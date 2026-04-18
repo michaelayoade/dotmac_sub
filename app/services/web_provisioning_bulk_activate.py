@@ -11,7 +11,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.audit import AuditActorType
 from app.models.catalog import (
     AccessCredential,
     CatalogOffer,
@@ -23,10 +22,9 @@ from app.models.catalog import (
 )
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
-from app.schemas.audit import AuditEventCreate
-from app.services import audit as audit_service
 from app.services import domain_settings as domain_settings_service
 from app.services import job_log_store
+from app.services.audit_adapter import record_audit_event
 from app.services.auth_flow import hash_service_secret
 from app.services.catalog.subscriptions import apply_offer_radius_profile
 
@@ -326,17 +324,16 @@ def _log_bulk_activation_audit(
     is_success: bool,
     summary: dict[str, Any],
 ) -> None:
-    payload = AuditEventCreate(
-        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+    record_audit_event(
+        db,
         actor_id=actor_id,
         action="bulk_activate",
         entity_type="service_activation",
         entity_id=job_id,
         status_code=200 if is_success else 500,
         is_success=is_success,
-        metadata_=summary,
+        metadata=summary,
     )
-    audit_service.audit_events.create(db=db, payload=payload)
 
 
 def _activation_datetime(value: str | None) -> datetime:

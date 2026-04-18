@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.services.credential_crypto import (
     encrypt_credential as _default_encrypt_credential,
 )
+from app.services.ipam_adapter import ipam_adapter
 from app.services.network import olt_autofind as olt_autofind_service
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_snmp_sync as olt_snmp_sync_service
@@ -16,9 +17,9 @@ from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network import olt_ssh_service_ports as olt_service_ports_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
-from app.services.network import olt_web_resources as olt_web_resources_service
 from app.services.network import olt_web_serials as olt_web_serials_service
 from app.services.network import olt_web_topology as olt_web_topology_service
+from app.services.olt_detail_adapter import olt_detail_adapter
 
 logger = logging.getLogger(__name__)
 encrypt_credential = _default_encrypt_credential
@@ -88,13 +89,13 @@ sync_monitoring_device = olt_web_forms_service.sync_monitoring_device
 validate_values = olt_web_forms_service.validate_values
 
 # Compatibility exports for OLT resource/event helpers.
-assign_ip_pool_to_olt = olt_web_resources_service.assign_ip_pool_to_olt
-assign_vlan_to_olt = olt_web_resources_service.assign_vlan_to_olt
-available_ip_pools_for_olt = olt_web_resources_service.available_ip_pools_for_olt
-available_vlans_for_olt = olt_web_resources_service.available_vlans_for_olt
-olt_device_events_context = olt_web_resources_service.olt_device_events_context
-unassign_ip_pool_from_olt = olt_web_resources_service.unassign_ip_pool_from_olt
-unassign_vlan_from_olt = olt_web_resources_service.unassign_vlan_from_olt
+assign_ip_pool_to_olt = ipam_adapter.assign_ip_pool_to_olt
+assign_vlan_to_olt = ipam_adapter.assign_vlan_to_olt
+available_ip_pools_for_olt = ipam_adapter.available_ip_pools_for_olt
+available_vlans_for_olt = ipam_adapter.available_vlans_for_olt
+olt_device_events_context = olt_detail_adapter.events_context
+unassign_ip_pool_from_olt = ipam_adapter.unassign_ip_pool_from_olt
+unassign_vlan_from_olt = ipam_adapter.unassign_vlan_from_olt
 
 # Compatibility exports for ONT serial matching helpers.
 _is_plausible_vendor_serial = olt_web_serials_service._is_plausible_vendor_serial

@@ -649,7 +649,10 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     )
 
     # Gather ONT assignments and build per-port stats
-    from app.services.network.signal_thresholds import classify_signal, get_signal_thresholds
+    from app.services.network.signal_thresholds import (
+        classify_signal,
+        get_signal_thresholds,
+    )
 
     warn, crit = get_signal_thresholds(db)
     ont_assignments = []
@@ -1334,44 +1337,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         .all()
     )
 
-    # VLANs and IP pools scoped to this OLT
-    from sqlalchemy import or_
+    from app.services.ipam_adapter import ipam_adapter
 
-    from app.models.network import IpPool, Vlan
-
-    olt_vlans = list(
-        db.scalars(
-            select(Vlan).where(Vlan.olt_device_id == olt.id).order_by(Vlan.tag.asc())
-        ).all()
-    )
-    olt_ip_pools = list(
-        db.scalars(
-            select(IpPool)
-            .where(IpPool.olt_device_id == olt.id)
-            .order_by(IpPool.name.asc())
-        ).all()
-    )
-    available_vlans = list(
-        db.scalars(
-            select(Vlan)
-            .where(Vlan.olt_device_id.is_(None))
-            .where(Vlan.is_active.is_(True))
-            .order_by(Vlan.tag.asc())
-        ).all()
-    )
-    available_ip_pools = list(
-        db.scalars(
-            select(IpPool)
-            .outerjoin(Vlan, IpPool.vlan_id == Vlan.id)
-            .where(IpPool.olt_device_id.is_(None))
-            .where(IpPool.is_active.is_(True))
-            .where(or_(IpPool.vlan_id.is_(None), Vlan.olt_device_id == olt.id))
-            .order_by(IpPool.name.asc())
-        ).all()
-    )
-    from app.services.network.olt_web_resources import ip_pool_usage_summary
-
-    olt_ip_pool_usage = ip_pool_usage_summary(db, olt_ip_pools)
+    ipam_scope = ipam_adapter.olt_scope_context(db, olt=olt)
 
     return {
         "olt": olt,
@@ -1397,11 +1365,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "live_board_others": live_board_others,
         "pon_port_table_rows": pon_port_table_rows,
         "config_backups": config_backups,
-        "olt_vlans": olt_vlans,
-        "olt_ip_pools": olt_ip_pools,
-        "olt_ip_pool_usage": olt_ip_pool_usage,
-        "available_vlans": available_vlans,
-        "available_ip_pools": available_ip_pools,
+        **ipam_scope,
     }
 
 
@@ -1864,7 +1828,10 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     past_assignments = [a for a in assignments if not a.active]
 
     # Signal classification
-    from app.services.network.signal_thresholds import classify_signal, get_signal_thresholds
+    from app.services.network.signal_thresholds import (
+        classify_signal,
+        get_signal_thresholds,
+    )
 
     warn, crit = get_signal_thresholds(db)
     olt_rx = getattr(ont, "olt_rx_signal_dbm", None)
@@ -2093,31 +2060,32 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     # Note: available_profile_templates and available_firmware are now lazy-loaded
     # via HTMX endpoints to reduce initial page load time
 
-    # Vendor capabilities for feature badges
-    from app.services.network.ont_read import OntReadFacade
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
-    capabilities = OntReadFacade.get_capabilities(db, ont_id)
-
-    from app.services.network.ont_service_intent import build_service_intent
-
-    service_intent = build_service_intent(
+    capabilities = service_intent_ui_adapter.ont_capabilities(db, ont_id=ont_id)
+    service_intent = service_intent_ui_adapter.build_ont_service_intent(
         ont,
         db=db,
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )
+    try:
+        acs_observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+            db,
+            ont_id=ont_id,
+        )
+    except Exception:
+        logger.exception("Failed to load ACS observed service intent for ONT %s", ont_id)
+        acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+            None
+        )
     last_config_summary = _ont_last_config_summary(ont)
-    connected_wifi_clients = _wifi_client_count(
-        getattr(ont, "tr069_last_snapshot", None),
-        fallback=getattr(ont, "observed_wifi_clients", None),
+    observed_runtime_summary = _acs_observed_runtime_summary(
+        acs_observed_intent,
+        ont=ont,
     )
-    connected_fallback = getattr(ont, "observed_lan_hosts", None)
-    if connected_fallback is None:
-        connected_fallback = connected_wifi_clients
-    connected_customer_devices = _lan_host_connected_count(
-        getattr(ont, "tr069_last_snapshot", None),
-        fallback=connected_fallback,
-    )
+    connected_wifi_clients = observed_runtime_summary.get("wifi_clients")
+    connected_customer_devices = observed_runtime_summary.get("customer_devices")
 
     # Configure form context (VLANs for dropdowns)
     from app.services import web_network_onts as web_network_onts_service
@@ -2139,6 +2107,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "provisioning_runs": provisioning_runs,
         "ont_plan": ont_plan,
         "service_intent": service_intent,
+        "acs_observed_intent": acs_observed_intent,
+        "observed_runtime_summary": observed_runtime_summary,
         "last_config_summary": last_config_summary,
         "connected_customer_devices": connected_customer_devices,
         "connected_wifi_clients": connected_wifi_clients,
@@ -2153,6 +2123,66 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         # Configure form context
         "configure_vlans": configure_vlans,
         **configure_mgmt_ip_choices,
+    }
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _acs_observed_runtime_summary(
+    acs_observed_intent: dict[str, object], *, ont: object
+) -> dict[str, object]:
+    observed = acs_observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    system = observed.get("system", {})
+    system = system if isinstance(system, dict) else {}
+    wan = observed.get("wan", {})
+    wan = wan if isinstance(wan, dict) else {}
+    lan = observed.get("lan", {})
+    lan = lan if isinstance(lan, dict) else {}
+    wifi = observed.get("wifi", {})
+    wifi = wifi if isinstance(wifi, dict) else {}
+    lan_hosts = observed.get("lan_hosts", [])
+    lan_hosts = lan_hosts if isinstance(lan_hosts, list) else []
+
+    wifi_clients = _safe_int(wifi.get("connected_clients"))
+    customer_devices = len(lan_hosts) if lan_hosts else _safe_int(lan.get("connected_hosts"))
+    fetched_at = acs_observed_intent.get("fetched_at")
+    updated_at_display = "-"
+    if isinstance(fetched_at, datetime):
+        updated_at_display = fetched_at.strftime("%Y-%m-%d %H:%M")
+    elif fetched_at:
+        updated_at_display = str(fetched_at)
+    has_runtime = bool(
+        acs_observed_intent.get("available")
+        or system.get("mac_address")
+        or wan.get("wan_ip")
+        or wan.get("pppoe_username")
+        or wan.get("status")
+        or lan.get("lan_ip")
+        or wifi_clients is not None
+        or customer_devices is not None
+        or fetched_at
+    )
+
+    return {
+        "has_runtime": has_runtime,
+        "mac_address": system.get("mac_address") or getattr(ont, "mac_address", None),
+        "wan_ip": wan.get("wan_ip"),
+        "pppoe_user": wan.get("pppoe_username") or getattr(ont, "pppoe_username", None),
+        "pppoe_status": wan.get("status"),
+        "wan_mode": getattr(getattr(ont, "wan_mode", None), "value", None)
+        or getattr(ont, "wan_mode", None),
+        "lan_mode": lan.get("dhcp_enabled"),
+        "lan_ip": lan.get("lan_ip"),
+        "wifi_clients": wifi_clients,
+        "customer_devices": customer_devices,
+        "updated_at": fetched_at,
+        "updated_at_display": updated_at_display,
     }
 
 
@@ -2309,8 +2339,7 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
     ssid = _snapshot_text(wireless, "SSID")
     fetched_at = _snapshot_time(
         snapshot,
-        getattr(ont, "tr069_last_snapshot_at", None)
-        or getattr(ont, "observed_runtime_updated_at", None),
+        getattr(ont, "tr069_last_snapshot_at", None),
     )
     metrics = [
         {

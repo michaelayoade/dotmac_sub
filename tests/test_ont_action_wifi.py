@@ -276,15 +276,104 @@ def test_set_wifi_config_pushes_radio_ssid_channel_and_security(monkeypatch) -> 
 
     assert result.success is True
     assert calls == [
+        ("device-1", {"Device.WiFi.SSID.1.SSID": "Customer WiFi"}),
+        ("device-1", {"Device.WiFi.SSID.1.Enable": "true"}),
+        ("device-1", {"Device.WiFi.Radio.1.Channel": "6"}),
         (
             "device-1",
-            {
-                "Device.WiFi.SSID.1.Enable": "true",
-                "Device.WiFi.SSID.1.SSID": "Customer WiFi",
-                "Device.WiFi.Radio.1.Channel": "6",
-                "Device.WiFi.AccessPoint.1.Security.ModeEnabled": "WPA2-Personal",
-            },
-        )
+            {"Device.WiFi.AccessPoint.1.Security.ModeEnabled": "WPA2-Personal"},
+        ),
+    ]
+
+
+def test_set_wifi_config_keeps_ssid_strict_but_tolerates_omitted_optional_readback(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, str]] = []
+    cache: dict[str, str] = {
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "wifi"
+    }
+
+    class FakeClient:
+        def set_parameter_values(
+            self,
+            _device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
+            calls.append(dict(params))
+            for path, value in params.items():
+                if path.endswith(".SSID"):
+                    cache[path] = value
+            return {"queued": True}
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="HWTT20A7B0A9"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+
+    result = ont_action_wifi.set_wifi_config(
+        None,
+        "ont-1",
+        enabled=True,
+        ssid="The Residence",
+        security_mode="WPA-WPA2-Personal",
+    )
+
+    assert result.success is True
+    assert cache["InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"] == (
+        "The Residence"
+    )
+    assert calls == [
+        {
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": (
+                "The Residence"
+            )
+        },
+        {"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable": "true"},
+        {"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable": "true"},
+        {
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType": (
+                "WPAand11i"
+            )
+        },
+        {
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType": (
+                "WPAand11i"
+            )
+        },
     ]
 
 

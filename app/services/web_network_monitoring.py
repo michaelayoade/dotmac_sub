@@ -88,15 +88,15 @@ def monitoring_page_data(
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
     """Queue non-blocking monitoring refresh tasks."""
     try:
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
+        enqueue_task(
             "app.tasks.network_monitoring.refresh_core_device_ping",
             correlation_id="monitoring_refresh:ping",
             source="admin_network_monitoring",
             request_id=request_id,
         )
-        enqueue_celery_task(
+        enqueue_task(
             "app.tasks.network_monitoring.refresh_core_device_snmp",
             correlation_id="monitoring_refresh:snmp",
             source="admin_network_monitoring",

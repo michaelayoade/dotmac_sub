@@ -19,9 +19,11 @@ from app.services.network.ont_action_common import (
 logger = logging.getLogger(__name__)
 
 # TR-069 parameter suffixes by data model root
-_WIFI_SSID_PATHS = {
-    "Device": "WiFi.SSID.1.SSID",
-    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.SSID",
+_WIFI_SSID_CANDIDATE_PATHS = {
+    "Device": [f"WiFi.SSID.{idx}.SSID" for idx in range(1, 9)],
+    "InternetGatewayDevice": [
+        f"LANDevice.1.WLANConfiguration.{idx}.SSID" for idx in range(1, 9)
+    ],
 }
 
 _WIFI_ENABLE_PATHS = {
@@ -200,6 +202,71 @@ def _set_first_supported_path(
     raise GenieACSError("No WiFi parameter paths configured.")
 
 
+def _set_single_wifi_field(
+    client: Any,
+    device_id: str,
+    root: str,
+    path: str,
+    value: str,
+    *,
+    verify: bool,
+) -> dict[str, object]:
+    params = build_tr069_params(root, {path: value})
+    if verify:
+        return set_and_verify(client, device_id, params)
+    return client.set_parameter_values(device_id, params, connection_request=True)
+
+
+def _set_best_effort_wifi_field(
+    client: Any,
+    device_id: str,
+    root: str,
+    path: str,
+    value: str,
+    label: str,
+    *,
+    allow_unverified: bool,
+) -> dict[str, object] | None:
+    """Write a WiFi field that is commonly write-only or omitted on readback."""
+    try:
+        return _set_single_wifi_field(
+            client,
+            device_id,
+            root,
+            path,
+            value,
+            verify=True,
+        )
+    except GenieACSError as exc:
+        if not allow_unverified:
+            raise
+        logger.info(
+            "WiFi %s on %s did not verify via readback; sending best-effort SPV: %s",
+            label,
+            device_id,
+            exc,
+        )
+        try:
+            result = _set_single_wifi_field(
+                client,
+                device_id,
+                root,
+                path,
+                value,
+                verify=False,
+            )
+        except GenieACSError:
+            logger.info(
+                "WiFi %s best-effort SPV failed on %s",
+                label,
+                device_id,
+                exc_info=True,
+            )
+            return None
+        _request_runtime_refresh(client, device_id, root)
+        return result
+
+
 def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
     """Set WiFi SSID on ONT via TR-069."""
     if not ssid or len(ssid) > 32:
@@ -212,10 +279,14 @@ def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
-    params = build_tr069_params(root, {_WIFI_SSID_PATHS[root]: ssid})
     try:
-        result = set_and_verify(client, device_id, params)
-        _request_runtime_refresh(client, device_id, root)
+        result = _set_first_supported_path(
+            client,
+            device_id,
+            root,
+            _WIFI_SSID_CANDIDATE_PATHS[root],
+            ssid,
+        )
         logger.info("WiFi SSID set on ONT %s to '%s'", ont.serial_number, ssid)
         return ActionResult(
             success=True,
@@ -290,33 +361,70 @@ def set_wifi_config(
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
 
-    params: dict[str, str] = {}
     changed: list[str] = []
     if enabled is not None:
-        params[_WIFI_ENABLE_PATHS[root]] = "true" if enabled else "false"
         changed.append("enabled" if enabled else "disabled")
     if ssid is not None:
-        params[_WIFI_SSID_PATHS[root]] = ssid
         changed.append(f"SSID {ssid}")
     if channel is not None:
-        params[_WIFI_CHANNEL_PATHS[root]] = str(channel)
         changed.append(f"channel {channel}")
     if security_mode:
         normalized_mode = _normalize_security_mode(security_mode, root)
-        params[_WIFI_SECURITY_PATHS[root]] = normalized_mode
         changed.append(f"security {normalized_mode}")
 
-    if not params and password is None:
+    if not changed and password is None:
         return ActionResult(
             success=False, message="At least one WiFi setting is required."
         )
 
     try:
         result: dict[str, object] = {}
-        if params:
-            full_params = build_tr069_params(root, params)
-            result = set_and_verify(client, device_id, full_params)
-            _request_runtime_refresh(client, device_id, root)
+        allow_unverified_optional = ssid is not None or password is not None
+        if ssid is not None:
+            result = _set_first_supported_path(
+                client,
+                device_id,
+                root,
+                _WIFI_SSID_CANDIDATE_PATHS[root],
+                ssid,
+            )
+        if enabled is not None:
+            best_effort = _set_best_effort_wifi_field(
+                client,
+                device_id,
+                root,
+                _WIFI_ENABLE_PATHS[root],
+                "true" if enabled else "false",
+                "enable",
+                allow_unverified=allow_unverified_optional,
+            )
+            if best_effort is not None:
+                result = best_effort
+        if channel is not None:
+            best_effort = _set_best_effort_wifi_field(
+                client,
+                device_id,
+                root,
+                _WIFI_CHANNEL_PATHS[root],
+                str(channel),
+                "channel",
+                allow_unverified=allow_unverified_optional,
+            )
+            if best_effort is not None:
+                result = best_effort
+        if security_mode:
+            normalized_mode = _normalize_security_mode(security_mode, root)
+            best_effort = _set_best_effort_wifi_field(
+                client,
+                device_id,
+                root,
+                _WIFI_SECURITY_PATHS[root],
+                normalized_mode,
+                "security",
+                allow_unverified=allow_unverified_optional,
+            )
+            if best_effort is not None:
+                result = best_effort
         if password is not None:
             result = _set_first_supported_path(
                 client,

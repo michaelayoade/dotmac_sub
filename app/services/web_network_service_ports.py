@@ -25,6 +25,7 @@ from app.services.network.service_port_allocator import (
     release_service_port,
 )
 from app.services.network.vlan_chain import validate_chain
+from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,14 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
     ports_data = result.data.get("service_ports", [])
     ports: list[ServicePortEntry] = ports_data if isinstance(ports_data, list) else []
     context["service_ports"] = ports
+    context["service_port_intent"] = (
+        service_intent_ui_adapter.profile_service_port_defaults(
+            ont,
+            service_ports=ports,
+        )
+        if ont
+        else {}
+    )
     context["reference_onts"] = _reference_ont_options(
         db,
         target_ont_id=ont_id,
@@ -221,13 +230,40 @@ def handle_create(
     Returns:
         (success, message).
     """
+    from app.services.network.config_validator_adapter import (
+        ServicePortConfig,
+        validate_service_port_config,
+    )
+
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
 
-    allowed_transforms = {"translate", "transparent", "default"}
-    if tag_transform not in allowed_transforms:
-        return False, "Invalid tag-transform value"
+    # Validate configuration before proceeding
+    validation = validate_service_port_config(
+        ServicePortConfig(
+            fsp=fsp,
+            ont_id=olt_ont_id,
+            vlan_id=vlan_id,
+            user_vlan=user_vlan if isinstance(user_vlan, int) else None,
+            gem_index=gem_index,
+            tag_transform=tag_transform,
+        ),
+        db=db,
+        olt=olt,
+    )
+    if not validation.is_valid:
+        error_msgs = "; ".join(f"{e.field}: {e.message}" for e in validation.errors)
+        return False, f"Validation failed: {error_msgs}"
+
+    # Log warnings but don't block
+    for warning in validation.warnings:
+        logger.warning(
+            "Service port config warning for ONT %s: %s - %s",
+            ont_id,
+            warning.field,
+            warning.message,
+        )
 
     # Pre-allocate service-port index from DB
     allocation = None

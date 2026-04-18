@@ -13,8 +13,9 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
+from app.services.acs_config_adapter import acs_config_adapter
 from app.services.credential_crypto import encrypt_credential
-from app.services.network.ont_actions import ActionResult, OntActions
+from app.services.network.ont_action_common import ActionResult
 from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
@@ -31,7 +32,7 @@ def set_wifi_ssid(
     db: Session, ont_id: str, ssid: str, *, request: Request | None = None
 ) -> ActionResult:
     """Set WiFi SSID and return result."""
-    result = OntActions.set_wifi_ssid(db, ont_id, ssid)
+    result = acs_config_adapter.set_wifi_ssid(db, ont_id, ssid)
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
@@ -51,7 +52,7 @@ def set_wifi_password(
     db: Session, ont_id: str, password: str, *, request: Request | None = None
 ) -> ActionResult:
     """Set WiFi password and return result."""
-    result = OntActions.set_wifi_password(db, ont_id, password)
+    result = acs_config_adapter.set_wifi_password(db, ont_id, password)
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
@@ -95,7 +96,7 @@ def set_wifi_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WiFi radio, SSID, security, and password fields."""
-    result = OntActions.set_wifi_config(
+    result = acs_config_adapter.set_wifi_config(
         db,
         ont_id,
         enabled=enabled,
@@ -176,7 +177,7 @@ def toggle_lan_port(
     request: Request | None = None,
 ) -> ActionResult:
     """Toggle a LAN port and return result."""
-    result = OntActions.toggle_lan_port(db, ont_id, port, enabled)
+    result = acs_config_adapter.toggle_lan_port(db, ont_id, port, enabled)
     _log_action_audit(
         db,
         request=request,
@@ -203,7 +204,7 @@ def set_lan_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set LAN gateway and DHCP server config on ONT via GenieACS TR-069."""
-    result = OntActions.set_lan_config(
+    result = acs_config_adapter.set_lan_config(
         db,
         ont_id,
         lan_ip=lan_ip,
@@ -257,7 +258,7 @@ def configure_wan_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WAN mode, VLAN, and static IP fields via GenieACS TR-069."""
-    result = OntActions.configure_wan_config(
+    result = acs_config_adapter.configure_wan_config(
         db,
         ont_id,
         wan_mode=wan_mode,
@@ -415,7 +416,7 @@ def set_pppoe_credentials(
         NetworkOperationType.ont_set_pppoe,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: OntActions.set_pppoe_credentials(
+        lambda: acs_config_adapter.set_pppoe_credentials(
             db,
             ont_id,
             username,

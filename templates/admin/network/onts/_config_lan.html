@@ -15,20 +15,31 @@
 
 {# LAN Configuration #}
 {% set lan_intent = ont_plan.get('configure_lan_tr069') if ont_plan is defined and ont_plan else {} %}
-{% set lan_ip = lan_intent.get('lan_ip') or (lan_info.get('LAN IP') if lan_info else '') %}
-{% set lan_subnet = lan_intent.get('lan_subnet') or (lan_info.get('Subnet Mask') if lan_info else '') %}
-{% set dhcp_enabled = lan_intent.get('dhcp_enabled') if lan_intent.get('dhcp_enabled') is not none else (lan_info.get('DHCP Enabled') if lan_info else '') %}
-{% set dhcp_start = lan_intent.get('dhcp_start') or (lan_info.get('DHCP Start') if lan_info else '') %}
-{% set dhcp_end = lan_intent.get('dhcp_end') or (lan_info.get('DHCP End') if lan_info else '') %}
+{% set lan_ip = lan_intent.get('lan_ip') or (lan_info.get('lan_ip') if lan_info else '') %}
+{% set lan_subnet = lan_intent.get('lan_subnet') or (lan_info.get('subnet_mask') if lan_info else '') %}
+{% set dhcp_enabled = lan_intent.get('dhcp_enabled') if lan_intent.get('dhcp_enabled') is not none else (lan_info.get('dhcp_enabled') if lan_info else '') %}
+{% set dhcp_start = lan_intent.get('dhcp_start') or (lan_info.get('dhcp_start') if lan_info else '') %}
+{% set dhcp_end = lan_intent.get('dhcp_end') or (lan_info.get('dhcp_end') if lan_info else '') %}
 {% if lan_info %}
 <div class="mb-4">
     <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">LAN Configuration</h4>
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        {% for key, value in lan_info.items() %}
+        {% for label, value in [
+            ('LAN IP', lan_info.get('lan_ip')),
+            ('Subnet Mask', lan_info.get('subnet_mask')),
+            ('DHCP Enabled', lan_info.get('dhcp_enabled')),
+            ('DHCP Start', lan_info.get('dhcp_start')),
+            ('DHCP End', lan_info.get('dhcp_end')),
+            ('Connected Hosts', lan_info.get('connected_hosts'))
+        ] %}
+        {% if value is not none and value != '' %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-            <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-            <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+            <dt class="text-xs text-slate-500 dark:text-slate-400">{{ label }}</dt>
+            <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">
+                {% if value == true %}Yes{% elif value == false %}No{% else %}{{ value }}{% endif %}
+            </dd>
         </div>
+        {% endif %}
         {% endfor %}
     </div>
 </div>
@@ -102,40 +113,46 @@
             </thead>
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for port in ethernet_ports %}
+                {% set port_num = port.get('port', port.get('index', loop.index)) %}
+                {% set admin_enabled = port.get('admin_enabled', port.get('Enable')) %}
+                {% set link_status = port.get('link_status', port.get('Status')) %}
+                {% set speed = port.get('speed_mbps', port.get('MaxBitRate')) %}
+                {% set duplex = port.get('duplex', port.get('DuplexMode')) %}
+                {% set mac = port.get('mac_address', port.get('MACAddress')) %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                    <td class="px-4 py-2 text-sm font-medium text-slate-900 dark:text-white">ETH {{ port.index }}</td>
+                    <td class="px-4 py-2 text-sm font-medium text-slate-900 dark:text-white">ETH {{ port_num }}</td>
                     <td class="px-4 py-2 text-sm">
-                        {% if port.Enable == true or port.Enable == '1' or port.Enable == 'true' %}
+                        {% if admin_enabled == true or admin_enabled == '1' or admin_enabled == 'true' %}
                         <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Yes</span>
                         {% else %}
                         <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">No</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-2 text-sm">
-                        {% if port.Status == 'Up' %}
+                        {% if link_status == 'Up' or link_status == 'up' %}
                         <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Up</span>
                         {% else %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">{{ port.Status or 'Down' }}</span>
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">{{ link_status or 'Down' }}</span>
                         {% endif %}
                     </td>
-                    <td class="px-4 py-2 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.MaxBitRate or '&mdash;' }}</td>
-                    <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ port.DuplexMode or '&mdash;' }}</td>
-                    <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ port.MACAddress or '&mdash;' }}</td>
+                    <td class="px-4 py-2 text-sm font-mono text-slate-600 dark:text-slate-300">{{ speed or '&mdash;' }}</td>
+                    <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ duplex or '&mdash;' }}</td>
+                    <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ mac or '&mdash;' }}</td>
                     <td class="px-4 py-2 text-right">
-                        {% set is_enabled = port.Enable == true or port.Enable == '1' or port.Enable == 'true' %}
+                        {% set is_enabled = admin_enabled == true or admin_enabled == '1' or admin_enabled == 'true' %}
                         {% if is_enabled %}
-                        <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port.index }}&enabled=false"
+                        <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
                             hx-swap="none"
-                            hx-confirm="Disable LAN port ETH {{ port.index }} via TR-069?"
+                            hx-confirm="Disable LAN port ETH {{ port_num }} via TR-069?"
                             data-network-action
                             data-loading-label="Disabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
                             Disable
                         </button>
                         {% else %}
-                        <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port.index }}&enabled=true"
+                        <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
                             hx-swap="none"
-                            hx-confirm="Enable LAN port ETH {{ port.index }} via TR-069?"
+                            hx-confirm="Enable LAN port ETH {{ port_num }} via TR-069?"
                             data-network-action
                             data-loading-label="Enabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">

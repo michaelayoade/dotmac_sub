@@ -1122,24 +1122,24 @@
         <div class="space-y-4">
             {# Observed Runtime Snapshot #}
             {% call card("Full Runtime Information", color="indigo") %}
-            {% set has_runtime = ont.mac_address or ont.observed_wan_ip or ont.pppoe_username or ont.observed_pppoe_status or ont.observed_lan_mode or (ont.observed_wifi_clients is not none) or (ont.observed_lan_hosts is not none) or ont.observed_runtime_updated_at %}
-            {% if has_runtime %}
+            {% set runtime = observed_runtime_summary if observed_runtime_summary is defined else {} %}
+            {% if runtime.get('has_runtime') %}
             <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('mac_address') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('wan_ip') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('pppoe_user') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ runtime.get('pppoe_status') or '—' }}</dd></div>
                 <div>
                     <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</dt>
-                    {% set wan_mode_value = ont.wan_mode.value if ont.wan_mode and ont.wan_mode.value is defined else ont.wan_mode %}
+                    {% set wan_mode_value = runtime.get('wan_mode') %}
                     <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</dd>
                 </div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Mode</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (ont.observed_lan_mode or '—') | replace('_', ' ') | title }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ connected_wifi_clients if connected_wifi_clients is not none else '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ connected_customer_devices if connected_customer_devices is not none else '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('lan_ip') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('wifi_clients') if runtime.get('wifi_clients') is not none else '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('customer_devices') if runtime.get('customer_devices') is not none else '—' }}</dd></div>
             </dl>
             <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                Runtime updated: {{ ont.observed_runtime_updated_at.strftime('%Y-%m-%d %H:%M') if ont.observed_runtime_updated_at else '—' }}
+                Runtime updated from ACS: {{ runtime.get('updated_at_display') or '—' }}
             </div>
             {% else %}
             <p class="text-sm text-slate-500 dark:text-slate-400">No runtime snapshot yet. Open TR-069 tab or click Get Status to refresh.</p>

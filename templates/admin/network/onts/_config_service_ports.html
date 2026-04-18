@@ -6,6 +6,30 @@
 </div>
 {% else %}
 
+{% set service_port_intent = service_port_intent if service_port_intent is defined else {} %}
+
+{% if service_port_intent.planned_services %}
+<div class="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 dark:border-indigo-800/50 dark:bg-indigo-900/20">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Profile Service Intent</h4>
+    <div class="mt-2 flex flex-wrap gap-2 text-xs">
+        {% for svc in service_port_intent.planned_services %}
+        <span class="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 text-slate-700 ring-1 ring-indigo-200 dark:bg-slate-800 dark:text-slate-200 dark:ring-indigo-800/60">
+            <span class="font-semibold">{{ svc.name }}</span>
+            {% if svc.s_vlan %}<span>S:{{ svc.s_vlan }}</span>{% endif %}
+            {% if svc.c_vlan %}<span>C:{{ svc.c_vlan }}</span>{% endif %}
+            {% if svc.gem_port_id %}<span>GEM {{ svc.gem_port_id }}</span>{% endif %}
+        </span>
+        {% endfor %}
+    </div>
+    {% if service_port_intent.missing_vlans or service_port_intent.extra_vlans %}
+    <p class="mt-2 text-xs text-indigo-700 dark:text-indigo-300">
+        {% if service_port_intent.missing_vlans %}Missing VLANs: {{ service_port_intent.missing_vlans|join(', ') }}.{% endif %}
+        {% if service_port_intent.extra_vlans %} Extra VLANs on OLT: {{ service_port_intent.extra_vlans|join(', ') }}.{% endif %}
+    </p>
+    {% endif %}
+</div>
+{% endif %}
+
 {# VLAN Chain Validation Status #}
 {% if vlan_chain and vlan_chain.warnings %}
 <div class="mb-4 space-y-1">
@@ -89,24 +113,34 @@
             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">VLAN</label>
             <select name="vlan_id" required class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 {% for v in vlans %}
-                <option value="{{ v.tag }}">{{ v.tag }} &mdash; {{ v.name or 'Unnamed' }}</option>
+                <option value="{{ v.tag }}" {% if service_port_intent.primary_vlan_id and service_port_intent.primary_vlan_id == v.tag %}selected{% endif %}>{{ v.tag }} &mdash; {{ v.name or 'Unnamed' }}</option>
                 {% endfor %}
             </select>
         </div>
         <div>
             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">GEM Index</label>
-            <input type="number" name="gem_index" value="1" min="0" max="255" class="w-20 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="gem_index" required class="w-28 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for gem in service_port_intent.gem_choices or [service_port_intent.primary_gem_index or 1] %}
+                <option value="{{ gem }}" {% if (service_port_intent.primary_gem_index or 1) == gem %}selected{% endif %}>GEM {{ gem }}</option>
+                {% endfor %}
+            </select>
         </div>
         <div>
             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">User VLAN</label>
-            <input type="text" name="user_vlan" placeholder="Optional" class="w-28 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="user_vlan" class="w-40 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Use service VLAN</option>
+                <option value="untagged" {% if service_port_intent.primary_user_vlan == 'untagged' %}selected{% endif %}>Untagged</option>
+                {% for vlan in service_port_intent.user_vlan_choices or [] %}
+                <option value="{{ vlan }}" {% if service_port_intent.primary_user_vlan == vlan %}selected{% endif %}>C-VLAN {{ vlan }}</option>
+                {% endfor %}
+            </select>
         </div>
         <div>
             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Tag Transform</label>
             <select name="tag_transform" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="translate">translate</option>
-                <option value="transparent">transparent</option>
-                <option value="default">default</option>
+                <option value="translate" {% if service_port_intent.primary_tag_transform == 'translate' %}selected{% endif %}>translate</option>
+                <option value="transparent" {% if service_port_intent.primary_tag_transform == 'transparent' %}selected{% endif %}>transparent</option>
+                <option value="default" {% if service_port_intent.primary_tag_transform == 'default' %}selected{% endif %}>default</option>
             </select>
         </div>
         <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700">

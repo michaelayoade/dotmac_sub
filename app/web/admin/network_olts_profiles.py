@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -14,9 +14,10 @@ from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services.auth_dependencies import require_permission
-from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.result_adapter import OperationResult
+from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-olt-profiles"])
@@ -71,7 +72,7 @@ def olt_tr069_profile_create(
     acs_password: str = Form(""),
     inform_interval: int = Form(300),
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> Response:
     """Create a TR-069 server profile on the OLT via SSH."""
     ok, message = olt_tr069_admin_service.handle_create_tr069_profile_audited(
         db,
@@ -83,7 +84,10 @@ def olt_tr069_profile_create(
         inform_interval=inform_interval,
         request=request,
     )
-    return JSONResponse({"ok": ok, "message": message}, status_code=200 if ok else 400)
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    result.redirect_tab = "tr069"
+    return result.to_response(request)
 
 
 @router.post(
@@ -94,20 +98,23 @@ async def olt_tr069_rebind(
     request: Request,
     olt_id: str,
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> Response:
     """Rebind selected ONTs to a TR-069 server profile."""
     form = await request.form()
     target_profile_raw = form.get("target_profile_id", "0")
     target_profile_value = (
         target_profile_raw if isinstance(target_profile_raw, str) else "0"
     )
-    target_profile_id = int(target_profile_value)
+    try:
+        target_profile_id = int(target_profile_value)
+    except (TypeError, ValueError):
+        target_profile_id = 0
     ont_ids = [value for value in form.getlist("ont_ids") if isinstance(value, str)]
     if not ont_ids or not target_profile_id:
-        return JSONResponse(
-            {"ok": False, "message": "Missing ONT selection or target profile"},
-            status_code=400,
-        )
+        result = OperationResult.error("Missing ONT selection or target profile")
+        result.redirect_url = f"/admin/network/olts/{olt_id}"
+        result.redirect_tab = "tr069"
+        return result.to_response(request)
 
     stats = olt_tr069_admin_service.handle_rebind_tr069_profiles_audited(
         db,
@@ -126,16 +133,15 @@ async def olt_tr069_rebind(
         message += f", {failed} failed"
     ok = rebound > 0
 
-    return JSONResponse(
-        {
-            "ok": ok,
-            "message": message,
-            "rebound": rebound,
-            "failed": failed,
-            "errors": errors,
-        },
-        status_code=200 if ok else 400,
+    result_data = {"rebound": rebound, "failed": failed, "errors": errors}
+    result = (
+        OperationResult.ok(message, data=result_data)
+        if ok
+        else OperationResult.error(message, data=result_data)
     )
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    result.redirect_tab = "tr069"
+    return result.to_response(request)
 
 
 @router.post(

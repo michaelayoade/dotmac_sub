@@ -568,9 +568,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         description: str = "",
     ) -> OltOperationResult:
         """Authorize ONT via SSH CLI."""
-        from app.services.network.olt_ssh_ont.lifecycle import (
-            authorize_ont as ssh_authorize,
-        )
+        from app.services.network.olt_ssh import authorize_ont as ssh_authorize
 
         try:
             ok, message, ont_id = ssh_authorize(

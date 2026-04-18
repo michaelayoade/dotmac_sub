@@ -311,13 +311,13 @@ class ProvisioningEnforcement:
         ont_ids: list[str],
     ) -> dict[str, int]:
         """Send connection requests to force TR-069 bootstrap."""
-        from app.services.network.ont_action_network import send_connection_request
+        from app.services.acs_config_adapter import acs_config_adapter
 
         sent = 0
         failed = 0
         for ont_id in ont_ids:
             try:
-                result = send_connection_request(db, ont_id)
+                result = acs_config_adapter.send_connection_request(db, ont_id)
                 if result.success:
                     sent += 1
                 else:
@@ -354,8 +354,8 @@ class ProvisioningEnforcement:
             wire the default AccessCredential-backed adapter lazily. If
             that bridge is unavailable, standalone mode skips the fallback.
         """
+        from app.services.acs_config_adapter import acs_config_adapter
         from app.services.credential_crypto import decrypt_credential
-        from app.services.network.ont_action_network import set_pppoe_credentials
 
         if credentials is None:
             credentials = _default_credential_provider(db)
@@ -402,7 +402,7 @@ class ProvisioningEnforcement:
                 continue
 
             try:
-                result = set_pppoe_credentials(
+                result = acs_config_adapter.set_pppoe_credentials(
                     db,
                     ont_id,
                     ont.pppoe_username,
@@ -444,8 +444,8 @@ class ProvisioningEnforcement:
         them to the device using GenieACS. This is idempotent - pushing the
         same config multiple times has no adverse effects.
         """
+        from app.services.acs_config_adapter import acs_config_adapter
         from app.services.credential_crypto import decrypt_credential
-        from app.services.network.ont_action_wifi import set_wifi_config
 
         pushed = 0
         failed = 0
@@ -468,7 +468,7 @@ class ProvisioningEnforcement:
                     )
 
             try:
-                result = set_wifi_config(
+                result = acs_config_adapter.set_wifi_config(
                     db,
                     ont_id,
                     ssid=ont.wifi_ssid,

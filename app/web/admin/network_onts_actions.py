@@ -17,6 +17,7 @@ from app.services import web_network_ont_charts as web_network_ont_charts_servic
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
 from app.services.network.action_logging import log_network_action_result
+from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -140,13 +141,13 @@ def _lan_ports_partial_response(
     toast_type: str = "success",
 ) -> HTMLResponse:
     """Return the LAN ports controls partial with current port status."""
-    from app.services.network.ont_read import OntReadFacade
-
-    tr069_summary = OntReadFacade.get_tr069_summary(db, ont_id)
-    no_tr069 = not tr069_summary.get("available", False)
-    ethernet_ports = (
-        OntReadFacade.get_ethernet_ports(db, ont_id) if not no_tr069 else []
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
     )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    no_tr069 = not bool(observed_intent.get("available"))
+    ethernet_ports = list(observed.get("ethernet_ports", []) or [])
 
     context = {
         "request": request,
@@ -174,11 +175,14 @@ def _ethernet_ports_partial_response(
     toast_type: str = "success",
 ) -> HTMLResponse:
     """Return the Ethernet ports status partial with current port state."""
-    from app.services.network.ont_read import ont_read
-
     context = _base_context(request, db, active_page="onts")
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
     context["ont_id"] = ont_id
-    context["ethernet_ports"] = ont_read.get_ethernet_ports(db, ont_id)
+    context["ethernet_ports"] = observed.get("ethernet_ports", [])
     response = templates.TemplateResponse(
         "admin/network/onts/_ethernet_ports_partial.html", context
     )
@@ -772,9 +776,12 @@ def ont_lan_hosts(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """HTMX partial: LAN hosts connected to an ONT."""
-    from app.services.network.ont_read import ont_read
-
-    lan_hosts = ont_read.get_lan_hosts(db, ont_id)
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    lan_hosts = observed.get("lan_hosts", [])
     context = _base_context(request, db, active_page="onts")
     context["lan_hosts"] = lan_hosts
     return templates.TemplateResponse(
@@ -791,9 +798,12 @@ def ont_ethernet_ports(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """HTMX partial: Ethernet port status for an ONT."""
-    from app.services.network.ont_read import ont_read
-
-    ethernet_ports = ont_read.get_ethernet_ports(db, ont_id)
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    ethernet_ports = observed.get("ethernet_ports", [])
     context = _base_context(request, db, active_page="onts")
     context["ont_id"] = ont_id
     context["ethernet_ports"] = ethernet_ports

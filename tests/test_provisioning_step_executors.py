@@ -36,16 +36,22 @@ def test_create_olt_sp_fails_without_vlan_id() -> None:
     assert "VLAN" in result.detail
 
 
+@patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
-@patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
-def test_create_olt_sp_success(mock_create: MagicMock, mock_resolve: MagicMock) -> None:
+def test_create_olt_sp_success(mock_resolve: MagicMock, mock_get_adapter: MagicMock) -> None:
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
     db = MagicMock()
-    mock_resolve.return_value = {
-        "olt": MagicMock(),
-        "fsp": "0/1/3",
-        "olt_ont_id": 5,
-    }
-    mock_create.return_value = (True, "Service port 700 created")
+    olt = MagicMock()
+    mock_resolve.return_value = (MagicMock(), olt, "0/1/3", 5)
+
+    mock_adapter = MagicMock()
+    mock_adapter.create_service_port.return_value = OltOperationResult(
+        success=True,
+        message="Service port 700 created",
+        data={"port_index": 700},
+    )
+    mock_get_adapter.return_value = mock_adapter
 
     result = execute_create_olt_service_port(
         db, {"ont_unit_id": "abc"}, {"vlan_id": 203}
@@ -53,21 +59,27 @@ def test_create_olt_sp_success(mock_create: MagicMock, mock_resolve: MagicMock) 
     assert result.status == "ok"
     assert result.payload is not None
     assert result.payload["olt_service_port_created"] is True
-    mock_create.assert_called_once()
+    mock_adapter.create_service_port.assert_called_once()
 
 
+@patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
-@patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
 def test_create_olt_sp_ssh_failure(
-    mock_create: MagicMock, mock_resolve: MagicMock
+    mock_resolve: MagicMock, mock_get_adapter: MagicMock
 ) -> None:
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
     db = MagicMock()
-    mock_resolve.return_value = {
-        "olt": MagicMock(),
-        "fsp": "0/1/3",
-        "olt_ont_id": 5,
-    }
-    mock_create.return_value = (False, "SSH timeout")
+    olt = MagicMock()
+    mock_resolve.return_value = (MagicMock(), olt, "0/1/3", 5)
+
+    mock_adapter = MagicMock()
+    mock_adapter.create_service_port.return_value = OltOperationResult(
+        success=False,
+        message="SSH timeout",
+        data={},
+    )
+    mock_get_adapter.return_value = mock_adapter
 
     result = execute_create_olt_service_port(
         db, {"ont_unit_id": "abc"}, {"vlan_id": 203}

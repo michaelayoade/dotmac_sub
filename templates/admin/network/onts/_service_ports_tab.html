@@ -110,6 +110,7 @@
 {% endif %}
 
 {# Create Service Port Form #}
+{% set service_port_intent = service_port_intent if service_port_intent is defined else {} %}
 <div class="mt-6 rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
     <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Create Service Port</h3>
     <form hx-post="/admin/network/onts/{{ ont.id }}/service-ports/create"
@@ -129,11 +130,21 @@
         </div>
         <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">GEM Index</label>
-            <input type="number" name="gem_index" value="1" min="0" max="255" class="w-24 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="gem_index" required class="w-28 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for gem in service_port_intent.gem_choices or [service_port_intent.primary_gem_index or 1] %}
+                <option value="{{ gem }}" {% if (service_port_intent.primary_gem_index or 1) == gem %}selected{% endif %}>GEM {{ gem }}</option>
+                {% endfor %}
+            </select>
         </div>
         <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">User VLAN</label>
-            <input type="text" name="user_vlan" placeholder="Optional, e.g. 101 or untagged" class="w-44 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="user_vlan" class="w-44 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Use service VLAN</option>
+                <option value="untagged" {% if service_port_intent.primary_user_vlan == 'untagged' %}selected{% endif %}>Untagged</option>
+                {% for vlan in service_port_intent.user_vlan_choices or [] %}
+                <option value="{{ vlan }}" {% if service_port_intent.primary_user_vlan == vlan %}selected{% endif %}>C-VLAN {{ vlan }}</option>
+                {% endfor %}
+            </select>
         </div>
         <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Tag Transform</label>

@@ -249,15 +249,20 @@
                 </div>
                 <div>
                     <label for="wifi_ssid" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SSID</label>
-                    <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ ont.wifi_ssid_template or '' }}"
+                    <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ ont.wifi_ssid or '' }}"
                            maxlength="32" placeholder="Network name"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
                 <div>
                     <label for="wifi_channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Channel</label>
-                    <input type="text" id="wifi_channel" name="wifi_channel" value="{{ ont.wifi_channel or '' }}"
-                           placeholder="Auto (0) or 1-13"
-                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select id="wifi_channel" name="wifi_channel"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="" {% if not ont.wifi_channel %}selected{% endif %}>Leave unchanged</option>
+                        <option value="0" {% if ont.wifi_channel == '0' %}selected{% endif %}>Auto</option>
+                        {% for channel in range(1, 14) %}
+                        <option value="{{ channel }}" {% if ont.wifi_channel|string == channel|string %}selected{% endif %}>Channel {{ channel }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div>
                     <label for="wifi_security_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Security Mode</label>

@@ -269,6 +269,7 @@ def device_create(
             f"/admin/network/nas/devices/{device.id}", status_code=303
         )
     except Exception as e:
+        db.rollback()
         errors.append(str(e))
         return templates.TemplateResponse(
             "admin/network/nas/device_form.html",
@@ -490,6 +491,7 @@ def device_update(
             f"/admin/network/nas/devices/{device_id}", status_code=303
         )
     except Exception as e:
+        db.rollback()
         errors.append(str(e))
         return templates.TemplateResponse(
             "admin/network/nas/device_form.html",

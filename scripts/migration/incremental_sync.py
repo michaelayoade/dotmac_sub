@@ -45,6 +45,46 @@ def _parse_date(val) -> datetime | None:
     return None
 
 
+def _is_splynx_deleted(value) -> bool:
+    """Normalize Splynx deleted flags from MySQL and FDW/staging rows."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _table_columns(conn, table_name: str) -> set[str]:
+    """Return source table columns from Splynx MySQL."""
+    if table_name not in {"payments"}:
+        raise ValueError(f"Unsupported Splynx table: {table_name}")
+    rows = fetch_all(conn, f"SHOW COLUMNS FROM {table_name}")  # noqa: S608
+    return {str(row.get("Field") or row.get("field") or "") for row in rows}
+
+
+def _payment_since_expression(conn) -> str:
+    columns = _table_columns(conn, "payments")
+    fields = [
+        field
+        for field in ("updated_at", "real_create_datetime", "payment_date", "date")
+        if field in columns
+    ]
+    if not fields:
+        raise RuntimeError("Splynx payments table has no usable date column")
+    if len(fields) == 1:
+        return fields[0]
+    return f"COALESCE({', '.join(fields)})"
+
+
+def _payment_paid_at(row: dict) -> datetime | None:
+    return _parse_date(
+        row.get("payment_date")
+        or row.get("date")
+        or row.get("real_create_datetime")
+        or row.get("updated_at")
+    )
+
+
 def _fetch_invoice_items(conn, inv_id: int) -> list[dict]:
     """Fetch non-deleted line items for a Splynx invoice."""
     return fetch_all(
@@ -164,7 +204,7 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
             skipped += 1
             continue
 
-        is_deleted = row.get("deleted") == "1"
+        is_deleted = _is_splynx_deleted(row.get("deleted"))
         status_raw = row.get("status", "not_paid")
         status_map = {
             "not_paid": InvoiceStatus.issued,
@@ -263,8 +303,13 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
         ).all()
     )
 
-    since_str = since.strftime("%Y-%m-%d")
-    query = f"SELECT * FROM payments WHERE date >= '{since_str}' ORDER BY id"  # noqa: S608
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+    payment_since_expr = _payment_since_expression(conn)
+    query = f"""
+        SELECT * FROM payments
+        WHERE {payment_since_expr} >= '{since_str}'
+        ORDER BY id
+    """  # noqa: S608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -280,8 +325,9 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
             skipped += 1
             continue
 
-        is_deleted = row.get("deleted") == "1"
+        is_deleted = _is_splynx_deleted(row.get("deleted"))
         amount = Decimal(str(row.get("amount") or "0"))
+        paid_at = _payment_paid_at(row)
 
         payment = Payment(
             account_id=subscriber_id,
@@ -290,7 +336,7 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
             status=PaymentStatus.succeeded
             if not is_deleted
             else PaymentStatus.canceled,
-            paid_at=_parse_date(row.get("date")),
+            paid_at=paid_at,
             receipt_number=(row.get("receipt_number") or "")[:120] or None,
             memo=(row.get("comment") or "")[:500] or None,
             splynx_payment_id=pid,
@@ -456,6 +502,7 @@ def run_incremental_sync(
         with dotmac_session() as db:
             if dry_run:
                 since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+                payment_since_expr = _payment_since_expression(conn)
                 tables = [
                     (
                         "new invoices",
@@ -463,7 +510,8 @@ def run_incremental_sync(
                     ),  # noqa: S608
                     (
                         "new payments",
-                        f"SELECT COUNT(*) as cnt FROM payments WHERE date >= '{since.strftime('%Y-%m-%d')}'",
+                        "SELECT COUNT(*) as cnt FROM payments "
+                        f"WHERE {payment_since_expr} >= '{since_str}'",
                     ),  # noqa: S608
                     (
                         "status changes",

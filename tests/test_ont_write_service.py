@@ -74,24 +74,32 @@ class TestUpdateManagementIp:
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
-    @patch("app.services.network.olt_ssh_ont.configure_ont_iphost")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
     @patch("app.services.network.cpe.Vlans.get")
     def test_accepts_huawei_dotted_external_id(
         self,
         mock_vlan_get,
-        mock_configure,
+        mock_get_adapter,
         mock_get,
         mock_resolve_context,
         mock_emit,
     ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
         ont = MagicMock(external_id="huawei:4194320640.5")
         mock_get.return_value = (ont, None)
+        olt = MagicMock()
         mock_resolve_context.return_value = (
-            SimpleNamespace(olt=MagicMock(), fsp="0/1/3", ont_id_on_olt=5),
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
         )
         mock_vlan_get.return_value = MagicMock(tag=203)
-        mock_configure.return_value = (True, "ok")
+
+        mock_adapter = MagicMock()
+        mock_adapter.configure_iphost.return_value = OltOperationResult(
+            success=True, message="ok", data={}
+        )
+        mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
 
         result = OntWriteService.update_management_ip(
@@ -102,30 +110,39 @@ class TestUpdateManagementIp:
         )
 
         assert result.success is True
-        mock_configure.assert_called_once()
-        assert mock_configure.call_args.args[2] == 5
+        mock_adapter.configure_iphost.assert_called_once()
+        # Verify ont_id is passed correctly
+        assert mock_adapter.configure_iphost.call_args.args[1] == 5
 
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
-    @patch("app.services.network.olt_ssh_ont.configure_ont_iphost")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
     @patch("app.services.network.cpe.Vlans.get")
     def test_uses_scanned_board_port_context(
         self,
         mock_vlan_get,
-        mock_configure,
+        mock_get_adapter,
         mock_get,
         mock_resolve_context,
         mock_emit,
     ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
+        olt = MagicMock()
         mock_resolve_context.return_value = (
-            SimpleNamespace(olt=MagicMock(), fsp="0/1/3", ont_id_on_olt=5),
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
         )
         mock_vlan_get.return_value = MagicMock(tag=203)
-        mock_configure.return_value = (True, "ok")
+
+        mock_adapter = MagicMock()
+        mock_adapter.configure_iphost.return_value = OltOperationResult(
+            success=True, message="ok", data={}
+        )
+        mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
 
         result = OntWriteService.update_management_ip(
@@ -136,31 +153,40 @@ class TestUpdateManagementIp:
         )
 
         assert result.success is True
-        assert mock_configure.call_args.args[1] == "0/1/3"
-        assert mock_configure.call_args.args[2] == 5
+        # Verify fsp and ont_id are passed correctly
+        assert mock_adapter.configure_iphost.call_args.args[0] == "0/1/3"
+        assert mock_adapter.configure_iphost.call_args.args[1] == 5
 
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
-    @patch("app.services.network.olt_ssh_ont.configure_ont_iphost")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
     def test_accepts_management_vlan_tag_without_vlan_row(
         self,
-        mock_configure,
+        mock_get_adapter,
         mock_get,
         mock_resolve_context,
         mock_emit,
     ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
+        olt = MagicMock(id=uuid.uuid4())
         mock_resolve_context.return_value = (
             SimpleNamespace(
-                olt=MagicMock(id=uuid.uuid4()),
+                olt=olt,
                 fsp="0/1/3",
                 ont_id_on_olt=5,
             ),
             None,
         )
-        mock_configure.return_value = (True, "ok")
+
+        mock_adapter = MagicMock()
+        mock_adapter.configure_iphost.return_value = OltOperationResult(
+            success=True, message="ok", data={}
+        )
+        mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
         db.scalars.return_value.first.return_value = None
 
@@ -172,7 +198,8 @@ class TestUpdateManagementIp:
         )
 
         assert result.success is True
-        assert mock_configure.call_args.kwargs["vlan_id"] == 201
+        # Verify vlan is passed correctly in kwargs
+        assert mock_adapter.configure_iphost.call_args.kwargs["vlan"] == 201
         assert "mgmt_vlan_id" not in ont.__dict__
 
 
@@ -180,21 +207,29 @@ class TestUpdateServicePort:
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
-    @patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
     def test_accepts_huawei_dotted_external_id(
         self,
-        mock_create,
+        mock_get_adapter,
         mock_get,
         mock_resolve_context,
         mock_emit,
     ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
         ont = MagicMock(external_id="huawei:4194320640.5")
         mock_get.return_value = (ont, None)
+        olt = MagicMock()
         mock_resolve_context.return_value = (
-            SimpleNamespace(olt=MagicMock(), fsp="0/1/3", ont_id_on_olt=5),
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
         )
-        mock_create.return_value = (True, "created")
+
+        mock_adapter = MagicMock()
+        mock_adapter.create_service_port.return_value = OltOperationResult(
+            success=True, message="created", data={"port_index": 700}
+        )
+        mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
 
         result = OntWriteService.update_service_port(
@@ -205,27 +240,36 @@ class TestUpdateServicePort:
         )
 
         assert result.success is True
-        mock_create.assert_called_once()
-        assert mock_create.call_args.args[2] == 5
+        mock_adapter.create_service_port.assert_called_once()
+        # Verify ont_id is passed correctly
+        assert mock_adapter.create_service_port.call_args.args[1] == 5
 
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
-    @patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
     def test_uses_scanned_board_port_context_and_generic_external_id(
         self,
-        mock_create,
+        mock_get_adapter,
         mock_get,
         mock_resolve_context,
         mock_emit,
     ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
+        olt = MagicMock()
         mock_resolve_context.return_value = (
-            SimpleNamespace(olt=MagicMock(), fsp="0/1/3", ont_id_on_olt=5),
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
         )
-        mock_create.return_value = (True, "created")
+
+        mock_adapter = MagicMock()
+        mock_adapter.create_service_port.return_value = OltOperationResult(
+            success=True, message="created", data={"port_index": 700}
+        )
+        mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
 
         result = OntWriteService.update_service_port(
@@ -236,8 +280,9 @@ class TestUpdateServicePort:
         )
 
         assert result.success is True
-        assert mock_create.call_args.args[1] == "0/1/3"
-        assert mock_create.call_args.args[2] == 5
+        # Verify fsp and ont_id are passed correctly
+        assert mock_adapter.create_service_port.call_args.args[0] == "0/1/3"
+        assert mock_adapter.create_service_port.call_args.args[1] == 5
 
 
 class TestOntOltWriteContext:

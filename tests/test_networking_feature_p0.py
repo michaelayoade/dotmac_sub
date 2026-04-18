@@ -280,6 +280,42 @@ def test_build_nas_payload_requires_nas_ip_when_radius_authorization_selected(
     assert any("authorization type is PPP/DHCP Radius" in err for err in errors)
 
 
+def test_build_nas_payload_normalizes_literal_none_optional_fields(db_session):
+    payload, errors = nas_service.build_nas_device_payload(
+        db_session,
+        form={
+            "name": "Optional NAS",
+            "vendor": "mikrotik",
+            "ip_address": "192.0.2.101",
+            "status": "active",
+            "supported_connection_types": "[]",
+            "nas_identifier": "None",
+            "ssh_password": "None",
+            "api_password": "None",
+            "api_key": "None",
+            "snmp_community": "None",
+            "backup_schedule": "None",
+            "notes": "None",
+        },
+        existing_tags=None,
+        for_update=True,
+    )
+
+    assert errors == []
+    assert payload is not None
+    assert payload.code is None
+    assert payload.ssh_password is None
+    assert payload.api_password is None
+    assert payload.api_token is None
+    assert payload.snmp_community is None
+    assert "ssh_password" not in payload.model_fields_set
+    assert "api_password" not in payload.model_fields_set
+    assert "api_token" not in payload.model_fields_set
+    assert "snmp_community" not in payload.model_fields_set
+    assert payload.backup_schedule is None
+    assert payload.notes is None
+
+
 def test_usable_ipv4_count_handles_common_prefixes():
     assert web_network_ip_service._usable_ipv4_count("10.0.0.0/24") == 254
     assert web_network_ip_service._usable_ipv4_count("10.0.0.0/31") == 2

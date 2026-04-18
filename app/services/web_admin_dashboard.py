@@ -18,9 +18,6 @@ from app.models.network_monitoring import (
 )
 from app.models.subscriber import Subscriber
 from app.services import (
-    audit as audit_service,
-)
-from app.services import (
     settings_spec,
 )
 from app.services import (
@@ -32,6 +29,7 @@ from app.services import (
 from app.services import (
     web_admin as web_admin_service,
 )
+from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
     extract_changes,
     format_audit_datetime,
@@ -341,7 +339,7 @@ def dashboard(request: Request, db: Session):
     }
 
     # --- Recent activity ---
-    recent_activity = audit_service.audit_events.list(
+    recent_activity = audit_adapter.list_events(
         db=db,
         actor_id=None,
         actor_type=None,
@@ -707,7 +705,7 @@ def dashboard_stats_partial(request: Request, db: Session):
 
 
 def dashboard_activity_partial(request: Request, db: Session):
-    recent_activity = audit_service.audit_events.list(
+    recent_activity = audit_adapter.list_events(
         db=db,
         actor_id=None,
         actor_type=None,

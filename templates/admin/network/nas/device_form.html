@@ -73,7 +73,7 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address *</label>
-                        <input type="text" name="ip_address" id="ip_address" value="{{ device.ip_address if device else (form_data.ip_address if form_data else '') }}" required
+                        <input type="text" name="ip_address" id="ip_address" value="{{ (device.ip_address or '') if device else (form_data.ip_address if form_data else '') }}" required
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="192.168.1.1">
                         <p id="ip_address_error" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
@@ -89,7 +89,7 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vendor / Model</label>
-                        <input type="text" name="model" value="{{ device.model if device else (form_data.model if form_data else '') }}"
+                        <input type="text" name="model" value="{{ (device.model or '') if device else (form_data.model if form_data else '') }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="e.g., CCR2004-16G-2S+">
                     </div>
@@ -124,7 +124,7 @@
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
                         <textarea name="description" rows="2"
                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                                  placeholder="Optional description">{{ device.description if device else (form_data.description if form_data else '') }}</textarea>
+                                  placeholder="Optional description">{{ (device.description or '') if device else (form_data.description if form_data else '') }}</textarea>
                     </div>
                 </div>
             </div>
@@ -204,13 +204,13 @@
                     <div class="grid gap-4 sm:grid-cols-3">
                         <div>
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Username</label>
-                            <input type="text" name="ssh_username" value="{{ device.ssh_username if device else '' }}"
+                            <input type="text" name="ssh_username" value="{{ (device.ssh_username or '') if device else '' }}"
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="admin">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Password</label>
-                            <input type="password" name="ssh_password" value="{{ device.ssh_password if device else '' }}"
+                            <input type="password" name="ssh_password" value=""
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="********">
                         </div>
@@ -223,7 +223,7 @@
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">SSH Private Key (optional)</label>
                             <textarea name="ssh_key" rows="3"
                                       class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----">{{ device.ssh_key if device else '' }}</textarea>
+                                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
                         </div>
                     </div>
                 </div>
@@ -243,19 +243,19 @@
                         </div>
                         <div class="sm:col-span-2">
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API URL</label>
-                            <input type="text" name="api_url" value="{{ device.api_url if device else '' }}"
+                            <input type="text" name="api_url" value="{{ (device.api_url or '') if device else '' }}"
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="https://192.168.1.1/rest">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Username</label>
-                            <input type="text" name="api_username" value="{{ device.api_username if device else '' }}"
+                            <input type="text" name="api_username" value="{{ (device.api_username or '') if device else '' }}"
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="api-user">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Password</label>
-                            <input type="password" name="api_password" value="{{ device.api_password if device else '' }}"
+                            <input type="password" name="api_password" value=""
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="********">
                         </div>
@@ -268,7 +268,7 @@
                         </div>
                         <div class="sm:col-span-2">
                             <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">API Token (optional)</label>
-                            <input type="text" name="api_key" value="{{ device.api_token if device else '' }}"
+                            <input type="text" name="api_key" value=""
                                    class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="Bearer token or API key">
                         </div>
@@ -287,7 +287,7 @@
                 <div class="grid gap-4 sm:grid-cols-3">
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Community String</label>
-                        <input type="text" name="snmp_community" value="{{ device.snmp_community if device else '' }}"
+                        <input type="text" name="snmp_community" value=""
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="public">
                     </div>
@@ -318,20 +318,20 @@
                 <div class="grid gap-4 sm:grid-cols-3">
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">RADIUS Shared Secret</label>
-                        <input type="password" name="radius_secret" value="{{ device.shared_secret if device else '' }}"
+                        <input type="password" name="radius_secret" value=""
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="Shared secret for RADIUS">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">NAS Identifier (Code)</label>
-                        <input type="text" name="nas_identifier" value="{{ device.code if device else '' }}"
+                        <input type="text" name="nas_identifier" value="{{ (device.code or '') if device else '' }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="e.g., core-router-01">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">NAS IP *</label>
                         <input type="text" name="nas_ip" id="nas_ip"
-                               value="{{ device.nas_ip if device else (form_data.nas_ip if form_data else '') }}"
+                               value="{{ (device.nas_ip or '') if device else (form_data.nas_ip if form_data else '') }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="10.0.0.1">
                         <p id="nas_ip_error" class="mt-1 hidden text-xs text-red-600 dark:text-red-400"></p>
@@ -388,7 +388,7 @@
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Backup Schedule (cron)</label>
-                        <input type="text" name="backup_schedule" value="{{ device.backup_schedule if device else '' }}"
+                        <input type="text" name="backup_schedule" value="{{ (device.backup_schedule or '') if device else '' }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="0 2 * * *">
                     </div>
@@ -465,18 +465,18 @@
                 <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Firmware Version</label>
-                        <input type="text" name="firmware_version" value="{{ device.firmware_version if device else '' }}"
+                        <input type="text" name="firmware_version" value="{{ (device.firmware_version or '') if device else '' }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="7.12.1">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Serial Number</label>
-                        <input type="text" name="serial_number" value="{{ device.serial_number if device else '' }}"
+                        <input type="text" name="serial_number" value="{{ (device.serial_number or '') if device else '' }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                     <div class="sm:col-span-2 lg:col-span-3">
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Rack Position / Location</label>
-                        <input type="text" name="location" value="{{ device.rack_position if device else '' }}"
+                        <input type="text" name="location" value="{{ (device.rack_position or '') if device else '' }}"
                                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                placeholder="Rack 5, Unit 22">
                     </div>
@@ -509,7 +509,7 @@
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Notes</label>
                         <textarea name="notes" rows="3"
                                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                                  placeholder="Additional notes...">{{ device.notes if device else '' }}</textarea>
+                                  placeholder="Additional notes...">{{ (device.notes or '') if device else '' }}</textarea>
                     </div>
                 </div>
                 <div class="mt-4 flex items-center gap-3">

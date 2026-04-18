@@ -66,6 +66,58 @@ DEVICE_AUDIT_EXCLUDE_FIELDS = {
 }
 
 
+_OPTIONAL_NAS_FORM_TEXT_FIELDS = {
+    "model",
+    "description",
+    "pop_site_id",
+    "authorization_type",
+    "accounting_type",
+    "physical_address",
+    "latitude",
+    "longitude",
+    "default_connection_type",
+    "ssh_username",
+    "ssh_password",
+    "ssh_key",
+    "api_url",
+    "api_username",
+    "api_password",
+    "api_key",
+    "snmp_community",
+    "backup_method",
+    "backup_schedule",
+    "radius_secret",
+    "nas_identifier",
+    "nas_ip",
+    "firmware_version",
+    "serial_number",
+    "location",
+    "shaper_target",
+    "shaping_type",
+    "notes",
+}
+
+
+def _clean_optional_form_values(form: dict[str, Any]) -> dict[str, Any]:
+    """Convert browser-submitted empty/None sentinels back to real nulls."""
+    cleaned = dict(form)
+    for key in _OPTIONAL_NAS_FORM_TEXT_FIELDS:
+        value = cleaned.get(key)
+        if isinstance(value, str) and value.strip().lower() in {"", "none", "null"}:
+            cleaned[key] = None
+    return cleaned
+
+
+_PRESERVE_ON_BLANK_UPDATE_FIELDS = {
+    "shared_secret",
+    "ssh_password",
+    "ssh_key",
+    "api_password",
+    "api_token",
+    "snmp_community",
+}
+
+
 def build_nas_device_payload(
     db: Session,
     *,
@@ -76,6 +128,7 @@ def build_nas_device_payload(
     """Validate web form values and build NAS create/update payload."""
     from app.services import network as network_service
 
+    form = _clean_optional_form_values(form)
     errors: list[str] = []
     supported_connection_types = form.get("supported_connection_types")
     conn_types: list[ConnectionType] | None = None
@@ -252,42 +305,46 @@ def build_nas_device_payload(
         notes = cast(str | None, form.get("notes") or None)
         is_active = cast(bool | None, form.get("is_active"))
         if for_update:
-            payload: NasDeviceCreate | NasDeviceUpdate = NasDeviceUpdate(
-                name=name,
-                code=code,
-                vendor=vendor,
-                model=model,
-                ip_address=ip_address,
-                management_ip=management_ip,
-                management_port=management_port,
-                nas_ip=nas_ip or None,
-                description=description,
-                pop_site_id=pop_site_id,
-                rack_position=rack_position,
-                status=status,
-                supported_connection_types=supported_types,
-                default_connection_type=default_connection_type,
-                ssh_username=ssh_username,
-                ssh_password=ssh_password,
-                ssh_key=ssh_key,
-                api_url=api_url,
-                api_username=api_username,
-                api_password=api_password,
-                api_token=api_token,
-                snmp_community=snmp_community,
-                snmp_version=snmp_version,
-                snmp_port=snmp_port,
-                backup_enabled=backup_enabled,
-                backup_method=backup_method,
-                backup_schedule=backup_schedule,
-                shared_secret=shared_secret,
-                coa_port=coa_port,
-                firmware_version=firmware_version,
-                serial_number=serial_number,
-                notes=notes,
-                tags=tags,
-                is_active=is_active,
-            )
+            update_data: dict[str, Any] = {
+                "name": name,
+                "code": code,
+                "vendor": vendor,
+                "model": model,
+                "ip_address": ip_address,
+                "management_ip": management_ip,
+                "management_port": management_port,
+                "nas_ip": nas_ip or None,
+                "description": description,
+                "pop_site_id": pop_site_id,
+                "rack_position": rack_position,
+                "status": status,
+                "supported_connection_types": supported_types,
+                "default_connection_type": default_connection_type,
+                "ssh_username": ssh_username,
+                "ssh_password": ssh_password,
+                "ssh_key": ssh_key,
+                "api_url": api_url,
+                "api_username": api_username,
+                "api_password": api_password,
+                "api_token": api_token,
+                "snmp_community": snmp_community,
+                "snmp_version": snmp_version,
+                "snmp_port": snmp_port,
+                "backup_enabled": backup_enabled,
+                "backup_method": backup_method,
+                "backup_schedule": backup_schedule,
+                "shared_secret": shared_secret,
+                "coa_port": coa_port,
+                "firmware_version": firmware_version,
+                "serial_number": serial_number,
+                "notes": notes,
+                "tags": tags,
+                "is_active": is_active,
+            }
+            for field in _PRESERVE_ON_BLANK_UPDATE_FIELDS:
+                if update_data.get(field) is None:
+                    update_data.pop(field, None)
+            payload: NasDeviceCreate | NasDeviceUpdate = NasDeviceUpdate(**update_data)
         else:
             payload = NasDeviceCreate(
                 name=cast(str, name),

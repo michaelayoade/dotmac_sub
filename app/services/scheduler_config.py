@@ -1060,6 +1060,31 @@ def build_beat_schedule() -> dict:
                 "kwargs": {"hours_back": 2},
             }
 
+        # Splynx customer accounts/details sync only. This intentionally stays
+        # separate from invoice, payment, and service sync.
+        splynx_customer_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.subscriber,
+            "splynx_customer_sync_enabled",
+            "SPLYNX_CUSTOMER_SYNC_ENABLED",
+            False,
+        )
+        splynx_customer_sync_interval_hours = _effective_int(
+            session,
+            SettingDomain.subscriber,
+            "splynx_customer_sync_interval_hours",
+            "SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS",
+            24,
+        )
+        splynx_customer_sync_interval_hours = max(
+            splynx_customer_sync_interval_hours, 1
+        )
+        if splynx_customer_sync_enabled:
+            schedule["splynx_customer_accounts_details_sync"] = {
+                "task": "app.tasks.splynx_sync.run_customer_accounts_details_sync",
+                "schedule": timedelta(hours=splynx_customer_sync_interval_hours),
+            }
+
         # ONT provisioning verification - periodic drift detection (Phase 2)
         ont_verification_enabled = _effective_bool(
             session,

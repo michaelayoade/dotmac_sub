@@ -422,14 +422,15 @@ def operational_health_context(
     except HTTPException:
         snapshots = []
     try:
-        from app.services.network.ont_service_intent import (
-            build_service_intent,
-            load_ont_plan_for_ont,
-        )
+        from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
-        ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
+        ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
         service_intent = (
-            build_service_intent(ont, db=db, ont_plan=ont_plan) if ont else {}
+            service_intent_ui_adapter.build_ont_service_intent(
+                ont, db=db, ont_plan=ont_plan
+            )
+            if ont
+            else {}
         )
     except Exception:
         logger.exception("Failed to build operations runbook intent for ONT %s", ont_id)

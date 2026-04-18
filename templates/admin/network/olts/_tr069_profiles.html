@@ -60,11 +60,13 @@
             const csrfEl = document.querySelector('input[name=_csrf_token]');
             if (csrfEl) fd.append(csrfEl.name, csrfEl.value);
             fetch('/admin/network/olts/{{ olt_id }}/tr069-profiles/rebind', {
-                method: 'POST', body: fd,
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+                body: fd,
             }).then(r => r.json()).then(data => {
                 rebindLoading = false;
-                document.dispatchEvent(new CustomEvent('show-toast', {detail: {message: data.message, type: data.ok ? 'success' : 'error'}}));
-                if (data.ok) selectedOnts = [];
+                document.dispatchEvent(new CustomEvent('show-toast', {detail: {message: data.message, type: data.success ? 'success' : 'error'}}));
+                if (data.success) selectedOnts = [];
             }).catch(() => { rebindLoading = false; });
         " :disabled="rebindLoading || selectedOnts.length === 0 || !targetProfile"
            class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-amber-600 hover:to-orange-700 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed">

@@ -29,7 +29,6 @@ from app.models.network import (
 )
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
-from app.services.notification_adapter import broadcast_websocket, notify
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
@@ -41,6 +40,7 @@ from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
 )
+from app.services.notification_adapter import broadcast_websocket, notify
 
 logger = logging.getLogger(__name__)
 
@@ -910,7 +910,6 @@ def authorize_autofind_ont(
             OLT authorization. Callers that continue into inline network
             provisioning should set this to False.
     """
-    from app.services.network import olt_ssh as olt_ssh_service
     from app.services.network import olt_ssh_ont as olt_ssh_ont_service
     from app.services.network.olt_write_reconciliation import (
         verify_ont_absent,
@@ -1081,13 +1080,6 @@ def authorize_autofind_ont(
             warning.field,
             warning.message,
         )
-    _append_step(
-        "Validate authorization config",
-        True,
-        "Authorization configuration is valid",
-        step_started_at=validate_config_started_at,
-    )
-
     # Check if OLT accepts new ONT authorizations
     from app.services.network.olt_lifecycle import is_olt_accepting_new_onts
 
@@ -2284,8 +2276,8 @@ def queue_authorize_autofind_ont(
                 olt_id,
                 fsp,
                 serial_number,
+                force_reauthorize,
             ],
-            kwargs={"force_reauthorize": force_reauthorize},
             correlation_id=correlation_key,
             source="olt_authorization",
         )

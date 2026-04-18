@@ -19,7 +19,7 @@
     <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Current WiFi Settings</h4>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {# SSID - Highlight #}
-        {% set ssid = wireless_info.get('SSID') %}
+        {% set ssid = wireless_info.get('ssid') %}
         {% if ssid %}
         <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 dark:bg-amber-900/20 dark:border-amber-800">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Network Name (SSID)</dt>
@@ -27,7 +27,7 @@
         </div>
         {% endif %}
         {# Enabled Status #}
-        {% set enabled = wireless_info.get('Enabled') or wireless_info.get('Enable') %}
+        {% set enabled = wireless_info.get('enabled') %}
         {% if enabled is not none %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Enabled</dt>
@@ -44,7 +44,7 @@
         </div>
         {% endif %}
         {# Channel #}
-        {% set channel = wireless_info.get('Channel') %}
+        {% set channel = wireless_info.get('channel') %}
         {% if channel %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Channel</dt>
@@ -52,30 +52,24 @@
         </div>
         {% endif %}
         {# Security Mode #}
-        {% set security = wireless_info.get('Security Mode') or wireless_info.get('SecurityMode') or wireless_info.get('BeaconType') %}
+        {% set security = wireless_info.get('security_mode') %}
         {% if security %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Security Mode</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ security }}</dd>
         </div>
         {% endif %}
-        {# Password - Hidden by default #}
-        {% set password = wireless_info.get('Password') or wireless_info.get('PreSharedKey') or wireless_info.get('KeyPassphrase') %}
-        {% if password %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60" x-data="{ revealed: false }">
+        {% set password_present = wireless_info.get('password_present') %}
+        {% if password_present %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Password</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">
-                <span x-show="!revealed">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;
-                    <button type="button" @click="revealed = true" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 focus:outline-none focus:underline">show</button>
-                </span>
-                <span x-show="revealed" x-cloak>{{ password }}
-                    <button type="button" @click="revealed = false" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 focus:outline-none focus:underline">hide</button>
-                </span>
+                Set
             </dd>
         </div>
         {% endif %}
         {# Bandwidth/Standard #}
-        {% set standard = wireless_info.get('Standard') or wireless_info.get('OperatingStandards') %}
+        {% set standard = wireless_info.get('standard') %}
         {% if standard %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Standard</dt>
@@ -88,10 +82,10 @@
 
 {# Full WiFi Configuration Form #}
 {% set wifi_intent = ont_plan.get('configure_wifi_tr069') if ont_plan is defined and ont_plan else {} %}
-{% set wifi_enabled = wifi_intent.get('enabled') if wifi_intent.get('enabled') is not none else (wireless_info.get('Enabled') or wireless_info.get('Enable') if wireless_info else '') %}
-{% set wifi_channel = wifi_intent.get('channel') or (wireless_info.get('Channel') if wireless_info else '') %}
-{% set wifi_security = wifi_intent.get('security_mode') or (wireless_info.get('Security Mode') or wireless_info.get('SecurityMode') or wireless_info.get('BeaconType') if wireless_info else '') %}
-{% set wifi_ssid = wifi_intent.get('ssid') or current_ssid or '' %}
+{% set wifi_enabled = wifi_intent.get('enabled') if wifi_intent.get('enabled') is not none else (wireless_info.get('enabled') if wireless_info else '') %}
+{% set wifi_channel = wifi_intent.get('channel') or (wireless_info.get('channel') if wireless_info else '') %}
+{% set wifi_security = wifi_intent.get('security_mode') or (wireless_info.get('security_mode') if wireless_info else '') %}
+{% set wifi_ssid = wifi_intent.get('ssid') or (wireless_info.get('ssid') if wireless_info else '') or current_ssid or '' %}
 <div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
      x-data="{ showWifiPassword: false }">
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WiFi</h4>
@@ -118,8 +112,13 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label>
-                <input type="number" name="channel" value="{{ wifi_channel or '' }}" min="0" max="196" placeholder="Auto"
-                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <select name="channel" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Leave unchanged</option>
+                    <option value="0" {% if wifi_channel|string == '0' %}selected{% endif %}>Auto</option>
+                    {% for channel in range(1, 14) %}
+                    <option value="{{ channel }}" {% if wifi_channel|string == channel|string %}selected{% endif %}>Channel {{ channel }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Security Mode</label>

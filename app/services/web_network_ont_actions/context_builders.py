@@ -11,6 +11,7 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OntAssignment
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
+from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
 )
@@ -47,10 +48,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_onts as web_network_onts_service
     from app.services import web_network_service_ports as web_service_ports_service
     from app.services.network import ont_web_forms as ont_web_forms_service
-    from app.services.network.ont_service_intent import (
-        build_service_intent,
-        load_ont_plan_for_ont,
-    )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     linked_tr069 = (
@@ -99,23 +96,37 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
                 or getattr(assignment.subscriber, "full_name", "")
                 or ""
             ).strip()
-    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-    service_intent = build_service_intent(
+    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    service_intent = service_intent_ui_adapter.build_ont_service_intent(
         ont,
         db=db,
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )
+    try:
+        acs_observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+            db,
+            ont_id=ont_id,
+        )
+    except Exception:
+        logger.exception("Failed to load ACS observed service intent for ONT %s", ont_id)
+        acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+            None
+        )
 
-    snapshot = getattr(ont, "tr069_last_snapshot", None) or {}
-    wireless_snapshot = snapshot.get("wireless") if isinstance(snapshot, dict) else {}
-    current_ssid = None
-    if isinstance(wireless_snapshot, dict):
-        current_ssid = wireless_snapshot.get("SSID") or wireless_snapshot.get("ssid")
+    observed = acs_observed_intent.get("observed", {})
+    observed_wan = observed.get("wan", {}) if isinstance(observed, dict) else {}
+    observed_wifi = observed.get("wifi", {}) if isinstance(observed, dict) else {}
+    wan_status = (
+        str(observed_wan.get("status") or "").strip().lower()
+        if isinstance(observed_wan, dict)
+        else ""
+    )
 
     return {
         "ont": ont,
         "service_intent": service_intent,
+        "acs_observed_intent": acs_observed_intent,
         "ont_plan": ont_plan,
         "iphost_config": iphost_config,
         "iphost_ok": ok,
@@ -133,11 +144,15 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         },
         "service_ports_count": service_ports_count,
         "wan_summary": {
-            "pppoe_user": getattr(ont, "pppoe_username", None),
-            "wan_ip": getattr(ont, "observed_wan_ip", None),
-            "status": getattr(ont, "observed_pppoe_status", None),
+            "pppoe_user": observed_wan.get("pppoe_username")
+            if isinstance(observed_wan, dict)
+            else None,
+            "wan_ip": observed_wan.get("wan_ip") if isinstance(observed_wan, dict) else None,
+            "status": wan_status or None,
         },
-        "wifi_summary": {"ssid": current_ssid},
+        "wifi_summary": {
+            "ssid": observed_wifi.get("ssid") if isinstance(observed_wifi, dict) else None
+        },
         "has_tr069": bool(
             linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
         ),
@@ -145,40 +160,41 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_ont_tr069 as web_tr069_service
     from app.services import web_network_onts as web_network_onts_service
-    from app.services.network.ont_service_intent import load_ont_plan_for_ont
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
-    wan = getattr(tr069, "wan", None) if tr069 else None
+    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    wan = observed.get("wan", {}) if isinstance(observed, dict) else {}
     return {
         "ont_id": ont_id,
-        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "tr069_available": bool(observed_intent.get("available")),
         "ont": ont,
         "ont_plan": ont_plan,
+        "acs_observed_intent": observed_intent,
         "wan_info": wan,
-        "current_pppoe_user": (wan or {}).get("Username"),
+        "current_pppoe_user": (wan or {}).get("pppoe_username"),
         "vlans": web_network_onts_service.get_vlans_for_ont(db, ont),
     }
 
 
 def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_ont_tr069 as web_tr069_service
-    from app.services.network.ont_service_intent import load_ont_plan_for_ont
-
-    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
-    wireless = getattr(tr069, "wireless", None) if tr069 else None
+    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    wireless = observed.get("wifi", {}) if isinstance(observed, dict) else {}
     return {
         "ont_id": ont_id,
-        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "tr069_available": bool(observed_intent.get("available")),
+        "acs_observed_intent": observed_intent,
         "ont_plan": ont_plan,
         "wireless_info": wireless,
-        "current_ssid": (wireless or {}).get("SSID"),
+        "current_ssid": (wireless or {}).get("ssid"),
     }
 
 
@@ -189,40 +205,45 @@ def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
     tr069_profiles, tr069_profiles_error = (
         web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
     )
+    current_profile, current_profile_error = (
+        service_intent_ui_adapter.resolve_effective_tr069_profile(db, ont=ont)
+    )
     return {
         "ont_id": ont_id,
         "tr069_profiles": tr069_profiles,
-        "tr069_profiles_error": tr069_profiles_error,
-        "current_profile": None,
-        "current_profile_id": None,
+        "tr069_profiles_error": tr069_profiles_error or current_profile_error,
+        "current_profile": getattr(current_profile, "profile_name", None)
+        or getattr(current_profile, "name", None),
+        "current_profile_id": getattr(current_profile, "profile_id", None),
     }
 
 
 def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_ont_tr069 as web_tr069_service
-    from app.services.network.ont_service_intent import load_ont_plan_for_ont
-
-    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
+    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
     return {
         "ont_id": ont_id,
-        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "tr069_available": bool(observed_intent.get("available")),
+        "acs_observed_intent": observed_intent,
         "ont_plan": ont_plan,
-        "lan_info": getattr(tr069, "lan", None) if tr069 else None,
-        "ethernet_ports": getattr(tr069, "ethernet_ports", None) if tr069 else None,
-        "lan_hosts": getattr(tr069, "lan_hosts", None) if tr069 else None,
+        "lan_info": observed.get("lan", {}),
+        "ethernet_ports": observed.get("ethernet_ports", []),
+        "lan_hosts": observed.get("lan_hosts", []),
     }
 
 
 def diagnostics_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_ont_tr069 as web_tr069_service
-
-    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
     return {
         "ont_id": ont_id,
-        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "tr069_available": bool(observed_intent.get("available")),
+        "acs_observed_intent": observed_intent,
     }
 
 

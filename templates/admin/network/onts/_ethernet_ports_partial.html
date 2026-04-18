@@ -19,13 +19,13 @@
         </thead>
         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
             {% for port in ethernet_ports %}
-            {% set port_num = port.get('index', port.get('port', loop.index)) %}
-            {% set enabled = port.get('Enable', port.get('admin_enabled', true)) %}
+            {% set port_num = port.get('port', port.get('index', loop.index)) %}
+            {% set enabled = port.get('admin_enabled', port.get('Enable', true)) %}
             {% set is_enabled = enabled == true or enabled == 'true' or enabled == '1' or enabled == 1 %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                 <td class="whitespace-nowrap px-4 py-2.5 text-sm font-medium text-slate-900 dark:text-white">ETH {{ port_num }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5">
-                    {% set status = port.get('Status', port.get('status', 'Unknown')) %}
+                    {% set status = port.get('link_status', port.get('Status', port.get('status', 'Unknown'))) %}
                     {% if is_enabled and (status == 'Up' or status == 'up') %}
                     <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
                         <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Up
@@ -38,9 +38,9 @@
                     <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ status }}</span>
                     {% endif %}
                 </td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ port.get('MaxBitRate', port.get('speed', '—')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ port.get('DuplexMode', port.get('duplex', '—')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.get('MACAddress', port.get('mac', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ port.get('speed_mbps', port.get('MaxBitRate', port.get('speed', '—'))) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ port.get('duplex', port.get('DuplexMode', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.get('mac_address', port.get('MACAddress', port.get('mac', '—'))) }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesSent', '—') }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesReceived', '—') }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-right">

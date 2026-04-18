@@ -100,16 +100,16 @@ class OntFeatureService:
             return cap_err
 
         if ssid is not None:
-            from app.services.network.ont_action_wifi import set_wifi_ssid
+            from app.services.acs_config_adapter import acs_config_adapter
 
-            result = set_wifi_ssid(db, ont_id, ssid)
+            result = acs_config_adapter.set_wifi_ssid(db, ont_id, ssid)
             if not result.success:
                 return result
 
         if password is not None:
-            from app.services.network.ont_action_wifi import set_wifi_password
+            from app.services.acs_config_adapter import acs_config_adapter
 
-            result = set_wifi_password(db, ont_id, password)
+            result = acs_config_adapter.set_wifi_password(db, ont_id, password)
             if not result.success:
                 return result
 
@@ -217,9 +217,9 @@ class OntFeatureService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        from app.services.network.ont_action_wifi import toggle_lan_port
+        from app.services.acs_config_adapter import acs_config_adapter
 
-        result = toggle_lan_port(db, ont_id, port_number, enabled)
+        result = acs_config_adapter.toggle_lan_port(db, ont_id, port_number, enabled)
         if result.success:
             _set_sync_meta(ont, "tr069")
             db.commit()

@@ -30,6 +30,8 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
         splynx_connection,
     )
     from scripts.migration.incremental_sync import (
+        sync_deleted_customers,
+        sync_deleted_services,
         sync_new_invoices,
         sync_new_payments,
         sync_status_changes,
@@ -42,6 +44,8 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
         "invoices_created": 0,
         "payments_created": 0,
         "status_updated": 0,
+        "customers_deleted": 0,
+        "services_canceled": 0,
         "errors": 0,
     }
 
@@ -60,21 +64,47 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
                 db.commit()
                 stats["status_updated"] = status_result.get("updated", 0)
 
+                del_cust_result = sync_deleted_customers(conn, db)
+                db.commit()
+                stats["customers_deleted"] = del_cust_result.get("soft_deleted", 0)
+
+                del_svc_result = sync_deleted_services(conn, db)
+                db.commit()
+                stats["services_canceled"] = del_svc_result.get("canceled", 0)
+
     except Exception as exc:
         logger.error("Splynx incremental sync failed: %s", exc)
         stats["errors"] = 1
         raise
 
     total = (
-        stats["invoices_created"] + stats["payments_created"] + stats["status_updated"]
+        stats["invoices_created"]
+        + stats["payments_created"]
+        + stats["status_updated"]
+        + stats["customers_deleted"]
+        + stats["services_canceled"]
     )
     logger.info(
-        "Splynx incremental sync complete: %d invoices, %d payments, %d status changes",
+        "Splynx incremental sync complete: %d invoices, %d payments, %d status changes, "
+        "%d deleted customers, %d canceled services",
         stats["invoices_created"],
         stats["payments_created"],
         stats["status_updated"],
+        stats["customers_deleted"],
+        stats["services_canceled"],
     )
     if total > 0:
         logger.info("Sync stats: %s", stats)
 
     return stats
+
+
+@celery_app.task(name="app.tasks.splynx_sync.run_customer_accounts_details_sync")
+def run_customer_accounts_details_sync() -> dict[str, dict[str, int]]:
+    """Sync only Splynx customer accounts and detail fields into DotMac Sub."""
+    from app.services.splynx_customer_sync import run_customer_sync
+
+    logger.info("Splynx customer accounts/details sync starting")
+    result = run_customer_sync(dry_run=False)
+    logger.info("Splynx customer accounts/details sync complete: %s", result)
+    return result

@@ -811,7 +811,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     """Build template context for the ONT provisioning wizard page."""
     from app.services import network as network_service
     from app.services import web_admin as web_admin_service
-    from app.services.network.ont_service_intent import load_ont_plan_for_ont
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
     from app.services.web_network_onts_provisioning import (
         preflight_result,
         validate_provision_form_fields,
@@ -855,7 +855,9 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         for pool in ip_pools
         if getattr(pool, "vlan_id", None)
     }
-    ont_plan: dict[str, Any] = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
+    ont_plan: dict[str, Any] = (
+        service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id) or {}
+    )
     lan_plan_value = ont_plan.get("configure_lan_tr069")
     wifi_plan_value = ont_plan.get("configure_wifi_tr069")
     lan_intent_from_order = lan_plan_value if isinstance(lan_plan_value, dict) else {}
@@ -1049,13 +1051,11 @@ def resolve_effective_tr069_profile_for_ont(
     # intent if no explicit ONT value exists.
     planned_profile_id: Any = getattr(ont, "tr069_olt_profile_id", None)
     if planned_profile_id is None:
-        from app.services.network.ont_service_intent import load_ont_plan_for_ont
-
         try:
-            from app.services.network.ont_service_intent import load_ont_plan_for_ont
+            from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
             ont_id = str(getattr(ont, "id", ""))
-            ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
+            ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
             bind_tr069 = (
                 ont_plan.get("bind_tr069") if isinstance(ont_plan, dict) else None
             )

@@ -38,21 +38,20 @@ def execute_create_olt_service_port(
     config = config or {}
     ont_unit_id = context.get("ont_unit_id")
     subscription_id = context.get("subscription_id")
+    subscriber_id = context.get("subscriber_id")
 
-    if not ont_unit_id and subscription_id:
-        # Resolve ONT from subscription's assignment
-        from sqlalchemy import select
+    # Use Subscriber-ONT adapter to resolve complete provisioning context
+    if not ont_unit_id and (subscription_id or subscriber_id):
+        from app.services.network.subscriber_ont_adapter import (
+            resolve_provisioning_context,
+        )
 
-        from app.models.network import OntAssignment
-
-        assignment = db.scalars(
-            select(OntAssignment).where(
-                OntAssignment.subscriber_id == context.get("subscriber_id"),
-                OntAssignment.active.is_(True),
-            )
-        ).first()
-        if assignment:
-            ont_unit_id = str(assignment.ont_unit_id)
+        prov_context = resolve_provisioning_context(
+            db,
+            subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
+        )
+        ont_unit_id = prov_context.ont_id
 
     if not ont_unit_id:
         return ProvisioningResult(
@@ -373,9 +372,11 @@ def execute_push_tr069_pppoe_credentials(
 
     try:
         if ont_unit_id:
-            from app.services.network.ont_action_network import set_pppoe_credentials
+            from app.services.acs_config_adapter import acs_config_adapter
 
-            result = set_pppoe_credentials(db, ont_unit_id, username, password)
+            result = acs_config_adapter.set_pppoe_credentials(
+                db, ont_unit_id, username, password
+            )
         elif cpe_device_id:
             # CPE doesn't handle PPPoE — it's behind the ONT. Skip gracefully.
             return ProvisioningResult(

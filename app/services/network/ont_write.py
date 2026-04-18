@@ -148,11 +148,9 @@ class OntWriteService:
         # Try setting PPPoE via TR-069 if applicable
         if wan_mode == "pppoe" and pppoe_username and pppoe_password:
             try:
-                from app.services.network.ont_action_network import (
-                    set_pppoe_credentials,
-                )
+                from app.services.acs_config_adapter import acs_config_adapter
 
-                result = set_pppoe_credentials(
+                result = acs_config_adapter.set_pppoe_credentials(
                     db, ont_id, pppoe_username, pppoe_password
                 )
                 if not result.success:

@@ -39,12 +39,10 @@ from app.models.radius import (
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
-from app.schemas.billing import InvoiceCreate, InvoiceLineCreate
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
 from app.services import auth_flow as auth_flow_service
-from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import email as email_service
 from app.services import network as network_service
@@ -53,9 +51,14 @@ from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec
 from app.services import sms as sms_service
 from app.services import subscriber as subscriber_service
+from app.services.audit_adapter import record_audit_event
 from app.services.audit_helpers import (
     build_changes_metadata,
-    log_audit_event,
+)
+from app.services.billing_adapter import (
+    InvoiceIntent,
+    InvoiceLineIntent,
+    billing_adapter,
 )
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
@@ -1166,20 +1169,21 @@ def create_invoice_for_subscription(db: Session, created: Subscription) -> None:
         if offer.prices:
             line_amount = offer.prices[0].amount or Decimal("0.00")
 
-    invoice_payload = InvoiceCreate(
-        account_id=created.subscriber_id,
-        status=InvoiceStatus.issued,
-        issued_at=datetime.now(UTC),
-    )
-    invoice = billing_service.invoices.create(db=db, payload=invoice_payload)
-    billing_service.invoice_lines.create(
+    billing_adapter.create_invoice_with_lines(
         db,
-        InvoiceLineCreate(
-            invoice_id=invoice.id,
-            description=line_description,
-            quantity=Decimal("1"),
-            unit_price=line_amount,
+        InvoiceIntent(
+            account_id=created.subscriber_id,
+            status=InvoiceStatus.issued,
+            total=line_amount,
+            issued_at=datetime.now(UTC),
         ),
+        [
+            InvoiceLineIntent(
+                description=line_description,
+                quantity=Decimal("1"),
+                unit_price=line_amount,
+            )
+        ],
     )
 
 
@@ -2003,9 +2007,8 @@ def bulk_update_status(
                 catalog_service.subscriptions.update(
                     db=db, subscription_id=sub_id, payload=payload
                 )
-                log_audit_event(
-                    db=db,
-                    request=request,
+                record_audit_event(
+                    db,
                     action=action,
                     entity_type="subscription",
                     entity_id=sub_id,
@@ -2050,9 +2053,8 @@ def bulk_change_plan(
                 catalog_service.subscriptions.update(
                     db=db, subscription_id=sub_id, payload=payload
                 )
-                log_audit_event(
-                    db=db,
-                    request=request,
+                record_audit_event(
+                    db,
                     action="change_plan",
                     entity_type="subscription",
                     entity_id=sub_id,
@@ -2188,9 +2190,8 @@ def create_subscription_with_audit(
         else:
             _reconcile_active_subscription_after_credential_sync(db, str(created.id))
 
-    log_audit_event(
-        db=db,
-        request=request,
+    record_audit_event(
+        db,
         action="create",
         entity_type="subscription",
         entity_id=str(created.id),
@@ -2270,9 +2271,8 @@ def update_subscription_with_audit(
         metadata_payload["allocated_ipv4_count"] = len(allocated_ips)
         metadata_payload["allocated_ipv4_addresses"] = allocated_ips
 
-    log_audit_event(
-        db=db,
-        request=request,
+    record_audit_event(
+        db,
         action="update",
         entity_type="subscription",
         entity_id=str(subscription_id),

@@ -7,7 +7,7 @@
         {% set port_num = port.get('port', loop.index) %}
         {% set admin_enabled = port.get('admin_enabled', port.get('Enable', 'true')) %}
         {% set is_enabled = admin_enabled == true or admin_enabled == 'true' or admin_enabled == '1' or admin_enabled == 1 %}
-        {% set status = port.get('Status', port.get('status', 'Unknown')) %}
+        {% set status = port.get('link_status', port.get('Status', port.get('status', 'Unknown'))) %}
         {% set is_up = status == 'Up' or status == 'up' %}
         <div class="flex items-center justify-between rounded-lg border {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if is_enabled and is_up else 'border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/60' }} px-3 py-2">
             <div class="flex items-center gap-2">

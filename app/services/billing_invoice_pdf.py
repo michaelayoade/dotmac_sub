@@ -825,19 +825,18 @@ def queue_export(
     if latest and latest.status == InvoicePdfExportStatus.processing:
         return latest
 
-    from app.celery_app import enqueue_celery_task
-    from app.tasks.invoice_pdf import generate_invoice_pdf_export
+    from app.services.queue_adapter import enqueue_task
 
     if latest and latest.status == InvoicePdfExportStatus.queued:
         if not latest.celery_task_id:
-            async_result = enqueue_celery_task(
-                generate_invoice_pdf_export,
+            dispatch = enqueue_task(
+                "app.tasks.invoice_pdf.generate_invoice_pdf_export",
                 args=[str(latest.id)],
                 correlation_id=f"invoice_pdf_export:{latest.id}",
                 source="billing_invoice_pdf",
                 actor_id=requested_by_id,
             )
-            latest.celery_task_id = str(async_result.id)
+            latest.celery_task_id = dispatch.task_id
             db.commit()
             db.refresh(latest)
         return latest
@@ -851,14 +850,14 @@ def queue_export(
     db.commit()
     db.refresh(export)
 
-    async_result = enqueue_celery_task(
-        generate_invoice_pdf_export,
+    dispatch = enqueue_task(
+        "app.tasks.invoice_pdf.generate_invoice_pdf_export",
         args=[str(export.id)],
         correlation_id=f"invoice_pdf_export:{export.id}",
         source="billing_invoice_pdf",
         actor_id=requested_by_id,
     )
-    export.celery_task_id = str(async_result.id)
+    export.celery_task_id = dispatch.task_id
     db.commit()
     db.refresh(export)
     return export

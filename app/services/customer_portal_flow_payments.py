@@ -5,13 +5,15 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus
+from app.models.billing import InvoiceStatus, Payment, PaymentStatus
 from app.models.domain_settings import SettingDomain
 from app.services import billing as billing_service
+from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.customer_portal_context import (
     get_allowed_account_ids,
     get_invoice_billing_contact,
 )
+from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -49,27 +51,19 @@ def get_payment_page(
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
     email = billing_contact["billing_email"] or customer.get("username", "")
 
-    if provider_type == "flutterwave":
-        from app.services.flutterwave import generate_reference, get_public_key
-
-        reference = generate_reference(invoice_number)
-        return {
-            "invoice": invoice,
-            "provider_type": "flutterwave",
-            "provider_public_key": get_public_key(db),
-            "payment_reference": reference,
-            "customer_email": email,
-        }
-
-    from app.services.paystack import generate_reference, get_public_key
-
-    reference = generate_reference(invoice_number)
+    gateway_context = payment_gateway_adapter.build_context(
+        db,
+        provider_type=provider_type,
+        invoice_number=invoice_number,
+    )
     return {
         "invoice": invoice,
-        "provider_type": "paystack",
-        "provider_public_key": get_public_key(db),
-        "paystack_public_key": get_public_key(db),
-        "payment_reference": reference,
+        "provider_type": gateway_context.provider_type,
+        "provider_public_key": gateway_context.public_key,
+        "paystack_public_key": gateway_context.public_key
+        if gateway_context.provider_type == "paystack"
+        else None,
+        "payment_reference": gateway_context.reference,
         "customer_email": email,
     }
 
@@ -84,40 +78,19 @@ def verify_and_record_payment(
     """Verify an online payment transaction and record the payment."""
     provider_type = provider or _resolve_payment_provider(db)
 
-    if provider_type == "flutterwave":
-        from app.services import flutterwave as flutterwave_svc
-
-        tx = flutterwave_svc.verify_transaction(db, reference)
-
-        if tx.get("status") != "successful":
-            raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
-
-        metadata = tx.get("meta") or {}
-        invoice_id = metadata.get("invoice_id")
-        amount_naira = Decimal(str(tx.get("amount", 0)))
-        memo_prefix = "Flutterwave"
-    else:
-        from app.services.paystack import kobo_to_naira, verify_transaction
-
-        tx = verify_transaction(db, reference)
-
-        if tx.get("status") != "success":
-            raise ValueError(f"Payment was not successful (status: {tx.get('status')})")
-
-        metadata = tx.get("metadata") or {}
-        invoice_id = metadata.get("invoice_id")
-        amount_naira = kobo_to_naira(tx.get("amount", 0))
-        memo_prefix = "Paystack"
+    tx = payment_gateway_adapter.verify(
+        db,
+        provider_type=provider_type,
+        reference=reference,
+    )
+    invoice_id = tx.metadata.get("invoice_id")
+    amount_naira = tx.amount
 
     if not invoice_id:
         raise ValueError("Payment metadata missing invoice_id")
 
     # Idempotency: check if a payment with this external reference already exists
-    from app.models.billing import Payment
-
-    existing_payment = (
-        db.query(Payment).filter(Payment.external_id == str(tx.get("id", ""))).first()
-    )
+    existing_payment = db.query(Payment).filter(Payment.external_id == tx.external_id).first()
     if existing_payment:
         invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
         return {
@@ -137,24 +110,25 @@ def verify_and_record_payment(
 
     from uuid import UUID as _UUID
 
-    from app.models.billing import PaymentStatus
-    from app.schemas.billing import PaymentAllocationApply, PaymentCreate
+    from app.schemas.billing import PaymentAllocationApply
 
-    payment_payload = PaymentCreate(
-        account_id=_UUID(str(invoice.account_id)),
-        amount=amount_naira,
-        currency=tx.get("currency", "NGN"),
-        status=PaymentStatus.succeeded,
-        external_id=str(tx.get("id", "")),
-        memo=f"{memo_prefix} payment ref: {reference}",
-        allocations=[
-            PaymentAllocationApply(
-                invoice_id=_UUID(str(invoice_id)),
-                amount=amount_naira,
-            )
-        ],
+    payment = billing_adapter.record_payment(
+        db,
+        PaymentIntent(
+            account_id=_UUID(str(invoice.account_id)),
+            amount=amount_naira,
+            currency=tx.currency,
+            status=PaymentStatus.succeeded,
+            external_id=tx.external_id,
+            memo=f"{tx.memo_prefix} payment ref: {reference}",
+            allocations=[
+                PaymentAllocationApply(
+                    invoice_id=_UUID(str(invoice_id)),
+                    amount=amount_naira,
+                )
+            ],
+        ),
     )
-    payment = billing_service.payments.create(db, payment_payload)
 
     return {
         "payment": payment,
@@ -206,15 +180,13 @@ def get_topup_page(
         "preset_amounts": [1000, 2000, 5000, 10000, 20000, 50000],
     }
 
-    if provider_type == "flutterwave":
-        from app.services.flutterwave import get_public_key
-
-        context["provider_public_key"] = get_public_key(db)
-    else:
-        from app.services.paystack import get_public_key
-
-        context["provider_public_key"] = get_public_key(db)
-        context["paystack_public_key"] = get_public_key(db)
+    gateway_context = payment_gateway_adapter.build_context(
+        db,
+        provider_type=provider_type,
+    )
+    context["provider_public_key"] = gateway_context.public_key
+    if gateway_context.provider_type == "paystack":
+        context["paystack_public_key"] = gateway_context.public_key
 
     return context
 
@@ -229,29 +201,15 @@ def verify_and_record_topup(
     """Verify a top-up payment and add credit to account balance."""
     provider_type = provider or _resolve_payment_provider(db)
 
-    # Verify with payment provider
-    if provider_type == "flutterwave":
-        from app.services import flutterwave as flutterwave_svc
-
-        tx = flutterwave_svc.verify_transaction(db, reference)
-        if tx.get("status") != "successful":
-            raise ValueError(f"Top-up was not successful (status: {tx.get('status')})")
-        amount_naira = Decimal(str(tx.get("amount", 0)))
-        external_id = str(tx.get("id", ""))
-        memo_prefix = "Flutterwave"
-    else:
-        from app.services.paystack import kobo_to_naira, verify_transaction
-
-        tx = verify_transaction(db, reference)
-        if tx.get("status") != "success":
-            raise ValueError(f"Top-up was not successful (status: {tx.get('status')})")
-        amount_naira = kobo_to_naira(tx.get("amount", 0))
-        external_id = str(tx.get("id", ""))
-        memo_prefix = "Paystack"
+    tx = payment_gateway_adapter.verify(
+        db,
+        provider_type=provider_type,
+        reference=reference,
+    )
+    amount_naira = tx.amount
+    external_id = tx.external_id
 
     # Idempotency check
-    from app.models.billing import Payment, PaymentStatus
-
     existing = db.query(Payment).filter(Payment.external_id == external_id).first()
     if existing:
         # Payment already recorded — still attempt service restore in case
@@ -277,23 +235,23 @@ def verify_and_record_topup(
     # Create unallocated payment (credit to account balance)
     from uuid import UUID as _UUID
 
-    from app.schemas.billing import PaymentCreate
-
     account_id = customer.get("account_id")
     # No explicit allocations — auto-allocation pays outstanding invoices
     # first, then remaining amount goes to account credit. This is
     # intentional: a subscriber who owes money should settle debts before
     # accumulating credit.
-    payment_payload = PaymentCreate(
-        account_id=_UUID(str(account_id)),
-        amount=amount_naira,
-        currency=tx.get("currency", "NGN"),
-        status=PaymentStatus.succeeded,
-        external_id=external_id,
-        memo=f"{memo_prefix} prepaid top-up ref: {reference}",
-        allocations=[],  # No invoice allocation — goes to account credit
+    payment = billing_adapter.record_payment(
+        db,
+        PaymentIntent(
+            account_id=_UUID(str(account_id)),
+            amount=amount_naira,
+            currency=tx.currency,
+            status=PaymentStatus.succeeded,
+            external_id=external_id,
+            memo=f"{tx.memo_prefix} prepaid top-up ref: {reference}",
+            allocations=[],  # No invoice allocation — goes to account credit
+        ),
     )
-    payment = billing_service.payments.create(db, payment_payload)
 
     # Emit usage_topped_up event (triggers notification + potential service restore)
     from app.services.events import emit_event

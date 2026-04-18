@@ -118,6 +118,43 @@ def _format_address(address) -> str:
     return ", ".join([part for part in parts if part])
 
 
+def _get_subscriber_devices(db: Session, subscriber_id: str) -> list:
+    """Get subscriber's ONT devices using the subscriber-ONT adapter.
+
+    Returns a list of SimpleNamespace objects with device info for the portal.
+    """
+    try:
+        from app.services.network.subscriber_ont_adapter import get_subscriber_onts
+
+        onts = get_subscriber_onts(db, subscriber_id)
+        devices = []
+        for ont_info in onts:
+            # Map online status to user-friendly display
+            status_display = {
+                "online": "Online",
+                "offline": "Offline",
+                "unknown": "Unknown",
+            }.get(ont_info.online_status or "unknown", "Unknown")
+
+            devices.append(
+                SimpleNamespace(
+                    serial_number=ont_info.serial_number or "Unknown",
+                    model=ont_info.model or "ONT Device",
+                    status=ont_info.online_status or "unknown",
+                    status_display=status_display,
+                    location=ont_info.service_address or "Service address",
+                )
+            )
+        return devices
+    except Exception as exc:
+        logger.warning(
+            "Failed to get devices for subscriber %s: %s",
+            subscriber_id,
+            exc,
+        )
+        return []
+
+
 def get_dashboard_context(db: Session, session: dict) -> dict:
     account_id = session.get("account_id")
     subscriber_id = session.get("subscriber_id")
@@ -276,11 +313,17 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             )
             prepaid_balance = 0.0
 
+    # Get subscriber's ONT devices
+    devices = []
+    if subscriber_id:
+        devices = _get_subscriber_devices(db, subscriber_id)
+
     return {
         "user": SimpleNamespace(**user),
         "account": account,
         "service": primary_service,
         "services": services,
+        "devices": devices,
         "tickets": SimpleNamespace(open_count=open_count),
         "recent_activity": [],
         "billing_mode": billing_mode,

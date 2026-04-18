@@ -74,7 +74,10 @@ from app.tasks.provisioning_enforcement import run_enforcement
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
 from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
-from app.tasks.splynx_sync import run_incremental_sync
+from app.tasks.splynx_sync import (
+    run_customer_accounts_details_sync,
+    run_incremental_sync,
+)
 from app.tasks.tr069 import (
     check_device_health as tr069_check_device_health,
 )
@@ -155,6 +158,7 @@ __all__ = [
     "run_bulk_activation_job",
     "run_service_migration_job",
     "run_incremental_sync",
+    "run_customer_accounts_details_sync",
     "discover_snmp_interfaces",
     "walk_snmp_interfaces",
     "run_vpn_control_job",

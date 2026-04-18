@@ -29,6 +29,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
+from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -624,7 +625,28 @@ def save_provision_settings(
                         "message": "Provisioning profile not found",
                     },
                 )
-            ont.provisioning_profile_id = profile_uuid
+            apply_result = service_intent_ui_adapter.apply_provisioning_profile_to_ont(
+                db,
+                ont_id=ont_id,
+                profile_id=str(profile_uuid),
+                create_wan_instances=True,
+                push_to_device=False,
+            )
+            if not getattr(apply_result, "success", False):
+                db.rollback()
+                return JsonActionResult(
+                    status_code=422,
+                    content={
+                        "success": False,
+                        "message": str(
+                            getattr(
+                                apply_result,
+                                "message",
+                                "Unable to apply provisioning profile",
+                            )
+                        ),
+                    },
+                )
             ont.tr069_olt_profile_id = tr069_profile_id_int
             update_service_order_execution_context_for_ont(
                 db,
@@ -647,7 +669,10 @@ def save_provision_settings(
                 },
             )
         return JsonActionResult(
-            content={"success": True, "message": "Network provisioning profile saved"}
+            content={
+                "success": True,
+                "message": "Network provisioning profile applied to service intent",
+            }
         )
 
     if wan_protocol_value == "static" and static_ip_pool_id_value:
@@ -687,6 +712,77 @@ def save_provision_settings(
         static_dns_value = (
             static_dns_value or str(choices_state.get("dns") or "").strip() or None
         )
+
+    profile_for_defaults = None
+    profile_uuid_for_defaults = coerce_uuid(profile_id_value)
+    if profile_uuid_for_defaults is not None:
+        profile_for_defaults = db.get(OntProvisioningProfile, profile_uuid_for_defaults)
+    adapter_defaults = service_intent_ui_adapter.provisioning_form_defaults(
+        db,
+        ont=ont,
+        profile=profile_for_defaults,
+    )
+    onu_mode_value = (
+        onu_mode_value
+        or _enum_value(getattr(ont, "onu_mode", None))
+        or _adapter_default_str(adapter_defaults, "onu_mode")
+    )
+    mgmt_vlan_id_value = (
+        mgmt_vlan_id_value
+        or (str(getattr(ont, "mgmt_vlan_id", "") or "").strip() or None)
+        or _adapter_default_str(adapter_defaults, "mgmt_vlan_id")
+    )
+    mgmt_ip_mode_value = (
+        mgmt_ip_mode_value
+        or _enum_value(getattr(ont, "mgmt_ip_mode", None))
+        or _adapter_default_str(adapter_defaults, "mgmt_ip_mode")
+    )
+    mgmt_ip_address_value = mgmt_ip_address_value or getattr(
+        ont, "mgmt_ip_address", None
+    )
+    wan_protocol_value = (
+        wan_protocol_value
+        or _enum_value(getattr(ont, "wan_mode", None))
+        or _adapter_default_str(adapter_defaults, "wan_protocol")
+    )
+    wan_vlan_id_value = (
+        wan_vlan_id_value
+        or (str(getattr(ont, "wan_vlan_id", "") or "").strip() or None)
+        or _adapter_default_str(adapter_defaults, "wan_vlan_id")
+    )
+    pppoe_username_value = pppoe_username_value or getattr(ont, "pppoe_username", None)
+    lan_ip_value = lan_ip_value or getattr(ont, "lan_gateway_ip", None)
+    lan_subnet_value = lan_subnet_value or getattr(ont, "lan_subnet_mask", None)
+    if dhcp_enabled_value is None:
+        dhcp_enabled_value = getattr(ont, "lan_dhcp_enabled", None)
+    dhcp_start_value = dhcp_start_value or getattr(ont, "lan_dhcp_start", None)
+    dhcp_end_value = dhcp_end_value or getattr(ont, "lan_dhcp_end", None)
+    if wifi_enabled_value is None:
+        wifi_enabled_default = adapter_defaults.get("wifi_enabled")
+        wifi_enabled_value = (
+            getattr(ont, "wifi_enabled", None)
+            if getattr(ont, "wifi_enabled", None) is not None
+            else wifi_enabled_default
+            if isinstance(wifi_enabled_default, bool)
+            else None
+        )
+    wifi_ssid_value = (
+        wifi_ssid_value
+        or getattr(ont, "wifi_ssid", None)
+        or _adapter_default_str(adapter_defaults, "wifi_ssid")
+    )
+    wifi_security_mode_value = (
+        wifi_security_mode_value
+        or getattr(ont, "wifi_security_mode", None)
+        or _adapter_default_str(adapter_defaults, "wifi_security_mode")
+    )
+    wifi_channel_value = (
+        wifi_channel_value
+        or getattr(ont, "wifi_channel", None)
+        or _adapter_default_str(adapter_defaults, "wifi_channel")
+    )
+    mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
+    wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
     field_issues = validate_provision_form_fields(
         profile_id=profile_id_value,
@@ -1079,6 +1175,18 @@ def _bool_from_form(value: str | None) -> bool | None:
     if not raw:
         return None
     return raw in {"true", "1", "yes", "on", "enabled"}
+
+
+def _enum_value(value: object) -> str | None:
+    raw = getattr(value, "value", value)
+    text = str(raw or "").strip()
+    return text or None
+
+
+def _adapter_default_str(defaults: dict[str, object], key: str) -> str | None:
+    value = defaults.get(key)
+    text = str(value or "").strip()
+    return text or None
 
 
 def _vlan_tag_for_id(db: Session, vlan_id: str | None) -> int | None:

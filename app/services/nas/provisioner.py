@@ -14,7 +14,6 @@ from app.models.catalog import (
     ExecutionMethod,
     NasConfigBackup,
     NasDevice,
-    NasVendor,
     ProvisioningAction,
     ProvisioningLog,
     ProvisioningLogStatus,
@@ -468,10 +467,10 @@ class DeviceProvisioner:
                 detail=f"Backup method {backup_method.value} not implemented",
             )
 
-        # Determine config format based on vendor
-        config_format = "txt"
-        if device.vendor == NasVendor.mikrotik:
-            config_format = "rsc"
+        # Determine config format based on vendor via adapter
+        from app.services.nas.vendor_adapter import get_config_format
+
+        config_format = get_config_format(device)
 
         # Create backup record
         backup = NasConfigBackups.create(
@@ -536,16 +535,12 @@ class DeviceProvisioner:
                 status_code=400, detail="Backup has no configuration content"
             )
 
-        # Vendor-specific import command
-        if device.vendor == NasVendor.mikrotik:
-            # MikroTik: pipe config into /import
-            command = f"/import verbose=yes\n{backup.config_content}"
-        elif device.vendor == NasVendor.cisco:
-            command = f"configure terminal\n{backup.config_content}\nend\nwrite memory"
-        elif device.vendor == NasVendor.huawei:
-            command = f"system-view\n{backup.config_content}\nreturn\nsave"
-        else:
-            command = backup.config_content
+        # Get vendor-specific import command via adapter
+        from app.services.nas.vendor_adapter import get_nas_vendor_adapter
+
+        adapter = get_nas_vendor_adapter(device)
+        vendor_cmd = adapter.get_restore_command(backup.config_content)
+        command = vendor_cmd.command
 
         log = ProvisioningLogs.create(
             db,
@@ -585,24 +580,27 @@ class DeviceProvisioner:
     @staticmethod
     def _backup_via_ssh(device: NasDevice) -> str:
         """Backup configuration via SSH."""
-        # Vendor-specific export commands
-        if device.vendor == NasVendor.mikrotik:
-            command = "/export"
-        elif device.vendor == NasVendor.cisco:
-            command = "show running-config"
-        elif device.vendor == NasVendor.huawei:
-            command = "display current-configuration"
-        elif device.vendor == NasVendor.juniper:
-            command = "show configuration"
-        else:
-            command = "show running-config"  # Generic fallback
+        from app.services.nas.vendor_adapter import get_nas_vendor_adapter
 
-        return DeviceProvisioner._execute_ssh(device, command)
+        adapter = get_nas_vendor_adapter(device)
+        vendor_cmd = adapter.get_backup_command()
+        return DeviceProvisioner._execute_ssh(
+            device, vendor_cmd.command, timeout_seconds=vendor_cmd.timeout_seconds
+        )
 
     @staticmethod
     def _backup_via_api(device: NasDevice) -> str:
         """Backup configuration via REST API."""
-        if device.vendor == NasVendor.mikrotik:
+        from app.services.nas.vendor_adapter import get_nas_vendor_adapter, supports_api
+
+        if not supports_api(device):
+            raise HTTPException(
+                status_code=400,
+                detail=f"API backup not supported for vendor {device.vendor.value}",
+            )
+
+        adapter = get_nas_vendor_adapter(device)
+        if adapter.vendor_name == "mikrotik":
             # MikroTik REST API export endpoint
             return DeviceProvisioner._execute_api(device, "/rest/export", {})
         else:

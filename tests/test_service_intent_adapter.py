@@ -173,3 +173,229 @@ def test_build_olt_provisioning_spec_uses_scalar_intent_only() -> None:
     assert wan_service.vlan_id == 203
     assert wan_service.gem_index == 2
     assert wan_service.user_vlan == 203
+
+
+def test_ui_adapter_builds_service_port_defaults_from_profile_intent() -> None:
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    profile = SimpleNamespace(
+        wan_services=[
+            SimpleNamespace(
+                is_active=True,
+                name="Internet",
+                service_type=SimpleNamespace(value="internet"),
+                connection_type=SimpleNamespace(value="pppoe"),
+                vlan_mode=SimpleNamespace(value="tagged"),
+                s_vlan=203,
+                c_vlan=3003,
+                gem_port_id=2,
+            ),
+            SimpleNamespace(
+                is_active=False,
+                name="Old VoIP",
+                service_type=SimpleNamespace(value="voip"),
+                connection_type=SimpleNamespace(value="dhcp"),
+                vlan_mode=SimpleNamespace(value="tagged"),
+                s_vlan=204,
+                c_vlan=None,
+                gem_port_id=3,
+            ),
+        ]
+    )
+    ont = SimpleNamespace(provisioning_profile=profile)
+    actual_ports = [SimpleNamespace(vlan_id=999)]
+
+    defaults = service_intent_ui_adapter.profile_service_port_defaults(
+        ont,
+        service_ports=actual_ports,
+    )
+
+    assert defaults["primary_vlan_id"] == 203
+    assert defaults["primary_gem_index"] == 2
+    assert defaults["primary_user_vlan"] == 3003
+    assert defaults["primary_tag_transform"] == "translate"
+    assert defaults["missing_vlans"] == [203]
+    assert defaults["extra_vlans"] == [999]
+    assert len(defaults["planned_services"]) == 1
+
+
+def test_ui_adapter_builds_provisioning_defaults_from_profile(monkeypatch) -> None:
+    from app.services import web_network_onts as web_network_onts_service
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    monkeypatch.setattr(
+        web_network_onts_service,
+        "get_vlans_for_ont",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(id="mgmt-vlan-id", tag=201),
+            SimpleNamespace(id="wan-vlan-id", tag=203),
+        ],
+    )
+    profile = SimpleNamespace(
+        onu_mode=SimpleNamespace(value="routing"),
+        mgmt_ip_mode=SimpleNamespace(value="dhcp"),
+        mgmt_vlan_tag=201,
+        wifi_enabled=True,
+        wifi_ssid_template="DOTMAC-{subscriber_code}",
+        wifi_security_mode="WPA2-Personal",
+        wifi_channel="auto",
+        wan_services=[
+            SimpleNamespace(
+                is_active=True,
+                connection_type=SimpleNamespace(value="pppoe"),
+                s_vlan=203,
+            )
+        ],
+    )
+
+    defaults = service_intent_ui_adapter.provisioning_form_defaults(
+        SimpleNamespace(),
+        ont=SimpleNamespace(),
+        profile=profile,
+    )
+
+    assert defaults["onu_mode"] == "routing"
+    assert defaults["mgmt_ip_mode"] == "dhcp"
+    assert defaults["mgmt_vlan_id"] == "mgmt-vlan-id"
+    assert defaults["wan_protocol"] == "pppoe"
+    assert defaults["wan_vlan_id"] == "wan-vlan-id"
+    assert defaults["wifi_ssid"] == "DOTMAC-{subscriber_code}"
+
+
+def test_acs_service_intent_adapter_maps_observed_summary_without_secrets() -> None:
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    summary = SimpleNamespace(
+        available=True,
+        source="live",
+        fetched_at=None,
+        error=None,
+        system={
+            "Manufacturer": "Huawei",
+            "Model": "HG8245H",
+            "Firmware": "V5R020",
+            "Hardware": "VER.A",
+            "Serial": "HWTC12345678",
+            "Uptime": "4d 2h 1m",
+            "CPU Usage": "12",
+            "Memory Total": "131072",
+            "Memory Free": "65536",
+            "Memory Usage": "50.0%",
+            "MAC Address": "aa:bb:cc:dd:ee:ff",
+        },
+        wan={
+            "Connection Type": "PPPoE",
+            "WAN IP": "100.64.1.20",
+            "Username": "cust-1001@dotmac",
+            "Status": "Connected",
+            "Uptime": "3600",
+            "DNS Servers": "1.1.1.1,8.8.8.8",
+            "Gateway": "100.64.1.1",
+            "WAN Instance": "1.1",
+            "WAN Service": "INTERNET",
+        },
+        lan={
+            "LAN IP": "192.168.1.1",
+            "Subnet Mask": "255.255.255.0",
+            "DHCP Enabled": "1",
+            "DHCP Start": "192.168.1.2",
+            "DHCP End": "192.168.1.254",
+            "Connected Hosts": "3",
+        },
+        wireless={
+            "Enabled": "true",
+            "SSID": "DOTMAC-1001",
+            "Channel": "6",
+            "Standard": "802.11n",
+            "Security Mode": "WPA2-Personal",
+            "Connected Clients": "2",
+            "Password": "super-secret-password",
+        },
+        ethernet_ports=[
+            {
+                "index": 1,
+                "Enable": "1",
+                "Status": "Up",
+                "MaxBitRate": "1000",
+                "DuplexMode": "Full",
+                "MACAddress": "11:22:33:44:55:66",
+            }
+        ],
+        lan_hosts=[
+            {
+                "HostName": "phone",
+                "IPAddress": "192.168.1.10",
+                "MACAddress": "aa:bb:cc:00:11:22",
+                "InterfaceType": "Ethernet",
+                "Active": "1",
+            }
+        ],
+    )
+
+    intent = service_intent_ui_adapter.build_acs_observed_service_intent(summary)
+    observed = intent["observed"]
+
+    assert intent["available"] is True
+    assert intent["source"] == "live"
+    assert observed["system"]["manufacturer"] == "Huawei"
+    assert observed["system"]["memory_usage"] == "50.0%"
+    assert observed["wan"]["connection_type"] == "PPPoE"
+    assert observed["wan"]["wan_ip"] == "100.64.1.20"
+    assert observed["wan"]["pppoe_username"] == "cust-1001@dotmac"
+    assert observed["lan"]["dhcp_enabled"] is True
+    assert observed["wifi"]["enabled"] is True
+    assert observed["wifi"]["ssid"] == "DOTMAC-1001"
+    assert observed["wifi"]["password_present"] is True
+    assert observed["ethernet_ports"][0]["port"] == 1
+    assert observed["ethernet_ports"][0]["admin_enabled"] is True
+    assert observed["ethernet_ports"][0]["link_status"] == "Up"
+    assert observed["ethernet_ports"][0]["speed_mbps"] == "1000"
+    assert observed["ethernet_ports"][0]["duplex"] == "Full"
+    assert observed["ethernet_ports"][0]["mac_address"] == "11:22:33:44:55:66"
+    assert observed["lan_hosts"][0]["host_name"] == "phone"
+    assert observed["lan_hosts"][0]["ip_address"] == "192.168.1.10"
+    assert observed["lan_hosts"][0]["active"] is True
+    assert observed["lan_hosts"][0]["active_display"] == "Active"
+    assert "super-secret-password" not in repr(intent)
+
+
+def test_service_intent_ui_adapter_delegates_ont_capabilities(monkeypatch) -> None:
+    from app.services.network.ont_read import OntReadFacade
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    calls = {}
+
+    def fake_capabilities(db, ont_id):
+        calls["args"] = (db, ont_id)
+        return {"supports_wifi": True}
+
+    monkeypatch.setattr(OntReadFacade, "get_capabilities", fake_capabilities)
+
+    db = object()
+    result = service_intent_ui_adapter.ont_capabilities(db, ont_id="ont-1")
+
+    assert result == {"supports_wifi": True}
+    assert calls["args"] == (db, "ont-1")
+
+
+def test_acs_service_intent_adapter_handles_unavailable_summary() -> None:
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+        SimpleNamespace(
+            available=False,
+            source="none",
+            fetched_at=None,
+            error="No matching CPE device.",
+            system={},
+            wan={},
+            lan={},
+            wireless={},
+            ethernet_ports=[],
+            lan_hosts=[],
+        )
+    )
+
+    assert intent["available"] is False
+    assert intent["sections"] == []
+    assert intent["error"] == "No matching CPE device."

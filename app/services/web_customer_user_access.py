@@ -15,7 +15,8 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services import web_system_user_mutations as web_system_user_mutations_service
-from app.services.audit_helpers import log_audit_event
+from app.services.audit_adapter import record_audit_event
+from app.services.rate_limiter_adapter import allow_operation
 from app.services.settings_spec import resolve_value
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
@@ -276,9 +277,8 @@ def send_customer_invite(
             if retry_at
             else "later"
         )
-        log_audit_event(
-            db=db,
-            request=request,
+        record_audit_event(
+            db,
             action=INVITE_AUDIT_ACTION,
             entity_type="subscriber",
             entity_id=str(state.get("target_subscriber_id") or ""),
@@ -292,15 +292,35 @@ def send_customer_invite(
             "title": "Invite blocked",
             "message": f"Invite already sent recently. You can resend after {when}.",
         }
+    decision = allow_operation(
+        f"customer_invite:{state['target_subscriber_id']}",
+        limit=1,
+        window_seconds=int(state.get("invite_expiry_minutes") or 60) * 60,
+    )
+    if not decision.allowed:
+        record_audit_event(
+            db,
+            action=INVITE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state.get("target_subscriber_id") or ""),
+            actor_id=actor_id,
+            metadata={"reason": "rate_limited_adapter"},
+            status_code=429,
+            is_success=False,
+        )
+        return {
+            "ok": False,
+            "title": "Invite blocked",
+            "message": "Invite rate limit reached. Try again later.",
+        }
 
     note = web_system_user_mutations_service.send_user_invite_for_user(
         db,
         user_id=str(state["target_subscriber_id"]),
     )
     ok = "sent" in note.lower()
-    log_audit_event(
-        db=db,
-        request=request,
+    record_audit_event(
+        db,
         action=INVITE_AUDIT_ACTION,
         entity_type="subscriber",
         entity_id=str(state["target_subscriber_id"]),
@@ -332,14 +352,34 @@ def send_customer_reset_link(
         customer_id=customer_id,
     )
     if not state.get("can_send_reset"):
-        log_audit_event(
-            db=db,
-            request=request,
+        record_audit_event(
+            db,
             action=RESET_AUDIT_ACTION,
             entity_type="subscriber",
             entity_id=str(state.get("target_subscriber_id") or ""),
             actor_id=actor_id,
             metadata={"reason": "rate_limited"},
+            status_code=429,
+            is_success=False,
+        )
+        return {
+            "ok": False,
+            "title": "Reset link blocked",
+            "message": "Reset limit reached: max 3 reset links per hour.",
+        }
+    decision = allow_operation(
+        f"customer_reset:{state['target_subscriber_id']}",
+        limit=3,
+        window_seconds=3600,
+    )
+    if not decision.allowed:
+        record_audit_event(
+            db,
+            action=RESET_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state.get("target_subscriber_id") or ""),
+            actor_id=actor_id,
+            metadata={"reason": "rate_limited_adapter"},
             status_code=429,
             is_success=False,
         )
@@ -354,9 +394,8 @@ def send_customer_reset_link(
         user_id=str(state["target_subscriber_id"]),
     )
     ok = "sent" in note.lower()
-    log_audit_event(
-        db=db,
-        request=request,
+    record_audit_event(
+        db,
         action=RESET_AUDIT_ACTION,
         entity_type="subscriber",
         entity_id=str(state["target_subscriber_id"]),
@@ -392,9 +431,8 @@ def set_customer_login_active(
             db, customer_type=customer_type, customer_id=customer_id
         )
     )
-    log_audit_event(
-        db=db,
-        request=request,
+    record_audit_event(
+        db,
         action=LOGIN_TOGGLE_AUDIT_ACTION,
         entity_type="subscriber",
         entity_id=str(target.subscriber.id),
@@ -424,9 +462,8 @@ def log_customer_user_access_error(
     metadata = {"customer_type": customer_type, "error": str(error)}
     if login_active is not None:
         metadata["login_active"] = login_active
-    log_audit_event(
-        db=db,
-        request=request,
+    record_audit_event(
+        db,
         action=action,
         entity_type="customer",
         entity_id=str(customer_id),

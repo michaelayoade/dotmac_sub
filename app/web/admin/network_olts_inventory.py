@@ -25,15 +25,16 @@ from app.services import (
 )
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
+from app.services.ipam_adapter import ipam_adapter
 from app.services.network import olt_autofind as olt_autofind_service
-from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
-from app.services.network import olt_web_resources as olt_web_resources_service
 from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
+from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
+from app.services.olt_detail_adapter import olt_detail_adapter
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -370,7 +371,7 @@ def olt_detail(
     sync_message: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    page_data = web_network_core_devices_service.olt_detail_page_data(db, olt_id)
+    page_data = olt_detail_adapter.page_data(db, olt_id=olt_id)
     if not page_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -431,7 +432,7 @@ def olt_detail_preview(
     sync_message: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    page_data = web_network_core_devices_service.olt_detail_page_data(db, olt_id)
+    page_data = olt_detail_adapter.page_data(db, olt_id=olt_id)
     if not page_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -490,7 +491,7 @@ def olt_device_events(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: ONT device events (online/offline/signal) for this OLT."""
-    data = olt_web_resources_service.olt_device_events_context(db, olt_id)
+    data = olt_detail_adapter.events_context(db, olt_id=olt_id)
     context = _base_context(request, db, active_page="olts")
     context.update(data)
     return templates.TemplateResponse(
@@ -508,7 +509,7 @@ def olt_assign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
-    olt_web_resources_service.assign_vlan_to_olt(db, olt_id, vlan_id)
+    ipam_adapter.assign_vlan_to_olt(db, olt_id, vlan_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -522,7 +523,7 @@ def olt_unassign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
-    olt_web_resources_service.unassign_vlan_from_olt(db, olt_id, vlan_id)
+    ipam_adapter.unassign_vlan_from_olt(db, olt_id, vlan_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -536,7 +537,7 @@ def olt_assign_ip_pool(
     pool_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    olt_web_resources_service.assign_ip_pool_to_olt(db, olt_id, pool_id)
+    ipam_adapter.assign_ip_pool_to_olt(db, olt_id, pool_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -550,7 +551,7 @@ def olt_unassign_ip_pool(
     pool_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    olt_web_resources_service.unassign_ip_pool_from_olt(db, olt_id, pool_id)
+    ipam_adapter.unassign_ip_pool_from_olt(db, olt_id, pool_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -1109,13 +1110,10 @@ def olt_authorize_ont(
     force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
     initiated_by = None
     try:
-        from app.services.network.olt_authorization_workflow import (
-            queue_authorize_autofind_ont,
-        )
-
         initiated_by = actor_label(request)
         # Queue authorization to run in background via Celery
-        queue_ok, queue_msg, operation_id = queue_authorize_autofind_ont(
+        queue_ok, queue_msg, operation_id = (
+            olt_operations_service.queue_authorize_autofind_ont(
             db,
             olt_id=olt_id,
             fsp=fsp,
@@ -1123,6 +1121,7 @@ def olt_authorize_ont(
             force_reauthorize=force,
             initiated_by=initiated_by,
             request=request,
+        )
         )
     except Exception as exc:
         db.rollback()

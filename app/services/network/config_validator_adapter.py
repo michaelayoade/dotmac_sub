@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from app.models.network import OLTDevice, OntUnit
+    from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ class ConfigValidationResult:
             severity=ValidationSeverity.info,
         ))
 
-    def merge(self, other: "ConfigValidationResult") -> None:
+    def merge(self, other: ConfigValidationResult) -> None:
         """Merge another result into this one."""
         self.issues.extend(other.issues)
         self.validated_data.update(other.validated_data)
@@ -310,8 +310,8 @@ class ConfigValidator(Protocol):
         self,
         config: OntConfig,
         *,
-        db: "Session | None" = None,
-        olt: "OLTDevice | None" = None,
+        db: Session | None = None,
+        olt: OLTDevice | None = None,
     ) -> ConfigValidationResult:
         """Validate ONT configuration."""
         ...
@@ -320,8 +320,8 @@ class ConfigValidator(Protocol):
         self,
         config: ServicePortConfig,
         *,
-        db: "Session | None" = None,
-        olt: "OLTDevice | None" = None,
+        db: Session | None = None,
+        olt: OLTDevice | None = None,
     ) -> ConfigValidationResult:
         """Validate service port configuration."""
         ...
@@ -330,7 +330,7 @@ class ConfigValidator(Protocol):
         self,
         config: ManagementConfig,
         *,
-        db: "Session | None" = None,
+        db: Session | None = None,
     ) -> ConfigValidationResult:
         """Validate management IP configuration."""
         ...
@@ -346,7 +346,7 @@ class ConfigValidator(Protocol):
         self,
         config: PppoeConfig,
         *,
-        db: "Session | None" = None,
+        db: Session | None = None,
     ) -> ConfigValidationResult:
         """Validate PPPoE configuration."""
         ...
@@ -355,8 +355,8 @@ class ConfigValidator(Protocol):
         self,
         config: AuthorizationConfig,
         *,
-        db: "Session | None" = None,
-        olt: "OLTDevice | None" = None,
+        db: Session | None = None,
+        olt: OLTDevice | None = None,
     ) -> ConfigValidationResult:
         """Validate ONT authorization configuration."""
         ...
@@ -746,8 +746,8 @@ class NetworkConfigValidator(BaseConfigValidator):
         self,
         config: OntConfig,
         *,
-        db: "Session | None" = None,
-        olt: "OLTDevice | None" = None,
+        db: Session | None = None,
+        olt: OLTDevice | None = None,
     ) -> ConfigValidationResult:
         """Validate ONT configuration."""
         result = ConfigValidationResult(config_type=ConfigType.ont)
@@ -780,8 +780,8 @@ class NetworkConfigValidator(BaseConfigValidator):
         self,
         config: ServicePortConfig,
         *,
-        db: "Session | None" = None,
-        olt: "OLTDevice | None" = None,
+        db: Session | None = None,
+        olt: OLTDevice | None = None,
     ) -> ConfigValidationResult:
         """Validate service port configuration."""
         result = ConfigValidationResult(config_type=ConfigType.service_port)
@@ -831,7 +831,7 @@ class NetworkConfigValidator(BaseConfigValidator):
         self,
         config: ManagementConfig,
         *,
-        db: "Session | None" = None,
+        db: Session | None = None,
     ) -> ConfigValidationResult:
         """Validate management IP configuration."""
         result = ConfigValidationResult(config_type=ConfigType.management)
@@ -909,7 +909,7 @@ class NetworkConfigValidator(BaseConfigValidator):
         self,
         config: PppoeConfig,
         *,
-        db: "Session | None" = None,
+        db: Session | None = None,
     ) -> ConfigValidationResult:
         """Validate PPPoE configuration."""
         result = ConfigValidationResult(config_type=ConfigType.pppoe)
@@ -952,8 +952,8 @@ class NetworkConfigValidator(BaseConfigValidator):
         self,
         config: AuthorizationConfig,
         *,
-        db: "Session | None" = None,
-        olt: "OLTDevice | None" = None,
+        db: Session | None = None,
+        olt: OLTDevice | None = None,
     ) -> ConfigValidationResult:
         """Validate ONT authorization configuration."""
         result = ConfigValidationResult(config_type=ConfigType.authorization)
@@ -988,7 +988,7 @@ class NetworkConfigValidator(BaseConfigValidator):
 
     def _validate_vlan_exists(
         self,
-        db: "Session",
+        db: Session,
         vlan_id: int,
         result: ConfigValidationResult,
     ) -> None:
@@ -1017,12 +1017,12 @@ class NetworkConfigValidator(BaseConfigValidator):
 
     def _validate_olt_has_credentials(
         self,
-        olt: "OLTDevice",
+        olt: OLTDevice,
         result: ConfigValidationResult,
     ) -> None:
         """Check if OLT has SSH credentials configured."""
         if not getattr(olt, "ssh_username", None):
-            result.add_error(
+            result.add_warning(
                 "olt",
                 "OLT does not have SSH credentials configured",
                 code="NO_CREDENTIALS",
@@ -1030,8 +1030,8 @@ class NetworkConfigValidator(BaseConfigValidator):
 
     def _validate_pon_port_exists(
         self,
-        db: "Session",
-        olt: "OLTDevice",
+        db: Session,
+        olt: OLTDevice,
         fsp: str,
         result: ConfigValidationResult,
     ) -> None:
@@ -1075,8 +1075,8 @@ def get_config_validator() -> ConfigValidator:
 def validate_ont_config(
     config: OntConfig,
     *,
-    db: "Session | None" = None,
-    olt: "OLTDevice | None" = None,
+    db: Session | None = None,
+    olt: OLTDevice | None = None,
 ) -> ConfigValidationResult:
     """Validate ONT configuration."""
     return get_config_validator().validate_ont_config(config, db=db, olt=olt)
@@ -1085,8 +1085,8 @@ def validate_ont_config(
 def validate_service_port_config(
     config: ServicePortConfig,
     *,
-    db: "Session | None" = None,
-    olt: "OLTDevice | None" = None,
+    db: Session | None = None,
+    olt: OLTDevice | None = None,
 ) -> ConfigValidationResult:
     """Validate service port configuration."""
     return get_config_validator().validate_service_port_config(config, db=db, olt=olt)
@@ -1095,7 +1095,7 @@ def validate_service_port_config(
 def validate_management_config(
     config: ManagementConfig,
     *,
-    db: "Session | None" = None,
+    db: Session | None = None,
 ) -> ConfigValidationResult:
     """Validate management IP configuration."""
     return get_config_validator().validate_management_config(config, db=db)
@@ -1109,7 +1109,7 @@ def validate_wifi_config(config: WifiConfig) -> ConfigValidationResult:
 def validate_pppoe_config(
     config: PppoeConfig,
     *,
-    db: "Session | None" = None,
+    db: Session | None = None,
 ) -> ConfigValidationResult:
     """Validate PPPoE configuration."""
     return get_config_validator().validate_pppoe_config(config, db=db)
@@ -1118,8 +1118,8 @@ def validate_pppoe_config(
 def validate_authorization_config(
     config: AuthorizationConfig,
     *,
-    db: "Session | None" = None,
-    olt: "OLTDevice | None" = None,
+    db: Session | None = None,
+    olt: OLTDevice | None = None,
 ) -> ConfigValidationResult:
     """Validate ONT authorization configuration."""
     return get_config_validator().validate_authorization_config(config, db=db, olt=olt)
@@ -1158,7 +1158,7 @@ def quick_validate_vlan(vlan: int | str) -> tuple[bool, str | None]:
     try:
         vlan_int = int(vlan)
     except (ValueError, TypeError):
-        return False, f"VLAN must be a number"
+        return False, "VLAN must be a number"
     if vlan_int not in _VLAN_RANGE:
         return False, f"VLAN {vlan_int} out of range (1-4094)"
     return True, None

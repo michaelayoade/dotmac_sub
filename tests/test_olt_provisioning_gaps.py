@@ -1404,6 +1404,7 @@ class TestWebNetworkServicePortsWrappers:
     def test_list_context_includes_reference_onts_on_same_olt(
         self, db_session, monkeypatch
     ) -> None:
+        from app.services.network.olt_protocol_adapters import OltOperationResult
         from app.services.web_network_service_ports import list_context
 
         olt = OLTDevice(name="Reference OLT", vendor="Huawei", model="MA5608T")
@@ -1435,9 +1436,15 @@ class TestWebNetworkServicePortsWrappers:
         )
         db_session.commit()
 
+        class MockAdapter:
+            def get_service_ports_for_ont(self, fsp, ont_id):
+                return OltOperationResult(
+                    success=True, message="ok", data={"service_ports": []}
+                )
+
         monkeypatch.setattr(
-            "app.services.web_network_service_ports.get_service_ports_for_ont",
-            lambda *_args, **_kwargs: (True, "ok", []),
+            "app.services.web_network_service_ports.get_protocol_adapter",
+            lambda *_args, **_kwargs: MockAdapter(),
         )
 
         ctx = list_context(db_session, str(target.id))
@@ -1453,6 +1460,7 @@ class TestWebNetworkServicePortsWrappers:
     def test_list_context_requires_scanned_board_port_not_pon_name_fallback(
         self, db_session, monkeypatch
     ) -> None:
+        from app.services.network.olt_protocol_adapters import OltOperationResult
         from app.services.web_network_service_ports import list_context
 
         olt = OLTDevice(name="Prefixed OLT", vendor="Huawei", model="MA5608T")
@@ -1475,9 +1483,15 @@ class TestWebNetworkServicePortsWrappers:
         )
         db_session.commit()
 
+        class MockAdapter:
+            def get_service_ports_for_ont(self, fsp, ont_id):
+                return OltOperationResult(
+                    success=True, message="ok", data={"service_ports": []}
+                )
+
         monkeypatch.setattr(
-            "app.services.web_network_service_ports.get_service_ports_for_ont",
-            lambda *_args, **_kwargs: (True, "ok", []),
+            "app.services.web_network_service_ports.get_protocol_adapter",
+            lambda *_args, **_kwargs: MockAdapter(),
         )
 
         ctx = list_context(db_session, str(ont.id))
@@ -1495,6 +1509,7 @@ class TestWebNetworkServicePortsWrappers:
     def test_handle_create_forwards_user_vlan_and_transform(
         self, db_session, monkeypatch
     ) -> None:
+        from app.services.network.olt_protocol_adapters import OltOperationResult
         from app.services.web_network_service_ports import handle_create
 
         olt = OLTDevice(name="SP Create OLT", vendor="Huawei", model="MA5608T")
@@ -1521,32 +1536,35 @@ class TestWebNetworkServicePortsWrappers:
 
         captured: dict[str, object] = {}
 
-        def _fake_create_single_service_port(
-            olt_obj,
-            fsp,
-            olt_ont_id,
-            gem_index,
-            vlan_id,
-            *,
-            user_vlan=None,
-            tag_transform="translate",
-        ):
-            captured.update(
-                {
-                    "olt_id": str(olt_obj.id),
-                    "fsp": fsp,
-                    "olt_ont_id": olt_ont_id,
-                    "gem_index": gem_index,
-                    "vlan_id": vlan_id,
-                    "user_vlan": user_vlan,
-                    "tag_transform": tag_transform,
-                }
-            )
-            return True, "created"
+        class MockAdapter:
+            def create_service_port(
+                self,
+                fsp,
+                ont_id,
+                *,
+                gem_index,
+                vlan_id,
+                user_vlan=None,
+                tag_transform="translate",
+                port_index=None,
+            ):
+                captured.update(
+                    {
+                        "fsp": fsp,
+                        "olt_ont_id": ont_id,
+                        "gem_index": gem_index,
+                        "vlan_id": vlan_id,
+                        "user_vlan": user_vlan,
+                        "tag_transform": tag_transform,
+                    }
+                )
+                return OltOperationResult(
+                    success=True, message="created", data={"port_index": 700}
+                )
 
         monkeypatch.setattr(
-            "app.services.web_network_service_ports.create_single_service_port",
-            _fake_create_single_service_port,
+            "app.services.web_network_service_ports.get_protocol_adapter",
+            lambda *_args, **_kwargs: MockAdapter(),
         )
 
         ok, msg = handle_create(
@@ -1559,9 +1577,8 @@ class TestWebNetworkServicePortsWrappers:
         )
 
         assert ok is True
-        assert msg == "created"
+        assert "created" in msg.lower()  # Service port was created
         assert captured == {
-            "olt_id": str(olt.id),
             "fsp": "0/2/1",
             "olt_ont_id": 7,
             "gem_index": 3,
@@ -2193,6 +2210,12 @@ class TestProvisioningUiTemplates:
             not in detail_template
         )
         assert "/admin/network/onts/{{ ont.id }}/provision" in detail_template
+
+    def test_ont_form_requires_olt_selection(self) -> None:
+        template = Path("templates/admin/network/onts/form.html").read_text()
+
+        assert 'name="olt_device_id" id="olt_device_id" required' in template
+        assert "Required before authorization" in template
 
 
 class TestOntLocationDetailsHelpers:

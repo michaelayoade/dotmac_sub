@@ -132,11 +132,45 @@ def reboot(db: Session, ont_id: str) -> ActionResult:
 
 
 def refresh_status(db: Session, ont_id: str) -> ActionResult:
+    """Refresh ONT status from both OLT (SNMP) and ACS (TR-069) sources.
+
+    Uses the ONT Status Adapter to get unified status and updates the database.
+    Also triggers a TR-069 parameter refresh if ACS is available.
+    """
+    from app.services.network.ont_status_adapter import (
+        StatusProviderMode,
+        refresh_ont_status,
+    )
+
+    # First, refresh status from cached sources (SNMP/ACS)
+    ont = db.get(
+        __import__("app.models.network", fromlist=["OntUnit"]).OntUnit,
+        ont_id,
+    )
+    if not ont:
+        return ActionResult(success=False, message="ONT not found.")
+
+    # Update status from adapter (uses cached SNMP + ACS data)
+    status_result = refresh_ont_status(db, ont, mode=StatusProviderMode.auto)
+    db.flush()
+
+    # Now try to trigger a TR-069 refresh for live data
     resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
-        return error
+        # No ACS available - return just the cached status
+        return ActionResult(
+            success=True,
+            message=f"Status updated from cache: {status_result.online_status.value}",
+            data={
+                "status": status_result.online_status.value,
+                "source": status_result.status_source.value,
+                "acs_status": status_result.acs_status.value,
+            },
+        )
+
     if resolved is None:
         return ActionResult(success=False, message="ONT resolution failed.")
+
     ont, client, device_id = resolved
     try:
         root = detect_data_model_root(db, ont, client, device_id)
@@ -150,11 +184,23 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         return ActionResult(
             success=True,
             message=f"Status refresh requested for {ont.serial_number}.",
-            data=result,
+            data={
+                "status": status_result.online_status.value,
+                "source": status_result.status_source.value,
+                "tr069_task": result,
+            },
         )
     except GenieACSError as exc:
         logger.error("Refresh failed for ONT %s: %s", ont.serial_number, exc)
-        return ActionResult(success=False, message=f"Status refresh failed: {exc}")
+        # Return cached status even if TR-069 refresh failed
+        return ActionResult(
+            success=True,
+            message=f"Status from cache (TR-069 refresh failed: {exc})",
+            data={
+                "status": status_result.online_status.value,
+                "source": status_result.status_source.value,
+            },
+        )
 
 
 def get_running_config(db: Session, ont_id: str) -> ActionResult:

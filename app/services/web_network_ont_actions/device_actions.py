@@ -12,10 +12,11 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
+from app.services.acs_config_adapter import acs_config_adapter
+from app.services.acs_service_intent_adapter import acs_service_intent_adapter
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.ont_actions import ActionResult, OntActions
-from app.services.network.ont_tr069 import OntTR069
 from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
@@ -95,10 +96,8 @@ def execute_config_snapshot_refresh(
     db: Session, ont_id: str, *, request: Request | None = None
 ) -> ActionResult:
     """Fetch live TR-069 config and persist the last-known snapshot."""
-    summary = OntTR069.get_device_summary(
-        db,
-        ont_id,
-        persist_observed_runtime=True,
+    summary = acs_service_intent_adapter.refresh_observed_summary_for_ont(
+        db, ont_id=ont_id
     )
     success = bool(summary.available and summary.source == "live" and not summary.error)
     message = (
@@ -216,15 +215,13 @@ def execute_enable_ipv6(
     request: Request | None = None,
 ) -> ActionResult:
     """Enable IPv6 dual-stack on ONT with operation tracking."""
-    from app.services.network.ont_action_network import enable_ipv6_on_wan
-
     initiated_by = initiated_by or actor_name_from_request(request)
     return run_tracked_action(
         db,
         NetworkOperationType.ont_enable_ipv6,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: enable_ipv6_on_wan(db, ont_id),
+        lambda: acs_config_adapter.enable_ipv6_on_wan(db, ont_id),
         correlation_key=f"ont_enable_ipv6:{ont_id}",
         initiated_by=initiated_by,
     )
@@ -238,7 +235,13 @@ def execute_connection_request(
     request: Request | None = None,
 ) -> ActionResult:
     """Send a TR-069 connection request with operation tracking."""
-    from app.services.network.ont_action_network import send_connection_request_tracked
-
     initiated_by = initiated_by or actor_name_from_request(request)
-    return send_connection_request_tracked(db, ont_id, initiated_by=initiated_by)
+    return run_tracked_action(
+        db,
+        NetworkOperationType.ont_send_conn_request,
+        NetworkOperationTargetType.ont,
+        ont_id,
+        lambda: acs_config_adapter.send_connection_request(db, ont_id),
+        correlation_key=f"ont_conn_req:{ont_id}",
+        initiated_by=initiated_by,
+    )

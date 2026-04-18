@@ -679,6 +679,38 @@ class TestBuildBeatSchedule:
 
         assert schedule["gis_sync"]["schedule"] == timedelta(minutes=1)
 
+    def test_builds_splynx_customer_sync_schedule(self, monkeypatch):
+        """Test builds customer-only Splynx sync schedule when enabled."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_ENABLED", "true")
+        monkeypatch.setenv("SPLYNX_CUSTOMER_SYNC_INTERVAL_HOURS", "24")
+        monkeypatch.delenv("SPLYNX_SYNC_ENABLED", raising=False)
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                schedule = scheduler_config.build_beat_schedule()
+
+        assert "splynx_customer_accounts_details_sync" in schedule
+        assert (
+            schedule["splynx_customer_accounts_details_sync"]["task"]
+            == "app.tasks.splynx_sync.run_customer_accounts_details_sync"
+        )
+        assert schedule["splynx_customer_accounts_details_sync"][
+            "schedule"
+        ] == timedelta(hours=24)
+        assert "splynx_incremental_sync" not in schedule
+
     def test_handles_exception_gracefully(self, monkeypatch, caplog):
         """Test handles database exceptions gracefully."""
         monkeypatch.delenv("GIS_SYNC_ENABLED", raising=False)

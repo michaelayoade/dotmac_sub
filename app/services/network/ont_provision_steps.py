@@ -28,7 +28,6 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
 from app.services.network._common import NasTarget
-from app.services.notification_adapter import broadcast_websocket, notify
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -48,6 +47,7 @@ from app.services.network.ont_provisioning.profiles import (
     resolve_profile as resolve_profile,
 )
 from app.services.network.ont_provisioning.result import StepResult as StepResult
+from app.services.notification_adapter import broadcast_websocket, notify
 
 logger = logging.getLogger(__name__)
 
@@ -759,15 +759,12 @@ def _provision_wan_service_instances(
         WanConnectionType,
         WanServiceProvisioningStatus,
     )
+    from app.services.acs_config_adapter import acs_config_adapter
     from app.services.credential_crypto import decrypt_credential
     from app.services.network.olt_ssh_ont import (
         configure_ont_internet_config,
         configure_ont_pppoe_omci,
         configure_ont_wan_config,
-    )
-    from app.services.network.ont_action_network import (
-        configure_wan_config,
-        set_pppoe_credentials,
     )
 
     ont = db.get(OntUnit, ont_id)
@@ -1156,7 +1153,7 @@ def _provision_wan_service_instances(
 
         # Configure WAN mode (creates WAN service if needed)
         if wan_mode:
-            wan_result = configure_wan_config(
+            wan_result = acs_config_adapter.configure_wan_config(
                 db,
                 ont_id,
                 wan_mode=wan_mode,
@@ -1176,7 +1173,7 @@ def _provision_wan_service_instances(
                     pppoe_password = None
 
             if pppoe_username and pppoe_password:
-                pppoe_result = set_pppoe_credentials(
+                pppoe_result = acs_config_adapter.set_pppoe_credentials(
                     db,
                     ont_id,
                     pppoe_username,
@@ -1232,17 +1229,11 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     Missing operator inputs are reported in ``data["needs_input"]`` and do not
     fail the bootstrap operation; they can be supplied later and retried.
     """
+    from app.services.acs_config_adapter import acs_config_adapter
     from app.services.credential_crypto import decrypt_credential
     from app.services.network.ont_action_network import (
-        configure_wan_config,
         probe_wan_capabilities,
-        set_lan_config,
-        set_pppoe_credentials,
     )
-    from app.services.network.ont_action_network import (
-        set_connection_request_credentials as set_cr_credentials,
-    )
-    from app.services.network.ont_action_wifi import set_wifi_config
     from app.services.network.ont_service_intent import load_ont_plan_for_ont
 
     t0 = time.monotonic()
@@ -1293,7 +1284,12 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     if cr_username and cr_password:
         _append(
             "set_connection_request_credentials",
-            set_cr_credentials(db, ont_id, str(cr_username), str(cr_password)),
+            acs_config_adapter.set_connection_request_credentials(
+                db,
+                ont_id,
+                str(cr_username),
+                str(cr_password),
+            ),
         )
     elif bind_plan:
         needs_input.append("Connection request credentials are incomplete.")
@@ -1336,7 +1332,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
                 wan_vlan = getattr(ont.wan_vlan, "tag", None)
             _append(
                 "configure_wan_tr069",
-                configure_wan_config(
+                acs_config_adapter.configure_wan_config(
                     db,
                     ont_id,
                     wan_mode=str(wan_mode),
@@ -1364,7 +1360,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             pppoe_wan_vlan = _optional_int(wan_vlan)
             _append(
                 "push_pppoe_tr069",
-                set_pppoe_credentials(
+                acs_config_adapter.set_pppoe_credentials(
                     db,
                     ont_id,
                     str(pppoe_username),
@@ -1391,7 +1387,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         dhcp_enabled_value = lan_values.get("dhcp_enabled")
         _append(
             "configure_lan_tr069",
-            set_lan_config(
+            acs_config_adapter.set_lan_config(
                 db,
                 ont_id,
                 lan_ip=str(lan_values.get("lan_ip") or "") or None,
@@ -1430,7 +1426,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         wifi_enabled_value = wifi_values.get("enabled")
         _append(
             "configure_wifi_tr069",
-            set_wifi_config(
+            acs_config_adapter.set_wifi_config(
                 db,
                 ont_id,
                 enabled=wifi_enabled_value
@@ -1502,12 +1498,15 @@ def set_connection_request_credentials(
         username: Connection request username.
         password: Connection request password.
     """
-    from app.services.network.ont_action_network import (
-        set_connection_request_credentials as _set_cr,
-    )
+    from app.services.acs_config_adapter import acs_config_adapter
 
     t0 = time.monotonic()
-    cr_result = _set_cr(db, ont_id, username, password)
+    cr_result = acs_config_adapter.set_connection_request_credentials(
+        db,
+        ont_id,
+        username,
+        password,
+    )
     ms = int((time.monotonic() - t0) * 1000)
     result = StepResult(
         "set_connection_request_credentials",
@@ -1602,9 +1601,7 @@ def push_pppoe_tr069(
         instance_index: WAN instance index (default 1, must be 1-8).
         retry: Whether to retry on failure (default True).
     """
-    from app.services.network.ont_action_network import (
-        set_pppoe_credentials as _set_pppoe,
-    )
+    from app.services.acs_config_adapter import acs_config_adapter
 
     t0 = time.monotonic()
 
@@ -1622,7 +1619,7 @@ def push_pppoe_tr069(
     last_result = None
 
     for attempt in range(1, max_attempts + 1):
-        last_result = _set_pppoe(
+        last_result = acs_config_adapter.set_pppoe_credentials(
             db, ont_id, username, password, instance_index=instance_index
         )
         if last_result.success or getattr(last_result, "waiting", False):
@@ -1686,7 +1683,7 @@ def configure_wan_tr069(
         dns_servers: Comma-separated DNS servers when wan_mode is "static".
         instance_index: WAN instance index (default 1).
     """
-    from app.services.network.ont_action_network import configure_wan_config
+    from app.services.acs_config_adapter import acs_config_adapter
 
     t0 = time.monotonic()
     resolved_wan_vlan = (
@@ -1697,7 +1694,7 @@ def configure_wan_tr069(
     if isinstance(resolved_wan_vlan, str):
         resolved_wan_vlan = None
 
-    action_result = configure_wan_config(
+    action_result = acs_config_adapter.configure_wan_config(
         db,
         ont_id,
         wan_mode=wan_mode,
@@ -1744,9 +1741,13 @@ def enable_ipv6(
     """
     t0 = time.monotonic()
     try:
-        from app.services.network.ont_action_network import enable_ipv6_on_wan
+        from app.services.acs_config_adapter import acs_config_adapter
 
-        v6_result = enable_ipv6_on_wan(db, ont_id, wan_instance=wan_instance)
+        v6_result = acs_config_adapter.enable_ipv6_on_wan(
+            db,
+            ont_id,
+            wan_instance=wan_instance,
+        )
         ms = int((time.monotonic() - t0) * 1000)
         result = StepResult(
             "enable_ipv6", v6_result.success, v6_result.message, ms, critical=False

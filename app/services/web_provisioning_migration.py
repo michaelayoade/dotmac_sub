@@ -12,15 +12,13 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.audit import AuditActorType
 from app.models.catalog import CatalogOffer, Subscription
 from app.models.network import IPAssignment, IpPool, IPVersion, OntAssignment, PonPort
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
-from app.schemas.audit import AuditEventCreate
-from app.services import audit as audit_service
 from app.services import domain_settings as domain_settings_service
 from app.services import job_log_store
+from app.services.audit_adapter import record_audit_event
 from app.services.catalog.subscriptions import apply_offer_radius_profile
 from app.services.radius import sync_account_credentials_to_radius
 
@@ -499,17 +497,16 @@ def _log_migration_audit(
     is_success: bool,
     summary: dict[str, Any],
 ) -> None:
-    payload = AuditEventCreate(
-        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+    record_audit_event(
+        db,
         actor_id=actor_id,
         action="service_migration",
         entity_type="service_migration",
         entity_id=job_id,
         status_code=200 if is_success else 500,
         is_success=is_success,
-        metadata_=summary,
+        metadata=summary,
     )
-    audit_service.audit_events.create(db=db, payload=payload)
 
 
 def _update_ip_pool_for_subscriber(

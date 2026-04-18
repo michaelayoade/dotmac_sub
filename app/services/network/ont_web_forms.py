@@ -213,6 +213,7 @@ def build_ont_create_payload(form: FormData) -> tuple[OntUnitCreate | None, str 
     serial_number = form_str(form, "serial_number").strip()
     if not serial_number:
         return None, "Serial number is required"
+    olt_device_id = form_uuid_or_none(form, "olt_device_id")
     payload = OntUnitCreate(
         serial_number=serial_number,
         vendor_serial_number=normalize_vendor_serial(
@@ -224,7 +225,7 @@ def build_ont_create_payload(form: FormData) -> tuple[OntUnitCreate | None, str 
         notes=form_str(form, "notes").strip() or None,
         is_active=form_str(form, "is_active") == "true",
         onu_type_id=form_uuid_or_none(form, "onu_type_id"),
-        olt_device_id=form_uuid_or_none(form, "olt_device_id"),
+        olt_device_id=olt_device_id,
         pon_type=form_str(form, "pon_type").strip() or None,
         gpon_channel=form_str(form, "gpon_channel").strip() or None,
         board=form_str(form, "board").strip() or None,
@@ -243,6 +244,8 @@ def build_ont_create_payload(form: FormData) -> tuple[OntUnitCreate | None, str 
         gps_latitude=form_float_or_none(form, "gps_latitude"),
         gps_longitude=form_float_or_none(form, "gps_longitude"),
     )
+    if payload.olt_device_id is None:
+        return payload, "Select an OLT for this ONT."
     if payload.is_active:
         return payload, "New ONTs must be inactive until assigned to a customer."
     return payload, None
