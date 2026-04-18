@@ -72,6 +72,54 @@ class ParsedServicePort:
     gemport: int
 
 
+@dataclass
+class ParsedOntRegistration:
+    """Parsed ONT registration from config."""
+
+    port: int  # Port number within board
+    ont_id: int  # ONT ID on that port
+    serial_number: str  # Converted serial number (e.g., HWTC...)
+
+
+# Regex to parse ont add commands
+# ont add <port> <ont_id> sn-auth "<hex_serial>" ...
+ONT_ADD_RE = re.compile(
+    r"ont\s+add\s+(\d+)\s+(\d+)\s+sn-auth\s+\"([0-9A-Fa-f]+)\""
+)
+
+
+def _hex_to_serial(hex_sn: str) -> str:
+    """Convert hex serial to standard format (e.g., 48575443A31C8507 -> HWTCA31C8507)."""
+    try:
+        # First 8 hex chars are ASCII prefix (e.g., HWTC)
+        prefix = bytes.fromhex(hex_sn[:8]).decode("ascii")
+        suffix = hex_sn[8:].upper()
+        return f"{prefix}{suffix}"
+    except Exception:
+        return hex_sn.upper()
+
+
+def parse_ont_registrations(filepath: Path) -> dict[tuple[int, int], str]:
+    """Parse ONT registrations to build (port, ont_id) -> serial_number map."""
+    result = {}
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        logger.error("Failed to read %s: %s", filepath, e)
+        return result
+
+    for line in content.splitlines():
+        match = ONT_ADD_RE.search(line)
+        if match:
+            port = int(match.group(1))
+            ont_id = int(match.group(2))
+            hex_sn = match.group(3)
+            serial = _hex_to_serial(hex_sn)
+            result[(port, ont_id)] = serial
+
+    return result
+
+
 def parse_config_file(filepath: Path) -> list[ParsedServicePort]:
     """Parse service-port entries from a config file."""
     results = []
@@ -134,10 +182,27 @@ def _normalize_board_port(board: str | None, port: str | None) -> str | None:
 
 
 def get_ont_by_fsp_and_id(
-    db, olt_id, fsp: str, ont_id: int
+    db, olt_id, fsp: str, ont_id: int, serial_number: str | None = None
 ) -> tuple[OntUnit | None, OntAssignment | None]:
-    """Find ONT by FSP and ONT ID on the OLT."""
-    # First try to find by simple external_id (ONT ID on OLT)
+    """Find ONT by FSP and ONT ID on the OLT, or by serial number."""
+
+    # First try by serial number if provided (most reliable)
+    if serial_number:
+        stmt = select(OntUnit).where(
+            OntUnit.olt_device_id == olt_id,
+            OntUnit.serial_number == serial_number,
+            OntUnit.is_active.is_(True),
+        )
+        ont = db.scalars(stmt).first()
+        if ont:
+            stmt = select(OntAssignment).where(
+                OntAssignment.ont_unit_id == ont.id,
+                OntAssignment.active.is_(True),
+            )
+            assignment = db.scalars(stmt).first()
+            return ont, assignment
+
+    # Try to find by simple external_id (ONT ID on OLT)
     stmt = select(OntUnit).where(
         OntUnit.olt_device_id == olt_id,
         OntUnit.external_id == str(ont_id),
@@ -216,6 +281,10 @@ def import_from_config(
             if not service_ports:
                 continue
 
+            # Parse ONT registrations to get serial numbers
+            ont_registrations = parse_ont_registrations(config_file)
+            logger.info("  Found %d ONT registrations", len(ont_registrations))
+
             # Get or create pool for this OLT
             stmt = select(OltServicePortPool).where(
                 OltServicePortPool.olt_device_id == olt.id
@@ -249,15 +318,27 @@ def import_from_config(
                     file_results["skipped_existing"] += 1
                     continue
 
+                # Extract port number from FSP (e.g., "0/2/3" -> 3)
+                fsp_parts = sp.fsp.split("/")
+                port_num = int(fsp_parts[-1]) if len(fsp_parts) == 3 else None
+
+                # Look up serial number from ONT registrations
+                serial_number = None
+                if port_num is not None:
+                    serial_number = ont_registrations.get((port_num, sp.ont_id))
+
                 # Try to find the ONT
-                ont, assignment = get_ont_by_fsp_and_id(db, olt.id, sp.fsp, sp.ont_id)
+                ont, assignment = get_ont_by_fsp_and_id(
+                    db, olt.id, sp.fsp, sp.ont_id, serial_number
+                )
 
                 if not ont:
                     logger.debug(
-                        "    Skipping port %d: ONT %s/%d not found",
+                        "    Skipping port %d: ONT %s/%d (sn=%s) not found",
                         sp.index,
                         sp.fsp,
                         sp.ont_id,
+                        serial_number,
                     )
                     file_results["skipped_no_ont"] += 1
                     continue
