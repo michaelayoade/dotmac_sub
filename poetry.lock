@@ -1326,7 +1326,7 @@ version = "3.14"
 description = "Builds a queryable graph of the imports within one or more Python packages."
 optional = false
 python-versions = ">=3.10"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "grimp-3.14-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:17364365c27c111514fd9d17844f275ed074ec9feca0d6cf9bd5bf9218db2412"},
     {file = "grimp-3.14-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:25273ea53ac1492e7343bd9d9d9b60445f707bc0d162eca85288c7325579ee47"},
@@ -1685,7 +1685,7 @@ version = "2.11"
 description = "Lint your Python architecture"
 optional = false
 python-versions = ">=3.10"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "import_linter-2.11-py3-none-any.whl", hash = "sha256:3dc54cae933bae3430358c30989762b721c77aa99d424f56a08265be0eeaa465"},
     {file = "import_linter-2.11.tar.gz", hash = "sha256:5abc3394797a54f9bae315e7242dc98715ba485f840ac38c6d3192c370d0085e"},
@@ -4902,9 +4902,9 @@ files = [
 test = ["pytest"]
 
 [extras]
-dev = ["bandit", "mypy", "playwright", "pre-commit", "pytest", "pytest-asyncio", "pytest-cov", "ruff"]
+dev = ["bandit", "import-linter", "mypy", "playwright", "pre-commit", "pytest", "pytest-asyncio", "pytest-cov", "ruff"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "66e2cc19240315e922f2a059b8aa115b9b8924d41e681d6d105d1478c0ba9181"
+content-hash = "5b3ca8fbf3c93e02ac43e96a575c18d7c8a0b7b944e9f860329e67085464de14"

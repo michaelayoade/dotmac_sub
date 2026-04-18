@@ -152,6 +152,7 @@ class OntProvisioningProfiles:
         """List provisioning profiles with optional filtering."""
         stmt = select(OntProvisioningProfile).options(
             selectinload(OntProvisioningProfile.wan_services),
+            selectinload(OntProvisioningProfile.owner_subscriber),
             selectinload(OntProvisioningProfile.olt_device),
             selectinload(OntProvisioningProfile.download_speed_profile),
             selectinload(OntProvisioningProfile.upload_speed_profile),
@@ -213,6 +214,7 @@ class OntProvisioningProfiles:
             select(OntProvisioningProfile)
             .options(
                 selectinload(OntProvisioningProfile.wan_services),
+                selectinload(OntProvisioningProfile.owner_subscriber),
                 selectinload(OntProvisioningProfile.olt_device),
                 selectinload(OntProvisioningProfile.download_speed_profile),
                 selectinload(OntProvisioningProfile.upload_speed_profile),
@@ -230,7 +232,7 @@ class OntProvisioningProfiles:
     def create(
         db: Session,
         *,
-        owner_subscriber_id: str,
+        owner_subscriber_id: str | None = None,
         name: str,
         profile_type: OntProfileType = OntProfileType.residential,
         description: str | None = None,
@@ -363,6 +365,8 @@ class OntProvisioningProfiles:
 
         for key, value in kwargs.items():
             if hasattr(profile, key):
+                if key == "owner_subscriber_id":
+                    value = coerce_uuid(value)
                 setattr(profile, key, value)
         db.commit()
         db.refresh(profile)

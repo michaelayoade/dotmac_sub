@@ -407,11 +407,17 @@ class CPEDevices(CRUDManager[CPEDevice]):
 
     @staticmethod
     def create(db: Session, payload: CPEDeviceCreate):
-        network_validators.validate_cpe_device_links(
-            db,
-            str(payload.subscriber_id),
-            str(payload.service_address_id) if payload.service_address_id else None,
-        )
+        if payload.subscriber_id is not None:
+            network_validators.validate_cpe_device_links(
+                db,
+                str(payload.subscriber_id),
+                str(payload.service_address_id) if payload.service_address_id else None,
+            )
+        elif payload.service_address_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="service_address_id requires subscriber_id",
+            )
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "device_type" not in fields_set:
@@ -472,13 +478,19 @@ class CPEDevices(CRUDManager[CPEDevice]):
         if not device:
             raise HTTPException(status_code=404, detail="CPE device not found")
         data = payload.model_dump(exclude_unset=True)
-        subscriber_id = str(data.get("subscriber_id", device.subscriber_id))
+        resolved_subscriber_id = data.get("subscriber_id", device.subscriber_id)
         service_address_id = data.get("service_address_id", device.service_address_id)
-        network_validators.validate_cpe_device_links(
-            db,
-            subscriber_id,
-            str(service_address_id) if service_address_id else None,
-        )
+        if resolved_subscriber_id is not None:
+            network_validators.validate_cpe_device_links(
+                db,
+                str(resolved_subscriber_id),
+                str(service_address_id) if service_address_id else None,
+            )
+        elif service_address_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="service_address_id requires subscriber_id",
+            )
         data = _normalize_cpe_data(data)
         for key, value in data.items():
             setattr(device, key, value)

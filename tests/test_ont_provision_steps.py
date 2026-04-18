@@ -145,22 +145,17 @@ class TestValidatePrerequisites:
             OntUnit,
             PonPort,
         )
-        from app.models.subscriber import Subscriber
         from app.models.tr069 import Tr069AcsServer
         from app.services.network.ont_provision_steps import validate_prerequisites
 
-        subscriber = Subscriber(
-            first_name="Preflight",
-            last_name="No PPPoE",
-            email=f"preflight-{uuid.uuid4().hex[:8]}@test.local",
-        )
+        # OntAssignment.subscriber_id is optional; no subscriber needed.
         acs = Tr069AcsServer(
             name="DotMac ACS",
             base_url="http://genieacs:7557",
             cwmp_url="http://acs.example/cwmp",
             is_active=True,
         )
-        db_session.add_all([subscriber, acs])
+        db_session.add(acs)
         db_session.flush()
 
         olt = OLTDevice(
@@ -201,7 +196,6 @@ class TestValidatePrerequisites:
         db_session.add(
             OntAssignment(
                 ont_unit_id=ont.id,
-                subscriber_id=subscriber.id,
                 pon_port_id=pon.id,
                 active=True,
             )

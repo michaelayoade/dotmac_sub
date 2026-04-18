@@ -1,4 +1,4 @@
-"""merge_task_executions_and_nin_verifications
+"""merge_task_executions_and_olt_draining
 
 Revision ID: 85f2cdc1eedd
 Revises: 033_add_olt_draining_status

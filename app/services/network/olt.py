@@ -13,6 +13,7 @@ import logging
 import re
 from collections.abc import Sequence
 from time import sleep
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
@@ -31,7 +32,6 @@ from app.models.network import (
     OntUnit,
     PonPort,
 )
-from app.models.subscriber import Subscriber
 from app.schemas.network import (
     OltCardCreate,
     OltCardPortCreate,
@@ -53,6 +53,7 @@ from app.services.crud import CRUDManager
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network._common import (
+    SubscriberValidator,
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
@@ -60,7 +61,6 @@ from app.services.network._common import (
     encode_to_hex_serial,
 )
 from app.services.query_builders import apply_active_state, apply_optional_equals
-from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
 
@@ -180,18 +180,26 @@ def _validate_assignment_customer_links(
     *,
     subscriber_id: object | None,
     service_address_id: object | None,
+    subscriber_validator: SubscriberValidator | None,
 ) -> None:
-    if subscriber_id is None:
-        if service_address_id is not None:
+    """Validate subscriber/service-address links via an injected validator.
+
+    When ``subscriber_validator`` is ``None`` the network service is running
+    in standalone mode: we still reject the obviously-inconsistent case of a
+    service address without a subscriber, but defer to the validator for any
+    subscriber-existence or address-ownership checks.
+    """
+    if subscriber_validator is None:
+        if subscriber_id is None and service_address_id is not None:
             raise HTTPException(
                 status_code=400,
                 detail="Service address requires a subscriber",
             )
         return
-    network_validators.validate_cpe_device_links(
+    subscriber_validator.validate_assignment_customer_links(
         db,
-        str(subscriber_id),
-        str(service_address_id) if service_address_id is not None else None,
+        subscriber_id=subscriber_id,
+        service_address_id=service_address_id,
     )
 
 
@@ -661,6 +669,11 @@ class OntUnits(CRUDManager[OntUnit]):
     soft_delete_field = "is_active"
     soft_delete_value = False
 
+    def __init__(
+        self, subscriber_validator: SubscriberValidator | None = None
+    ) -> None:
+        self._subscriber_validator = subscriber_validator
+
     @staticmethod
     def list(
         db: Session,
@@ -680,8 +693,8 @@ class OntUnits(CRUDManager[OntUnit]):
         )
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
-    @staticmethod
     def list_advanced(
+        self,
         db: Session,
         *,
         olt_id: str | None = None,
@@ -771,7 +784,6 @@ class OntUnits(CRUDManager[OntUnit]):
             search_assignment = aliased(OntAssignment)
             search_pon_port = aliased(PonPort)
             search_olt = aliased(OLTDevice)
-            search_subscriber = aliased(Subscriber)
 
             # Build list of serial search conditions including hex serial variants
             serial_conditions = [OntUnit.serial_number.ilike(term)]
@@ -797,28 +809,34 @@ class OntUnits(CRUDManager[OntUnit]):
                     search_pon_port, search_pon_port.id == search_assignment.pon_port_id
                 )
                 .outerjoin(search_olt, search_olt.id == search_pon_port.olt_id)
-                .outerjoin(
-                    search_subscriber,
-                    search_subscriber.id == search_assignment.subscriber_id,
-                )
-                .where(
-                    or_(
-                        *serial_conditions,
-                        OntUnit.mac_address.ilike(term),
-                        OntUnit.vendor.ilike(term),
-                        OntUnit.model.ilike(term),
-                        OntUnit.firmware_version.ilike(term),
-                        OntUnit.notes.ilike(term),
-                        OntUnit.board.ilike(term),
-                        OntUnit.port.ilike(term),
-                        search_olt.name.ilike(term),
-                        search_olt.hostname.ilike(term),
-                        search_pon_port.name.ilike(term),
-                        search_pon_port.notes.ilike(term),
-                        search_subscriber.display_name.ilike(term),
-                        search_subscriber.subscriber_number.ilike(term),
-                        search_subscriber.email.ilike(term),
+            )
+
+            # Optionally let the subscriber bridge add its own joins/conditions.
+            subscriber_conditions: Sequence[Any] = ()
+            if self._subscriber_validator is not None:
+                stmt, subscriber_conditions = (
+                    self._subscriber_validator.augment_ont_search(
+                        stmt,
+                        term,
+                        assignment_alias=search_assignment,
                     )
+                )
+
+            stmt = stmt.where(
+                or_(
+                    *serial_conditions,
+                    OntUnit.mac_address.ilike(term),
+                    OntUnit.vendor.ilike(term),
+                    OntUnit.model.ilike(term),
+                    OntUnit.firmware_version.ilike(term),
+                    OntUnit.notes.ilike(term),
+                    OntUnit.board.ilike(term),
+                    OntUnit.port.ilike(term),
+                    search_olt.name.ilike(term),
+                    search_olt.hostname.ilike(term),
+                    search_pon_port.name.ilike(term),
+                    search_pon_port.notes.ilike(term),
+                    *subscriber_conditions,
                 )
             )
 
@@ -882,8 +900,12 @@ class OntAssignments(CRUDManager[OntAssignment]):
     model = OntAssignment
     not_found_detail = "ONT assignment not found"
 
-    @classmethod
-    def create(cls, db: Session, payload: OntAssignmentCreate) -> OntAssignment:
+    def __init__(
+        self, subscriber_validator: SubscriberValidator | None = None
+    ) -> None:
+        self._subscriber_validator = subscriber_validator
+
+    def create(self, db: Session, payload: OntAssignmentCreate) -> OntAssignment:
         ont, _pon_port = _validate_assignment_target(
             db,
             ont_unit_id=payload.ont_unit_id,
@@ -894,6 +916,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
             db,
             subscriber_id=payload.subscriber_id,
             service_address_id=payload.service_address_id,
+            subscriber_validator=self._subscriber_validator,
         )
         assignment = OntAssignment(**payload.model_dump())
         from app.services.network.cpe import ensure_cpe_for_ont
@@ -954,11 +977,10 @@ class OntAssignments(CRUDManager[OntAssignment]):
     def get(cls, db: Session, assignment_id: str) -> OntAssignment:
         return super().get(db, assignment_id)
 
-    @classmethod
     def update(
-        cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate
+        self, db: Session, assignment_id: str, payload: OntAssignmentUpdate
     ) -> OntAssignment:
-        assignment = cls.get(db, assignment_id)
+        assignment = self.get(db, assignment_id)
         original_ont_unit_id = assignment.ont_unit_id
         data = payload.model_dump(exclude_unset=True)
         fields_set = set(payload.model_fields_set)
@@ -987,6 +1009,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
             db,
             subscriber_id=target_subscriber_id,
             service_address_id=target_service_address_id,
+            subscriber_validator=self._subscriber_validator,
         )
 
         original_ont = (
@@ -1320,10 +1343,30 @@ class OltSfpModules(CRUDManager[OltSfpModule]):
         return super().delete(db, module_id)
 
 
+def _default_subscriber_validator() -> SubscriberValidator | None:
+    """Soft-import the subscriber bridge validator.
+
+    The network package must not import the subscriber model directly, but
+    callers running in the full subscription-enabled deployment want the
+    validator wired in automatically. We import the bridge lazily so the
+    network package stays importable in standalone deployments where the
+    bridge (or the subscriber model) is absent.
+    """
+    try:
+        from app.services.network_subscriber_bridge import (
+            default_subscriber_validator,
+        )
+    except ImportError:  # pragma: no cover - standalone deployments
+        return None
+    return default_subscriber_validator
+
+
+_validator = _default_subscriber_validator()
+
 olt_devices = OLTDevices()
 pon_ports = PonPorts()
-ont_units = OntUnits()
-ont_assignments = OntAssignments()
+ont_units = OntUnits(subscriber_validator=_validator)
+ont_assignments = OntAssignments(subscriber_validator=_validator)
 olt_shelves = OltShelves()
 olt_cards = OltCards()
 olt_card_ports = OltCardPorts()

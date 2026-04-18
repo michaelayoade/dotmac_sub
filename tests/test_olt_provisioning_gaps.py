@@ -39,7 +39,6 @@ from app.models.network import (
     WanServiceType,
 )
 from app.models.ont_autofind import OltAutofindCandidate
-from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.network import olt_authorization_workflow
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -60,21 +59,6 @@ from app.services.network.vlan_chain import (
     VlanChainWarning,
     validate_chain,
 )
-
-
-def _create_business_subscriber(db_session) -> Subscriber:
-    """Create a minimal business subscriber for ownership constraints."""
-    subscriber = Subscriber(
-        first_name="Test",
-        last_name="Business",
-        email=f"business-{uuid.uuid4().hex[:8]}@example.test",
-        company_name=f"Test Org {uuid.uuid4().hex[:8]}",
-    )
-    subscriber.category = SubscriberCategory.business
-    db_session.add(subscriber)
-    db_session.commit()
-    db_session.refresh(subscriber)
-    return subscriber
 
 
 def _add_olt_auth_profile(
@@ -1998,14 +1982,11 @@ class TestGetProfileTemplates:
     def test_get_profile_templates_returns_active_only(self, db_session) -> None:
         from app.services.web_network_onts import get_profile_templates
 
-        org = _create_business_subscriber(db_session)
         active = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
             name="Active Profile Test",
             is_active=True,
         )
         inactive = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
             name="Inactive Profile Test",
             is_active=False,
         )
@@ -2610,7 +2591,6 @@ class TestProfileWanServiceVlanScope:
         try:
             ont_provisioning_profiles.create(
                 db_session,
-                owner_subscriber_id=None,
                 name="Missing Mgmt VLAN Profile",
                 olt_device_id=str(olt.id),
                 mgmt_vlan_tag=201,
@@ -2628,7 +2608,6 @@ class TestProfileWanServiceVlanScope:
 
         profile = ont_provisioning_profiles.create(
             db_session,
-            owner_subscriber_id=None,
             name="Valid Mgmt VLAN Profile",
             olt_device_id=str(olt.id),
             mgmt_vlan_tag=201,

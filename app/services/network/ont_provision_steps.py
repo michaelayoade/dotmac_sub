@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
+from app.services.network._common import NasTarget
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -1769,7 +1771,7 @@ def enable_ipv6(
 def ensure_nas_vlan(
     db: Session,
     *,
-    nas_device_id: str,
+    nas: NasTarget,
     vlan_id: int,
     parent_interface: str = "ether3",
     ip_address: str,
@@ -1782,27 +1784,24 @@ def ensure_nas_vlan(
 
     Args:
         db: Database session.
-        nas_device_id: NAS device primary key.
+        nas: Lightweight DTO describing the target NAS device. Callers that
+            hold a ``NasDevice`` ORM row should construct a :class:`NasTarget`
+            from it before calling this function.
         vlan_id: VLAN ID to create.
         parent_interface: Physical interface (default "ether3").
         ip_address: IP address with CIDR for the VLAN interface.
         pppoe_service_name: Optional PPPoE service name.
         pppoe_default_profile: PPP profile name (default "default").
     """
-    from app.models.catalog import NasDevice
-
     t0 = time.monotonic()
-    nas = db.get(NasDevice, nas_device_id)
-    if not nas:
-        return StepResult(
-            "ensure_nas_vlan", False, f"NAS device {nas_device_id} not found"
-        )
 
     try:
         from app.services.nas._mikrotik_vlan import provision_vlan_full
 
+        # ``provision_vlan_full`` is typed to ``NasDevice`` but only reads the
+        # attributes present on ``NasTarget``; the DTO is duck-type compatible.
         vlan_result = provision_vlan_full(
-            nas,
+            cast(Any, nas),
             vlan_id=vlan_id,
             parent_interface=parent_interface,
             ip_address=ip_address,
