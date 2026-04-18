@@ -99,6 +99,7 @@ def resolve_pon_port_for_ont(db: Session, ont) -> dict[str, object]:
         olt_device = getattr(ont, "olt_device", None)
         if not olt_device:
             from app.models.network import OLTDevice
+
             olt_device = db.get(OLTDevice, olt_device_id)
         if olt_device:
             olt_name = f" ({olt_device.name})"
@@ -154,9 +155,15 @@ def parse_form_values(form) -> dict[str, object]:
 
 
 def validate_form_values(values: dict[str, object]) -> str | None:
-    """Validate required assignment fields."""
-    if not values.get("account_id"):
-        return "Subscriber account is required"
+    """Validate assignment fields.
+
+    Subscriber account is optional: ONT assignments may be created without
+    a subscriber ref for standalone network operations (see DCP-11).
+    ``service_address_id`` requires ``account_id`` because addresses belong
+    to a subscriber.
+    """
+    if values.get("service_address_id") and not values.get("account_id"):
+        return "Service address requires a subscriber account"
     return None
 
 
@@ -209,23 +216,30 @@ def resolve_service_address_for_subscriber(
 
 
 def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
-    """Create ONT assignment, auto-resolving PON port and address."""
+    """Create ONT assignment, auto-resolving PON port and address.
+
+    Subscriber account is optional. When absent, the service address lookup
+    is skipped and the assignment is created without a subscriber ref.
+    """
     pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
     pon_port_id = coerce_uuid(pon_port_id_str) if pon_port_id_str else None
 
-    subscriber_id = str(values["account_id"])
+    subscriber_id_str = str(values["account_id"]) if values.get("account_id") else None
 
-    # Auto-resolve service address from subscriber if not provided
-    service_address_id_str = (
-        str(values["service_address_id"])
-        if values.get("service_address_id")
-        else resolve_service_address_for_subscriber(db, subscriber_id)
-    )
+    service_address_id_str: str | None
+    if values.get("service_address_id"):
+        service_address_id_str = str(values["service_address_id"])
+    elif subscriber_id_str is not None:
+        service_address_id_str = resolve_service_address_for_subscriber(
+            db, subscriber_id_str
+        )
+    else:
+        service_address_id_str = None
 
     payload = OntAssignmentCreate(
         ont_unit_id=ont.id,
         pon_port_id=pon_port_id,
-        subscriber_id=coerce_uuid(subscriber_id),
+        subscriber_id=coerce_uuid(subscriber_id_str) if subscriber_id_str else None,
         service_address_id=(
             coerce_uuid(service_address_id_str) if service_address_id_str else None
         ),
@@ -236,7 +250,9 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     network_service.ont_assignments.create(db=db, payload=payload)
 
 
-def form_payload(values: dict[str, object], db: Session | None = None) -> dict[str, object]:
+def form_payload(
+    values: dict[str, object], db: Session | None = None
+) -> dict[str, object]:
     """Return template-friendly form payload.
 
     If db is provided and account_id is set, looks up the subscriber label
@@ -393,7 +409,9 @@ def update_assignment_from_form(
 
     payload = OntAssignmentUpdate(
         pon_port_id=resolved_pon_port_id,
-        subscriber_id=coerce_uuid(str(values["account_id"])),
+        subscriber_id=(
+            coerce_uuid(str(values["account_id"])) if values.get("account_id") else None
+        ),
         subscription_id=(
             coerce_uuid(str(values["subscription_id"]))
             if values.get("subscription_id")

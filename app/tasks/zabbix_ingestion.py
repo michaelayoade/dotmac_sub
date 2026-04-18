@@ -64,11 +64,15 @@ def _period_bounds(period: str) -> tuple[datetime, datetime]:
 
 
 def _lock_key_for_chunk(subscription_ids: list[str], period: str) -> str:
-    digest = hashlib.sha256(",".join(sorted(subscription_ids)).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        ",".join(sorted(subscription_ids)).encode("utf-8")
+    ).hexdigest()
     return f"{_CHUNK_LOCK_PREFIX}:{period}:{digest}"
 
 
-def _acquire_lock(key: str, ttl_seconds: int = _LOCK_TTL_SECONDS) -> tuple[Any, str] | None:
+def _acquire_lock(
+    key: str, ttl_seconds: int = _LOCK_TTL_SECONDS
+) -> tuple[Any, str] | None:
     redis = get_redis()
     if redis is None:
         return None
@@ -115,9 +119,7 @@ def dispatch_portal_usage_ingestion() -> dict[str, Any]:
         subscription_ids = [str(row[0]) for row in rows]
         chunks = _chunks(subscription_ids, _chunk_size())
         planned_chunks = [
-            (period, chunk)
-            for period in ("current", "last")
-            for chunk in chunks
+            (period, chunk) for period in ("current", "last") for chunk in chunks
         ]
         cursor = 0
         try:
@@ -171,7 +173,10 @@ def ingest_portal_usage_chunk(
     lock_key = _lock_key_for_chunk(normalized_ids, normalized_period)
     lock = _acquire_lock(lock_key)
     if lock is None:
-        return {"skipped": "chunk_already_running", "subscriptions": len(normalized_ids)}
+        return {
+            "skipped": "chunk_already_running",
+            "subscriptions": len(normalized_ids),
+        }
     redis, lock_token = lock
 
     db = SessionLocal()

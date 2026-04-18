@@ -53,7 +53,9 @@ class _FakeS3Client:
     def create_bucket(self, **kwargs):
         self.created_bucket = True
 
-    def put_object(self, Bucket: str, Key: str, Body: bytes, ContentType: str | None = None):
+    def put_object(
+        self, Bucket: str, Key: str, Body: bytes, ContentType: str | None = None
+    ):
         self.objects[Key] = Body
         if ContentType:
             self.content_types[Key] = ContentType
@@ -208,12 +210,8 @@ class TestRetryWithBackoff:
 
     @patch("app.services.object_storage.time.sleep")
     def test_retry_on_transient_error_then_success(self, mock_sleep):
-        func = MagicMock(
-            side_effect=[socket.gaierror(8, "DNS failed"), "success"]
-        )
-        result = _retry_with_backoff(
-            "test op", func, max_attempts=3, base_delay=1.0
-        )
+        func = MagicMock(side_effect=[socket.gaierror(8, "DNS failed"), "success"])
+        result = _retry_with_backoff("test op", func, max_attempts=3, base_delay=1.0)
         assert result == "success"
         assert func.call_count == 2
         mock_sleep.assert_called_once_with(1.0)

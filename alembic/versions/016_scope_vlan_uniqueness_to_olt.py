@@ -19,7 +19,10 @@ depends_on = None
 
 def _unique_constraints(table_name: str) -> set[str]:
     inspector = inspect(op.get_bind())
-    return {constraint["name"] for constraint in inspector.get_unique_constraints(table_name)}
+    return {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints(table_name)
+    }
 
 
 def upgrade() -> None:

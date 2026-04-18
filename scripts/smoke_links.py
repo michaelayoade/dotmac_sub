@@ -88,7 +88,9 @@ def _is_login_redirect(location: str | None) -> bool:
     return any(parsed.path.startswith(path) for path in LOGIN_REDIRECT_PATHS)
 
 
-def _login(client: httpx.Client, base_url: str, login_path: str, username: str, password: str) -> None:
+def _login(
+    client: httpx.Client, base_url: str, login_path: str, username: str, password: str
+) -> None:
     url = f"{base_url}{login_path}"
     response = client.post(
         url,
@@ -162,7 +164,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke test internal links.")
     parser.add_argument(
         "--base-url",
-        default=os.getenv("SMOKE_BASE_URL", os.getenv("PLAYWRIGHT_BASE_URL", "http://localhost:8000")),
+        default=os.getenv(
+            "SMOKE_BASE_URL", os.getenv("PLAYWRIGHT_BASE_URL", "http://localhost:8000")
+        ),
         help="Base URL for the app (default: http://localhost:8000).",
     )
     parser.add_argument(
@@ -211,10 +215,14 @@ def main() -> int:
     excluded = set(DEFAULT_EXCLUDED_PATH_SNIPPETS)
     env_excludes = os.getenv("SMOKE_EXCLUDE", "")
     if env_excludes:
-        excluded.update(item.strip() for item in env_excludes.split(",") if item.strip())
+        excluded.update(
+            item.strip() for item in env_excludes.split(",") if item.strip()
+        )
     excluded.update(item.strip() for item in args.exclude if item.strip())
 
-    with httpx.Client(base_url=base_url, timeout=15.0, headers={"User-Agent": "smoke-links/1.0"}) as client:
+    with httpx.Client(
+        base_url=base_url, timeout=15.0, headers={"User-Agent": "smoke-links/1.0"}
+    ) as client:
         if args.username and args.password:
             _login(client, base_url, args.login_path, args.username, args.password)
 

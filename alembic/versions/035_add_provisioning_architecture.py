@@ -9,9 +9,10 @@ Phase 2: Async verification (verification_status, timestamps)
 Phase 4: Circuit breaker (circuit_state, backoff, queued operations)
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "035_add_provisioning_architecture"
 down_revision = "034_add_compensation_failures"
@@ -36,7 +37,11 @@ def upgrade() -> None:
             sa.Column("olt_device_id", sa.UUID(), nullable=False),
             sa.Column("min_index", sa.Integer(), nullable=False, default=0),
             sa.Column("max_index", sa.Integer(), nullable=False, default=65535),
-            sa.Column("reserved_indices", postgresql.JSON(astext_type=sa.Text()), nullable=True),
+            sa.Column(
+                "reserved_indices",
+                postgresql.JSON(astext_type=sa.Text()),
+                nullable=True,
+            ),
             sa.Column("next_available_index", sa.Integer(), nullable=True),
             sa.Column("available_count", sa.Integer(), nullable=True),
             sa.Column("is_active", sa.Boolean(), nullable=False, default=True),
@@ -170,7 +175,9 @@ def upgrade() -> None:
     if "last_successful_ssh_at" not in olt_columns:
         op.add_column(
             "olt_devices",
-            sa.Column("last_successful_ssh_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column(
+                "last_successful_ssh_at", sa.DateTime(timezone=True), nullable=True
+            ),
         )
 
     if "circuit_failure_threshold" not in olt_columns:
@@ -191,7 +198,9 @@ def upgrade() -> None:
             sa.Column("id", sa.UUID(), nullable=False),
             sa.Column("olt_device_id", sa.UUID(), nullable=False),
             sa.Column("operation_type", sa.String(length=64), nullable=False),
-            sa.Column("payload", postgresql.JSON(astext_type=sa.Text()), nullable=False),
+            sa.Column(
+                "payload", postgresql.JSON(astext_type=sa.Text()), nullable=False
+            ),
             sa.Column(
                 "status",
                 sa.String(length=20),
@@ -235,8 +244,12 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Drop queued_olt_operations table
-    op.drop_index("ix_queued_olt_operations_scheduled", table_name="queued_olt_operations")
-    op.drop_index("ix_queued_olt_operations_olt_status", table_name="queued_olt_operations")
+    op.drop_index(
+        "ix_queued_olt_operations_scheduled", table_name="queued_olt_operations"
+    )
+    op.drop_index(
+        "ix_queued_olt_operations_olt_status", table_name="queued_olt_operations"
+    )
     op.drop_table("queued_olt_operations")
 
     # Remove circuit breaker columns from olt_devices
@@ -252,8 +265,12 @@ def downgrade() -> None:
     op.drop_column("ont_units", "last_applied_at")
 
     # Drop service_port_allocations table
-    op.drop_index("ix_service_port_allocations_active", table_name="service_port_allocations")
-    op.drop_index("ix_service_port_allocations_ont", table_name="service_port_allocations")
+    op.drop_index(
+        "ix_service_port_allocations_active", table_name="service_port_allocations"
+    )
+    op.drop_index(
+        "ix_service_port_allocations_ont", table_name="service_port_allocations"
+    )
     op.drop_table("service_port_allocations")
 
     # Drop olt_service_port_pools table

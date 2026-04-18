@@ -95,16 +95,16 @@ def _make_invoice(
     return cast(
         Invoice,
         billing_service.invoices.create(
-        db_session,
-        InvoiceCreate(
-            account_id=account_id,
-            currency=currency,
-            subtotal=subtotal,
-            tax_total=tax_total,
-            total=total,
-            balance_due=balance_due,
-            status=status,
-        ),
+            db_session,
+            InvoiceCreate(
+                account_id=account_id,
+                currency=currency,
+                subtotal=subtotal,
+                tax_total=tax_total,
+                total=total,
+                balance_due=balance_due,
+                status=status,
+            ),
         ),
     )
 
@@ -1526,9 +1526,7 @@ class TestPureFunctions:
     """Tests for pure/helper functions in the billing modules."""
 
     def test_validate_invoice_line_amount_auto_calc(self):
-        result = _validate_invoice_line_amount(
-            Decimal("3"), Decimal("10.00"), None
-        )
+        result = _validate_invoice_line_amount(Decimal("3"), Decimal("10.00"), None)
         assert result == Decimal("30.00")
 
     def test_validate_invoice_line_amount_correct(self):
@@ -1553,26 +1551,24 @@ class TestPureFunctions:
 
     def test_validate_invoice_line_zero_quantity(self):
         with pytest.raises(HTTPException) as exc:
-            _validate_invoice_line_amount(
-                Decimal("0"), Decimal("10.00"), None
-            )
+            _validate_invoice_line_amount(Decimal("0"), Decimal("10.00"), None)
         assert exc.value.status_code == 400
 
     def test_validate_invoice_line_negative_unit_price(self):
         with pytest.raises(HTTPException) as exc:
-            _validate_invoice_line_amount(
-                Decimal("1"), Decimal("-5.00"), None
-            )
+            _validate_invoice_line_amount(Decimal("1"), Decimal("-5.00"), None)
         assert exc.value.status_code == 400
 
     def test_validate_invoice_totals_valid(self):
         # Should not raise
-        _validate_invoice_totals({
-            "subtotal": Decimal("100.00"),
-            "tax_total": Decimal("10.00"),
-            "total": Decimal("110.00"),
-            "balance_due": Decimal("110.00"),
-        })
+        _validate_invoice_totals(
+            {
+                "subtotal": Decimal("100.00"),
+                "tax_total": Decimal("10.00"),
+                "total": Decimal("110.00"),
+                "balance_due": Decimal("110.00"),
+            }
+        )
 
     def test_validate_invoice_totals_negative_subtotal(self):
         with pytest.raises(HTTPException) as exc:
@@ -1581,19 +1577,23 @@ class TestPureFunctions:
 
     def test_validate_invoice_totals_balance_exceeds_total(self):
         with pytest.raises(HTTPException) as exc:
-            _validate_invoice_totals({
-                "total": Decimal("50.00"),
-                "balance_due": Decimal("100.00"),
-            })
+            _validate_invoice_totals(
+                {
+                    "total": Decimal("50.00"),
+                    "balance_due": Decimal("100.00"),
+                }
+            )
         assert exc.value.status_code == 400
 
     def test_validate_invoice_totals_total_below_subtotal_plus_tax(self):
         with pytest.raises(HTTPException) as exc:
-            _validate_invoice_totals({
-                "subtotal": Decimal("100.00"),
-                "tax_total": Decimal("10.00"),
-                "total": Decimal("90.00"),
-            })
+            _validate_invoice_totals(
+                {
+                    "subtotal": Decimal("100.00"),
+                    "tax_total": Decimal("10.00"),
+                    "total": Decimal("90.00"),
+                }
+            )
         assert exc.value.status_code == 400
 
 

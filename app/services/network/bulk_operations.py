@@ -93,11 +93,13 @@ class BulkDeviceOperation:
         label: str = "",
     ) -> None:
         """Add a target with its operation steps."""
-        self.targets.append(BulkOperationTarget(
-            target_id=target_id,
-            steps=steps,
-            label=label or target_id,
-        ))
+        self.targets.append(
+            BulkOperationTarget(
+                target_id=target_id,
+                steps=steps,
+                label=label or target_id,
+            )
+        )
 
     def execute(self) -> BulkOperationResult:
         """Execute operations on all targets.
@@ -171,10 +173,12 @@ class BulkDeviceOperation:
             # Mark remaining targets as not executed
             remaining = len(self.targets) - len(results)
             for _ in range(remaining):
-                results.append(DeviceOperationResult(
-                    success=False,
-                    message="Skipped due to earlier failure (all-or-nothing mode)",
-                ))
+                results.append(
+                    DeviceOperationResult(
+                        success=False,
+                        message="Skipped due to earlier failure (all-or-nothing mode)",
+                    )
+                )
                 failed += 1
 
         return BulkOperationResult(
@@ -229,10 +233,12 @@ class BulkDeviceOperation:
                     exc,
                     exc_info=True,
                 )
-                results.append(DeviceOperationResult(
-                    success=False,
-                    message=f"Unexpected error: {exc}",
-                ))
+                results.append(
+                    DeviceOperationResult(
+                        success=False,
+                        message=f"Unexpected error: {exc}",
+                    )
+                )
 
         return BulkOperationResult(
             total=len(self.targets),

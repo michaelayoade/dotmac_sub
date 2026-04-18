@@ -203,7 +203,14 @@ class ZabbixClient:
             "jsonrpc": "2.0",
             "method": method,
             "params": {
-                "output": ["itemid", "clock", "num", "value_min", "value_avg", "value_max"],
+                "output": [
+                    "itemid",
+                    "clock",
+                    "num",
+                    "value_min",
+                    "value_avg",
+                    "value_max",
+                ],
                 "itemids": item_ids,
                 "time_from": time_from,
                 "time_till": time_till,

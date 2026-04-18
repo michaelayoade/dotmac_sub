@@ -117,7 +117,9 @@ def _build_ont_operations_runbook(
     has_cr_url = bool(linked_tr069 and linked_tr069.connection_request_url)
     intent_complete = bool(service_intent.get("is_complete"))
     raw_missing_count = service_intent.get("missing_count")
-    missing_count = int(raw_missing_count) if isinstance(raw_missing_count, int | str) else 0
+    missing_count = (
+        int(raw_missing_count) if isinstance(raw_missing_count, int | str) else 0
+    )
     has_service_path_intent = bool(
         _intent_step_present(ont_plan, "create_service_port")
         or _service_path_intent_present(service_intent)
@@ -228,7 +230,9 @@ def _build_ont_operations_runbook(
             order=3,
             title="OLT service path",
             source="OLT SSH",
-            status="ready" if has_olt_context and has_service_path_intent else "blocked",
+            status="ready"
+            if has_olt_context and has_service_path_intent
+            else "blocked",
             message=(
                 "Ready to create or verify service-port/VLAN path."
                 if has_olt_context and has_service_path_intent
@@ -281,7 +285,9 @@ def _build_ont_operations_runbook(
             title="ACS connection request",
             source="ACS",
             status="ready" if has_cr_url else "blocked",
-            message="Connection request URL captured." if has_cr_url else "No connection request URL captured yet.",
+            message="Connection request URL captured."
+            if has_cr_url
+            else "No connection request URL captured yet.",
             action_label="Force inform",
             action_url=f"/admin/network/onts/{ont_id}/connection-request",
             method="POST",
@@ -348,7 +354,11 @@ def _build_ont_operations_runbook(
             order=11,
             title="Running config snapshot",
             source="ACS read",
-            status="complete" if has_running_snapshot else "ready" if has_acs_device else "blocked",
+            status="complete"
+            if has_running_snapshot
+            else "ready"
+            if has_acs_device
+            else "blocked",
             message=(
                 f"{len(snapshots)} snapshot(s) captured."
                 if has_running_snapshot
@@ -412,7 +422,9 @@ def operational_health_context(
         )
 
         ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-        service_intent = build_service_intent(ont, db=db, ont_plan=ont_plan) if ont else {}
+        service_intent = (
+            build_service_intent(ont, db=db, ont_plan=ont_plan) if ont else {}
+        )
     except Exception:
         logger.exception("Failed to build operations runbook intent for ONT %s", ont_id)
         ont_plan = {}

@@ -158,7 +158,9 @@ class ServicePortDelta:
     desired: DesiredServicePort | None
     actual: ActualServicePort | None
     message: str = ""
-    depends_on_delete_index: int | None = None  # Index of DELETE delta this CREATE depends on
+    depends_on_delete_index: int | None = (
+        None  # Index of DELETE delta this CREATE depends on
+    )
 
 
 @dataclass
@@ -274,7 +276,9 @@ def build_desired_state_from_profile(
             if pool is not None:
                 gateway = getattr(pool, "gateway", None)
                 try:
-                    subnet = str(ipaddress.ip_network(str(pool.cidr), strict=False).netmask)
+                    subnet = str(
+                        ipaddress.ip_network(str(pool.cidr), strict=False).netmask
+                    )
                 except ValueError:
                     subnet = None
         management = DesiredManagementConfig(

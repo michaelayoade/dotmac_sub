@@ -30,7 +30,9 @@ def test_sync_olt_autofind_candidates_creates_and_expires(db_session, monkeypatc
         lambda _olt: (True, "Found 1 unregistered ONT", entries_round1),
     )
 
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(db_session, str(olt.id))
+    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
+        db_session, str(olt.id)
+    )
     assert ok is True
     assert stats["created"] == 1
 
@@ -42,7 +44,9 @@ def test_sync_olt_autofind_candidates_creates_and_expires(db_session, monkeypatc
         "app.services.network.olt_ssh.get_autofind_onts",
         lambda _olt: (True, "Found 0 unregistered ONTs", []),
     )
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(db_session, str(olt.id))
+    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
+        db_session, str(olt.id)
+    )
     assert ok is True
     assert stats["resolved"] == 1
 
@@ -160,7 +164,9 @@ def test_sync_olt_autofind_candidates_uses_hex_when_display_serial_blank(
 def test_sync_olt_autofind_candidates_prefers_exact_serial_on_duplicate_variants(
     db_session, monkeypatch
 ):
-    olt = OLTDevice(name="OLT-Duplicate-Serials", mgmt_ip="198.51.100.207", is_active=True)
+    olt = OLTDevice(
+        name="OLT-Duplicate-Serials", mgmt_ip="198.51.100.207", is_active=True
+    )
     db_session.add(olt)
     db_session.commit()
 
@@ -216,9 +222,7 @@ def test_sync_olt_autofind_candidates_prefers_exact_serial_on_duplicate_variants
     assert db_session.query(OltAutofindCandidate).count() == 2
 
 
-def test_sync_olt_autofind_candidates_skips_unmatchable_serial(
-    db_session, monkeypatch
-):
+def test_sync_olt_autofind_candidates_skips_unmatchable_serial(db_session, monkeypatch):
     olt = OLTDevice(name="OLT-Malformed", mgmt_ip="198.51.100.206", is_active=True)
     db_session.add(olt)
     db_session.commit()
@@ -298,7 +302,9 @@ def test_restore_candidate_clears_disappeared_state_for_authorization(db_session
     db_session.add(item)
     db_session.commit()
 
-    ok, message = autofind_service.restore_candidate(db_session, candidate_id=str(item.id))
+    ok, message = autofind_service.restore_candidate(
+        db_session, candidate_id=str(item.id)
+    )
 
     assert ok is True
     assert "Restored autofind candidate" in message

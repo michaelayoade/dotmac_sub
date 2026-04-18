@@ -97,7 +97,9 @@ def test_soft_delete_marks_deleted(db_session, monkeypatch):
     db_session.commit()
     db_session.refresh(record)
 
-    deleted = file_uploads.soft_delete(db=db_session, file=record, hard_delete_object=True)
+    deleted = file_uploads.soft_delete(
+        db=db_session, file=record, hard_delete_object=True
+    )
     assert deleted.is_deleted is True
     assert deleted.deleted_at is not None
     assert calls == [record.storage_key_or_relative_path]

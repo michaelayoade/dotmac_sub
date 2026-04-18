@@ -1402,7 +1402,9 @@ class TestOntAssignmentsCRUD:
         ont.olt_device_id = pon.olt_id
         foreign_olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Foreign Update OLT", hostname="foreign-update-olt.local"),
+            OLTDeviceCreate(
+                name="Foreign Update OLT", hostname="foreign-update-olt.local"
+            ),
         )
         foreign_pon = network_service.pon_ports.create(
             db_session,

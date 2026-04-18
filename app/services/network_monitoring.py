@@ -591,21 +591,25 @@ class NetworkDevices(ListResponseMixin):
         from app.models.network_monitoring import DeviceStatus as DStatus
 
         # Device counts using SQL aggregation
-        device_counts = db.query(
-            func.count(NetworkDevice.id).label("total"),
-            func.count(NetworkDevice.id)
-            .filter(NetworkDevice.status == DStatus.online)
-            .label("online"),
-            func.count(NetworkDevice.id)
-            .filter(NetworkDevice.status == DStatus.degraded)
-            .label("degraded"),
-            func.count(NetworkDevice.id)
-            .filter(NetworkDevice.status == DStatus.offline)
-            .label("offline"),
-            func.count(NetworkDevice.id)
-            .filter(NetworkDevice.status == DStatus.maintenance)
-            .label("maintenance"),
-        ).filter(NetworkDevice.is_active.is_(True)).one()
+        device_counts = (
+            db.query(
+                func.count(NetworkDevice.id).label("total"),
+                func.count(NetworkDevice.id)
+                .filter(NetworkDevice.status == DStatus.online)
+                .label("online"),
+                func.count(NetworkDevice.id)
+                .filter(NetworkDevice.status == DStatus.degraded)
+                .label("degraded"),
+                func.count(NetworkDevice.id)
+                .filter(NetworkDevice.status == DStatus.offline)
+                .label("offline"),
+                func.count(NetworkDevice.id)
+                .filter(NetworkDevice.status == DStatus.maintenance)
+                .label("maintenance"),
+            )
+            .filter(NetworkDevice.is_active.is_(True))
+            .one()
+        )
 
         total_count = device_counts.total or 0
         online_count = device_counts.online or 0
@@ -630,15 +634,19 @@ class NetworkDevices(ListResponseMixin):
         }
 
         # Alarm counts using SQL aggregation
-        alarm_counts = db.query(
-            func.count(Alert.id)
-            .filter(Alert.severity == Sev.critical)
-            .label("critical"),
-            func.count(Alert.id)
-            .filter(Alert.severity == Sev.warning)
-            .label("warning"),
-            func.count(Alert.id).filter(Alert.severity == Sev.info).label("info"),
-        ).filter(Alert.status == AStatus.open).one()
+        alarm_counts = (
+            db.query(
+                func.count(Alert.id)
+                .filter(Alert.severity == Sev.critical)
+                .label("critical"),
+                func.count(Alert.id)
+                .filter(Alert.severity == Sev.warning)
+                .label("warning"),
+                func.count(Alert.id).filter(Alert.severity == Sev.info).label("info"),
+            )
+            .filter(Alert.status == AStatus.open)
+            .one()
+        )
 
         alarms_critical = alarm_counts.critical or 0
         alarms_warning = alarm_counts.warning or 0

@@ -36,7 +36,11 @@ class WebhooksPage(BasePage):
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
+                self.page.goto(
+                    f"{self.base_url}{path}",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
                 return
             except PlaywrightError as exc:
                 last_error = exc
@@ -45,7 +49,9 @@ class WebhooksPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the webhooks page is loaded."""
-        expect(self.page.get_by_role("heading", name="Webhooks", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Webhooks", exact=True)
+        ).to_be_visible()
 
     def click_new_webhook(self) -> None:
         """Click new webhook button."""
@@ -57,7 +63,9 @@ class WebhooksPage(BasePage):
 
     def expect_webhook_in_list(self, webhook_name: str) -> None:
         """Assert a webhook is visible in the list."""
-        expect(self.page.get_by_role("row").filter(has_text=webhook_name)).to_be_visible()
+        expect(
+            self.page.get_by_role("row").filter(has_text=webhook_name)
+        ).to_be_visible()
 
     def get_webhook_count(self) -> int:
         """Get the count of webhooks in the table."""

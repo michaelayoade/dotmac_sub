@@ -57,6 +57,7 @@ from app.services.provisioning_adapters import (
 # EventType enum tests
 # ---------------------------------------------------------------------------
 
+
 class TestEventType:
     def test_subscriber_events_exist(self):
         assert EventType.subscriber_created.value == "subscriber.created"
@@ -119,7 +120,9 @@ class TestEventType:
         assert set(SUBSCRIPTION_LIFECYCLE_MAP.keys()) == expected_keys
 
     def test_subscription_lifecycle_map_values(self):
-        assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_activated] == "activate"
+        assert (
+            SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_activated] == "activate"
+        )
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_suspended] == "suspend"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_resumed] == "resume"
         assert SUBSCRIPTION_LIFECYCLE_MAP[EventType.subscription_canceled] == "cancel"
@@ -128,6 +131,7 @@ class TestEventType:
 # ---------------------------------------------------------------------------
 # Event dataclass tests
 # ---------------------------------------------------------------------------
+
 
 class TestEventDataclass:
     def test_event_defaults(self):
@@ -190,6 +194,7 @@ class TestEventDataclass:
 # ---------------------------------------------------------------------------
 # EventDispatcher tests
 # ---------------------------------------------------------------------------
+
 
 class TestEventDispatcher:
     def test_register_handler(self):
@@ -269,10 +274,14 @@ class TestEventDispatcher:
         dispatcher.dispatch(mock_db, event)
 
         start_record = next(
-            record for record in caplog.records if record.getMessage() == "event_dispatch_start"
+            record
+            for record in caplog.records
+            if record.getMessage() == "event_dispatch_start"
         )
         complete_record = next(
-            record for record in caplog.records if record.getMessage() == "event_dispatch_complete"
+            record
+            for record in caplog.records
+            if record.getMessage() == "event_dispatch_complete"
         )
 
         assert start_record.event_id == str(event.event_id)
@@ -283,10 +292,14 @@ class TestEventDispatcher:
     def test_retry_event_calls_only_failed_handlers(self, db_session):
         dispatcher = EventDispatcher()
         h1 = MagicMock()
-        h1.__class__ = type("SuccessHandler", (), {"__name__": "SuccessHandler", "handle": h1.handle})
+        h1.__class__ = type(
+            "SuccessHandler", (), {"__name__": "SuccessHandler", "handle": h1.handle}
+        )
         h1.__class__.__name__ = "SuccessHandler"
         h2 = MagicMock()
-        h2.__class__ = type("FailedHandler", (), {"__name__": "FailedHandler", "handle": h2.handle})
+        h2.__class__ = type(
+            "FailedHandler", (), {"__name__": "FailedHandler", "handle": h2.handle}
+        )
         h2.__class__.__name__ = "FailedHandler"
         dispatcher.register_handler(h1)
         dispatcher.register_handler(h2)
@@ -343,6 +356,7 @@ class TestEventDispatcher:
 # EnforcementHandler tests
 # ---------------------------------------------------------------------------
 
+
 class TestEnforcementHandler:
     def _make_event(self, event_type, payload=None, **kwargs):
         return Event(
@@ -351,9 +365,13 @@ class TestEnforcementHandler:
             **kwargs,
         )
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_suspended_disconnects_and_blocks(
         self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
@@ -366,14 +384,26 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
 
-        mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="suspended")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(sub_id), reason="suspended"
+        )
         mock_block.assert_called_once_with(db_session, str(sub_id))
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_block_sets_subscriber_status_suspended(
-        self, mock_reject_ip, mock_disconnect, mock_block, db_session, subscription, subscriber
+        self,
+        mock_reject_ip,
+        mock_disconnect,
+        mock_block,
+        db_session,
+        subscription,
+        subscriber,
     ):
         mock_reject_ip.return_value = {"ok": False}
         subscription.status = SubscriptionStatus.suspended
@@ -390,9 +420,13 @@ class TestEnforcementHandler:
 
         assert subscriber.status == AccountStatus.suspended
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_canceled_disconnects_and_blocks(
         self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
@@ -405,12 +439,18 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
 
-        mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="canceled")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(sub_id), reason="canceled"
+        )
         mock_block.assert_called_once_with(db_session, str(sub_id))
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_block_uses_payload_fallback(
         self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
@@ -422,11 +462,17 @@ class TestEnforcementHandler:
             payload={"subscription_id": str(sub_id)},
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="suspended")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(sub_id), reason="suspended"
+        )
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_block_uses_negative_reject_reason_for_dunning(
         self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
@@ -443,9 +489,13 @@ class TestEnforcementHandler:
             db_session, str(sub_id), reject_reason="negative"
         )
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_block_defaults_reject_reason_to_blocked(
         self, mock_reject_ip, mock_disconnect, mock_block, db_session
     ):
@@ -462,7 +512,9 @@ class TestEnforcementHandler:
             db_session, str(sub_id), reject_reason="blocked"
         )
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     def test_subscription_block_skips_without_id(
         self, mock_disconnect, mock_block, db_session
@@ -473,7 +525,9 @@ class TestEnforcementHandler:
         mock_disconnect.assert_not_called()
         mock_block.assert_not_called()
 
-    @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_subscription_activated_restores(
@@ -487,10 +541,14 @@ class TestEnforcementHandler:
             subscription_id=sub_id,
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="restore")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(sub_id), reason="restore"
+        )
         mock_remove_block.assert_called_once_with(db_session, str(sub_id))
 
-    @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_subscription_resumed_restores(
@@ -504,13 +562,19 @@ class TestEnforcementHandler:
             subscription_id=sub_id,
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="restore")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(sub_id), reason="restore"
+        )
         mock_remove_block.assert_called_once_with(db_session, str(sub_id))
 
-    @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
-    @patch("app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip")
+    @patch(
+        "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
+    )
     def test_subscription_restore_sets_subscriber_status_active(
         self,
         mock_reject_ip,
@@ -538,7 +602,9 @@ class TestEnforcementHandler:
 
         assert subscriber.status == AccountStatus.active
 
-    @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_subscription_restore_skips_disconnect_when_refresh_disabled(
@@ -568,7 +634,9 @@ class TestEnforcementHandler:
             account_id=acc_id,
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(db_session, str(acc_id), reason="throttle")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(acc_id), reason="throttle"
+        )
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
@@ -594,7 +662,9 @@ class TestEnforcementHandler:
         handler.handle(db_session, event)
         mock_disconnect.assert_not_called()
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_usage_exhausted_block_action(
@@ -615,7 +685,9 @@ class TestEnforcementHandler:
             account_id=acc_id,
         )
         handler.handle(db_session, event)
-        mock_disconnect.assert_called_once_with(db_session, str(sub_id), reason="fup_block")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(sub_id), reason="fup_block"
+        )
         mock_block.assert_called_once_with(db_session, str(sub_id))
 
     @patch("app.services.events.handlers.enforcement.settings_spec")
@@ -705,7 +777,9 @@ class TestEnforcementHandler:
         mock_apply_profile.assert_called_once_with(
             db_session, str(acc_id), str(throttle_profile_id)
         )
-        mock_disconnect.assert_called_once_with(db_session, str(acc_id), reason="fup_throttle")
+        mock_disconnect.assert_called_once_with(
+            db_session, str(acc_id), reason="fup_throttle"
+        )
 
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.events.handlers.enforcement.settings_spec")
@@ -742,6 +816,7 @@ class TestEnforcementHandler:
 # ---------------------------------------------------------------------------
 # LifecycleHandler tests
 # ---------------------------------------------------------------------------
+
 
 class TestLifecycleHandler:
     def _make_event(self, event_type, payload=None, **kwargs):
@@ -824,6 +899,7 @@ class TestLifecycleHandler:
 # ---------------------------------------------------------------------------
 # NotificationHandler tests
 # ---------------------------------------------------------------------------
+
 
 class TestNotificationHandler:
     def test_event_type_to_template_mapping_exists(self):
@@ -1030,6 +1106,7 @@ class TestNotificationHandler:
 # WebhookHandler tests
 # ---------------------------------------------------------------------------
 
+
 class TestWebhookHandler:
     def test_event_type_to_webhook_mapping_completeness(self):
         # Most event types should have a webhook mapping
@@ -1062,6 +1139,7 @@ class TestWebhookHandler:
 # ---------------------------------------------------------------------------
 # ProvisioningHandler tests
 # ---------------------------------------------------------------------------
+
 
 class TestProvisioningHandler:
     def _make_event(self, event_type, payload=None, **kwargs):
@@ -1141,6 +1219,7 @@ class TestProvisioningHandler:
 # Provisioning Adapters tests
 # ---------------------------------------------------------------------------
 
+
 class TestProvisioningAdapters:
     def test_stub_provisioner_assign_ont(self):
         stub = StubProvisioner(ProvisioningVendor.other)
@@ -1171,6 +1250,7 @@ class TestProvisioningAdapters:
     def test_get_provisioner_returns_stub_for_unknown(self):
         # Use a vendor that we intentionally de-register
         from app.services.provisioning_adapters import _PROVISIONERS
+
         # Nokia is registered above, but "other" may not be
         original = _PROVISIONERS.pop(ProvisioningVendor.other, None)
         try:
@@ -1183,21 +1263,25 @@ class TestProvisioningAdapters:
 
     def test_get_provisioner_mikrotik(self):
         from app.services.provisioning_adapters import MikrotikProvisioner
+
         provisioner = get_provisioner(ProvisioningVendor.mikrotik)
         assert isinstance(provisioner, MikrotikProvisioner)
 
     def test_get_provisioner_huawei(self):
         from app.services.provisioning_adapters import HuaweiProvisioner
+
         provisioner = get_provisioner(ProvisioningVendor.huawei)
         assert isinstance(provisioner, HuaweiProvisioner)
 
     def test_get_provisioner_zte_is_huawei_subclass(self):
         from app.services.provisioning_adapters import ZteProvisioner
+
         provisioner = get_provisioner(ProvisioningVendor.zte)
         assert isinstance(provisioner, ZteProvisioner)
 
     def test_get_provisioner_genieacs(self):
         from app.services.provisioning_adapters import GenieACSProvisioner
+
         provisioner = get_provisioner(ProvisioningVendor.genieacs)
         assert isinstance(provisioner, GenieACSProvisioner)
 
@@ -1255,6 +1339,7 @@ class TestProvisioningAdapters:
 # ---------------------------------------------------------------------------
 # Enforcement service helper tests
 # ---------------------------------------------------------------------------
+
 
 class TestEnforcementServiceHelpers:
     def test_apply_mikrotik_address_list_add(self, monkeypatch):
@@ -1351,12 +1436,11 @@ class TestEnforcementServiceHelpers:
 # emit_event integration test
 # ---------------------------------------------------------------------------
 
+
 class TestEmitEvent:
     @patch("app.services.events.dispatcher._dispatcher", None)
     @patch("app.services.events.dispatcher._initialize_handlers")
-    def test_emit_event_creates_and_dispatches(
-        self, mock_init_handlers, db_session
-    ):
+    def test_emit_event_creates_and_dispatches(self, mock_init_handlers, db_session):
         from app.services.events.dispatcher import emit_event
 
         mock_db = MagicMock()
@@ -1376,9 +1460,7 @@ class TestEmitEvent:
 
     @patch("app.services.events.dispatcher._dispatcher", None)
     @patch("app.services.events.dispatcher._initialize_handlers")
-    def test_emit_event_accepts_string_uuids(
-        self, mock_init_handlers, db_session
-    ):
+    def test_emit_event_accepts_string_uuids(self, mock_init_handlers, db_session):
         from app.services.events.dispatcher import emit_event
 
         mock_db = MagicMock()

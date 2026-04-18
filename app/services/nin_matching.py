@@ -76,13 +76,15 @@ def match_subscriber_nin_response(
     first_match = _name_matches_full_name(subscriber.first_name, mono_full_name)
     last_match = _name_matches_full_name(subscriber.last_name, mono_full_name)
     name_match = first_match and last_match
-    dob_match = _normalized_date_string(subscriber.date_of_birth) == _normalized_date_string(
-        mono_data.get("date_of_birth")
-    )
+    dob_match = _normalized_date_string(
+        subscriber.date_of_birth
+    ) == _normalized_date_string(mono_data.get("date_of_birth"))
 
     subscriber_phone = normalize_phone(subscriber.phone)
     mono_phone = normalize_phone(str(mono_data.get("phone_number") or ""))
-    phone_match = bool(subscriber_phone and mono_phone and subscriber_phone == mono_phone)
+    phone_match = bool(
+        subscriber_phone and mono_phone and subscriber_phone == mono_phone
+    )
 
     score = 0
     if name_match:

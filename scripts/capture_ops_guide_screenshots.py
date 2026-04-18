@@ -42,7 +42,9 @@ def capture(page, name, url, *, wait=2000, full_page=True, highlight_selectors=N
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 1440, "height": 900}, device_scale_factor=2)
+        context = browser.new_context(
+            viewport={"width": 1440, "height": 900}, device_scale_factor=2
+        )
         page = context.new_page()
 
         # Login
@@ -62,69 +64,52 @@ def main():
             # Company & Branding
             ("ops_01_company_info", "/admin/system/company-info"),
             ("ops_02_branding", "/admin/system/branding"),
-
             # Settings Hub
             ("ops_03_settings_hub", "/admin/system/settings-hub"),
             ("ops_04_settings_billing", "/admin/system/settings-hub?category=billing"),
-
             # Billing Config
             ("ops_05_billing_config", "/admin/system/config/billing"),
             ("ops_06_tax_config", "/admin/system/config/tax"),
             ("ops_07_payment_methods", "/admin/system/config/payment-methods"),
             ("ops_08_finance_automation", "/admin/system/config/finance-automation"),
-
             # SMTP / Email
             ("ops_09_email_config", "/admin/system/email"),
-
             # RADIUS
             ("ops_10_radius_config", "/admin/system/config/radius"),
-
             # Network Config
             ("ops_11_cpe_config", "/admin/system/config/cpe"),
             ("ops_12_monitoring_config", "/admin/system/config/monitoring"),
-
             # Catalog
             ("ops_13_catalog_offers", "/admin/catalog"),
             ("ops_14_catalog_settings", "/admin/catalog/settings"),
-
             # Customers
             ("ops_15_customer_list", "/admin/customers"),
-
             # Subscriptions
             ("ops_16_subscriptions", "/admin/catalog/subscriptions"),
-
             # Billing
             ("ops_17_billing_overview", "/admin/billing"),
             ("ops_18_invoices", "/admin/billing/invoices"),
-
             # Network
             ("ops_19_nas_devices", "/admin/network/nas"),
             ("ops_20_olts", "/admin/network/olts"),
             ("ops_21_onts", "/admin/network/onts"),
             ("ops_22_tr069", "/admin/network/tr069"),
-
             # Provisioning
             ("ops_23_provisioning", "/admin/provisioning"),
-
             # Monitoring
             ("ops_24_monitoring", "/admin/network/monitoring"),
             ("ops_25_alarms", "/admin/network/alarms"),
-
             # Topology
             ("ops_26_topology", "/admin/network/topology"),
-
             # GIS
             ("ops_27_gis", "/admin/gis"),
-
             # Notifications
             ("ops_28_notification_templates", "/admin/notifications/templates"),
             ("ops_29_notification_queue", "/admin/notifications/queue"),
-
             # Reports
             ("ops_30_reports_hub", "/admin/reports/hub"),
             ("ops_31_reports_revenue", "/admin/reports/revenue"),
             ("ops_32_reports_bandwidth", "/admin/reports/bandwidth"),
-
             # System
             ("ops_33_users", "/admin/system/users"),
             ("ops_34_roles", "/admin/system/roles"),
@@ -133,7 +118,6 @@ def main():
             ("ops_37_scheduler", "/admin/system/scheduler"),
             ("ops_38_webhooks", "/admin/system/webhooks"),
             ("ops_39_api_keys", "/admin/system/api-keys"),
-
             # Integrations
             ("ops_40_integrations", "/admin/integrations/connectors"),
         ]

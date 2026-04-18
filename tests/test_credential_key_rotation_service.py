@@ -221,12 +221,10 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
     )
     refreshed_ont = db_session.get(OntUnit, ont.id)
     assert (
-        decrypt_credential_with_key(refreshed_ont.pppoe_password, new_key)
-        == "ont-pass"
+        decrypt_credential_with_key(refreshed_ont.pppoe_password, new_key) == "ont-pass"
     )
     assert (
-        decrypt_credential_with_key(refreshed_ont.wifi_password, new_key)
-        == "wifi-pass"
+        decrypt_credential_with_key(refreshed_ont.wifi_password, new_key) == "wifi-pass"
     )
     assert (
         decrypt_credential_with_key(

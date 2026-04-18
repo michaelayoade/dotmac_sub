@@ -21,19 +21,39 @@ def upgrade() -> None:
     columns = {c["name"] for c in inspector.get_columns("ont_units")}
 
     if "mac_address" not in columns:
-        op.add_column("ont_units", sa.Column("mac_address", sa.String(length=64), nullable=True))
+        op.add_column(
+            "ont_units", sa.Column("mac_address", sa.String(length=64), nullable=True)
+        )
     if "observed_wan_ip" not in columns:
-        op.add_column("ont_units", sa.Column("observed_wan_ip", sa.String(length=64), nullable=True))
+        op.add_column(
+            "ont_units",
+            sa.Column("observed_wan_ip", sa.String(length=64), nullable=True),
+        )
     if "observed_pppoe_status" not in columns:
-        op.add_column("ont_units", sa.Column("observed_pppoe_status", sa.String(length=60), nullable=True))
+        op.add_column(
+            "ont_units",
+            sa.Column("observed_pppoe_status", sa.String(length=60), nullable=True),
+        )
     if "observed_lan_mode" not in columns:
-        op.add_column("ont_units", sa.Column("observed_lan_mode", sa.String(length=60), nullable=True))
+        op.add_column(
+            "ont_units",
+            sa.Column("observed_lan_mode", sa.String(length=60), nullable=True),
+        )
     if "observed_wifi_clients" not in columns:
-        op.add_column("ont_units", sa.Column("observed_wifi_clients", sa.Integer(), nullable=True))
+        op.add_column(
+            "ont_units", sa.Column("observed_wifi_clients", sa.Integer(), nullable=True)
+        )
     if "observed_lan_hosts" not in columns:
-        op.add_column("ont_units", sa.Column("observed_lan_hosts", sa.Integer(), nullable=True))
+        op.add_column(
+            "ont_units", sa.Column("observed_lan_hosts", sa.Integer(), nullable=True)
+        )
     if "observed_runtime_updated_at" not in columns:
-        op.add_column("ont_units", sa.Column("observed_runtime_updated_at", sa.DateTime(timezone=True), nullable=True))
+        op.add_column(
+            "ont_units",
+            sa.Column(
+                "observed_runtime_updated_at", sa.DateTime(timezone=True), nullable=True
+            ),
+        )
 
 
 def downgrade() -> None:

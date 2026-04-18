@@ -13,6 +13,7 @@ class OLTsPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/network/olts") -> None:
         """Navigate to the OLTs list."""
         url = f"{self.base_url}{path}"
@@ -27,7 +28,9 @@ class OLTsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the OLTs page is loaded."""
-        expect(self.page.get_by_role("heading", name="OLT Devices", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="OLT Devices", exact=True)
+        ).to_be_visible()
 
     def click_new_olt(self) -> None:
         """Click new OLT button."""

@@ -27,7 +27,9 @@ class InvoiceFormPage(BasePage):
 
     def select_account(self, account_label: str) -> None:
         """Select a billing account."""
-        self.page.locator("select[name='account_id']").select_option(label=account_label)
+        self.page.locator("select[name='account_id']").select_option(
+            label=account_label
+        )
 
     def fill_invoice_number(self, number: str) -> None:
         """Fill the invoice number."""
@@ -63,7 +65,11 @@ class InvoiceFormPage(BasePage):
 
     def expect_error(self, message: str) -> None:
         """Assert an error message is displayed."""
-        expect(self.page.locator(".text-red-500, .text-red-700, .error").filter(has_text=message)).to_be_visible()
+        expect(
+            self.page.locator(".text-red-500, .text-red-700, .error").filter(
+                has_text=message
+            )
+        ).to_be_visible()
 
     def add_line_item(self, description: str, quantity: str, unit_price: str) -> None:
         """Add a line item to the invoice."""

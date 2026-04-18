@@ -213,7 +213,9 @@ class TestIpPoolsCRUD:
         """Test getting IP pool by ID."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Get Pool", cidr="10.1.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Get Pool", cidr="10.1.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         fetched = network_service.ip_pools.get(db_session, str(pool.id))
         assert fetched.id == pool.id
@@ -228,7 +230,9 @@ class TestIpPoolsCRUD:
         """Test updating IP pool."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Update Pool", cidr="10.2.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Update Pool", cidr="10.2.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         updated = network_service.ip_pools.update(
             db_session, str(pool.id), IpPoolUpdate(name="Updated Pool")
@@ -247,7 +251,9 @@ class TestIpPoolsCRUD:
         """Test soft deleting IP pool (sets is_active=False)."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Delete Pool", cidr="10.3.0.0/24", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Delete Pool", cidr="10.3.0.0/24", ip_version=IPVersion.ipv4
+            ),
         )
         pool_id = str(pool.id)
         network_service.ip_pools.delete(db_session, pool_id)
@@ -400,7 +406,9 @@ class TestSplittersCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="Get Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:16"),
+            SplitterCreate(
+                name="Get Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:16"
+            ),
         )
         fetched = network_service.splitters.get(db_session, str(splitter.id))
         assert fetched.id == splitter.id
@@ -418,7 +426,9 @@ class TestSplittersCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="Update Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"),
+            SplitterCreate(
+                name="Update Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"
+            ),
         )
         updated = network_service.splitters.update(
             db_session, str(splitter.id), SplitterUpdate(name="Updated Splitter")
@@ -440,7 +450,9 @@ class TestSplittersCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="Delete Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:4"),
+            SplitterCreate(
+                name="Delete Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:4"
+            ),
         )
         splitter_id = str(splitter.id)
         network_service.splitters.delete(db_session, splitter_id)
@@ -461,11 +473,15 @@ class TestSplittersCRUD:
         )
         network_service.splitters.create(
             db_session,
-            SplitterCreate(name="List Splitter 1", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"),
+            SplitterCreate(
+                name="List Splitter 1", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"
+            ),
         )
         network_service.splitters.create(
             db_session,
-            SplitterCreate(name="List Splitter 2", fdh_cabinet_id=fdh.id, splitter_ratio="1:16"),
+            SplitterCreate(
+                name="List Splitter 2", fdh_cabinet_id=fdh.id, splitter_ratio="1:16"
+            ),
         )
         splitters = network_service.splitters.list(
             db_session,
@@ -488,7 +504,9 @@ class TestSplitterPortsCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="Get Port Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"),
+            SplitterCreate(
+                name="Get Port Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"
+            ),
         )
         port = network_service.splitter_ports.create(
             db_session,
@@ -510,7 +528,9 @@ class TestSplitterPortsCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="Update Port Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"),
+            SplitterCreate(
+                name="Update Port Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"
+            ),
         )
         port = network_service.splitter_ports.create(
             db_session,
@@ -536,7 +556,9 @@ class TestSplitterPortsCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="Delete Port Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"),
+            SplitterCreate(
+                name="Delete Port Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"
+            ),
         )
         port = network_service.splitter_ports.create(
             db_session,
@@ -561,7 +583,9 @@ class TestSplitterPortsCRUD:
         )
         splitter = network_service.splitters.create(
             db_session,
-            SplitterCreate(name="List Ports Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"),
+            SplitterCreate(
+                name="List Ports Splitter", fdh_cabinet_id=fdh.id, splitter_ratio="1:8"
+            ),
         )
         network_service.splitter_ports.create(
             db_session,
@@ -608,7 +632,9 @@ class TestFiberSpliceClosuresCRUD:
             FiberSpliceClosureCreate(name="Update Closure"),
         )
         updated = network_service.fiber_splice_closures.update(
-            db_session, str(closure.id), FiberSpliceClosureUpdate(name="Updated Closure")
+            db_session,
+            str(closure.id),
+            FiberSpliceClosureUpdate(name="Updated Closure"),
         )
         assert updated.name == "Updated Closure"
 
@@ -821,7 +847,9 @@ class TestIpBlocksCRUD:
         """Test creating an IP block."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Block Pool", cidr="172.16.0.0/16", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Block Pool", cidr="172.16.0.0/16", ip_version=IPVersion.ipv4
+            ),
         )
         block = network_service.ip_blocks.create(
             db_session,
@@ -834,7 +862,9 @@ class TestIpBlocksCRUD:
         """Test getting IP block by ID."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Get Block Pool", cidr="172.17.0.0/16", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Get Block Pool", cidr="172.17.0.0/16", ip_version=IPVersion.ipv4
+            ),
         )
         block = network_service.ip_blocks.create(
             db_session,
@@ -853,7 +883,11 @@ class TestIpBlocksCRUD:
         """Test updating IP block."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Update Block Pool", cidr="172.18.0.0/16", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Update Block Pool",
+                cidr="172.18.0.0/16",
+                ip_version=IPVersion.ipv4,
+            ),
         )
         block = network_service.ip_blocks.create(
             db_session,
@@ -876,7 +910,11 @@ class TestIpBlocksCRUD:
         """Test soft deleting IP block."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="Delete Block Pool", cidr="172.19.0.0/16", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="Delete Block Pool",
+                cidr="172.19.0.0/16",
+                ip_version=IPVersion.ipv4,
+            ),
         )
         block = network_service.ip_blocks.create(
             db_session,
@@ -897,7 +935,9 @@ class TestIpBlocksCRUD:
         """Test listing IP blocks."""
         pool = network_service.ip_pools.create(
             db_session,
-            IpPoolCreate(name="List Blocks Pool", cidr="172.20.0.0/16", ip_version=IPVersion.ipv4),
+            IpPoolCreate(
+                name="List Blocks Pool", cidr="172.20.0.0/16", ip_version=IPVersion.ipv4
+            ),
         )
         network_service.ip_blocks.create(
             db_session, IpBlockCreate(pool_id=pool.id, cidr="172.20.1.0/24")
@@ -1458,7 +1498,9 @@ class TestFiberTerminationPointsCRUD:
             db_session,
             FiberTerminationPointCreate(name="Get Term Point"),
         )
-        fetched = network_service.fiber_termination_points.get(db_session, str(point.id))
+        fetched = network_service.fiber_termination_points.get(
+            db_session, str(point.id)
+        )
         assert fetched.id == point.id
 
     def test_get_fiber_termination_point_not_found(self, db_session):
@@ -1474,7 +1516,9 @@ class TestFiberTerminationPointsCRUD:
             FiberTerminationPointCreate(name="Update Term Point"),
         )
         updated = network_service.fiber_termination_points.update(
-            db_session, str(point.id), FiberTerminationPointUpdate(name="Updated Term Point")
+            db_session,
+            str(point.id),
+            FiberTerminationPointUpdate(name="Updated Term Point"),
         )
         assert updated.name == "Updated Term Point"
 
@@ -1501,7 +1545,9 @@ class TestFiberTerminationPointsCRUD:
     def test_delete_fiber_termination_point_not_found(self, db_session):
         """Test 404 for deleting non-existent fiber termination point."""
         with pytest.raises(HTTPException) as exc_info:
-            network_service.fiber_termination_points.delete(db_session, str(uuid.uuid4()))
+            network_service.fiber_termination_points.delete(
+                db_session, str(uuid.uuid4())
+            )
         assert exc_info.value.status_code == 404
 
     def test_list_fiber_termination_points(self, db_session):
@@ -1679,7 +1725,9 @@ class TestOltCardPortsCRUD:
         """Test getting OLT card port by ID."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Get Card Port OLT", hostname="get-card-port-olt.local"),
+            OLTDeviceCreate(
+                name="Get Card Port OLT", hostname="get-card-port-olt.local"
+            ),
         )
         shelf = network_service.olt_shelves.create(
             db_session,
@@ -1706,7 +1754,9 @@ class TestOltCardPortsCRUD:
         """Test updating OLT card port."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Update Card Port OLT", hostname="update-card-port-olt.local"),
+            OLTDeviceCreate(
+                name="Update Card Port OLT", hostname="update-card-port-olt.local"
+            ),
         )
         shelf = network_service.olt_shelves.create(
             db_session,
@@ -1737,7 +1787,9 @@ class TestOltCardPortsCRUD:
         """Test deleting OLT card port (hard delete)."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Delete Card Port OLT", hostname="delete-card-port-olt.local"),
+            OLTDeviceCreate(
+                name="Delete Card Port OLT", hostname="delete-card-port-olt.local"
+            ),
         )
         shelf = network_service.olt_shelves.create(
             db_session,
@@ -1767,7 +1819,9 @@ class TestOltCardPortsCRUD:
         """Test listing OLT card ports."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="List Card Ports OLT", hostname="list-card-ports-olt.local"),
+            OLTDeviceCreate(
+                name="List Card Ports OLT", hostname="list-card-ports-olt.local"
+            ),
         )
         shelf = network_service.olt_shelves.create(
             db_session,
@@ -1871,11 +1925,15 @@ class TestPonPortsCRUD:
         )
         assert updated.port_number == 3
 
-    def test_create_pon_port_with_card_port_uses_canonical_port_number(self, db_session):
+    def test_create_pon_port_with_card_port_uses_canonical_port_number(
+        self, db_session
+    ):
         """Linked card ports should override caller-supplied metadata."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Canonical PON OLT", hostname="canonical-pon-olt.local"),
+            OLTDeviceCreate(
+                name="Canonical PON OLT", hostname="canonical-pon-olt.local"
+            ),
         )
         shelf = network_service.olt_shelves.create(
             db_session,
@@ -1987,7 +2045,9 @@ class TestPonPortsCRUD:
             )
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "OLT card port does not belong to the selected OLT"
+        assert (
+            exc_info.value.detail == "OLT card port does not belong to the selected OLT"
+        )
 
     def test_update_pon_port_with_card_port_keeps_canonical_name(self, db_session):
         """Linked ports should not drift to arbitrary names."""
@@ -2062,7 +2122,9 @@ class TestPonPortsCRUD:
             )
 
         assert exc_info.value.status_code == 409
-        assert exc_info.value.detail == "A PON port already exists for this OLT and name"
+        assert (
+            exc_info.value.detail == "A PON port already exists for this OLT and name"
+        )
 
     def test_create_unlinked_pon_port_requires_canonical_name(self, db_session):
         """Unlinked PON ports should not be created with placeholder pon-* names."""
@@ -2128,7 +2190,9 @@ class TestPonPortsCRUD:
             == "Canonical frame/slot/port name is required when no OLT card or card port is linked"
         )
 
-    def test_update_unlinked_pon_port_recalculates_port_number_from_name(self, db_session):
+    def test_update_unlinked_pon_port_recalculates_port_number_from_name(
+        self, db_session
+    ):
         """Canonical unlinked updates should keep port_number aligned with the name."""
         olt = network_service.olt_devices.create(
             db_session,
@@ -2151,7 +2215,9 @@ class TestPonPortsCRUD:
         assert updated.name == "0/2/3"
         assert updated.port_number == 3
 
-    def test_create_unlinked_pon_port_revives_soft_deleted_canonical_row(self, db_session):
+    def test_create_unlinked_pon_port_revives_soft_deleted_canonical_row(
+        self, db_session
+    ):
         """Recreating a soft-deleted canonical port should revive the existing row."""
         olt = network_service.olt_devices.create(
             db_session,
@@ -2179,7 +2245,9 @@ class TestPonPortsCRUD:
         assert revived.port_number == 0
         assert revived.notes == "new-notes"
 
-    def test_update_unlinked_pon_port_rejects_duplicate_canonical_name(self, db_session):
+    def test_update_unlinked_pon_port_rejects_duplicate_canonical_name(
+        self, db_session
+    ):
         """Unlinked updates should fail cleanly instead of hitting DB uniqueness errors."""
         olt = network_service.olt_devices.create(
             db_session,
@@ -2205,7 +2273,9 @@ class TestPonPortsCRUD:
             )
 
         assert exc_info.value.status_code == 409
-        assert exc_info.value.detail == "A PON port already exists for this OLT and name"
+        assert (
+            exc_info.value.detail == "A PON port already exists for this OLT and name"
+        )
 
     def test_update_pon_port_not_found(self, db_session):
         """Test 404 for updating non-existent PON port."""
@@ -2441,7 +2511,9 @@ class TestPortVlansCRUD:
         """Test updating port VLAN."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Update PortVlan OLT", hostname="update-portvlan-olt.local"),
+            OLTDeviceCreate(
+                name="Update PortVlan OLT", hostname="update-portvlan-olt.local"
+            ),
         )
         port = network_service.ports.create(
             db_session,
@@ -2472,7 +2544,9 @@ class TestPortVlansCRUD:
         """Test deleting port VLAN (hard delete)."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Delete PortVlan OLT", hostname="delete-portvlan-olt.local"),
+            OLTDeviceCreate(
+                name="Delete PortVlan OLT", hostname="delete-portvlan-olt.local"
+            ),
         )
         port = network_service.ports.create(
             db_session,
@@ -2502,7 +2576,9 @@ class TestPortVlansCRUD:
         """Test listing port VLANs."""
         olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="List PortVlans OLT", hostname="list-portvlans-olt.local"),
+            OLTDeviceCreate(
+                name="List PortVlans OLT", hostname="list-portvlans-olt.local"
+            ),
         )
         port = network_service.ports.create(
             db_session,

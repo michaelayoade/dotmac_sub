@@ -16,6 +16,7 @@ from app.services.public_branding import is_configured_favicon_url
 
 router = APIRouter(prefix="/branding", tags=["public-branding"])
 
+
 @router.get("/assets/{file_id}")
 def branding_asset(file_id: str, db: Session = Depends(get_db)):
     try:

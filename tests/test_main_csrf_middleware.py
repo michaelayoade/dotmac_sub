@@ -36,7 +36,9 @@ def _run_async(awaitable):
         return future.result()
 
 
-def test_csrf_middleware_returns_204_when_no_response_and_request_still_connected(monkeypatch, caplog):
+def test_csrf_middleware_returns_204_when_no_response_and_request_still_connected(
+    monkeypatch, caplog
+):
     request = _build_request()
 
     async def _connected() -> bool:

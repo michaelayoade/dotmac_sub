@@ -135,7 +135,9 @@ def test_get_lifecycle_event(db_session, subscription):
         ),
     )
 
-    fetched = lifecycle_service.subscription_lifecycle_events.get(db_session, str(event.id))
+    fetched = lifecycle_service.subscription_lifecycle_events.get(
+        db_session, str(event.id)
+    )
     assert fetched is not None
     assert fetched.id == event.id
     assert fetched.event_type == LifecycleEventType.cancel

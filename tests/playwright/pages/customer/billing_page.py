@@ -28,7 +28,9 @@ class CustomerBillingPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the billing page is loaded."""
-        expect(self.page.get_by_role("heading", name="Billing", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Billing", exact=True)
+        ).to_be_visible()
 
     def expect_invoices_visible(self) -> None:
         """Assert invoices section is visible."""
@@ -41,11 +43,13 @@ class CustomerBillingPage(BasePage):
     def expect_balance_visible(self) -> None:
         """Assert billing summary stats are visible."""
         expect(
-            self.page.get_by_text("Outstanding", exact=False).or_(
+            self.page.get_by_text("Outstanding", exact=False)
+            .or_(
                 self.page.get_by_text("Total Billed", exact=False).or_(
                     self.page.get_by_text("Overdue", exact=False)
                 )
-            ).first
+            )
+            .first
         ).to_be_visible()
 
     def click_view_invoice(self, invoice_number: str) -> None:
@@ -73,7 +77,9 @@ class CustomerBillingPage(BasePage):
 
     def expect_invoice_in_list(self, invoice_number: str) -> None:
         """Assert an invoice is visible in the list."""
-        expect(self.page.get_by_role("row").filter(has_text=invoice_number)).to_be_visible()
+        expect(
+            self.page.get_by_role("row").filter(has_text=invoice_number)
+        ).to_be_visible()
 
     def download_invoice(self, invoice_number: str) -> None:
         """Download an invoice PDF."""

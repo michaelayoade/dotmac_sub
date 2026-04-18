@@ -52,7 +52,8 @@ def test_handle_add_rule_respects_active_checkbox(db_session, catalog_offer):
     handle_add_rule(db_session, str(catalog_offer.id), form)
 
     rules = fup_policies.list_rules(
-        db_session, str(fup_policies.get_or_create(db_session, str(catalog_offer.id)).id)
+        db_session,
+        str(fup_policies.get_or_create(db_session, str(catalog_offer.id)).id),
     )
     assert len(rules) == 1
     assert rules[0].is_active is False

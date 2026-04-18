@@ -31,11 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 # Statuses that block new ONT authorizations
-_BLOCKING_STATUSES = frozenset({
-    DeviceStatus.draining,
-    DeviceStatus.retired,
-    DeviceStatus.inactive,
-})
+_BLOCKING_STATUSES = frozenset(
+    {
+        DeviceStatus.draining,
+        DeviceStatus.retired,
+        DeviceStatus.inactive,
+    }
+)
 
 
 def is_olt_accepting_new_onts(olt: OLTDevice) -> tuple[bool, str]:
@@ -162,18 +164,14 @@ def get_deletion_impact(db: Session, olt_id: str) -> OltDeletionImpact | None:
     warnings: list[str] = []
 
     if active_onts > 0:
-        blocking_reasons.append(
-            f"{active_onts} active ONT(s) are linked to this OLT"
-        )
+        blocking_reasons.append(f"{active_onts} active ONT(s) are linked to this OLT")
     if active_assignments > 0:
         blocking_reasons.append(
             f"{active_assignments} active assignment(s) exist on this OLT's PON ports"
         )
 
     if vlans_to_orphan > 0:
-        warnings.append(
-            f"{vlans_to_orphan} VLAN(s) will lose their OLT association"
-        )
+        warnings.append(f"{vlans_to_orphan} VLAN(s) will lose their OLT association")
     if ip_pools_to_orphan > 0:
         warnings.append(
             f"{ip_pools_to_orphan} IP pool(s) will lose their OLT association"
@@ -199,30 +197,40 @@ def get_deletion_impact(db: Session, olt_id: str) -> OltDeletionImpact | None:
 
 # Valid status transitions (from -> allowed targets)
 _STATUS_TRANSITIONS: dict[DeviceStatus, frozenset[DeviceStatus]] = {
-    DeviceStatus.active: frozenset({
-        DeviceStatus.inactive,
-        DeviceStatus.maintenance,
-        DeviceStatus.draining,
-        DeviceStatus.retired,
-    }),
-    DeviceStatus.inactive: frozenset({
-        DeviceStatus.active,
-        DeviceStatus.maintenance,
-        DeviceStatus.retired,
-    }),
-    DeviceStatus.maintenance: frozenset({
-        DeviceStatus.active,
-        DeviceStatus.inactive,
-        DeviceStatus.draining,
-        DeviceStatus.retired,
-    }),
-    DeviceStatus.draining: frozenset({
-        DeviceStatus.active,
-        DeviceStatus.retired,
-    }),
-    DeviceStatus.retired: frozenset({
-        DeviceStatus.active,  # Allow reactivation if needed
-    }),
+    DeviceStatus.active: frozenset(
+        {
+            DeviceStatus.inactive,
+            DeviceStatus.maintenance,
+            DeviceStatus.draining,
+            DeviceStatus.retired,
+        }
+    ),
+    DeviceStatus.inactive: frozenset(
+        {
+            DeviceStatus.active,
+            DeviceStatus.maintenance,
+            DeviceStatus.retired,
+        }
+    ),
+    DeviceStatus.maintenance: frozenset(
+        {
+            DeviceStatus.active,
+            DeviceStatus.inactive,
+            DeviceStatus.draining,
+            DeviceStatus.retired,
+        }
+    ),
+    DeviceStatus.draining: frozenset(
+        {
+            DeviceStatus.active,
+            DeviceStatus.retired,
+        }
+    ),
+    DeviceStatus.retired: frozenset(
+        {
+            DeviceStatus.active,  # Allow reactivation if needed
+        }
+    ),
 }
 
 

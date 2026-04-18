@@ -70,10 +70,12 @@ class OntAuthorizationService:
         from app.services.network.olt_ssh import authorize_ont as ssh_authorize
 
         if line_profile_id is None or service_profile_id is None:
-            profiles_ok, profiles_msg, profiles = resolve_authorization_profiles_from_db(
-                db,
-                ctx.olt,
-                profile=getattr(ctx.ont, "provisioning_profile", None),
+            profiles_ok, profiles_msg, profiles = (
+                resolve_authorization_profiles_from_db(
+                    db,
+                    ctx.olt,
+                    profile=getattr(ctx.ont, "provisioning_profile", None),
+                )
             )
             if not profiles_ok or profiles is None:
                 return StepResult("authorize", False, profiles_msg, critical=True)
@@ -119,16 +121,16 @@ class OntAuthorizationService:
                             strict=False,
                         )
                         db.flush()
-                        return StepResult(
-                            "authorize", False, match_msg, critical=True
-                        )
+                        return StepResult("authorize", False, match_msg, critical=True)
                 set_authorization_status(
                     ctx.ont, OntAuthorizationStatus.authorized, strict=False
                 )
                 db.flush()
                 logger.info(
                     "ONT %s authorized on OLT %s (ONT-ID %s)",
-                    ctx.ont.serial_number, ctx.olt.name, olt_ont_id,
+                    ctx.ont.serial_number,
+                    ctx.olt.name,
+                    olt_ont_id,
                 )
             else:
                 set_provisioning_status(
@@ -143,11 +145,15 @@ class OntAuthorizationService:
                     ctx.olt.name,
                     verification.message,
                 )
-                return StepResult("authorize", False, verification.message, critical=True)
+                return StepResult(
+                    "authorize", False, verification.message, critical=True
+                )
         else:
             logger.warning(
                 "ONT %s authorization failed on OLT %s: %s",
-                ctx.ont.serial_number, ctx.olt.name, msg,
+                ctx.ont.serial_number,
+                ctx.olt.name,
+                msg,
             )
 
         return StepResult("authorize", ok, msg, critical=True)
@@ -195,7 +201,8 @@ class OntAuthorizationService:
                 db.flush()
                 logger.info(
                     "ONT %s deauthorized from OLT %s",
-                    ctx.ont.serial_number, ctx.olt.name,
+                    ctx.ont.serial_number,
+                    ctx.olt.name,
                 )
             else:
                 set_provisioning_status(
@@ -210,11 +217,15 @@ class OntAuthorizationService:
                     ctx.olt.name,
                     verification.message,
                 )
-                return StepResult("deauthorize", False, verification.message, critical=True)
+                return StepResult(
+                    "deauthorize", False, verification.message, critical=True
+                )
         else:
             logger.warning(
                 "ONT %s deauthorization failed on OLT %s: %s",
-                ctx.ont.serial_number, ctx.olt.name, msg,
+                ctx.ont.serial_number,
+                ctx.olt.name,
+                msg,
             )
 
         return StepResult("deauthorize", ok, msg, critical=True)
@@ -233,7 +244,8 @@ class OntAuthorizationService:
         current = ont.authorization_status
         status_str = current.value if current else "unknown"
         return StepResult(
-            "check_status", True,
+            "check_status",
+            True,
             f"Current authorization status: {status_str}",
             critical=False,
         )

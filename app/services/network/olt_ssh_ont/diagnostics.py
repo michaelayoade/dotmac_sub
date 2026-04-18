@@ -147,10 +147,14 @@ def diagnose_service_ports(
         ont_online = run_state == "online"
 
         if not ont_online:
-            warnings.append(f"ONT is {run_state.upper()} - service ports will show Down")
+            warnings.append(
+                f"ONT is {run_state.upper()} - service ports will show Down"
+            )
 
         # 2. Get GEM port status
-        gem_cmd = f"display ont port state {frame_slot} {port_num} {ont_id} eth-port all"
+        gem_cmd = (
+            f"display ont port state {frame_slot} {port_num} {ont_id} eth-port all"
+        )
         gem_output = core._run_huawei_cmd(channel, gem_cmd)
         raw_outputs["gem_ports"] = gem_output
 

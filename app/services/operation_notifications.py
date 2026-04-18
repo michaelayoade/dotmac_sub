@@ -65,10 +65,12 @@ def publish_operation_status(
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
-        payload = json.dumps({
-            "conversation_id": operation_id,
-            "event": event_data,
-        })
+        payload = json.dumps(
+            {
+                "conversation_id": operation_id,
+                "event": event_data,
+            }
+        )
 
         client = redis.from_url(REDIS_URL, decode_responses=True)
         try:

@@ -35,9 +35,24 @@ def _create_invoice(
 
 def test_ar_aging_includes_counts_and_supports_bucket_selection(db_session, subscriber):
     now = datetime.now(UTC)
-    _create_invoice(db_session, account_id=subscriber.id, due_at=now + timedelta(days=2), balance_due="50.00")
-    _create_invoice(db_session, account_id=subscriber.id, due_at=now - timedelta(days=10), balance_due="30.00")
-    _create_invoice(db_session, account_id=subscriber.id, due_at=now - timedelta(days=95), balance_due="20.00")
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now + timedelta(days=2),
+        balance_due="50.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=10),
+        balance_due="30.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=now - timedelta(days=95),
+        balance_due="20.00",
+    )
     _create_invoice(
         db_session,
         account_id=subscriber.id,
@@ -61,13 +76,22 @@ def test_ar_aging_includes_counts_and_supports_bucket_selection(db_session, subs
     assert len(result["aging_trend"]["series"]["90_plus"]) == 6
 
 
-def test_ar_aging_this_year_period_excludes_previous_year_invoices(db_session, subscriber):
+def test_ar_aging_this_year_period_excludes_previous_year_invoices(
+    db_session, subscriber
+):
     now = datetime.now(UTC)
     this_year_due = datetime(now.year, 1, 15, tzinfo=UTC)
     previous_year_due = datetime(now.year - 1, 12, 15, tzinfo=UTC)
 
-    _create_invoice(db_session, account_id=subscriber.id, due_at=this_year_due, balance_due="80.00")
-    _create_invoice(db_session, account_id=subscriber.id, due_at=previous_year_due, balance_due="120.00")
+    _create_invoice(
+        db_session, account_id=subscriber.id, due_at=this_year_due, balance_due="80.00"
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        due_at=previous_year_due,
+        balance_due="120.00",
+    )
 
     all_period = build_ar_aging_data(db_session, period="all")
     this_year = build_ar_aging_data(db_session, period="this_year")
@@ -87,10 +111,30 @@ def test_ar_aging_top_debtors_sorted_by_total_overdue_balance(db_session):
     db_session.commit()
 
     now = datetime.now(UTC)
-    _create_invoice(db_session, account_id=account_a.id, due_at=now - timedelta(days=31), balance_due="40.00")
-    _create_invoice(db_session, account_id=account_a.id, due_at=now - timedelta(days=10), balance_due="20.00")
-    _create_invoice(db_session, account_id=account_b.id, due_at=now - timedelta(days=20), balance_due="30.00")
-    _create_invoice(db_session, account_id=account_b.id, due_at=now + timedelta(days=5), balance_due="999.00")
+    _create_invoice(
+        db_session,
+        account_id=account_a.id,
+        due_at=now - timedelta(days=31),
+        balance_due="40.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=account_a.id,
+        due_at=now - timedelta(days=10),
+        balance_due="20.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=account_b.id,
+        due_at=now - timedelta(days=20),
+        balance_due="30.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=account_b.id,
+        due_at=now + timedelta(days=5),
+        balance_due="999.00",
+    )
 
     result = build_ar_aging_data(db_session, period="all")
     top_debtors = result["top_debtors"]
@@ -126,8 +170,18 @@ def test_ar_aging_filters_by_partner_and_location(db_session):
     db_session.commit()
 
     now = datetime.now(UTC)
-    _create_invoice(db_session, account_id=account_a.id, due_at=now - timedelta(days=12), balance_due="55.00")
-    _create_invoice(db_session, account_id=account_b.id, due_at=now - timedelta(days=12), balance_due="95.00")
+    _create_invoice(
+        db_session,
+        account_id=account_a.id,
+        due_at=now - timedelta(days=12),
+        balance_due="55.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=account_b.id,
+        due_at=now - timedelta(days=12),
+        balance_due="95.00",
+    )
 
     filtered = build_ar_aging_data(
         db_session,
@@ -164,8 +218,18 @@ def test_ar_aging_trend_respects_partner_filter(db_session):
     db_session.commit()
 
     now = datetime.now(UTC)
-    _create_invoice(db_session, account_id=account_a.id, due_at=now - timedelta(days=10), balance_due="40.00")
-    _create_invoice(db_session, account_id=account_b.id, due_at=now - timedelta(days=10), balance_due="90.00")
+    _create_invoice(
+        db_session,
+        account_id=account_a.id,
+        due_at=now - timedelta(days=10),
+        balance_due="40.00",
+    )
+    _create_invoice(
+        db_session,
+        account_id=account_b.id,
+        due_at=now - timedelta(days=10),
+        balance_due="90.00",
+    )
 
     filtered = build_ar_aging_data(
         db_session,
@@ -181,13 +245,23 @@ def test_ar_aging_top_debtors_respects_debtor_period(db_session, subscriber):
     now = datetime.now(UTC)
     this_month_due = datetime(now.year, now.month, 5, tzinfo=UTC)
     last_month_anchor = datetime(now.year, now.month, 1, tzinfo=UTC) - timedelta(days=1)
-    last_month_due = datetime(last_month_anchor.year, last_month_anchor.month, 10, tzinfo=UTC)
+    last_month_due = datetime(
+        last_month_anchor.year, last_month_anchor.month, 10, tzinfo=UTC
+    )
 
-    _create_invoice(db_session, account_id=subscriber.id, due_at=this_month_due, balance_due="33.00")
-    _create_invoice(db_session, account_id=subscriber.id, due_at=last_month_due, balance_due="77.00")
+    _create_invoice(
+        db_session, account_id=subscriber.id, due_at=this_month_due, balance_due="33.00"
+    )
+    _create_invoice(
+        db_session, account_id=subscriber.id, due_at=last_month_due, balance_due="77.00"
+    )
 
-    this_month = build_ar_aging_data(db_session, period="all", debtor_period="this_month")
-    last_month = build_ar_aging_data(db_session, period="all", debtor_period="last_month")
+    this_month = build_ar_aging_data(
+        db_session, period="all", debtor_period="this_month"
+    )
+    last_month = build_ar_aging_data(
+        db_session, period="all", debtor_period="last_month"
+    )
 
     assert this_month["selected_debtor_period"] == "this_month"
     assert last_month["selected_debtor_period"] == "last_month"

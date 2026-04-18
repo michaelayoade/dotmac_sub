@@ -8,8 +8,8 @@ Create Date: 2026-04-11 13:30:31.486412
 
 from alembic import op
 
-revision = 'ed9e5aad1101'
-down_revision = '013_add_ont_contact_column'
+revision = "ed9e5aad1101"
+down_revision = "013_add_ont_contact_column"
 branch_labels = None
 depends_on = None
 

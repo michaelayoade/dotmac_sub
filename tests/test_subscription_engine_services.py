@@ -180,7 +180,9 @@ class TestEngines:
         )
 
         payload = SubscriptionEngineUpdate(name="Updated Name")
-        result = subscription_engine.engines.update(db_session, str(created.id), payload)
+        result = subscription_engine.engines.update(
+            db_session, str(created.id), payload
+        )
 
         assert result.name == "Updated Name"
         assert result.code == "UPDATE-ENGINE"  # Unchanged
@@ -351,7 +353,9 @@ class TestEngineSettings:
         )
 
         payload = SubscriptionEngineSettingUpdate(value_text="updated_value")
-        result = subscription_engine.engine_settings.update(db_session, str(created.id), payload)
+        result = subscription_engine.engine_settings.update(
+            db_session, str(created.id), payload
+        )
 
         assert result.value_text == "updated_value"
         assert result.key == "update_key"  # Unchanged
@@ -361,7 +365,9 @@ class TestEngineSettings:
         payload = SubscriptionEngineSettingUpdate(value_text="new_value")
 
         with pytest.raises(HTTPException) as exc_info:
-            subscription_engine.engine_settings.update(db_session, str(uuid.uuid4()), payload)
+            subscription_engine.engine_settings.update(
+                db_session, str(uuid.uuid4()), payload
+            )
 
         assert exc_info.value.status_code == 404
 
@@ -401,4 +407,7 @@ class TestEngineSettings:
 def test_module_aliases():
     """Test that module aliases are correctly set."""
     assert subscription_engine.subscription_engines is subscription_engine.engines
-    assert subscription_engine.subscription_engine_settings is subscription_engine.engine_settings
+    assert (
+        subscription_engine.subscription_engine_settings
+        is subscription_engine.engine_settings
+    )

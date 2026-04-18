@@ -99,7 +99,9 @@ def _check_postgres(db: Session) -> ServiceStatus:
         try:
             db.rollback()
         except Exception:
-            logger.debug("Rollback failed after PostgreSQL health check error", exc_info=True)
+            logger.debug(
+                "Rollback failed after PostgreSQL health check error", exc_info=True
+            )
         return ServiceStatus(
             name="PostgreSQL",
             status="down",
@@ -199,10 +201,7 @@ def _check_victoriametrics(db: Session) -> ServiceStatus:
         if resp.status_code == 200:
             data = resp.json()
             # VictoriaMetrics returns {"status":"success","data":{"version":"..."}}
-            version = (
-                data.get("data", {}).get("version", "")
-                or data.get("version", "")
-            )
+            version = data.get("data", {}).get("version", "") or data.get("version", "")
         return ServiceStatus(
             name="VictoriaMetrics",
             status="up" if resp.status_code == 200 else "degraded",
@@ -231,9 +230,7 @@ def _check_genieacs(db: Session) -> ServiceStatus:
         from sqlalchemy import select
 
         server = db.scalars(
-            select(Tr069AcsServer)
-            .where(Tr069AcsServer.is_active.is_(True))
-            .limit(1)
+            select(Tr069AcsServer).where(Tr069AcsServer.is_active.is_(True)).limit(1)
         ).first()
         if not server:
             return ServiceStatus(

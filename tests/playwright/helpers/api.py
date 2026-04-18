@@ -56,4 +56,6 @@ def api_post_form(
     # Use form= parameter for form-encoded data (Playwright handles Content-Type)
     # Don't follow redirects by default for API tests (use max_redirects=0)
     max_redirects = 0 if not follow_redirects else 30
-    return context.post(url, form=form_payload, headers=merged, max_redirects=max_redirects)
+    return context.post(
+        url, form=form_payload, headers=merged, max_redirects=max_redirects
+    )

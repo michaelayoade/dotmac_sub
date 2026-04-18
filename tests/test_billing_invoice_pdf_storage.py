@@ -57,7 +57,9 @@ def test_process_export_uploads_invoice_pdf_to_s3_metadata(
         bind=db_session.get_bind(), autoflush=False, autocommit=False
     )
     monkeypatch.setattr(pdf_service, "SessionLocal", SessionLocal)
-    monkeypatch.setattr(pdf_service, "_build_pdf_bytes", lambda _db, _invoice: b"%PDF-1.4 bytes")
+    monkeypatch.setattr(
+        pdf_service, "_build_pdf_bytes", lambda _db, _invoice: b"%PDF-1.4 bytes"
+    )
 
     invoice = _invoice(db_session, subscriber_account)
     export = InvoicePdfExport(
@@ -130,12 +132,23 @@ def test_export_file_exists_and_stream_export_uses_s3(
     assert b"".join(stream.chunks) == b"%PDF-1.4 body"
 
 
-def test_queue_export_ignores_non_subscriber_requested_by_id(db_session, subscriber_account, monkeypatch):
+def test_queue_export_ignores_non_subscriber_requested_by_id(
+    db_session, subscriber_account, monkeypatch
+):
     invoice = _invoice(db_session, subscriber_account)
 
     captured: dict[str, object] = {}
 
-    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, actor_id=None, **extra):
+    def _fake_enqueue(
+        task,
+        *,
+        args=None,
+        kwargs=None,
+        correlation_id=None,
+        source=None,
+        actor_id=None,
+        **extra,
+    ):
         captured["task"] = task
         captured["args"] = args
         captured["kwargs"] = kwargs
@@ -176,7 +189,16 @@ def test_queue_export_reuses_queued_export_without_task_id_with_correlated_enque
 
     captured: dict[str, object] = {}
 
-    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, actor_id=None, **extra):
+    def _fake_enqueue(
+        task,
+        *,
+        args=None,
+        kwargs=None,
+        correlation_id=None,
+        source=None,
+        actor_id=None,
+        **extra,
+    ):
         captured["task"] = task
         captured["args"] = args
         captured["kwargs"] = kwargs
@@ -203,7 +225,9 @@ def test_queue_export_reuses_queued_export_without_task_id_with_correlated_enque
     assert captured["actor_id"] == str(subscriber_account.id)
 
 
-def test_render_invoice_html_includes_branding_and_company_info(db_session, subscriber_account):
+def test_render_invoice_html_includes_branding_and_company_info(
+    db_session, subscriber_account
+):
     invoice = _invoice(db_session, subscriber_account)
     db_session.add_all(
         [
@@ -237,13 +261,16 @@ def test_render_invoice_html_includes_branding_and_company_info(db_session, subs
     assert "--red-700" in html
 
 
-def test_completed_export_before_template_refresh_is_stale(db_session, subscriber_account):
+def test_completed_export_before_template_refresh_is_stale(
+    db_session, subscriber_account
+):
     invoice = _invoice(db_session, subscriber_account)
     export = InvoicePdfExport(
         invoice_id=invoice.id,
         status=InvoicePdfExportStatus.completed,
         requested_by_id=subscriber_account.id,
-        completed_at=pdf_service.INVOICE_PDF_TEMPLATE_REFRESHED_AT - timedelta(minutes=1),
+        completed_at=pdf_service.INVOICE_PDF_TEMPLATE_REFRESHED_AT
+        - timedelta(minutes=1),
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -251,7 +278,9 @@ def test_completed_export_before_template_refresh_is_stale(db_session, subscribe
     assert pdf_service._is_export_fresh(invoice, export) is False
 
 
-def test_generate_export_now_uses_current_renderer(db_session, subscriber_account, monkeypatch):
+def test_generate_export_now_uses_current_renderer(
+    db_session, subscriber_account, monkeypatch
+):
     fake_storage = _FakeStorage()
     monkeypatch.setattr(file_uploads, "storage", fake_storage)
     SessionLocal = sessionmaker(

@@ -12,17 +12,26 @@ class FiberMapPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/network/fiber-map") -> None:
         """Navigate to the fiber map page."""
-        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
+        self.page.goto(
+            f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000
+        )
 
     def expect_loaded(self) -> None:
         """Assert the fiber map page is loaded."""
-        expect(self.page.get_by_role("heading", name="Fiber Plant Map", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Fiber Plant Map", exact=True)
+        ).to_be_visible()
 
     def expect_map_visible(self) -> None:
         """Assert the map component is visible."""
-        expect(self.page.locator("#map, .leaflet-container, [data-testid='fiber-map']").first).to_be_visible()
+        expect(
+            self.page.locator(
+                "#map, .leaflet-container, [data-testid='fiber-map']"
+            ).first
+        ).to_be_visible()
 
     def zoom_in(self) -> None:
         """Zoom in on the map."""

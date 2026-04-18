@@ -280,7 +280,9 @@ def test_layer_feature_collection_respects_area_type_filters(db_session):
             area_type=GeoAreaType.coverage,
             geometry_geojson={
                 "type": "Polygon",
-                "coordinates": [[[7.0, 9.0], [7.0, 9.2], [7.2, 9.2], [7.2, 9.0], [7.0, 9.0]]],
+                "coordinates": [
+                    [[7.0, 9.0], [7.0, 9.2], [7.2, 9.2], [7.2, 9.0], [7.0, 9.0]]
+                ],
             },
         ),
     )
@@ -291,7 +293,9 @@ def test_layer_feature_collection_respects_area_type_filters(db_session):
             area_type=GeoAreaType.region,
             geometry_geojson={
                 "type": "Polygon",
-                "coordinates": [[[7.3, 9.0], [7.3, 9.2], [7.5, 9.2], [7.5, 9.0], [7.3, 9.0]]],
+                "coordinates": [
+                    [[7.3, 9.0], [7.3, 9.2], [7.5, 9.2], [7.5, 9.0], [7.3, 9.0]]
+                ],
             },
         ),
     )

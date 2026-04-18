@@ -7,7 +7,9 @@ from app.services.catalog.subscriptions import apply_offer_radius_profile
 
 def _mock_db_with_credentials(*credentials):
     db = MagicMock()
-    db.query.return_value.filter.return_value.filter.return_value.all.return_value = list(credentials)
+    db.query.return_value.filter.return_value.filter.return_value.all.return_value = (
+        list(credentials)
+    )
     return db
 
 

@@ -30,9 +30,13 @@ def upgrade() -> None:
     foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("pop_sites")}
 
     if "organization_id" not in columns:
-        op.add_column("pop_sites", sa.Column("organization_id", UUID(as_uuid=True), nullable=True))
+        op.add_column(
+            "pop_sites", sa.Column("organization_id", UUID(as_uuid=True), nullable=True)
+        )
     if "reseller_id" not in columns:
-        op.add_column("pop_sites", sa.Column("reseller_id", UUID(as_uuid=True), nullable=True))
+        op.add_column(
+            "pop_sites", sa.Column("reseller_id", UUID(as_uuid=True), nullable=True)
+        )
 
     if "fk_pop_sites_organization_id" not in foreign_keys:
         op.create_foreign_key(
@@ -61,7 +65,9 @@ def downgrade() -> None:
     if "fk_pop_sites_reseller_id" in foreign_keys:
         op.drop_constraint("fk_pop_sites_reseller_id", "pop_sites", type_="foreignkey")
     if "fk_pop_sites_organization_id" in foreign_keys:
-        op.drop_constraint("fk_pop_sites_organization_id", "pop_sites", type_="foreignkey")
+        op.drop_constraint(
+            "fk_pop_sites_organization_id", "pop_sites", type_="foreignkey"
+        )
 
     if "reseller_id" in columns:
         op.drop_column("pop_sites", "reseller_id")

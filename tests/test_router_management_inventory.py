@@ -157,9 +157,7 @@ def test_update_jump_host(db_session):
         db_session,
         JumpHostCreate(name="jh-update", hostname="j2.example.com", username="t"),
     )
-    updated = JumpHostInventory.update(
-        db_session, jh.id, JumpHostUpdate(port=2222)
-    )
+    updated = JumpHostInventory.update(db_session, jh.id, JumpHostUpdate(port=2222))
     assert updated.port == 2222
 
 

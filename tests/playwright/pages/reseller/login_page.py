@@ -19,11 +19,13 @@ class ResellerLoginPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the login page is loaded."""
-        expect(self.page.get_by_role("heading", name="Login", exact=True).or_(
-            self.page.get_by_label("Email").or_(
-                self.page.get_by_label("Username")
+        expect(
+            self.page.get_by_role("heading", name="Login", exact=True)
+            .or_(
+                self.page.get_by_label("Email").or_(self.page.get_by_label("Username"))
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
     def fill_email(self, email: str) -> None:
         """Fill email field."""

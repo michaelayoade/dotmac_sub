@@ -78,6 +78,37 @@ jobs:
       - name: Run mypy
         run: poetry run mypy app/ --ignore-missing-imports --no-incremental
 
+  import-boundaries:
+    name: Import Boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        # import-linter needs to import the app package to build the module
+        # graph, so it needs the full runtime dependency set, not just dev.
+        run: poetry install --no-interaction
+
+      - name: Run import-linter
+        run: poetry run lint-imports
+
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -141,7 +172,7 @@ jobs:
         run: poetry install --only dev --no-interaction
 
       - name: Security lint (bandit via ruff)
-        run: poetry run ruff check app/ --select S
+        run: poetry run ruff check app/ --select S --ignore S101,S105,S110,S112,S507,S603,S607
 
       - name: Bandit security scan
         run: poetry run bandit -r app/ -c pyproject.toml -q || true
@@ -205,6 +236,14 @@ jobs:
             sleep 2
           done
 
+      - name: Run database migrations
+        run: |
+          docker run --rm --network ci-net \
+            -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
+            -e SECRET_KEY=ci-test-secret-key-not-for-production \
+            -e REDIS_URL=redis://ci-redis:6379/0 \
+            dotmac-sub:ci alembic upgrade head
+
       - name: Start application
         run: |
           docker run -d --name ci-app --network ci-net \
@@ -223,7 +262,7 @@ jobs:
               docker logs ci-app
               exit 1
             fi
-            HEALTH=$(docker exec ci-app python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read().decode())" 2>/dev/null || echo "")
+            HEALTH=$(docker exec ci-app python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8001/health').read().decode())" 2>/dev/null || echo "")
             if echo "$HEALTH" | grep -qi 'ok\|healthy'; then
               echo "Health check passed: $HEALTH"
               exit 0

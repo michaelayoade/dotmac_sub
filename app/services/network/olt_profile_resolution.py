@@ -102,9 +102,15 @@ def parse_service_profile_detail(
     return ServiceProfileDetail(
         profile_id=profile_id,
         name=name,
-        ethernet_ports=_match_count(r"\b(?:ETH|Ethernet)\s+(?:port\s+)?(?:number|num|count)\s*:\s*(\d+)"),
-        voip_ports=_match_count(r"\b(?:POTS|VOIP|VoIP)\s+(?:port\s+)?(?:number|num|count)\s*:\s*(\d+)"),
-        catv_ports=_match_count(r"\bCATV\s+(?:port\s+)?(?:number|num|count)\s*:\s*(\d+)"),
+        ethernet_ports=_match_count(
+            r"\b(?:ETH|Ethernet)\s+(?:port\s+)?(?:number|num|count)\s*:\s*(\d+)"
+        ),
+        voip_ports=_match_count(
+            r"\b(?:POTS|VOIP|VoIP)\s+(?:port\s+)?(?:number|num|count)\s*:\s*(\d+)"
+        ),
+        catv_ports=_match_count(
+            r"\bCATV\s+(?:port\s+)?(?:number|num|count)\s*:\s*(\d+)"
+        ),
         binding_count=binding_count,
     )
 
@@ -310,7 +316,9 @@ def resolve_authorization_profiles(
     except (core.SSHException, OSError, ValueError) as exc:
         return False, f"Connection failed while resolving OLT profiles: {exc}", None
     except Exception as exc:
-        logger.error("Error connecting to OLT %s for profile resolution: %s", olt.name, exc)
+        logger.error(
+            "Error connecting to OLT %s for profile resolution: %s", olt.name, exc
+        )
         return False, f"Unexpected profile resolution error: {type(exc).__name__}", None
 
     try:
@@ -331,7 +339,9 @@ def resolve_authorization_profiles(
         if line_profile is None:
             return False, "No line profiles were found on the OLT.", None
 
-        service_output = core._run_huawei_cmd(channel, "display ont-srvprofile gpon all")
+        service_output = core._run_huawei_cmd(
+            channel, "display ont-srvprofile gpon all"
+        )
         service_entries = core._parse_profile_table(service_output)
         service_details: list[ServiceProfileDetail] = []
         for entry in service_entries:
@@ -438,7 +448,9 @@ def ensure_ont_service_profile_match(
                 "ONT profile mismatch detected, but OLT capability output did not include usable port counts.",
             )
 
-        service_output = core._run_huawei_cmd(channel, "display ont-srvprofile gpon all")
+        service_output = core._run_huawei_cmd(
+            channel, "display ont-srvprofile gpon all"
+        )
         service_entries = core._parse_profile_table(service_output)
         service_details: list[ServiceProfileDetail] = []
         for entry in service_entries:
@@ -459,7 +471,10 @@ def ensure_ont_service_profile_match(
             capability=capability,
         )
         if service_profile is None:
-            return False, "ONT profile mismatch detected, but no matching service profile was found."
+            return (
+                False,
+                "ONT profile mismatch detected, but no matching service profile was found.",
+            )
 
         output = core._run_huawei_cmd(
             channel,
@@ -483,7 +498,9 @@ def ensure_ont_service_profile_match(
             f"Updated ONT service profile to {service_profile.profile_id} based on live capability.",
         )
     except Exception as exc:
-        logger.error("Error reconciling ONT service profile on OLT %s: %s", olt.name, exc)
+        logger.error(
+            "Error reconciling ONT service profile on OLT %s: %s", olt.name, exc
+        )
         return False, f"Error reconciling ONT service profile: {exc}"
     finally:
         transport.close()

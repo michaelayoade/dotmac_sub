@@ -25,7 +25,9 @@ class ReportsPage(BasePage):
                     timeout=30000,
                 )
                 self.page.wait_for_load_state("domcontentloaded")
-                reports_link = self.page.locator("a[href='/admin/reports'], a[href='/admin/reports/hub']").first
+                reports_link = self.page.locator(
+                    "a[href='/admin/reports'], a[href='/admin/reports/hub']"
+                ).first
                 expect(reports_link).to_be_visible()
                 reports_link.click(no_wait_after=True)
                 self.page.wait_for_load_state("domcontentloaded")
@@ -48,11 +50,13 @@ class ReportsPage(BasePage):
     def expect_loaded(self) -> None:
         """Assert reports page is loaded."""
         expect(
-            self.page.get_by_role("heading", name="Reports Hub", exact=True).or_(
+            self.page.get_by_role("heading", name="Reports Hub", exact=True)
+            .or_(
                 self.page.get_by_role("heading", name="Reports", exact=True).or_(
                     self.page.get_by_role("heading", name="Report", exact=False)
                 )
-            ).first
+            )
+            .first
         ).to_be_visible()
 
 
@@ -84,11 +88,15 @@ class TestReportsAccess:
         page.goto()
         page.expect_loaded()
         # Should show some report categories
-        expect(admin_page.get_by_text("Revenue", exact=False).or_(
-            admin_page.get_by_text("Financial", exact=False).or_(
-                admin_page.get_by_text("Report", exact=False)
+        expect(
+            admin_page.get_by_text("Revenue", exact=False)
+            .or_(
+                admin_page.get_by_text("Financial", exact=False).or_(
+                    admin_page.get_by_text("Report", exact=False)
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
 
 class TestRevenueReports:
@@ -97,13 +105,17 @@ class TestRevenueReports:
     def test_revenue_report_accessible(self, admin_page: Page, settings):
         """Revenue report should be accessible."""
         _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/revenue")
-        expect(admin_page.get_by_role("heading", name="Revenue Report", exact=True)).to_be_visible()
+        expect(
+            admin_page.get_by_role("heading", name="Revenue Report", exact=True)
+        ).to_be_visible()
 
     def test_revenue_report_date_filter(self, admin_page: Page, settings):
         """Revenue report should have date filters."""
         _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/revenue")
         expect(admin_page.locator("#days")).to_be_visible()
-        expect(admin_page.get_by_role("button", name="Export", exact=True)).to_be_visible()
+        expect(
+            admin_page.get_by_role("button", name="Export", exact=True)
+        ).to_be_visible()
 
 
 class TestSubscriberReports:
@@ -112,9 +124,11 @@ class TestSubscriberReports:
     def test_subscriber_report_accessible(self, admin_page: Page, settings):
         """Subscriber report should be accessible."""
         _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/hub")
-        expect(admin_page.get_by_text("Subscriber", exact=False).or_(
-            admin_page.get_by_text("Customer", exact=False)
-        ).first).to_be_visible()
+        expect(
+            admin_page.get_by_text("Subscriber", exact=False)
+            .or_(admin_page.get_by_text("Customer", exact=False))
+            .first
+        ).to_be_visible()
 
 
 class TestNetworkReports:
@@ -124,11 +138,15 @@ class TestNetworkReports:
         """Network report should be accessible."""
         _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/hub")
         # Check for network or operations reports
-        expect(admin_page.get_by_text("Network", exact=False).or_(
-            admin_page.get_by_text("Operation", exact=False).or_(
-                admin_page.get_by_text("Report", exact=False)
+        expect(
+            admin_page.get_by_text("Network", exact=False)
+            .or_(
+                admin_page.get_by_text("Operation", exact=False).or_(
+                    admin_page.get_by_text("Report", exact=False)
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
 
 class TestReportsAPI:

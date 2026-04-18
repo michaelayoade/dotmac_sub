@@ -14,7 +14,13 @@ from app.models.network import OLTDevice
 logger = logging.getLogger(__name__)
 
 # Specific SSH-related exceptions that can occur during OLT operations
-_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
+_SSH_CONNECTION_ERRORS = (
+    SSHException,
+    OSError,
+    socket.timeout,
+    TimeoutError,
+    ConnectionError,
+)
 
 
 @dataclass(frozen=True)
@@ -103,7 +109,9 @@ def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
         msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
         return True, msg, entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error reading autofind: {exc}", []
     finally:
         transport.close()

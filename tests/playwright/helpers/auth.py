@@ -35,7 +35,9 @@ def login_for_token(api_context, username: str, password: str) -> str:
                 raise AuthError(f"Login failed for {username}: {response.status}")
             payload = cast(dict[str, Any], response.json())
             if payload.get("mfa_required"):
-                pytest.skip("MFA is enabled for this account; disable MFA for E2E users.")
+                pytest.skip(
+                    "MFA is enabled for this account; disable MFA for E2E users."
+                )
             token_obj = payload.get("access_token")
             if not isinstance(token_obj, str) or not token_obj:
                 raise AuthError("Login response missing access_token")
@@ -83,9 +85,13 @@ def _session_token_from_headers(headers: dict[str, str]) -> str | None:
     return match.group(1)
 
 
-def ensure_person(api_context, token: str, first_name: str, last_name: str, email: str) -> dict[str, Any]:
+def ensure_person(
+    api_context, token: str, first_name: str, last_name: str, email: str
+) -> dict[str, Any]:
     headers = bearer_headers(token)
-    response = api_get(api_context, f"/api/v1/customers/search?q={email}", headers=headers)
+    response = api_get(
+        api_context, f"/api/v1/customers/search?q={email}", headers=headers
+    )
     if response.ok:
         data = cast(dict[str, Any], response.json())
         items_obj = data.get("items", [])
@@ -171,7 +177,9 @@ def ensure_role_id(api_context, token: str, role_name: str) -> str:
     raise AuthError(f"Role not found: {role_name}")
 
 
-def ensure_person_role(api_context, token: str, person_id: str, role_id: str) -> dict[str, Any]:
+def ensure_person_role(
+    api_context, token: str, person_id: str, role_id: str
+) -> dict[str, Any]:
     headers = bearer_headers(token)
     response = api_get(
         api_context,

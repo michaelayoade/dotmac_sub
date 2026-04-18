@@ -77,7 +77,9 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("id"),
         )
 
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("invoice_pdf_exports")}
+    existing_indexes = {
+        idx["name"] for idx in inspector.get_indexes("invoice_pdf_exports")
+    }
     if "ix_invoice_pdf_exports_invoice_id" not in existing_indexes:
         op.create_index(
             "ix_invoice_pdf_exports_invoice_id",

@@ -67,6 +67,9 @@ def downgrade() -> None:
     op.drop_index("ix_pop_sites_geom", table_name="pop_sites")
     op.drop_index("ix_pop_sites_latitude_longitude", table_name="pop_sites")
     op.drop_index("ix_fiber_splice_closures_geom", table_name="fiber_splice_closures")
-    op.drop_index("ix_fiber_splice_closures_latitude_longitude", table_name="fiber_splice_closures")
+    op.drop_index(
+        "ix_fiber_splice_closures_latitude_longitude",
+        table_name="fiber_splice_closures",
+    )
     op.drop_index("ix_fdh_cabinets_geom", table_name="fdh_cabinets")
     op.drop_index("ix_fdh_cabinets_latitude_longitude", table_name="fdh_cabinets")

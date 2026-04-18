@@ -196,5 +196,8 @@ def test_render_payment_import_history_csv_contains_headers_and_rows():
         ]
     )
 
-    assert "occurred_at,file_name,handler,status,payment_source,payment_method_type,row_count,matched_count,unmatched_count,total_amount" in csv_text
+    assert (
+        "occurred_at,file_name,handler,status,payment_source,payment_method_type,row_count,matched_count,unmatched_count,total_amount"
+        in csv_text
+    )
     assert "payments.csv,base_csv,success,Zenith,transfer,4,4,0,5000.50" in csv_text

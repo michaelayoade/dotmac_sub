@@ -1,4 +1,5 @@
 """Tests for RADIUS service."""
+
 import sqlite3
 from unittest.mock import MagicMock, patch
 
@@ -277,7 +278,14 @@ def test_import_access_credentials_from_external_radius_skips_opaque_password_bu
     radius_db = tmp_path / "radius-opaque.db"
     _write_external_radius_db(
         radius_db,
-        [("100000127", "Cleartext-Password", ":=", "fHbF0nDj7iT/NYQTWcpUYvpxAEZkGfMofjjQukY=")],
+        [
+            (
+                "100000127",
+                "Cleartext-Password",
+                ":=",
+                "fHbF0nDj7iT/NYQTWcpUYvpxAEZkGfMofjjQukY=",
+            )
+        ],
     )
 
     result = radius_service.import_access_credentials_from_external_radius(

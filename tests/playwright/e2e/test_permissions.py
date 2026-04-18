@@ -155,7 +155,9 @@ class TestWebPortalAccess:
     def test_admin_can_access_dashboard(self, admin_page: Page, settings):
         """Admin should be able to access dashboard."""
         admin_page.goto(f"{settings.base_url}/admin/dashboard")
-        expect(admin_page.get_by_role("heading", name="Operations Center")).to_be_visible()
+        expect(
+            admin_page.get_by_role("heading", name="Operations Center")
+        ).to_be_visible()
 
     def test_admin_can_access_tickets(self, admin_page: Page, settings):
         """Admin should be able to access tickets page."""
@@ -165,4 +167,6 @@ class TestWebPortalAccess:
     def test_agent_can_access_dashboard(self, agent_page: Page, settings):
         """Support agent should be able to access dashboard."""
         agent_page.goto(f"{settings.base_url}/admin/dashboard")
-        expect(agent_page.get_by_role("heading", name="Operations Center")).to_be_visible()
+        expect(
+            agent_page.get_by_role("heading", name="Operations Center")
+        ).to_be_visible()

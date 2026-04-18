@@ -339,8 +339,7 @@ def fetch_config_backup(
     dependencies=[Depends(require_permission("network:read"))],
 )
 def test_olt_connection(
-    request: Request,
-    olt_id: str, db: Session = Depends(get_db)
+    request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
     success, message, policy_key = olt_api_operations.test_ssh_connection(
         db, olt_id, request=request

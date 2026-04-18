@@ -47,35 +47,32 @@ def detect_profile_drift() -> dict[str, int]:
 def auto_link_profiles() -> dict[str, int]:
     """Auto-link provisioning profiles to ONTs without one.
 
-    For ONTs that have an active subscription but no provisioning_profile_id,
-    attempt to resolve a profile from the subscription's offer default or
-    organization default, and assign it.
+    Scans active ONTs that have no profile and attempts to resolve one via
+    ``resolve_profile_for_ont``. The resolver only returns a directly
+    assigned profile (no owner-based default lookup), so this task is
+    effectively a no-op unless an ONT already carries a profile reference.
     """
     logger.info("Starting auto-link of provisioning profiles to ONTs")
     db = SessionLocal()
     try:
         from sqlalchemy import select
 
-        from app.models.network import OntAssignment, OntUnit
+        from app.models.network import OntUnit
         from app.services.network.ont_profile_apply import resolve_profile_for_ont
 
-        # Find ONTs with active assignments (to subscribers) but no profile
         stmt = (
             select(OntUnit.id)
-            .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
             .where(
                 OntUnit.provisioning_profile_id.is_(None),
                 OntUnit.is_active.is_(True),
-                OntAssignment.active.is_(True),
-                OntAssignment.subscriber_id.isnot(None),
             )
             .limit(500)
         )
-        ont_ids = list(db.scalars(stmt).all())
+        ont_rows = list(db.execute(stmt).all())
 
         linked = 0
         errors = 0
-        for ont_id in ont_ids:
+        for (ont_id,) in ont_rows:
             try:
                 profile = resolve_profile_for_ont(db, str(ont_id))
                 if profile:
@@ -95,7 +92,7 @@ def auto_link_profiles() -> dict[str, int]:
 
         return {
             "linked": linked,
-            "skipped": len(ont_ids) - linked - errors,
+            "skipped": len(ont_rows) - linked - errors,
             "errors": errors,
         }
     except Exception as e:

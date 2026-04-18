@@ -272,7 +272,9 @@ def _get_offline_poll_threshold(db: Session) -> int:
         raw = resolve_value(
             db, SettingDomain.network_monitoring, "ont_offline_poll_threshold"
         )
-        threshold = int(str(raw)) if raw is not None else _DEFAULT_OFFLINE_POLL_THRESHOLD
+        threshold = (
+            int(str(raw)) if raw is not None else _DEFAULT_OFFLINE_POLL_THRESHOLD
+        )
         return max(threshold, 1)
     except Exception:
         return _DEFAULT_OFFLINE_POLL_THRESHOLD
@@ -331,6 +333,7 @@ def _build_reading_targets(
     def _normalize_serial(val: str | None) -> str:
         """Normalize serial number for matching (strip non-alphanumeric, uppercase)."""
         import re
+
         return re.sub(r"[^A-Za-z0-9]", "", str(val or "").strip()).upper()
 
     def _external_onu_id(val: str | None) -> str | None:
@@ -420,7 +423,9 @@ def _build_reading_targets(
             fsp_hint = _fsp_hint_from_index(reading.onu_index)
             if fsp_hint:
                 unmatched = [
-                    ont for ont in by_fsp_hint.get(fsp_hint, []) if ont.id not in used_ont_ids
+                    ont
+                    for ont in by_fsp_hint.get(fsp_hint, [])
+                    if ont.id not in used_ont_ids
                 ]
                 if len(unmatched) == 1:
                     matched = unmatched[0]
@@ -608,7 +613,13 @@ def poll_olt_ont_signals(
         community = _validate_snmp_community(community)
     except SNMPValidationError as e:
         logger.warning("OLT %s SNMP validation failed: %s", olt.name, e)
-        return {"polled": 0, "updated": 0, "errors": 1, "skipped": 0, "validation_error": str(e)}
+        return {
+            "polled": 0,
+            "updated": 0,
+            "errors": 1,
+            "skipped": 0,
+            "validation_error": str(e),
+        }
 
     vendor = (olt.vendor or "").lower()
     oids = _resolve_oid_set(vendor)
@@ -873,9 +884,13 @@ def poll_olt_ont_signals(
                             update_values["offline_reason"] = None
                         else:
                             try:
-                                update_values["offline_reason"] = OnuOfflineReason(reason)
+                                update_values["offline_reason"] = OnuOfflineReason(
+                                    reason
+                                )
                             except ValueError:
-                                update_values["offline_reason"] = OnuOfflineReason.unknown
+                                update_values["offline_reason"] = (
+                                    OnuOfflineReason.unknown
+                                )
                     # If threshold not reached, keep current status but track the poll
 
             # Use SNMP offline_reason OID if available (more precise than status code)
@@ -1350,7 +1365,13 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
 
     if not olt.is_active:
         logger.info("Skipping inactive OLT %s", olt.name)
-        return {"olt_name": olt.name, "polled": 0, "updated": 0, "errors": 0, "skipped": 1}
+        return {
+            "olt_name": olt.name,
+            "polled": 0,
+            "updated": 0,
+            "errors": 0,
+            "skipped": 1,
+        }
 
     result: dict[str, int | str] = {
         "olt_name": olt.name,
@@ -1386,7 +1407,10 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
     # is detected on the next attempt. ICMP-blocked OLTs still get tried
     # because consecutive_poll_failures only reaches the threshold after
     # real SNMP failures (ping fail alone doesn't trip the breaker).
-    if ping_ok is False and (olt.consecutive_poll_failures or 0) >= _POLL_BREAKER_THRESHOLD:
+    if (
+        ping_ok is False
+        and (olt.consecutive_poll_failures or 0) >= _POLL_BREAKER_THRESHOLD
+    ):
         logger.warning(
             "OLT %s circuit-breaker open (%d consecutive failures, ping down) — skipping SNMP poll",
             olt.name,

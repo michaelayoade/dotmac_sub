@@ -85,7 +85,9 @@ class NotificationHandler:
             templates = self._seed_and_reload_templates(db, template_code)
         if not templates:
             if template_code not in _LOGGED_MISSING_TEMPLATE_CODES:
-                logger.warning("No active notification template for code %s", template_code)
+                logger.warning(
+                    "No active notification template for code %s", template_code
+                )
                 _LOGGED_MISSING_TEMPLATE_CODES.add(template_code)
             return
 

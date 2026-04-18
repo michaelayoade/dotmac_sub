@@ -126,8 +126,7 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
     )
     # Build ticket ID → UUID mapping
     ticket_map = {
-        t.splynx_ticket_id: t.id
-        for t in db.scalars(select(SplynxArchivedTicket)).all()
+        t.splynx_ticket_id: t.id for t in db.scalars(select(SplynxArchivedTicket)).all()
     }
 
     msg_created = 0
@@ -153,7 +152,9 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
                 ticket_id=ticket_id,
                 splynx_message_id=row["id"],
                 sender_type=sender_type[:40],
-                sender_name=str(row.get("admin_id") or row.get("customer_id") or "")[:120],
+                sender_name=str(row.get("admin_id") or row.get("customer_id") or "")[
+                    :120
+                ],
                 body=body,
                 is_internal=row.get("message_type") == "note",
             )
@@ -289,7 +290,9 @@ def migrate_mrr_snapshots(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
 
     existing_pairs = {
         (str(row[0]), row[1])
-        for row in db.execute(select(MrrSnapshot.subscriber_id, MrrSnapshot.snapshot_date)).all()
+        for row in db.execute(
+            select(MrrSnapshot.subscriber_id, MrrSnapshot.snapshot_date)
+        ).all()
     }
 
     query = """
@@ -331,13 +334,16 @@ def migrate_mrr_snapshots(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
 
         db.flush()
         if created % 100000 == 0 and created > 0:
-            logger.info("MRR snapshots: %d created so far (%d skipped)", created, skipped)
+            logger.info(
+                "MRR snapshots: %d created so far (%d skipped)", created, skipped
+            )
 
     logger.info("MRR snapshots: %d created, %d skipped", created, skipped)
 
 
 def migrate_credit_note_applications(
-    conn, db,
+    conn,
+    db,
     invoice_mapping: dict[int, uuid.UUID],
 ) -> None:
     """Migrate Splynx credit_notes_to_invoices → CreditNoteApplication."""
@@ -353,20 +359,24 @@ def migrate_credit_note_applications(
         ).all()
     }
 
-    cn_totals = {
-        cn.id: cn.total for cn in db.scalars(select(CreditNote)).all()
-    }
+    cn_totals = {cn.id: cn.total for cn in db.scalars(select(CreditNote)).all()}
     existing_pairs = {
         (str(app.credit_note_id), str(app.invoice_id))
         for app in db.scalars(select(CreditNoteApplication)).all()
     }
     application_counts: dict[int, int] = {}
-    for row in fetch_all(conn, "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id"):
+    for row in fetch_all(
+        conn, "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id"
+    ):
         credit_note_id = row.get("credit_note_id")
         if credit_note_id is not None:
-            application_counts[credit_note_id] = application_counts.get(credit_note_id, 0) + 1
+            application_counts[credit_note_id] = (
+                application_counts.get(credit_note_id, 0) + 1
+            )
 
-    rows = fetch_all(conn, "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id")
+    rows = fetch_all(
+        conn, "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id"
+    )
     created = 0
     skipped = 0
 
@@ -418,11 +428,17 @@ def run_phase3(dry_run: bool = True) -> None:
                 logger.info("DRY RUN — counting source data only")
                 tables = [
                     ("tickets", "SELECT COUNT(*) as cnt FROM ticket WHERE deleted='0'"),
-                    ("ticket_messages", "SELECT COUNT(*) as cnt FROM ticket_messages WHERE deleted='0'"),
+                    (
+                        "ticket_messages",
+                        "SELECT COUNT(*) as cnt FROM ticket_messages WHERE deleted='0'",
+                    ),
                     ("mail_pool", "SELECT COUNT(*) as cnt FROM mail_pool"),
                     ("sms_pool", "SELECT COUNT(*) as cnt FROM sms_pool"),
                     ("mrr_statistics", "SELECT COUNT(*) as cnt FROM mrr_statistics"),
-                    ("credit_notes_to_invoices", "SELECT COUNT(*) as cnt FROM credit_notes_to_invoices"),
+                    (
+                        "credit_notes_to_invoices",
+                        "SELECT COUNT(*) as cnt FROM credit_notes_to_invoices",
+                    ),
                 ]
                 for name, query in tables:
                     rows = fetch_all(conn, query)

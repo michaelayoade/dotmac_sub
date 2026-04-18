@@ -56,9 +56,7 @@ class TestDispatchAction:
             "app.services.network.ont_features.OntFeatureService.toggle_catv",
             return_value=ActionResult(success=True, message="Toggled"),
         ):
-            result = _dispatch_action(
-                db, "ont-1", "catv_toggle", {"enabled": True}
-            )
+            result = _dispatch_action(db, "ont-1", "catv_toggle", {"enabled": True})
             assert result.success is True
 
     def test_wifi_update_action(self):
@@ -69,9 +67,7 @@ class TestDispatchAction:
             "app.services.network.ont_features.OntFeatureService.set_wifi_config",
             return_value=ActionResult(success=True, message="Updated"),
         ):
-            result = _dispatch_action(
-                db, "ont-1", "wifi_update", {"ssid": "NewSSID"}
-            )
+            result = _dispatch_action(db, "ont-1", "wifi_update", {"ssid": "NewSSID"})
             assert result.success is True
 
     def test_voip_toggle_action(self):
@@ -82,9 +78,7 @@ class TestDispatchAction:
             "app.services.network.ont_features.OntFeatureService.toggle_voip",
             return_value=ActionResult(success=True, message="Toggled"),
         ):
-            result = _dispatch_action(
-                db, "ont-1", "voip_toggle", {"enabled": False}
-            )
+            result = _dispatch_action(db, "ont-1", "voip_toggle", {"enabled": False})
             assert result.success is True
 
     def test_unknown_action(self):

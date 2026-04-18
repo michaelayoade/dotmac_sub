@@ -47,6 +47,7 @@ def _operation_title(op: Any) -> str:
         return "PON Port Repair"
     return OPERATION_DISPLAY.get(op_type_val, op_type_val)
 
+
 STATUS_CLASSES: dict[str, str] = {
     "pending": "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200",
     "running": "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200",

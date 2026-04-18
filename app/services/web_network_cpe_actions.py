@@ -38,9 +38,7 @@ def execute_reboot(
 
 
 def execute_reboot_from_request(db: Session, cpe_id: str, *, request) -> ActionResult:
-    result = execute_reboot(
-        db, cpe_id, initiated_by=actor_name_from_request(request)
-    )
+    result = execute_reboot(db, cpe_id, initiated_by=actor_name_from_request(request))
     log_cpe_audit_event(
         db,
         request=request,

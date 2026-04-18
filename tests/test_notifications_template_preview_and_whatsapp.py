@@ -10,7 +10,9 @@ def _request() -> Request:
     return Request({"type": "http", "method": "POST", "path": "/", "headers": []})
 
 
-def test_notification_template_test_uses_whatsapp_and_substitution(db_session, monkeypatch):
+def test_notification_template_test_uses_whatsapp_and_substitution(
+    db_session, monkeypatch
+):
     template = notification_service.templates.create(
         db_session,
         NotificationTemplateCreate(

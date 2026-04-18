@@ -114,11 +114,13 @@ def fiber_change_request_detail(
 def fiber_change_request_approve(
     request: Request, request_id: str, db: Session = Depends(get_db)
 ):
-    redirect_url = web_network_fiber_plant_actions_service.approve_change_request_from_form(
-        request,
-        db,
-        request_id=request_id,
-        form=parse_form_data_sync(request),
+    redirect_url = (
+        web_network_fiber_plant_actions_service.approve_change_request_from_form(
+            request,
+            db,
+            request_id=request_id,
+            form=parse_form_data_sync(request),
+        )
     )
     return RedirectResponse(url=redirect_url, status_code=303)
 
@@ -130,11 +132,13 @@ def fiber_change_request_approve(
 def fiber_change_request_reject(
     request: Request, request_id: str, db: Session = Depends(get_db)
 ):
-    redirect_url = web_network_fiber_plant_actions_service.reject_change_request_from_form(
-        request,
-        db,
-        request_id=request_id,
-        form=parse_form_data_sync(request),
+    redirect_url = (
+        web_network_fiber_plant_actions_service.reject_change_request_from_form(
+            request,
+            db,
+            request_id=request_id,
+            form=parse_form_data_sync(request),
+        )
     )
     return RedirectResponse(url=redirect_url, status_code=303)
 
@@ -295,7 +299,9 @@ def fdh_cabinet_create(request: Request, db: Session = Depends(get_db)):
             status_code=result.status_code,
         )
 
-    return RedirectResponse(result.redirect_url or "/admin/network/fdh-cabinets", status_code=303)
+    return RedirectResponse(
+        result.redirect_url or "/admin/network/fdh-cabinets", status_code=303
+    )
 
 
 @router.get(
@@ -355,7 +361,9 @@ def fdh_cabinet_update(
             "admin/network/fiber/fdh-cabinet-form.html", context
         )
 
-    return RedirectResponse(result.redirect_url or "/admin/network/fdh-cabinets", status_code=303)
+    return RedirectResponse(
+        result.redirect_url or "/admin/network/fdh-cabinets", status_code=303
+    )
 
 
 @router.get(
@@ -439,7 +447,9 @@ def splitter_create(request: Request, db: Session = Depends(get_db)):
             status_code=result.status_code,
         )
 
-    return RedirectResponse(result.redirect_url or "/admin/network/splitters", status_code=303)
+    return RedirectResponse(
+        result.redirect_url or "/admin/network/splitters", status_code=303
+    )
 
 
 @router.get(
@@ -494,7 +504,9 @@ def splitter_update(request: Request, splitter_id: str, db: Session = Depends(ge
             "admin/network/fiber/splitter-form.html", context
         )
 
-    return RedirectResponse(result.redirect_url or "/admin/network/splitters", status_code=303)
+    return RedirectResponse(
+        result.redirect_url or "/admin/network/splitters", status_code=303
+    )
 
 
 @router.get(

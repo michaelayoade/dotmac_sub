@@ -58,13 +58,19 @@ def validate_cpe_devices(db: Session, payloads: list) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     for idx, payload in enumerate(payloads):
         try:
-            network.validate_cpe_device_links(
-                db,
-                str(_get(payload, "account_id")),
-                str(_get(payload, "service_address_id"))
-                if _get(payload, "service_address_id")
-                else None,
-            )
+            account_id = _get(payload, "account_id")
+            service_address_id = _get(payload, "service_address_id")
+            if account_id is not None:
+                network.validate_cpe_device_links(
+                    db,
+                    str(account_id),
+                    str(service_address_id) if service_address_id else None,
+                )
+            elif service_address_id is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="service_address_id requires account_id",
+                )
         except HTTPException as exc:
             issues.append(ValidationIssue(index=idx, detail=str(exc.detail)))
     return issues
@@ -74,13 +80,19 @@ def validate_ip_assignments(db: Session, payloads: list) -> list[ValidationIssue
     issues: list[ValidationIssue] = []
     for idx, payload in enumerate(payloads):
         try:
-            network.validate_ip_assignment_links(
-                db,
-                str(_get(payload, "account_id")),
-                str(_get(payload, "service_address_id"))
-                if _get(payload, "service_address_id")
-                else None,
-            )
+            account_id = _get(payload, "account_id")
+            service_address_id = _get(payload, "service_address_id")
+            if account_id is not None:
+                network.validate_ip_assignment_links(
+                    db,
+                    str(account_id),
+                    str(service_address_id) if service_address_id else None,
+                )
+            elif service_address_id is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="service_address_id requires account_id",
+                )
         except HTTPException as exc:
             issues.append(ValidationIssue(index=idx, detail=str(exc.detail)))
     return issues

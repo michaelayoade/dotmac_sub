@@ -25,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 def _ssh_query(query: str) -> str:
     cmd = [
-        "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+        "ssh",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=no",
         "root@138.68.165.175",
         f'mysql -u root -N -B -e "{query}" splynx',
     ]
@@ -69,7 +73,15 @@ def fix_ip_pool_metadata(db, dry_run: bool) -> dict[str, int]:
     }
 
     # Update existing pools
-    pools = IpPools.list(db, ip_version="ipv4", is_active=True, order_by="name", order_dir="asc", limit=200, offset=0)
+    pools = IpPools.list(
+        db,
+        ip_version="ipv4",
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
+    )
     updated = 0
     for pool in pools:
         # Extract network from pool name (e.g. "Pool-100-172.16.98.0" → "172.16.98.0")
@@ -91,6 +103,7 @@ def fix_ip_pool_metadata(db, dry_run: bool) -> dict[str, int]:
             from sqlalchemy import select as sa_select
 
             from app.models.network import IpPool
+
             existing_with_name = db.scalars(
                 sa_select(IpPool).where(IpPool.name == new_name, IpPool.id != pool.id)
             ).first()
@@ -112,10 +125,18 @@ def fix_ip_pool_metadata(db, dry_run: bool) -> dict[str, int]:
                     db.flush()
                 except Exception as e:
                     db.rollback()
-                    logger.warning("  Skipped %s (name conflict): %s", pool_name, str(e)[:80])
+                    logger.warning(
+                        "  Skipped %s (name conflict): %s", pool_name, str(e)[:80]
+                    )
                     continue
             updated += 1
-            logger.info("  %s Pool %s → name='%s' type=%s", "[DRY]" if dry_run else "Updated", pool_name, unique_name, new_type)
+            logger.info(
+                "  %s Pool %s → name='%s' type=%s",
+                "[DRY]" if dry_run else "Updated",
+                pool_name,
+                unique_name,
+                new_type,
+            )
 
     if not dry_run:
         db.commit()
@@ -132,7 +153,9 @@ def import_ipv6_pools(db, dry_run: bool) -> dict[str, int]:
 
     from app.models.network import IpPool
 
-    existing = {p.name: p for p in db.query(IpPool).filter(IpPool.ip_version == "ipv6").all()}
+    existing = {
+        p.name: p for p in db.query(IpPool).filter(IpPool.ip_version == "ipv6").all()
+    }
     created = 0
 
     for line in raw.split("\n"):
@@ -149,9 +172,12 @@ def import_ipv6_pools(db, dry_run: bool) -> dict[str, int]:
             continue
 
         if dry_run:
-            logger.info("  [DRY] Would create IPv6 pool: %s (%s/%d)", title, network, prefix)
+            logger.info(
+                "  [DRY] Would create IPv6 pool: %s (%s/%d)", title, network, prefix
+            )
         else:
             from app.models.network import IPVersion
+
             pool = IpPool(
                 name=title,
                 ip_version=IPVersion.ipv6,
@@ -202,7 +228,13 @@ def fix_vlan_names(db, dry_run: bool) -> dict[str, int]:
             if not dry_run:
                 v.name = new_name
             updated += 1
-            logger.info("  %s VLAN %d: '%s' → '%s'", "[DRY]" if dry_run else "Updated", v.tag, old, new_name)
+            logger.info(
+                "  %s VLAN %d: '%s' → '%s'",
+                "[DRY]" if dry_run else "Updated",
+                v.tag,
+                old,
+                new_name,
+            )
 
     if not dry_run:
         db.commit()
@@ -214,10 +246,14 @@ def fix_nas_monitoring_linkage(db, dry_run: bool) -> dict[str, int]:
     from app.models.catalog import NasDevice
     from app.models.network_monitoring import NetworkDevice
 
-    nas_devices = db.query(NasDevice).filter(
-        NasDevice.is_active.is_(True),
-        NasDevice.network_device_id.is_(None),
-    ).all()
+    nas_devices = (
+        db.query(NasDevice)
+        .filter(
+            NasDevice.is_active.is_(True),
+            NasDevice.network_device_id.is_(None),
+        )
+        .all()
+    )
 
     # Build IP → NetworkDevice lookup
     mon_by_ip = {}
@@ -235,7 +271,13 @@ def fix_nas_monitoring_linkage(db, dry_run: bool) -> dict[str, int]:
             if not dry_run:
                 nas.network_device_id = mon.id
             linked += 1
-            logger.info("  %s NAS '%s' (%s) → monitoring device %s", "[DRY]" if dry_run else "Linked", nas.name, ip, mon.id)
+            logger.info(
+                "  %s NAS '%s' (%s) → monitoring device %s",
+                "[DRY]" if dry_run else "Linked",
+                nas.name,
+                ip,
+                mon.id,
+            )
 
     if not dry_run:
         db.commit()
@@ -256,7 +298,9 @@ def fix_allen_olt(db, dry_run: bool) -> dict[str, int]:
         allen.vendor = "Huawei"
         allen.model = "MA5608T"
         db.commit()
-    logger.info("  %s Allen OLT: vendor=Huawei model=MA5608T", "[DRY]" if dry_run else "Updated")
+    logger.info(
+        "  %s Allen OLT: vendor=Huawei model=MA5608T", "[DRY]" if dry_run else "Updated"
+    )
     return {"updated": 1}
 
 
@@ -266,6 +310,7 @@ def main():
     args = parser.parse_args()
 
     from app.db import SessionLocal
+
     db = SessionLocal()
 
     logger.info("=== IP Pool Metadata ===")

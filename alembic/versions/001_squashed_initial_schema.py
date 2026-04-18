@@ -39,6 +39,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     raise RuntimeError(
-        "Cannot downgrade squashed initial migration. "
-        "Restore from backup instead."
+        "Cannot downgrade squashed initial migration. Restore from backup instead."
     )

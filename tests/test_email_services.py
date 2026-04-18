@@ -117,6 +117,7 @@ def test_get_smtp_config_from_env(monkeypatch):
 
 def test_send_email_connection_error(db_session, monkeypatch):
     """Test handling SMTP connection error."""
+
     def mock_smtp_error(*args, **kwargs):
         raise ConnectionRefusedError("Connection refused")
 
@@ -139,6 +140,7 @@ def test_send_email_connection_error(db_session, monkeypatch):
 
 def test_send_email_auth_failure_logs(db_session, monkeypatch, caplog):
     """Test SMTP authentication failure is surfaced in logs."""
+
     def mock_smtp_auth_error(*args, **kwargs):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication failed")
 
@@ -164,6 +166,7 @@ def test_send_email_auth_failure_logs(db_session, monkeypatch, caplog):
 
 def test_smtp_connection_auth_failure_logs(monkeypatch, caplog):
     """Test SMTP auth failure during connection test is surfaced."""
+
     def mock_smtp_auth_error(*args, **kwargs):
         raise smtplib.SMTPAuthenticationError(535, b"Authentication failed")
 
@@ -191,7 +194,9 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.host",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="smtp.billing.local"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="smtp.billing.local"
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
@@ -201,7 +206,9 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.username",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="billing-user"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="billing-user"
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
@@ -215,12 +222,16 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.from_email",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="billing@example.com"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="billing@example.com"
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
         "smtp_sender.billing.use_tls",
-        DomainSettingUpdate(value_type=SettingValueType.boolean, value_text="true", value_json=True),
+        DomainSettingUpdate(
+            value_type=SettingValueType.boolean, value_text="true", value_json=True
+        ),
     )
     notification_settings.upsert_by_key(
         db_session,
@@ -310,9 +321,9 @@ def test_deactivate_smtp_sender_removes_sender_from_active_list(db_session):
         is_active=True,
     )
 
-    assert [sender["sender_key"] for sender in email_service.list_smtp_senders(db_session)] == [
-        "billing"
-    ]
+    assert [
+        sender["sender_key"] for sender in email_service.list_smtp_senders(db_session)
+    ] == ["billing"]
 
     email_service.deactivate_smtp_sender(db_session, "billing")
 
@@ -332,11 +343,15 @@ def test_get_smtp_config_falls_back_to_legacy_env(monkeypatch):
     assert config["from_email"] == "legacy@example.com"
 
 
-def test_send_user_invite_email_uses_company_name_and_branding_logo(db_session, monkeypatch):
+def test_send_user_invite_email_uses_company_name_and_branding_logo(
+    db_session, monkeypatch
+):
     """Invite email should use configured company name and branded logo."""
     captured: dict[str, str] = {}
 
-    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+    def fake_send_email(
+        db, to_email, subject, body_html, body_text, activity, **kwargs
+    ):
         captured["to_email"] = to_email
         captured["subject"] = subject
         captured["body_html"] = body_html
@@ -375,7 +390,10 @@ def test_send_user_invite_email_uses_company_name_and_branding_logo(db_session, 
     assert result is True
     assert captured["subject"] == "You're invited to Dotmac Selfcare"
     assert "Welcome to Dotmac Selfcare" in captured["body_html"]
-    assert "https://selfcare.dotmac.ng/branding/assets/logo-main.png" in captured["body_html"]
+    assert (
+        "https://selfcare.dotmac.ng/branding/assets/logo-main.png"
+        in captured["body_html"]
+    )
     assert "Welcome to Dotmac Selfcare." in captured["body_text"]
     assert captured["activity"] == "auth_user_invite"
 
@@ -384,7 +402,9 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
     """Password reset email should use branded HTML and app logo."""
     captured: dict[str, str] = {}
 
-    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+    def fake_send_email(
+        db, to_email, subject, body_html, body_text, activity, **kwargs
+    ):
         captured["subject"] = subject
         captured["body_html"] = body_html
         captured["body_text"] = body_text
@@ -422,8 +442,14 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
     assert result is True
     assert captured["subject"] == "Password Reset Request"
     assert "Password Reset Request" in captured["body_html"]
-    assert "https://selfcare.dotmac.ng/branding/assets/logo-main.png" in captured["body_html"]
-    assert "We received a request to reset your password for Dotmac Selfcare." in captured["body_text"]
+    assert (
+        "https://selfcare.dotmac.ng/branding/assets/logo-main.png"
+        in captured["body_html"]
+    )
+    assert (
+        "We received a request to reset your password for Dotmac Selfcare."
+        in captured["body_text"]
+    )
     assert captured["activity"] == "auth_password_reset"
 
 
@@ -433,7 +459,9 @@ def test_send_password_reset_email_prefers_selfcare_domain_setting(
     """Customer-facing reset links should use configured selfcare domain."""
     captured: dict[str, str] = {}
 
-    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+    def fake_send_email(
+        db, to_email, subject, body_html, body_text, activity, **kwargs
+    ):
         captured["body_html"] = body_html
         captured["body_text"] = body_text
         return True
@@ -459,8 +487,14 @@ def test_send_password_reset_email_prefers_selfcare_domain_setting(
     )
 
     assert result is True
-    assert "https://selfcare.dotmac.io/auth/reset-password?token=reset-456" in captured["body_html"]
-    assert "https://selfcare.dotmac.io/auth/reset-password?token=reset-456" in captured["body_text"]
+    assert (
+        "https://selfcare.dotmac.io/auth/reset-password?token=reset-456"
+        in captured["body_html"]
+    )
+    assert (
+        "https://selfcare.dotmac.io/auth/reset-password?token=reset-456"
+        in captured["body_text"]
+    )
 
 
 def test_send_user_invite_email_prefers_selfcare_domain_for_admin_login(
@@ -469,7 +503,9 @@ def test_send_user_invite_email_prefers_selfcare_domain_for_admin_login(
     """Admin invites should use the public selfcare host when configured."""
     captured: dict[str, str] = {}
 
-    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+    def fake_send_email(
+        db, to_email, subject, body_html, body_text, activity, **kwargs
+    ):
         captured["body_html"] = body_html
         captured["body_text"] = body_text
         return True
@@ -504,6 +540,15 @@ def test_send_user_invite_email_prefers_selfcare_domain_for_admin_login(
     )
 
     assert result is True
-    assert "https://selfcare.dotmac.io/auth/reset-password?token=token-123" in captured["body_html"]
-    assert "next_login=%2Fauth%2Flogin%3Fnext%3D%2Fadmin%2Fdashboard" in captured["body_html"]
-    assert "https://selfcare.dotmac.io/auth/reset-password?token=token-123" in captured["body_text"]
+    assert (
+        "https://selfcare.dotmac.io/auth/reset-password?token=token-123"
+        in captured["body_html"]
+    )
+    assert (
+        "next_login=%2Fauth%2Flogin%3Fnext%3D%2Fadmin%2Fdashboard"
+        in captured["body_html"]
+    )
+    assert (
+        "https://selfcare.dotmac.io/auth/reset-password?token=token-123"
+        in captured["body_text"]
+    )

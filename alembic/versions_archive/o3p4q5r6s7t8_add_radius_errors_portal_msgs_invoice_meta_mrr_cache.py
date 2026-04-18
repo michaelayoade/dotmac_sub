@@ -29,9 +29,7 @@ branch_labels = None
 depends_on = None
 
 
-def _coerce_text_column_to_jsonb(
-    table_name: str, inspector: sa.Inspector
-) -> None:
+def _coerce_text_column_to_jsonb(table_name: str, inspector: sa.Inspector) -> None:
     columns = {c["name"]: c for c in inspector.get_columns(table_name)}
     metadata_col = columns.get("metadata")
     if metadata_col is None:
@@ -112,9 +110,7 @@ def upgrade() -> None:
     if "radius_auth_errors" not in existing_tables:
         op.create_table(
             "radius_auth_errors",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "subscriber_id",
                 postgresql.UUID(as_uuid=True),
@@ -135,9 +131,7 @@ def upgrade() -> None:
             ),
             sa.Column("username", sa.String(120), nullable=False),
             sa.Column("nas_ip_address", sa.String(64), nullable=True),
-            sa.Column(
-                "calling_station_id", sa.String(64), nullable=True
-            ),
+            sa.Column("calling_station_id", sa.String(64), nullable=True),
             sa.Column(
                 "error_type",
                 postgresql.ENUM(
@@ -195,9 +189,7 @@ def upgrade() -> None:
     if "portal_messages" not in existing_tables:
         op.create_table(
             "portal_messages",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "subscriber_id",
                 postgresql.UUID(as_uuid=True),
@@ -238,12 +230,8 @@ def upgrade() -> None:
                 sa.Boolean,
                 server_default=sa.text("false"),
             ),
-            sa.Column(
-                "read_at", sa.DateTime(timezone=True), nullable=True
-            ),
-            sa.Column(
-                "expires_at", sa.DateTime(timezone=True), nullable=True
-            ),
+            sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),
@@ -266,9 +254,7 @@ def upgrade() -> None:
     if "portal_onboarding_states" not in existing_tables:
         op.create_table(
             "portal_onboarding_states",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "subscriber_id",
                 postgresql.UUID(as_uuid=True),
@@ -343,9 +329,7 @@ def downgrade() -> None:
         "USING metadata::text"
     )
     op.execute(
-        "ALTER TABLE invoice_lines "
-        "ALTER COLUMN metadata TYPE text "
-        "USING metadata::text"
+        "ALTER TABLE invoice_lines ALTER COLUMN metadata TYPE text USING metadata::text"
     )
 
     op.drop_column("subscribers", "mrr_total")

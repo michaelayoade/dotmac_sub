@@ -37,7 +37,9 @@ def _ssh_query(query: str) -> str:
         logger.warning("SPLYNX_SSH_HOST not set — skipping SSH query")
         return ""
     cmd = [
-        "ssh", "-o", "ConnectTimeout=10",
+        "ssh",
+        "-o",
+        "ConnectTimeout=10",
         f"{ssh_user}@{ssh_host}",
         f'mysql -u root -N -B -e "{query}" splynx',
     ]
@@ -54,16 +56,22 @@ def generate_ipv6_prefixes(db: Session, dry_run: bool) -> dict[str, int]:
     """
     from app.models.network import IpPool, IPv6Address, IPVersion
 
-    pools = db.query(IpPool).filter(
-        IpPool.ip_version == IPVersion.ipv6,
-        IpPool.is_active.is_(True),
-    ).all()
+    pools = (
+        db.query(IpPool)
+        .filter(
+            IpPool.ip_version == IPVersion.ipv6,
+            IpPool.is_active.is_(True),
+        )
+        .all()
+    )
 
     total_created = 0
     for pool in pools:
         existing = db.query(IPv6Address).filter(IPv6Address.pool_id == pool.id).count()
         if existing > 0:
-            logger.info("  Pool '%s' already has %d prefixes, skipping", pool.name, existing)
+            logger.info(
+                "  Pool '%s' already has %d prefixes, skipping", pool.name, existing
+            )
             continue
 
         try:
@@ -79,7 +87,11 @@ def generate_ipv6_prefixes(db: Session, dry_run: bool) -> dict[str, int]:
         elif network.prefixlen <= 64:
             target_prefix = 128
         else:
-            logger.info("  Pool '%s' prefix /%d too narrow for delegation", pool.name, network.prefixlen)
+            logger.info(
+                "  Pool '%s' prefix /%d too narrow for delegation",
+                pool.name,
+                network.prefixlen,
+            )
             continue
 
         count = 0
@@ -108,7 +120,13 @@ def generate_ipv6_prefixes(db: Session, dry_run: bool) -> dict[str, int]:
 
         if not dry_run and count > 1:
             db.flush()
-        logger.info("  %s '%s': %d prefixes (/%d)", "[DRY]" if dry_run else "Generated", pool.name, count - 1, target_prefix)
+        logger.info(
+            "  %s '%s': %d prefixes (/%d)",
+            "[DRY]" if dry_run else "Generated",
+            pool.name,
+            count - 1,
+            target_prefix,
+        )
 
     if not dry_run:
         db.commit()
@@ -140,8 +158,12 @@ def set_ipv6_on_radius_profiles(db: Session, dry_run: bool) -> dict[str, int]:
 
     if not dry_run:
         db.commit()
-    logger.info("  %s %d RADIUS profiles with ipv6_pool_name='%s'",
-                "[DRY]" if dry_run else "Updated", updated, pool_name)
+    logger.info(
+        "  %s %d RADIUS profiles with ipv6_pool_name='%s'",
+        "[DRY]" if dry_run else "Updated",
+        updated,
+        pool_name,
+    )
     return {"updated": updated}
 
 
@@ -214,8 +236,12 @@ def import_ipv4_from_splynx(db: Session, dry_run: bool) -> dict[str, int]:
 
     if not dry_run:
         db.commit()
-    logger.info("  %s %d IPv4 addresses (%d skipped/existing)",
-                "[DRY]" if dry_run else "Imported", imported, skipped)
+    logger.info(
+        "  %s %d IPv4 addresses (%d skipped/existing)",
+        "[DRY]" if dry_run else "Imported",
+        imported,
+        skipped,
+    )
     return {"imported": imported, "skipped": skipped}
 
 
@@ -239,18 +265,21 @@ def assign_ipv6_to_subscribers(db: Session, dry_run: bool) -> dict[str, int]:
         )
     ).all()
 
-    logger.info("  Found %d active subscriptions with IPv4 but no IPv6", len(active_subs))
+    logger.info(
+        "  Found %d active subscriptions with IPv4 but no IPv6", len(active_subs)
+    )
 
     # Get available IPv6 prefixes (not yet assigned)
     assigned_v6_ids = {
-        a.ipv6_address_id for a in
-        db.query(IPAssignment.ipv6_address_id).filter(
-            IPAssignment.ipv6_address_id.isnot(None)
-        ).all()
+        a.ipv6_address_id
+        for a in db.query(IPAssignment.ipv6_address_id)
+        .filter(IPAssignment.ipv6_address_id.isnot(None))
+        .all()
     }
 
     # Load all IPv6 addresses not yet assigned, grouped by pool
     from collections import defaultdict
+
     available_by_pool: dict[str, list] = defaultdict(list)
     all_v6_query = db.query(IPv6Address)
     if assigned_v6_ids:
@@ -290,7 +319,11 @@ def assign_ipv6_to_subscribers(db: Session, dry_run: bool) -> dict[str, int]:
 
     if not dry_run:
         db.commit()
-    logger.info("  %s %d subscribers with IPv6 prefixes", "[DRY]" if dry_run else "Assigned", assigned)
+    logger.info(
+        "  %s %d subscribers with IPv6 prefixes",
+        "[DRY]" if dry_run else "Assigned",
+        assigned,
+    )
     return {"assigned": assigned, "remaining_prefixes": len(all_available)}
 
 
@@ -300,6 +333,7 @@ def main():
     args = parser.parse_args()
 
     from app.db import SessionLocal
+
     db = SessionLocal()
     try:
         logger.info("=== Step 1: Generate IPv6 /64 delegation prefixes ===")

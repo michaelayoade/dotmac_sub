@@ -5,6 +5,7 @@ Revises: 024_add_wifi_ssid_password_to_ont_units
 Create Date: 2026-04-16
 
 """
+
 from alembic import op
 
 revision = "025_acs_interval_3600"

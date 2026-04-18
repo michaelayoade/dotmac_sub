@@ -3,6 +3,12 @@
 Classifies each online ONT into a PPPoE health category based on
 credential state, ACS registration, and observed WAN IP. Used by
 the ONT Fleet page to surface connectivity issues for NOC operators.
+
+Credential lookup is injected via
+:class:`~app.services.network._credentials.PppoeCredentialProvider`
+so this module never imports from the subscription/catalog domain.
+Callers that have an ``AccessCredential``-backed store should wire up
+``app.services.network_credential_bridge.AccessCredentialAdapter``.
 """
 
 from __future__ import annotations
@@ -11,14 +17,19 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, case, func, literal_column, select
+from sqlalchemy import and_, func, select
 
-from app.models.catalog import AccessCredential
 from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
 from app.models.tr069 import Tr069CpeDevice
 from app.services.common import coerce_uuid
+from app.services.network._credentials import (
+    PppoeCredential,
+    PppoeCredentialProvider,
+)
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -85,7 +96,11 @@ class PppoeHealthInfo:
 
 
 def _health_base_query() -> Any:
-    """Build the base SELECT + FROM with all required left-joins.
+    """Build the base SELECT + FROM with ONT/assignment/TR-069 joins.
+
+    Credential data is intentionally NOT joined here — it's fetched via
+    :class:`PppoeCredentialProvider` so the network domain does not have
+    to import the catalog ORM model.
 
     Returns the select statement so callers can add WHERE/GROUP BY clauses.
     """
@@ -93,8 +108,6 @@ def _health_base_query() -> Any:
         select(
             OntUnit.id.label("ont_id"),
             OntAssignment.subscriber_id.label("subscriber_id"),
-            AccessCredential.username.label("credential_username"),
-            AccessCredential.id.label("credential_id"),
             OntUnit.pppoe_username.label("ont_pppoe_username"),
             OntUnit.observed_wan_ip.label("observed_wan_ip"),
             Tr069CpeDevice.id.label("tr069_device_id"),
@@ -104,13 +117,6 @@ def _health_base_query() -> Any:
             and_(
                 OntAssignment.ont_unit_id == OntUnit.id,
                 OntAssignment.active.is_(True),
-            ),
-        )
-        .outerjoin(
-            AccessCredential,
-            and_(
-                AccessCredential.subscriber_id == OntAssignment.subscriber_id,
-                AccessCredential.is_active.is_(True),
             ),
         )
         .outerjoin(
@@ -129,15 +135,14 @@ _NO_WAN_IP_VALUES = ("", "0.0.0.0")  # nosec B104  # noqa: S104
 
 def _classify_row(
     subscriber_id: object,
-    credential_username: str | None,
-    credential_id: object,
+    credential: PppoeCredential | None,
     ont_pppoe_username: str | None,
     observed_wan_ip: str | None,
     tr069_device_id: object,
 ) -> str:
     """Derive the PPPoE health category from a single joined row."""
     has_assignment = subscriber_id is not None
-    has_credential = credential_id is not None
+    has_credential = credential is not None
     has_tr069 = tr069_device_id is not None
     has_wan_ip = bool(observed_wan_ip) and observed_wan_ip not in _NO_WAN_IP_VALUES
 
@@ -150,10 +155,11 @@ def _classify_row(
         return CATEGORY_NO_CREDENTIAL
 
     # Has credential — check for mismatch
+    assert credential is not None  # for type checker  # noqa: S101
     if (
         ont_pppoe_username
-        and credential_username
-        and ont_pppoe_username != credential_username
+        and credential.username
+        and ont_pppoe_username != credential.username
     ):
         return CATEGORY_CREDENTIAL_MISMATCH
 
@@ -186,16 +192,49 @@ def _build_info(
     )
 
 
+def _collect_subscriber_ids(rows: list[Any]) -> list[UUID]:
+    """Extract unique, non-null subscriber ids from a result set."""
+    seen: dict[Any, None] = {}
+    for row in rows:
+        sid = row.subscriber_id
+        if sid is not None and sid not in seen:
+            seen[sid] = None
+    # Keys are whatever SQLAlchemy returned — usually UUID instances.
+    return list(seen.keys())
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
 class PppoeHealthClassifier:
-    """PPPoE connectivity health classification for the ONT fleet."""
+    """PPPoE connectivity health classification for the ONT fleet.
 
-    @staticmethod
+    Parameters
+    ----------
+    credentials:
+        Provider used to look up access credentials for assigned
+        subscribers. When ``None`` (standalone mode) every assigned
+        ONT is treated as having no credential, so the classifier
+        still works in deployments where the catalog/subscription
+        module is not wired up.
+    """
+
+    def __init__(self, credentials: PppoeCredentialProvider | None = None):
+        self._credentials = credentials
+
+    def _load_credentials(self, rows: list[Any]) -> dict[Any, PppoeCredential]:
+        """Bulk-load credentials for every subscriber in ``rows``."""
+        if self._credentials is None:
+            return {}
+        subscriber_ids = _collect_subscriber_ids(rows)
+        if not subscriber_ids:
+            return {}
+        return dict(self._credentials.get_active_by_subscriber_ids(subscriber_ids))
+
     def classify_fleet(
+        self,
         db: Session,
         ont_ids: list[str],
     ) -> dict[str, PppoeHealthInfo]:
@@ -214,28 +253,34 @@ class PppoeHealthClassifier:
         stmt = _health_base_query().where(OntUnit.id.in_(ont_ids))
         rows = db.execute(stmt).all()
 
+        credentials_by_sub = self._load_credentials(list(rows))
+
         result: dict[str, PppoeHealthInfo] = {}
         for row in rows:
             ont_id_str = str(row.ont_id)
+            credential = (
+                credentials_by_sub.get(row.subscriber_id)
+                if row.subscriber_id is not None
+                else None
+            )
             category = _classify_row(
                 row.subscriber_id,
-                row.credential_username,
-                row.credential_id,
+                credential,
                 row.ont_pppoe_username,
                 row.observed_wan_ip,
                 row.tr069_device_id,
             )
             result[ont_id_str] = _build_info(
                 category,
-                row.credential_username,
+                credential.username if credential else None,
                 row.ont_pppoe_username,
                 row.tr069_device_id,
                 row.observed_wan_ip,
             )
         return result
 
-    @staticmethod
     def count_issues(
+        self,
         db: Session,
         *,
         olt_id: str | None = None,
@@ -245,94 +290,11 @@ class PppoeHealthClassifier:
         This powers the stat card number. Only counts ONTs that are online
         and assigned to a subscriber — unassigned ONTs are not issues.
         """
-        # Helper: consider observed_wan_ip valid only if non-null and not 0.0.0.0
-        _has_wan = and_(
-            OntUnit.observed_wan_ip.isnot(None),
-            OntUnit.observed_wan_ip != "",
-            OntUnit.observed_wan_ip != "0.0.0.0",  # nosec B104  # noqa: S104
-        )
+        issue_ids = self.list_ont_ids_by_health(db, "issues", olt_id=olt_id)
+        return len(issue_ids)
 
-        # Build a SQL CASE expression for the category so we can filter in DB.
-        category_expr = case(
-            # No assignment → not an issue (excluded by WHERE below)
-            (OntAssignment.subscriber_id.is_(None), literal_column("'unassigned'")),
-            # No credential + WAN IP → bridge mode (not an issue)
-            (
-                and_(AccessCredential.id.is_(None), _has_wan),
-                literal_column("'bridge_mode'"),
-            ),
-            # No credential → issue
-            (AccessCredential.id.is_(None), literal_column("'no_credential'")),
-            # Credential mismatch: ONT has a different username configured
-            (
-                and_(
-                    OntUnit.pppoe_username.isnot(None),
-                    OntUnit.pppoe_username != "",
-                    OntUnit.pppoe_username != AccessCredential.username,
-                ),
-                literal_column("'credential_mismatch'"),
-            ),
-            # Has WAN IP → ok
-            (_has_wan, literal_column("'ok'")),
-            # Not in ACS → issue
-            (Tr069CpeDevice.id.is_(None), literal_column("'not_in_acs'")),
-            # Else: in ACS but no WAN IP → issue
-            else_=literal_column("'no_wan_ip'"),
-        )
-
-        stmt = (
-            select(func.count())
-            .select_from(OntUnit)
-            .outerjoin(
-                OntAssignment,
-                and_(
-                    OntAssignment.ont_unit_id == OntUnit.id,
-                    OntAssignment.active.is_(True),
-                ),
-            )
-            .outerjoin(
-                AccessCredential,
-                and_(
-                    AccessCredential.subscriber_id == OntAssignment.subscriber_id,
-                    AccessCredential.is_active.is_(True),
-                ),
-            )
-            .outerjoin(
-                Tr069CpeDevice,
-                and_(
-                    Tr069CpeDevice.ont_unit_id == OntUnit.id,
-                    Tr069CpeDevice.is_active.is_(True),
-                ),
-            )
-            .where(OntUnit.online_status == OnuOnlineStatus.online)
-            .where(OntUnit.is_active.is_(True))
-            .where(OntAssignment.subscriber_id.isnot(None))
-            .where(
-                category_expr.in_(
-                    [
-                        "no_credential",
-                        "not_in_acs",
-                        "credential_mismatch",
-                        "no_wan_ip",
-                    ]
-                )
-            )
-        )
-
-        if olt_id:
-            from app.models.network import PonPort
-
-            stmt = stmt.outerjoin(
-                PonPort, PonPort.id == OntAssignment.pon_port_id
-            ).where(
-                func.coalesce(PonPort.olt_id, OntUnit.olt_device_id)
-                == coerce_uuid(olt_id)
-            )
-
-        return db.scalar(stmt) or 0
-
-    @staticmethod
     def list_ont_ids_by_health(
+        self,
         db: Session,
         category: str,
         *,
@@ -358,15 +320,20 @@ class PppoeHealthClassifier:
             )
 
         rows = db.execute(stmt).all()
+        credentials_by_sub = self._load_credentials(list(rows))
 
         target_categories = ISSUE_CATEGORIES if category == "issues" else {category}
 
         matching_ids: list[str] = []
         for row in rows:
+            credential = (
+                credentials_by_sub.get(row.subscriber_id)
+                if row.subscriber_id is not None
+                else None
+            )
             cat = _classify_row(
                 row.subscriber_id,
-                row.credential_username,
-                row.credential_id,
+                credential,
                 row.ont_pppoe_username,
                 row.observed_wan_ip,
                 row.tr069_device_id,

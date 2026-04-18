@@ -76,6 +76,7 @@ def update_olt_with_audit(db, request, olt_id, before_obj, values, actor_id):
         actor_id,
     )
 
+
 # Compatibility exports for OLT form helpers now owned by network/olt_web_forms.py.
 _find_linked_network_device = olt_web_forms_service._find_linked_network_device
 build_form_model = olt_web_forms_service.build_form_model
@@ -198,7 +199,9 @@ def _call_operations_helper(fn, *args, **kwargs):
 
 
 def test_olt_connection(db: Session, olt_id: str) -> tuple[bool, str]:
-    return _call_operations_helper(olt_operations_service.test_olt_connection, db, olt_id)
+    return _call_operations_helper(
+        olt_operations_service.test_olt_connection, db, olt_id
+    )
 
 
 def test_olt_snmp_connection(db: Session, olt_id: str) -> tuple[bool, str]:
@@ -207,9 +210,7 @@ def test_olt_snmp_connection(db: Session, olt_id: str) -> tuple[bool, str]:
     )
 
 
-def test_olt_ssh_connection(
-    db: Session, olt_id: str
-) -> tuple[bool, str, str | None]:
+def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | None]:
     return _call_operations_helper(
         olt_operations_service.test_olt_ssh_connection, db, olt_id
     )
@@ -290,9 +291,7 @@ _parse_online_status = olt_snmp_sync_service._parse_online_status
 _run_simple_v2c_walk = olt_snmp_sync_service._run_simple_v2c_walk
 _sync_onts_from_olt_snmp_impl = olt_snmp_sync_service._sync_onts_from_olt_snmp_impl
 sync_onts_from_olt_snmp = olt_snmp_sync_service.sync_onts_from_olt_snmp
-sync_onts_from_olt_snmp_tracked = (
-    olt_snmp_sync_service.sync_onts_from_olt_snmp_tracked
-)
+sync_onts_from_olt_snmp_tracked = olt_snmp_sync_service.sync_onts_from_olt_snmp_tracked
 
 
 # Compatibility exports for OLT TR-069 profile/admin logic now owned by

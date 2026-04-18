@@ -19,25 +19,33 @@ class CustomerServicesPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the services page is loaded."""
-        expect(self.page.get_by_role("heading", name="Services", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Services", exact=True)
+        ).to_be_visible()
 
     def expect_active_services_visible(self) -> None:
         """Assert services content or empty state is visible."""
         expect(
-            self.page.get_by_text("Your Services", exact=False).or_(
+            self.page.get_by_text("Your Services", exact=False)
+            .or_(
                 self.page.get_by_text("No services available", exact=False).or_(
                     self.page.get_by_text("Contact Support", exact=False)
                 )
-            ).first
+            )
+            .first
         ).to_be_visible()
 
     def expect_service_details_visible(self) -> None:
         """Assert service details are visible."""
-        expect(self.page.locator("[data-testid='service-details']").or_(
-            self.page.get_by_text("Plan", exact=False).or_(
-                self.page.get_by_text("Speed", exact=False)
+        expect(
+            self.page.locator("[data-testid='service-details']")
+            .or_(
+                self.page.get_by_text("Plan", exact=False).or_(
+                    self.page.get_by_text("Speed", exact=False)
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
     def get_service_count(self) -> int:
         """Get count of services displayed."""
@@ -70,16 +78,20 @@ class CustomerServicesPage(BasePage):
 
     def get_current_plan_name(self) -> str:
         """Get current plan name."""
-        plan_element = self.page.locator("[data-testid='current-plan']").or_(
-            self.page.get_by_text("Plan", exact=False)
-        ).first
+        plan_element = (
+            self.page.locator("[data-testid='current-plan']")
+            .or_(self.page.get_by_text("Plan", exact=False))
+            .first
+        )
         return plan_element.text_content() or ""
 
     def get_service_status(self) -> str:
         """Get service status."""
-        status_element = self.page.locator("[data-testid='service-status']").or_(
-            self.page.get_by_text("Active").or_(
-                self.page.get_by_text("Suspended")
+        status_element = (
+            self.page.locator("[data-testid='service-status']")
+            .or_(
+                self.page.get_by_text("Active").or_(self.page.get_by_text("Suspended"))
             )
-        ).first
+            .first
+        )
         return status_element.text_content() or ""

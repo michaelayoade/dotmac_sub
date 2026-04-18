@@ -28,6 +28,7 @@ from app.services.network.olt_web_audit import (
 
 logger = logging.getLogger(__name__)
 
+
 def _encrypt_if_set(values: Mapping[str, Any], key: str) -> str | None:
     """Extract a string value from form data, encrypt if non-empty."""
     raw = str(values.get(key) or "").strip() or None
@@ -516,9 +517,7 @@ def _auto_init_tr069_profile(olt: OLTDevice) -> None:
         if not ok:
             logger.info("Skipping auto TR-069 init for %s: %s", olt.name, msg)
         elif profile_id is not None:
-            logger.info(
-                "Auto-verified TR-069 profile %s on %s", profile_id, olt.name
-            )
+            logger.info("Auto-verified TR-069 profile %s on %s", profile_id, olt.name)
         else:
             logger.info("Auto-verified TR-069 profile on %s", olt.name)
     except Exception as exc:
@@ -567,7 +566,9 @@ def update_olt_with_audit(
     after_obj = network_service.olt_devices.get(db=db, device_id=olt_id)
     after_snapshot = model_to_dict(after_obj)
     changes = diff_dicts(before_snapshot, after_snapshot)
-    metadata_payload: dict[str, object] | None = {"changes": changes} if changes else None
+    metadata_payload: dict[str, object] | None = (
+        {"changes": changes} if changes else None
+    )
     log_olt_audit_event(
         db,
         request=request,

@@ -5,8 +5,6 @@ Seeds a default suspension policy with:
 - Day 37: Suspend (account suspension)
 """
 
-
-
 from alembic import op
 
 # revision identifiers, used by Alembic.

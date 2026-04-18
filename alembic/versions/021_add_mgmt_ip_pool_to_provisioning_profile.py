@@ -20,37 +20,73 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table_name: str, column_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
+def _index_exists(table_name: str, index_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return index_name in {index["name"] for index in inspector.get_indexes(table_name)}
+
+
+def _foreign_key_exists(table_name: str, constraint_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return constraint_name in {
+        fk["name"] for fk in inspector.get_foreign_keys(table_name)
+    }
+
+
 def upgrade() -> None:
     # Add mgmt_ip_pool_id column to ont_provisioning_profiles
-    op.add_column(
-        "ont_provisioning_profiles",
-        sa.Column("mgmt_ip_pool_id", UUID(as_uuid=True), nullable=True),
-    )
+    if not _column_exists("ont_provisioning_profiles", "mgmt_ip_pool_id"):
+        op.add_column(
+            "ont_provisioning_profiles",
+            sa.Column("mgmt_ip_pool_id", UUID(as_uuid=True), nullable=True),
+        )
     # Add foreign key constraint
-    op.create_foreign_key(
-        "fk_ont_prov_profiles_mgmt_ip_pool",
-        "ont_provisioning_profiles",
-        "ip_pools",
-        ["mgmt_ip_pool_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    if not _foreign_key_exists(
+        "ont_provisioning_profiles", "fk_ont_prov_profiles_mgmt_ip_pool"
+    ):
+        op.create_foreign_key(
+            "fk_ont_prov_profiles_mgmt_ip_pool",
+            "ont_provisioning_profiles",
+            "ip_pools",
+            ["mgmt_ip_pool_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
     # Add index for faster lookups
-    op.create_index(
-        "ix_ont_provisioning_profiles_mgmt_ip_pool_id",
-        "ont_provisioning_profiles",
-        ["mgmt_ip_pool_id"],
-    )
+    if not _index_exists(
+        "ont_provisioning_profiles", "ix_ont_provisioning_profiles_mgmt_ip_pool_id"
+    ):
+        op.create_index(
+            "ix_ont_provisioning_profiles_mgmt_ip_pool_id",
+            "ont_provisioning_profiles",
+            ["mgmt_ip_pool_id"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_ont_provisioning_profiles_mgmt_ip_pool_id",
-        table_name="ont_provisioning_profiles",
-    )
-    op.drop_constraint(
-        "fk_ont_prov_profiles_mgmt_ip_pool",
-        "ont_provisioning_profiles",
-        type_="foreignkey",
-    )
-    op.drop_column("ont_provisioning_profiles", "mgmt_ip_pool_id")
+    if _index_exists(
+        "ont_provisioning_profiles", "ix_ont_provisioning_profiles_mgmt_ip_pool_id"
+    ):
+        op.drop_index(
+            "ix_ont_provisioning_profiles_mgmt_ip_pool_id",
+            table_name="ont_provisioning_profiles",
+        )
+    if _foreign_key_exists(
+        "ont_provisioning_profiles", "fk_ont_prov_profiles_mgmt_ip_pool"
+    ):
+        op.drop_constraint(
+            "fk_ont_prov_profiles_mgmt_ip_pool",
+            "ont_provisioning_profiles",
+            type_="foreignkey",
+        )
+    if _column_exists("ont_provisioning_profiles", "mgmt_ip_pool_id"):
+        op.drop_column("ont_provisioning_profiles", "mgmt_ip_pool_id")

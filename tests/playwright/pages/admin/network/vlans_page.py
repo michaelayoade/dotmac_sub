@@ -12,13 +12,18 @@ class VLANsPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/network/vlans") -> None:
         """Navigate to the VLANs list."""
-        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
+        self.page.goto(
+            f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000
+        )
 
     def expect_loaded(self) -> None:
         """Assert the VLANs page is loaded."""
-        expect(self.page.get_by_role("heading", name="VLANs", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="VLANs", exact=True)
+        ).to_be_visible()
 
     def click_new_vlan(self) -> None:
         """Click new VLAN button."""

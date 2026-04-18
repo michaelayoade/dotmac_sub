@@ -28,8 +28,11 @@ from app.models.network import (
 class CPEDeviceBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    subscriber_id: UUID = Field(
-        validation_alias="account_id", serialization_alias="account_id"
+    subscriber_id: UUID | None = Field(
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description="Optional caller-supplied owner reference; not required for standalone OLT/ONT operation.",
     )
     service_address_id: UUID | None = None
     device_type: DeviceType = DeviceType.router
@@ -170,8 +173,14 @@ class PortVlanRead(PortVlanBase):
 
 
 class IPAssignmentBase(BaseModel):
-    subscriber_id: UUID = Field(
-        validation_alias="account_id", serialization_alias="account_id"
+    subscriber_id: UUID | None = Field(
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
     )
     service_address_id: UUID | None = None
     ip_version: IPVersion = IPVersion.ipv4
@@ -593,7 +602,13 @@ class OntAssignmentBase(BaseModel):
     ont_unit_id: UUID
     pon_port_id: UUID | None = None  # Optional for TR-069-only devices
     subscriber_id: UUID | None = Field(
-        default=None, validation_alias="account_id", serialization_alias="account_id"
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
     )
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
@@ -611,9 +626,21 @@ class OntAssignmentUpdate(BaseModel):
     ont_unit_id: UUID | None = None
     pon_port_id: UUID | None = None
     subscriber_id: UUID | None = Field(
-        default=None, validation_alias="account_id", serialization_alias="account_id"
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
     )
-    subscription_id: UUID | None = None
+    subscription_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
+    )
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool | None = None
@@ -807,7 +834,13 @@ class SplitterPortRead(SplitterPortBase):
 class SplitterPortAssignmentBase(BaseModel):
     splitter_port_id: UUID
     subscriber_id: UUID | None = Field(
-        default=None, validation_alias="account_id", serialization_alias="account_id"
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
     )
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
@@ -822,7 +855,13 @@ class SplitterPortAssignmentCreate(SplitterPortAssignmentBase):
 class SplitterPortAssignmentUpdate(BaseModel):
     splitter_port_id: UUID | None = None
     subscriber_id: UUID | None = Field(
-        default=None, validation_alias="account_id", serialization_alias="account_id"
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
     )
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None

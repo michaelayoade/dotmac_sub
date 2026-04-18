@@ -32,6 +32,7 @@ from app.models.network import (
     WanServiceProvisioningStatus,
 )
 from app.services.common import coerce_uuid
+from app.services.network._common import SubscriberTemplateContextProvider
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ def _resolve_vlan_by_tag(
 def _get_subscriber_context(
     db: Session,
     ont: OntUnit,
+    subscriber_context_provider: SubscriberTemplateContextProvider | None = None,
 ) -> dict[str, str]:
     """Build subscriber context for template resolution."""
     context = {
@@ -152,13 +154,17 @@ def _get_subscriber_context(
             OntAssignment.active.is_(True),
         )
     ).first()
-    if active_assignment and active_assignment.subscriber_id:
-        from app.models.subscriber import Subscriber
-
-        subscriber = db.get(Subscriber, active_assignment.subscriber_id)
-        if subscriber:
-            context["subscriber_code"] = getattr(subscriber, "external_code", "") or ""
-            context["subscriber_name"] = getattr(subscriber, "name", "") or ""
+    if (
+        active_assignment
+        and active_assignment.subscriber_id
+        and subscriber_context_provider is not None
+    ):
+        context.update(
+            subscriber_context_provider.get_template_context(
+                db,
+                subscriber_id=active_assignment.subscriber_id,
+            )
+        )
 
     return context
 
@@ -292,15 +298,12 @@ def resolve_profile_for_ont(
 
     Resolution chain:
     1. Directly assigned profile on OntUnit.provisioning_profile_id
-    2. Default profile from the linked CatalogOffer (via subscription → offer)
-    3. Business account default profile (is_default=True)
-    4. None
+    2. None
     """
     ont = db.get(OntUnit, coerce_uuid(ont_id))
     if not ont:
         return None
 
-    # 1. Direct assignment
     if ont.provisioning_profile_id:
         stmt = (
             select(OntProvisioningProfile)
@@ -319,37 +322,6 @@ def resolve_profile_for_ont(
                 ont.olt_device_id,
             )
 
-    # 2. Business account default (need business subscriber from assignment)
-    from app.models.network import OntAssignment
-
-    active_assignment = db.scalars(
-        select(OntAssignment).where(
-            OntAssignment.ont_unit_id == ont.id,
-            OntAssignment.active.is_(True),
-        )
-    ).first()
-    if active_assignment and active_assignment.subscriber_id:
-        from app.models.subscriber import Subscriber
-
-        subscriber = db.get(Subscriber, active_assignment.subscriber_id)
-        if subscriber and getattr(subscriber, "is_business", False):
-            owner_subscriber_id = getattr(subscriber, "id", None)
-            if owner_subscriber_id:
-                stmt = (
-                    select(OntProvisioningProfile)
-                    .options(selectinload(OntProvisioningProfile.wan_services))
-                    .where(
-                        OntProvisioningProfile.owner_subscriber_id
-                        == owner_subscriber_id,
-                        OntProvisioningProfile.is_default.is_(True),
-                        OntProvisioningProfile.is_active.is_(True),
-                        OntProvisioningProfile.olt_device_id == ont.olt_device_id,
-                    )
-                )
-                profile = db.scalars(stmt).first()
-                if profile:
-                    return profile
-
     return None
 
 
@@ -360,6 +332,7 @@ def apply_profile_to_ont(
     *,
     create_wan_instances: bool = True,
     push_to_device: bool = False,
+    subscriber_context_provider: SubscriberTemplateContextProvider | None = None,
 ) -> ApplyResult:
     """Apply a provisioning profile's desired state to an ONT.
 
@@ -421,7 +394,11 @@ def apply_profile_to_ont(
     # Create WAN service instances from profile's wan_services
     wan_instances_created = 0
     if create_wan_instances and profile.wan_services:
-        subscriber_context = _get_subscriber_context(db, ont)
+        subscriber_context = _get_subscriber_context(
+            db,
+            ont,
+            subscriber_context_provider=subscriber_context_provider,
+        )
         wan_instances_created = _create_wan_service_instances(
             db, ont, profile, subscriber_context
         )

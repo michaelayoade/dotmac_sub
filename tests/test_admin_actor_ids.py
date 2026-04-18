@@ -29,9 +29,7 @@ def test_get_current_user_exposes_stable_actor_id_for_system_user():
         email="admin@example.com",
     )
 
-    current_user = web_admin_service.get_current_user(
-        _request_with_user(system_user)
-    )
+    current_user = web_admin_service.get_current_user(_request_with_user(system_user))
 
     assert current_user["id"] == "system-user-1"
     assert current_user["actor_id"] == "system-user-1"

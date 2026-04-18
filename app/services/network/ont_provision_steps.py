@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
+from app.services.network._common import NasTarget
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -66,7 +68,9 @@ from app.services.network.provisioning_settings import (
 _BOOTSTRAP_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_bootstrap_timeout_sec
 _BOOTSTRAP_POLL_INTERVAL_SEC = _PROVISIONING_DEFAULTS.tr069_bootstrap_poll_interval_sec
 _TR069_TASK_READY_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_timeout_sec
-_TR069_TASK_READY_POLL_INTERVAL_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
+_TR069_TASK_READY_POLL_INTERVAL_SEC = (
+    _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
+)
 _PPPOE_PUSH_MAX_ATTEMPTS = _PROVISIONING_DEFAULTS.pppoe_push_max_attempts
 _PPPOE_PUSH_RETRY_DELAY_SEC = _PROVISIONING_DEFAULTS.pppoe_push_retry_delay_sec
 
@@ -182,7 +186,10 @@ def create_service_port(
                 True,
                 f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent NOOP)",
                 ms,
-                data={"idempotent_noop": True, "existing_index": existing_check.get("index")},
+                data={
+                    "idempotent_noop": True,
+                    "existing_index": existing_check.get("index"),
+                },
             )
             _record_step(db, ctx.ont, "create_service_port", result)
             return result
@@ -1193,12 +1200,16 @@ def _provision_wan_service_instances(
                     from app.models.network import WanServiceProvisioningStatus
 
                     instance.provisioning_status = WanServiceProvisioningStatus.pending
-                    instance.last_error = pppoe_result.message[:500] if pppoe_result.message else None
+                    instance.last_error = (
+                        pppoe_result.message[:500] if pppoe_result.message else None
+                    )
                 else:
                     from app.models.network import WanServiceProvisioningStatus
 
                     instance.provisioning_status = WanServiceProvisioningStatus.failed
-                    instance.last_error = pppoe_result.message[:500] if pppoe_result.message else None
+                    instance.last_error = (
+                        pppoe_result.message[:500] if pppoe_result.message else None
+                    )
             else:
                 needs_input.append(
                     f"PPPoE credentials missing for WAN service '{service_label}'."
@@ -1349,9 +1360,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         )
         if pppoe_username and pppoe_password:
             # Pass wan_vlan so PPP WAN service can be auto-created if missing
-            pppoe_wan_vlan = (
-                _optional_int(wan_vlan)
-            )
+            pppoe_wan_vlan = _optional_int(wan_vlan)
             _append(
                 "push_pppoe_tr069",
                 set_pppoe_credentials(
@@ -1433,7 +1442,9 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             ),
         )
     elif wifi_plan.get("password_set"):
-        needs_input.append("WiFi password was requested but no saved password is available.")
+        needs_input.append(
+            "WiFi password was requested but no saved password is available."
+        )
 
     ms = int((time.monotonic() - t0) * 1000)
     if hard_failures:
@@ -1769,7 +1780,7 @@ def enable_ipv6(
 def ensure_nas_vlan(
     db: Session,
     *,
-    nas_device_id: str,
+    nas: NasTarget,
     vlan_id: int,
     parent_interface: str = "ether3",
     ip_address: str,
@@ -1782,27 +1793,24 @@ def ensure_nas_vlan(
 
     Args:
         db: Database session.
-        nas_device_id: NAS device primary key.
+        nas: Lightweight DTO describing the target NAS device. Callers that
+            hold a ``NasDevice`` ORM row should construct a :class:`NasTarget`
+            from it before calling this function.
         vlan_id: VLAN ID to create.
         parent_interface: Physical interface (default "ether3").
         ip_address: IP address with CIDR for the VLAN interface.
         pppoe_service_name: Optional PPPoE service name.
         pppoe_default_profile: PPP profile name (default "default").
     """
-    from app.models.catalog import NasDevice
-
     t0 = time.monotonic()
-    nas = db.get(NasDevice, nas_device_id)
-    if not nas:
-        return StepResult(
-            "ensure_nas_vlan", False, f"NAS device {nas_device_id} not found"
-        )
 
     try:
         from app.services.nas._mikrotik_vlan import provision_vlan_full
 
+        # ``provision_vlan_full`` is typed to ``NasDevice`` but only reads the
+        # attributes present on ``NasTarget``; the DTO is duck-type compatible.
         vlan_result = provision_vlan_full(
-            nas,
+            cast(Any, nas),
             vlan_id=vlan_id,
             parent_interface=parent_interface,
             ip_address=ip_address,
@@ -2094,7 +2102,9 @@ def provision_with_reconciliation(
     )
     if not delta:
         ms = int((time.monotonic() - t0) * 1000)
-        return StepResult("provision_reconciled", False, f"Reconciliation failed: {err}", ms)
+        return StepResult(
+            "provision_reconciled", False, f"Reconciliation failed: {err}", ms
+        )
 
     # Check validations
     if not delta.is_valid:
@@ -2143,7 +2153,9 @@ def provision_with_reconciliation(
     )
     if not desired:
         ms = int((time.monotonic() - t0) * 1000)
-        return StepResult("provision_reconciled", False, f"Failed to build desired state: {err}", ms)
+        return StepResult(
+            "provision_reconciled", False, f"Failed to build desired state: {err}", ms
+        )
 
     if dry_run:
         ms = int((time.monotonic() - t0) * 1000)

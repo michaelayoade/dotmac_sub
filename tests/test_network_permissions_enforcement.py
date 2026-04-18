@@ -21,7 +21,9 @@ def _auth(subscriber) -> dict:
 
 
 def _request(method: str) -> Request:
-    return Request({"type": "http", "method": method, "path": "/admin/network", "headers": []})
+    return Request(
+        {"type": "http", "method": method, "path": "/admin/network", "headers": []}
+    )
 
 
 def _ensure_permission(db_session, key: str) -> Permission:

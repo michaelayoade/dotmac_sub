@@ -136,7 +136,9 @@ class TestImportSubscriberCustomFieldsUpload:
         mock_file.filename = "data.xlsx"
 
         with pytest.raises(HTTPException) as exc_info:
-            imports_service.import_subscriber_custom_fields_upload(db_session, mock_file)
+            imports_service.import_subscriber_custom_fields_upload(
+                db_session, mock_file
+            )
 
         assert exc_info.value.status_code == 400
         assert "CSV file required" in exc_info.value.detail
@@ -147,7 +149,9 @@ class TestImportSubscriberCustomFieldsUpload:
         mock_file.filename = None
 
         with pytest.raises(HTTPException) as exc_info:
-            imports_service.import_subscriber_custom_fields_upload(db_session, mock_file)
+            imports_service.import_subscriber_custom_fields_upload(
+                db_session, mock_file
+            )
 
         assert exc_info.value.status_code == 400
 
@@ -159,7 +163,9 @@ class TestImportSubscriberCustomFieldsUpload:
         mock_file.file = BytesIO(large_content)
 
         with pytest.raises(HTTPException) as exc_info:
-            imports_service.import_subscriber_custom_fields_upload(db_session, mock_file)
+            imports_service.import_subscriber_custom_fields_upload(
+                db_session, mock_file
+            )
 
         assert exc_info.value.status_code == 413
         assert "too large" in exc_info.value.detail
@@ -172,7 +178,9 @@ class TestImportSubscriberCustomFieldsUpload:
         mock_file.file = BytesIO(invalid_content)
 
         with pytest.raises(HTTPException) as exc_info:
-            imports_service.import_subscriber_custom_fields_upload(db_session, mock_file)
+            imports_service.import_subscriber_custom_fields_upload(
+                db_session, mock_file
+            )
 
         assert exc_info.value.status_code == 400
         assert "Invalid UTF-8" in exc_info.value.detail

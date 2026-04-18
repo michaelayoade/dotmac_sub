@@ -21,7 +21,10 @@ def client():
 @pytest.fixture
 def mock_response():
     """Create a mock HTTP response."""
-    def _create(status_code=200, json_data=None, text="", headers=None, reason_phrase=""):
+
+    def _create(
+        status_code=200, json_data=None, text="", headers=None, reason_phrase=""
+    ):
         response = MagicMock(spec=httpx.Response)
         response.status_code = status_code
         response.text = text if text else (json.dumps(json_data) if json_data else "")
@@ -30,6 +33,7 @@ def mock_response():
         response.reason_phrase = reason_phrase
         response.raise_for_status.return_value = None
         return response
+
     return _create
 
 
@@ -84,7 +88,9 @@ class TestRequestErrorHandling:
             mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
                 "Not found", request=MagicMock(), response=mock_response
             )
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response
+            )
 
             with pytest.raises(GenieACSError) as exc_info:
                 client._request("GET", "/devices/test")
@@ -117,8 +123,8 @@ class TestDeviceOperations:
         devices = [{"_id": "device1"}, {"_id": "device2"}]
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=devices
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=devices)
             )
 
             result = client.list_devices()
@@ -129,26 +135,30 @@ class TestDeviceOperations:
     def test_list_devices_with_query(self, client, mock_response):
         """Test list_devices with query filter."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=[]
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=[])
             )
 
             client.list_devices(query={"_tags": "test"})
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             assert "params" in call_args.kwargs
             assert "query" in call_args.kwargs["params"]
 
     def test_list_devices_with_projection(self, client, mock_response):
         """Test list_devices with projection."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=[]
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=[])
             )
 
             client.list_devices(projection={"_id": 1})
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             assert "params" in call_args.kwargs
             assert "projection" in call_args.kwargs["params"]
 
@@ -157,14 +167,16 @@ class TestDeviceOperations:
         device = {"_id": "ABC-Model-123"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=[device]
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=[device])
             )
 
             result = client.get_device("ABC-Model-123")
 
             assert result == device
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             assert call_args.args[:2] == ("GET", "http://genieacs:7557/devices")
             assert json.loads(call_args.kwargs["params"]["query"]) == {
                 "_id": "ABC-Model-123"
@@ -200,7 +212,9 @@ class TestDeviceOperations:
     def test_delete_device(self, client, mock_response):
         """Test delete_device succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.delete_device("ABC-Model-123")
@@ -208,8 +222,8 @@ class TestDeviceOperations:
     def test_count_devices(self, client, mock_response):
         """Test count_devices returns count."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                headers={"X-Total-Count": "42"}
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(headers={"X-Total-Count": "42"})
             )
 
             result = client.count_devices()
@@ -219,8 +233,8 @@ class TestDeviceOperations:
     def test_count_devices_with_query(self, client, mock_response):
         """Test count_devices with query."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                headers={"X-Total-Count": "10"}
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(headers={"X-Total-Count": "10"})
             )
 
             result = client.count_devices(query={"_tags": "test"})
@@ -230,7 +244,9 @@ class TestDeviceOperations:
     def test_count_devices_missing_header(self, client, mock_response):
         """Test count_devices returns 0 if header missing."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             result = client.count_devices()
 
@@ -250,8 +266,8 @@ class TestTaskOperations:
         task_result = {"_id": "task123"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=task_result, text=json.dumps(task_result)
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=task_result, text=json.dumps(task_result))
             )
 
             result = client.create_task("device1", {"name": "reboot"})
@@ -261,8 +277,8 @@ class TestTaskOperations:
     def test_create_task_empty_response(self, client, mock_response):
         """Test create_task handles empty response."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                text=""
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(text="")
             )
 
             result = client.create_task("device1", {"name": "reboot"})
@@ -272,11 +288,15 @@ class TestTaskOperations:
     def test_create_task_with_connection_request_false(self, client, mock_response):
         """Test create_task with connection_request=False."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.create_task("device1", {"name": "reboot"}, connection_request=False)
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             assert call_args.kwargs["params"]["connection_request"] == "false"
 
     def test_create_task_captures_connection_request_error_from_reason_phrase(
@@ -286,11 +306,13 @@ class TestTaskOperations:
         task_result = {"_id": "task123"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                status_code=202,
-                json_data=task_result,
-                text=json.dumps(task_result),
-                reason_phrase="Device is offline",
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(
+                    status_code=202,
+                    json_data=task_result,
+                    text=json.dumps(task_result),
+                    reason_phrase="Device is offline",
+                )
             )
 
             result = client.create_task("device1", {"name": "reboot"})
@@ -325,11 +347,13 @@ class TestTaskOperations:
         task_result = {"_id": "task123", "connectionRequestError": "From JSON body"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                status_code=202,
-                json_data=task_result,
-                text=json.dumps(task_result),
-                reason_phrase="Device is offline",
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(
+                    status_code=202,
+                    json_data=task_result,
+                    text=json.dumps(task_result),
+                    reason_phrase="Device is offline",
+                )
             )
 
             result = client.create_task("device1", {"name": "reboot"})
@@ -342,11 +366,13 @@ class TestTaskOperations:
         task_result = {"_id": "task123"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                status_code=202,
-                json_data=task_result,
-                text=json.dumps(task_result),
-                reason_phrase="Accepted",
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(
+                    status_code=202,
+                    json_data=task_result,
+                    text=json.dumps(task_result),
+                    reason_phrase="Accepted",
+                )
             )
 
             result = client.create_task("device1", {"name": "reboot"})
@@ -365,7 +391,9 @@ class TestTaskOperations:
 
             assert result["_id"] == "task123"
             assert result["alreadyPending"] is True
-            assert mock_client.return_value.__enter__.return_value.request.call_count == 1
+            assert (
+                mock_client.return_value.__enter__.return_value.request.call_count == 1
+            )
 
     def test_create_task_replaces_pending_parameter_write(self, client, mock_response):
         pending = [
@@ -373,7 +401,9 @@ class TestTaskOperations:
                 "_id": "old-task",
                 "name": "setParameterValues",
                 "device": "device1",
-                "parameterValues": [["Device.PPP.Interface.1.Username", "old", "xsd:string"]],
+                "parameterValues": [
+                    ["Device.PPP.Interface.1.Username", "old", "xsd:string"]
+                ],
             }
         ]
         accepted = {"_id": "new-task"}
@@ -391,18 +421,24 @@ class TestTaskOperations:
             )
 
             assert result["_id"] == "new-task"
-            calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+            calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
             assert calls[1].args[0] == "DELETE"
             assert calls[2].args[0] == "POST"
 
     def test_get_parameter_values(self, client, mock_response):
         """Test get_parameter_values creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.get_parameter_values("device1", ["Device.DeviceInfo.SerialNumber"])
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "getParameterValues"
             assert "parameterNames" in task
@@ -410,11 +446,15 @@ class TestTaskOperations:
     def test_set_parameter_values(self, client, mock_response):
         """Test set_parameter_values creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.set_parameter_values("device1", {"Device.WiFi.SSID": "TestNetwork"})
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "setParameterValues"
             assert "parameterValues" in task
@@ -422,11 +462,15 @@ class TestTaskOperations:
     def test_refresh_object(self, client, mock_response):
         """Test refresh_object creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.refresh_object("device1", "Device.WiFi.")
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "refreshObject"
             assert task["objectName"] == "Device.WiFi"
@@ -434,33 +478,47 @@ class TestTaskOperations:
     def test_reboot_device(self, client, mock_response):
         """Test reboot_device creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.reboot_device("device1")
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "reboot"
 
     def test_factory_reset(self, client, mock_response):
         """Test factory_reset creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.factory_reset("device1")
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "factoryReset"
 
     def test_download(self, client, mock_response):
         """Test download creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
-            client.download("device1", "1 Firmware Upgrade Image", "http://example.com/fw.bin")
+            client.download(
+                "device1", "1 Firmware Upgrade Image", "http://example.com/fw.bin"
+            )
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "download"
             assert task["fileType"] == "1 Firmware Upgrade Image"
@@ -469,36 +527,53 @@ class TestTaskOperations:
     def test_download_with_filename(self, client, mock_response):
         """Test download with filename creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
-
-            client.download(
-                "device1", "1 Firmware Upgrade Image", "http://example.com/fw.bin", filename="fw.bin"
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
             )
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            client.download(
+                "device1",
+                "1 Firmware Upgrade Image",
+                "http://example.com/fw.bin",
+                filename="fw.bin",
+            )
+
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["filename"] == "fw.bin"
 
     def test_add_object(self, client, mock_response):
         """Test add_object creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.add_object("device1", "Device.NAT.PortMapping.")
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "addObject"
             assert task["objectName"] == "Device.NAT.PortMapping"
 
-    def test_refresh_object_does_not_queue_full_refresh_seed(self, client, mock_response):
+    def test_refresh_object_does_not_queue_full_refresh_seed(
+        self, client, mock_response
+    ):
         """refreshObject should not queue the broken full-refresh provision first."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.refresh_object("device1", "InternetGatewayDevice.DeviceInfo.")
 
-            request_calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+            request_calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
             post_calls = [call for call in request_calls if call.args[0] == "POST"]
             assert len(post_calls) == 1
             task = post_calls[0].kwargs["json"]
@@ -508,11 +583,15 @@ class TestTaskOperations:
     def test_delete_object(self, client, mock_response):
         """Test delete_object creates correct task."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             client.delete_object("device1", "Device.NAT.PortMapping.1.")
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["name"] == "deleteObject"
             assert task["objectName"] == "Device.NAT.PortMapping.1."
@@ -522,8 +601,8 @@ class TestTaskOperations:
         tasks = [{"_id": "task1"}, {"_id": "task2"}]
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=tasks
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=tasks)
             )
 
             result = client.get_pending_tasks("device1")
@@ -533,7 +612,9 @@ class TestTaskOperations:
     def test_delete_task(self, client, mock_response):
         """Test delete_task succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.delete_task("task123")
@@ -552,8 +633,8 @@ class TestPresetOperations:
         presets = [{"_id": "preset1"}, {"_id": "preset2"}]
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=presets
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=presets)
             )
 
             result = client.list_presets()
@@ -565,8 +646,8 @@ class TestPresetOperations:
         preset = {"_id": "preset1", "channel": "default"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=preset
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=preset)
             )
 
             result = client.get_preset("preset1")
@@ -578,8 +659,8 @@ class TestPresetOperations:
         preset = {"_id": "new_preset", "channel": "bootstrap"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=preset, text=json.dumps(preset)
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=preset, text=json.dumps(preset))
             )
 
             result = client.create_preset(preset)
@@ -591,8 +672,8 @@ class TestPresetOperations:
         preset = {"_id": "new_preset", "channel": "bootstrap"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                text=""
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(text="")
             )
 
             result = client.create_preset(preset)
@@ -602,7 +683,9 @@ class TestPresetOperations:
     def test_delete_preset(self, client, mock_response):
         """Test delete_preset succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.delete_preset("preset1")
@@ -621,8 +704,8 @@ class TestProvisionOperations:
         provisions = [{"_id": "prov1"}, {"_id": "prov2"}]
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=provisions
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=provisions)
             )
 
             result = client.list_provisions()
@@ -634,8 +717,8 @@ class TestProvisionOperations:
         provision = {"_id": "prov1", "script": "const now = Date.now();"}
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=provision
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=provision)
             )
 
             result = client.get_provision("prov1")
@@ -645,7 +728,9 @@ class TestProvisionOperations:
     def test_create_provision(self, client, mock_response):
         """Test create_provision succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.create_provision("prov1", "const now = Date.now();")
@@ -653,7 +738,9 @@ class TestProvisionOperations:
     def test_delete_provision(self, client, mock_response):
         """Test delete_provision succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.delete_provision("prov1")
@@ -672,8 +759,8 @@ class TestFaultOperations:
         faults = [{"_id": "fault1"}, {"_id": "fault2"}]
 
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=faults
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=faults)
             )
 
             result = client.list_faults()
@@ -683,20 +770,24 @@ class TestFaultOperations:
     def test_list_faults_with_device_id(self, client, mock_response):
         """Test list_faults with device filter."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=[]
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=[])
             )
 
             client.list_faults(device_id="device1")
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             assert "params" in call_args.kwargs
             assert "query" in call_args.kwargs["params"]
 
     def test_delete_fault(self, client, mock_response):
         """Test delete_fault succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.delete_fault("fault1")
@@ -704,7 +795,9 @@ class TestFaultOperations:
     def test_retry_fault(self, client, mock_response):
         """Test retry_fault succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.retry_fault("fault1")
@@ -721,7 +814,9 @@ class TestTagOperations:
     def test_add_tag(self, client, mock_response):
         """Test add_tag succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.add_tag("device1", "production")
@@ -729,7 +824,9 @@ class TestTagOperations:
     def test_remove_tag(self, client, mock_response):
         """Test remove_tag succeeds."""
         with patch("httpx.Client") as mock_client:
-            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
 
             # Should not raise
             client.remove_tag("device1", "production")
@@ -764,13 +861,7 @@ class TestHelperMethods:
 
     def test_extract_parameter_value_simple(self, client):
         """Test extract_parameter_value for simple value."""
-        device = {
-            "Device": {
-                "DeviceInfo": {
-                    "SerialNumber": {"_value": "SN123"}
-                }
-            }
-        }
+        device = {"Device": {"DeviceInfo": {"SerialNumber": {"_value": "SN123"}}}}
         value = client.extract_parameter_value(device, "Device.DeviceInfo.SerialNumber")
         assert value == "SN123"
 
@@ -782,20 +873,12 @@ class TestHelperMethods:
 
     def test_extract_parameter_value_no_value_field(self, client):
         """Test extract_parameter_value returns dict if no _value field."""
-        device = {
-            "Device": {
-                "DeviceInfo": {
-                    "Manufacturer": "TestCorp"
-                }
-            }
-        }
+        device = {"Device": {"DeviceInfo": {"Manufacturer": "TestCorp"}}}
         value = client.extract_parameter_value(device, "Device.DeviceInfo.Manufacturer")
         assert value == "TestCorp"
 
     def test_extract_parameter_value_non_dict_intermediate(self, client):
         """Test extract_parameter_value returns None for non-dict intermediate."""
-        device = {
-            "Device": "not_a_dict"
-        }
+        device = {"Device": "not_a_dict"}
         value = client.extract_parameter_value(device, "Device.DeviceInfo.SerialNumber")
         assert value is None

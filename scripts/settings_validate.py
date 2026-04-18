@@ -19,16 +19,14 @@ def main():
     load_dotenv()
     db = SessionLocal()
     try:
-        rows = (
-            db.query(DomainSetting)
-            .filter(DomainSetting.is_active.is_(True))
-            .all()
-        )
+        rows = db.query(DomainSetting).filter(DomainSetting.is_active.is_(True)).all()
         db_map = {(row.domain, row.key): row for row in rows}
         errors: list[str] = []
         for spec in SETTINGS_SPECS:
             env_raw = _env_value(spec.env_var) if spec.env_var else None
-            env_value, env_error = coerce_value(spec, env_raw) if env_raw is not None else (None, None)
+            env_value, env_error = (
+                coerce_value(spec, env_raw) if env_raw is not None else (None, None)
+            )
             if env_error:
                 errors.append(f"{spec.domain.value}.{spec.key}: env {env_error}")
                 continue
@@ -40,7 +38,9 @@ def main():
                         f"{spec.domain.value}.{spec.key}: secret must be an OpenBao reference"
                     )
                     continue
-            db_value, db_error = coerce_value(spec, db_raw) if db_raw is not None else (None, None)
+            db_value, db_error = (
+                coerce_value(spec, db_raw) if db_raw is not None else (None, None)
+            )
             if db_error:
                 errors.append(f"{spec.domain.value}.{spec.key}: db {db_error}")
                 continue
@@ -65,7 +65,9 @@ def main():
                             f"{spec.domain.value}.{spec.key}: value must be >= {spec.min_value}"
                         )
                 except (TypeError, ValueError):
-                    errors.append(f"{spec.domain.value}.{spec.key}: value must be an integer")
+                    errors.append(
+                        f"{spec.domain.value}.{spec.key}: value must be an integer"
+                    )
             if spec.max_value is not None:
                 try:
                     if int(effective) > spec.max_value:
@@ -73,7 +75,9 @@ def main():
                             f"{spec.domain.value}.{spec.key}: value must be <= {spec.max_value}"
                         )
                 except (TypeError, ValueError):
-                    errors.append(f"{spec.domain.value}.{spec.key}: value must be an integer")
+                    errors.append(
+                        f"{spec.domain.value}.{spec.key}: value must be an integer"
+                    )
     finally:
         db.close()
 

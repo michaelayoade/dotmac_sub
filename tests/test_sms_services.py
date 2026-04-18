@@ -10,7 +10,9 @@ from app.services import sms as sms_service
 def test_send_sms_twilio_auth_failure_logs(caplog):
     response = httpx.Response(
         401,
-        request=httpx.Request("POST", "https://api.twilio.com/2010-04-01/Accounts/acct/Messages.json"),
+        request=httpx.Request(
+            "POST", "https://api.twilio.com/2010-04-01/Accounts/acct/Messages.json"
+        ),
         json={"message": "Authentication failed"},
     )
 

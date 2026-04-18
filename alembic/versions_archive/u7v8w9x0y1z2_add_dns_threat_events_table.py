@@ -45,7 +45,9 @@ def upgrade() -> None:
             "dns_threat_events",
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("subscriber_id", postgresql.UUID(as_uuid=True), nullable=True),
-            sa.Column("network_device_id", postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "network_device_id", postgresql.UUID(as_uuid=True), nullable=True
+            ),
             sa.Column("pop_site_id", postgresql.UUID(as_uuid=True), nullable=True),
             sa.Column("queried_domain", sa.String(length=255), nullable=False),
             sa.Column("query_type", sa.String(length=16), nullable=True),
@@ -53,8 +55,12 @@ def upgrade() -> None:
             sa.Column("destination_ip", sa.String(length=64), nullable=True),
             sa.Column("threat_category", sa.String(length=80), nullable=True),
             sa.Column("threat_feed", sa.String(length=120), nullable=True),
-            sa.Column("severity", dns_threat_severity, nullable=False, server_default="medium"),
-            sa.Column("action", dns_threat_action, nullable=False, server_default="blocked"),
+            sa.Column(
+                "severity", dns_threat_severity, nullable=False, server_default="medium"
+            ),
+            sa.Column(
+                "action", dns_threat_action, nullable=False, server_default="blocked"
+            ),
             sa.Column("confidence_score", sa.Float(), nullable=True),
             sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("notes", sa.Text(), nullable=True),
@@ -114,7 +120,9 @@ def downgrade() -> None:
     if inspector.has_table("dns_threat_events"):
         op.drop_index("ix_dns_threat_events_action", table_name="dns_threat_events")
         op.drop_index("ix_dns_threat_events_severity", table_name="dns_threat_events")
-        op.drop_index("ix_dns_threat_events_occurred_at", table_name="dns_threat_events")
+        op.drop_index(
+            "ix_dns_threat_events_occurred_at", table_name="dns_threat_events"
+        )
         op.drop_index(
             "ix_dns_threat_events_pop_site_id",
             table_name="dns_threat_events",

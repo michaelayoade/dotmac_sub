@@ -162,9 +162,12 @@ def test_settings_cache_multi_operations(monkeypatch):
     )
 
     # Test set_multi
-    assert settings_cache.SettingsCache.set_multi(
-        "billing", {"currency": '"USD"', "tax_rate": "0.1"}
-    ) is True
+    assert (
+        settings_cache.SettingsCache.set_multi(
+            "billing", {"currency": '"USD"', "tax_rate": "0.1"}
+        )
+        is True
+    )
 
     # Test get_multi
     result = settings_cache.SettingsCache.get_multi("billing", ["currency", "tax_rate"])

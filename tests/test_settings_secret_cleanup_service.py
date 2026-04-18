@@ -73,7 +73,9 @@ def test_migrate_plaintext_secret_settings_rewrites_to_openbao_ref(
 
     writes = []
     monkeypatch.setattr(cleanup_service, "is_openbao_available", lambda: True)
-    monkeypatch.setattr(cleanup_service, "read_secret_fields", lambda path, masked=False: {})
+    monkeypatch.setattr(
+        cleanup_service, "read_secret_fields", lambda path, masked=False: {}
+    )
 
     def _write_secret(path, data):
         writes.append((path, data))
@@ -81,7 +83,9 @@ def test_migrate_plaintext_secret_settings_rewrites_to_openbao_ref(
 
     monkeypatch.setattr(cleanup_service, "write_secret", _write_secret)
 
-    result = cleanup_service.migrate_plaintext_secret_settings(db_session, dry_run=False)
+    result = cleanup_service.migrate_plaintext_secret_settings(
+        db_session, dry_run=False
+    )
 
     db_session.refresh(row)
     assert result.migrated == 1
@@ -90,7 +94,9 @@ def test_migrate_plaintext_secret_settings_rewrites_to_openbao_ref(
     assert row.value_text == "bao://secret/settings/auth#jwt_secret"
 
 
-def test_migrate_plaintext_secret_settings_reports_openbao_unavailable(db_session, monkeypatch):
+def test_migrate_plaintext_secret_settings_reports_openbao_unavailable(
+    db_session, monkeypatch
+):
     row = DomainSetting(
         domain=SettingDomain.auth,
         key="jwt_secret",
@@ -104,7 +110,9 @@ def test_migrate_plaintext_secret_settings_reports_openbao_unavailable(db_sessio
 
     monkeypatch.setattr(cleanup_service, "is_openbao_available", lambda: False)
 
-    result = cleanup_service.migrate_plaintext_secret_settings(db_session, dry_run=False)
+    result = cleanup_service.migrate_plaintext_secret_settings(
+        db_session, dry_run=False
+    )
 
     db_session.refresh(row)
     assert result.migrated == 0

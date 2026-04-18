@@ -1,6 +1,6 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 from alembic import context
 from app.config import settings
@@ -58,6 +58,23 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def ensure_alembic_version_table(connection) -> None:
+    """Use a wider revision column for this repo's descriptive revision IDs."""
+    version_table = Table(
+        "alembic_version",
+        MetaData(),
+        Column("version_num", String(255), primary_key=True),
+    )
+    version_table.create(connection, checkfirst=True)
+
+    if connection.dialect.name == "postgresql":
+        connection.execute(
+            text(
+                "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
+            )
+        )
+
+
 def include_object(object, name, type_, reflected, compare_to):
     """Exclude PostGIS system tables from autogenerate."""
     if type_ == "table" and name in ("spatial_ref_sys",):
@@ -87,6 +104,8 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        ensure_alembic_version_table(connection)
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

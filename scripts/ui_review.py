@@ -3,11 +3,12 @@
 from playwright.sync_api import sync_playwright
 
 BASE = "http://localhost:8001"
-SCREENSHOTS_DIR = "/tmp/ui_review" # noqa: S108
+SCREENSHOTS_DIR = "/tmp/ui_review"  # noqa: S108
 
 
 def main():
     import os
+
     os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
     with sync_playwright() as p:
@@ -70,7 +71,9 @@ def main():
             print(f"  Navigating to first VLAN: {href}")
             page.goto(f"{BASE}{href}")
             page.wait_for_load_state("networkidle")
-            page.screenshot(path=f"{SCREENSHOTS_DIR}/05_vlan_detail.png", full_page=True)
+            page.screenshot(
+                path=f"{SCREENSHOTS_DIR}/05_vlan_detail.png", full_page=True
+            )
 
             purpose_badge = page.query_selector("text=Purpose")
             print(f"  Purpose label: {'FOUND' if purpose_badge else 'MISSING'}")
@@ -94,7 +97,9 @@ def main():
 
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(500)
-        page.screenshot(path=f"{SCREENSHOTS_DIR}/08_monitoring_bottom.png", full_page=True)
+        page.screenshot(
+            path=f"{SCREENSHOTS_DIR}/08_monitoring_bottom.png", full_page=True
+        )
 
         # Check for ONU auth trend chart
         auth_trend = page.query_selector("canvas#onuAuthTrendChart")
@@ -121,21 +126,29 @@ def main():
             page.screenshot(path=f"{SCREENSHOTS_DIR}/09_olt_detail_top.png")
 
             # Click Activity tab if present
-            activity_tab = page.query_selector("[data-tab='activity'], button:has-text('Activity')")
+            activity_tab = page.query_selector(
+                "[data-tab='activity'], button:has-text('Activity')"
+            )
             if activity_tab:
                 activity_tab.click()
                 page.wait_for_timeout(500)
-                page.screenshot(path=f"{SCREENSHOTS_DIR}/10_olt_activity_tab.png", full_page=True)
+                page.screenshot(
+                    path=f"{SCREENSHOTS_DIR}/10_olt_activity_tab.png", full_page=True
+                )
                 print("  Activity tab: FOUND and clicked")
 
                 backup_heading = page.query_selector("text=Config Backup History")
-                print(f"  Config Backup History: {'FOUND' if backup_heading else 'MISSING'}")
+                print(
+                    f"  Config Backup History: {'FOUND' if backup_heading else 'MISSING'}"
+                )
             else:
                 print("  Activity tab: NOT FOUND")
                 # Try scrolling to find backup section
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(300)
-                page.screenshot(path=f"{SCREENSHOTS_DIR}/10_olt_detail_bottom.png", full_page=True)
+                page.screenshot(
+                    path=f"{SCREENSHOTS_DIR}/10_olt_detail_bottom.png", full_page=True
+                )
         else:
             print("  No OLTs found")
 
@@ -152,11 +165,15 @@ def main():
             page.screenshot(path=f"{SCREENSHOTS_DIR}/11_ont_detail.png")
 
             # Click TR-069 tab
-            tr069_tab = page.query_selector("[data-tab='tr069'], button:has-text('TR-069'), a:has-text('TR-069')")
+            tr069_tab = page.query_selector(
+                "[data-tab='tr069'], button:has-text('TR-069'), a:has-text('TR-069')"
+            )
             if tr069_tab:
                 tr069_tab.click()
                 page.wait_for_timeout(1000)
-                page.screenshot(path=f"{SCREENSHOTS_DIR}/12_ont_tr069_tab.png", full_page=True)
+                page.screenshot(
+                    path=f"{SCREENSHOTS_DIR}/12_ont_tr069_tab.png", full_page=True
+                )
                 print("  TR-069 tab: FOUND and clicked")
 
                 ssid_btn = page.query_selector("button:has-text('Change SSID')")

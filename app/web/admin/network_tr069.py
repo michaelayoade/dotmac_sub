@@ -209,9 +209,7 @@ def tr069_sync_acs_get_fallback(acs_id: str) -> RedirectResponse:
 
 
 @router.get("/tr069/acs/{acs_id}/enforcement-status")
-def tr069_acs_enforcement_status(
-    acs_id: str, db: Session = Depends(get_db)
-) -> dict:
+def tr069_acs_enforcement_status(acs_id: str, db: Session = Depends(get_db)) -> dict:
     """Get ACS enforcement preset status (JSON response for HTMX)."""
     from app.services.tr069 import get_acs_enforcement_status
 
@@ -518,7 +516,9 @@ def tr069_nat_forward(
         description = str(form.get("description") or "").strip() or None
 
         if not external_port or not internal_ip or not internal_port:
-            raise ValueError("External port, internal IP, and internal port are required")
+            raise ValueError(
+                "External port, internal IP, and internal port are required"
+            )
 
         job = web_network_tr069_service.create_nat_port_forward_job(
             db,
@@ -530,7 +530,9 @@ def tr069_nat_forward(
             description=description,
             request=request,
         )
-        message = quote_plus(f"NAT forward rule queued: {external_port} → {internal_ip}:{internal_port}")
+        message = quote_plus(
+            f"NAT forward rule queued: {external_port} → {internal_ip}:{internal_port}"
+        )
         return RedirectResponse(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
             status_code=303,

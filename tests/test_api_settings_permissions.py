@@ -5,7 +5,11 @@ from app.api import settings as settings_api
 
 def _get_route(path: str, method: str) -> APIRoute:
     for route in settings_api.router.routes:
-        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+        if (
+            isinstance(route, APIRoute)
+            and route.path == path
+            and method in route.methods
+        ):
             return route
     raise AssertionError(f"Route not found: {method} {path}")
 

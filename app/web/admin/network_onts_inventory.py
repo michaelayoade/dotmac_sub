@@ -390,7 +390,9 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
             ont=result.ont,
             action_url=f"/admin/network/onts/{result.ont.id}/assign",
             error=result.error,
-            form=web_network_ont_assignments_service.form_payload(result.values or {}, db),
+            form=web_network_ont_assignments_service.form_payload(
+                result.values or {}, db
+            ),
             mode="create",
         )
         if return_to in ("provision",):
@@ -481,7 +483,9 @@ def ont_assignment_update(
             ont=result.ont,
             action_url=f"/admin/network/onts/{result.ont.id}/assignments/{result.assignment.id}/edit",
             error=result.error,
-            form=web_network_ont_assignments_service.form_payload(result.values or {}, db),
+            form=web_network_ont_assignments_service.form_payload(
+                result.values or {}, db
+            ),
             mode="edit",
             assignment=result.assignment,
         )

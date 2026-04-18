@@ -314,7 +314,9 @@ def set_pppoe_credentials(
             ont = network_service.ont_units.get_including_inactive(
                 db=db, entity_id=ont_id
             )
-            wan_vlan = int(ont.wan_vlan.tag) if ont.wan_vlan and ont.wan_vlan.tag else None
+            wan_vlan = (
+                int(ont.wan_vlan.tag) if ont.wan_vlan and ont.wan_vlan.tag else None
+            )
         except Exception:
             logger.exception("Failed to resolve WAN VLAN for ONT %s", ont_id)
     result = run_tracked_action(

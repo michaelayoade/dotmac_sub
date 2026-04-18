@@ -102,7 +102,9 @@ def get_job(
     return _row_to_payload(row)
 
 
-def upsert_job(db: Session, *, job_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+def upsert_job(
+    db: Session, *, job_type: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     normalized = _normalize_payload(payload)
     row = (
         db.query(SystemJob)
@@ -121,17 +123,27 @@ def upsert_job(db: Session, *, job_type: str, payload: dict[str, Any]) -> dict[s
         merged_payload = {**existing_payload, **normalized}
         incoming_actor_id = _payload_owner_actor_id(normalized)
         incoming_email = _payload_owner_email(normalized)
-        if row.owner_actor_id and incoming_actor_id and row.owner_actor_id != incoming_actor_id:
-            raise HTTPException(status_code=403, detail="Job belongs to a different actor")
+        if (
+            row.owner_actor_id
+            and incoming_actor_id
+            and row.owner_actor_id != incoming_actor_id
+        ):
+            raise HTTPException(
+                status_code=403, detail="Job belongs to a different actor"
+            )
         if (
             row.owner_actor_id is None
             and row.owner_email
             and incoming_email
             and row.owner_email != incoming_email
         ):
-            raise HTTPException(status_code=403, detail="Job belongs to a different actor")
+            raise HTTPException(
+                status_code=403, detail="Job belongs to a different actor"
+            )
         current_status = str(row.status or "").strip().lower()
-        incoming_status = str(merged_payload.get("status") or row.status or "").strip().lower()
+        incoming_status = (
+            str(merged_payload.get("status") or row.status or "").strip().lower()
+        )
         if (
             current_status in _TERMINAL_JOB_STATUSES
             and incoming_status

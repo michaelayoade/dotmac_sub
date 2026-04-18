@@ -51,7 +51,9 @@ class TestOltSchemas:
         assert read.model == "EG8145V5"
 
     def test_service_port_read(self):
-        read = OltServicePortRead(index=1, vlan_id=203, ont_id=5, gem_index=0, state="up")
+        read = OltServicePortRead(
+            index=1, vlan_id=203, ont_id=5, gem_index=0, state="up"
+        )
         assert read.flow_type is None
 
     def test_profile_read(self):
@@ -65,9 +67,7 @@ class TestOltSchemas:
         assert read.username is None
 
     def test_tr069_create_request(self):
-        req = OltTr069ProfileCreateRequest(
-            name="ACS-New", acs_url="http://acs:7547"
-        )
+        req = OltTr069ProfileCreateRequest(name="ACS-New", acs_url="http://acs:7547")
         assert req.username == ""
         assert req.inform_interval == 300
 

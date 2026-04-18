@@ -29,7 +29,9 @@ class InvoicesPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the invoices page is loaded."""
-        expect(self.page.get_by_role("heading", name="Invoices", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Invoices", exact=True)
+        ).to_be_visible()
 
     def filter_by_status(self, status: str) -> None:
         """Filter invoices by status."""
@@ -51,7 +53,9 @@ class InvoicesPage(BasePage):
 
     def expect_invoice_in_list(self, invoice_number: str) -> None:
         """Assert an invoice is visible in the list."""
-        expect(self.page.get_by_role("row").filter(has_text=invoice_number)).to_be_visible()
+        expect(
+            self.page.get_by_role("row").filter(has_text=invoice_number)
+        ).to_be_visible()
 
     def expect_no_invoices(self) -> None:
         """Assert no invoices message is shown."""

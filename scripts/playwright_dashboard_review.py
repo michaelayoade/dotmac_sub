@@ -8,7 +8,11 @@ def main() -> None:
         page.set_default_timeout(15000)
 
         print("open-login")
-        page.goto("http://127.0.0.1:8001/auth/login?next=/admin/dashboard", wait_until="domcontentloaded", timeout=30000)
+        page.goto(
+            "http://127.0.0.1:8001/auth/login?next=/admin/dashboard",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
         page.screenshot(path="screenshots/dashboard-login-review.png")
         print(f"login-url: {page.url}")
         print(f"title: {page.title()}")
@@ -30,30 +34,52 @@ def main() -> None:
         for i in range(buttons.count()):
             print("button:", i, buttons.nth(i).inner_text())
 
-        page.locator('input[name="email"], input[name="username"], input[name="identifier"], input[type="email"], input[type="text"]').first.fill("admin")
-        page.locator('input[name="password"], input[type="password"]').first.fill("admin123")
+        page.locator(
+            'input[name="email"], input[name="username"], input[name="identifier"], input[type="email"], input[type="text"]'
+        ).first.fill("admin")
+        page.locator('input[name="password"], input[type="password"]').first.fill(
+            "admin123"
+        )
         print("submit-login")
-        page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Login")').first.click()
+        page.locator(
+            'button[type="submit"], button:has-text("Sign in"), button:has-text("Login")'
+        ).first.click()
         page.wait_for_load_state("domcontentloaded", timeout=30000)
         print(f"post-login-url: {page.url}")
 
         print("open-dashboard")
-        page.goto("http://127.0.0.1:8001/admin/dashboard", wait_until="domcontentloaded", timeout=30000)
+        page.goto(
+            "http://127.0.0.1:8001/admin/dashboard",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
         page.screenshot(path="screenshots/dashboard-live-review.png", full_page=True)
         print(f"title: {page.title()}")
         print(f"url: {page.url}")
 
         print("open-monitoring")
-        page.goto("http://127.0.0.1:8001/admin/network/monitoring", wait_until="domcontentloaded", timeout=30000)
+        page.goto(
+            "http://127.0.0.1:8001/admin/network/monitoring",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
         page.wait_for_timeout(2500)
-        page.screenshot(path="screenshots/network-monitoring-live-review.png", full_page=True)
+        page.screenshot(
+            path="screenshots/network-monitoring-live-review.png", full_page=True
+        )
         print(f"monitoring-title: {page.title()}")
         print(f"monitoring-url: {page.url}")
 
         print("open-subscribers")
-        page.goto("http://127.0.0.1:8001/admin/subscribers", wait_until="domcontentloaded", timeout=30000)
+        page.goto(
+            "http://127.0.0.1:8001/admin/subscribers",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
         page.wait_for_timeout(2500)
-        page.screenshot(path="screenshots/subscribers-list-live-review.png", full_page=True)
+        page.screenshot(
+            path="screenshots/subscribers-list-live-review.png", full_page=True
+        )
         print(f"subscribers-title: {page.title()}")
         print(f"subscribers-url: {page.url}")
 
@@ -75,8 +101,14 @@ def main() -> None:
         print(f"subscriber-href: {subscriber_href}")
         if subscriber_href:
             print("open-subscriber")
-            page.goto(f"http://127.0.0.1:8001{subscriber_href}", wait_until="domcontentloaded", timeout=30000)
-            page.screenshot(path="screenshots/subscriber-detail-live-review.png", full_page=True)
+            page.goto(
+                f"http://127.0.0.1:8001{subscriber_href}",
+                wait_until="domcontentloaded",
+                timeout=30000,
+            )
+            page.screenshot(
+                path="screenshots/subscriber-detail-live-review.png", full_page=True
+            )
             print(f"subscriber-title: {page.title()}")
             print(f"subscriber-url: {page.url}")
 

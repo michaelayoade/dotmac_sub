@@ -34,14 +34,36 @@ def upgrade() -> None:
         sa.Column("mac", sa.String(length=32), nullable=True),
         sa.Column("equipment_sn", sa.String(length=120), nullable=True),
         sa.Column("autofind_time", sa.String(length=120), nullable=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("resolution_reason", sa.String(length=64), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column("first_seen_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "first_seen_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "last_seen_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.ForeignKeyConstraint(["olt_id"], ["olt_devices.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["ont_unit_id"], ["ont_units.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
@@ -67,6 +89,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_olt_autofind_candidates_olt_active", table_name="olt_autofind_candidates")
-    op.drop_index("ix_olt_autofind_candidates_active", table_name="olt_autofind_candidates")
+    op.drop_index(
+        "ix_olt_autofind_candidates_olt_active", table_name="olt_autofind_candidates"
+    )
+    op.drop_index(
+        "ix_olt_autofind_candidates_active", table_name="olt_autofind_candidates"
+    )
     op.drop_table("olt_autofind_candidates")

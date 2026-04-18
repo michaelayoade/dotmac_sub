@@ -62,7 +62,10 @@ def test_setting_value_and_jwt_secret_errors(db_session, monkeypatch):
     db_session.add(setting_json)
     db_session.commit()
     assert auth_flow_service._setting_value(db_session, "jwt_algorithm") == "HS512"
-    assert auth_flow_service._setting_value(db_session, "jwt_refresh_ttl_days") == "{'value': 'bad'}"
+    assert (
+        auth_flow_service._setting_value(db_session, "jwt_refresh_ttl_days")
+        == "{'value': 'bad'}"
+    )
 
     monkeypatch.delenv("JWT_SECRET", raising=False)
     with pytest.raises(HTTPException):
@@ -297,7 +300,10 @@ def test_mfa_confirm_and_verify_errors(db_session, person, monkeypatch):
 
     with pytest.raises(HTTPException):
         auth_flow_service.AuthFlow.mfa_verify(
-            db_session, auth_flow_service._issue_access_token(None, "p", "s"), "123456", _make_request()
+            db_session,
+            auth_flow_service._issue_access_token(None, "p", "s"),
+            "123456",
+            _make_request(),
         )
 
 
@@ -352,7 +358,9 @@ def test_mfa_confirm_not_found(db_session):
 def test_mfa_confirm_commit_error(db_session, person, monkeypatch):
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)
-    setup = auth_flow_service.AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    setup = auth_flow_service.AuthFlow.mfa_setup(
+        db_session, str(person.id), label="device"
+    )
     code = pyotp.TOTP(setup["secret"]).now()
 
     def _boom():
@@ -370,7 +378,9 @@ def test_mfa_verify_missing_method(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
     with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_verify(db_session, mfa_token, "123456", _make_request())
+        auth_flow_service.AuthFlow.mfa_verify(
+            db_session, mfa_token, "123456", _make_request()
+        )
 
 
 def test_mfa_verify_missing_sub(monkeypatch, db_session):
@@ -381,19 +391,27 @@ def test_mfa_verify_missing_sub(monkeypatch, db_session):
         algorithm="HS256",
     )
     with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_verify(db_session, token, "123456", _make_request())
+        auth_flow_service.AuthFlow.mfa_verify(
+            db_session, token, "123456", _make_request()
+        )
 
 
 def test_mfa_verify_invalid_code(db_session, person, monkeypatch):
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    setup = auth_flow_service.AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    setup = auth_flow_service.AuthFlow.mfa_setup(
+        db_session, str(person.id), label="device"
+    )
     code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    auth_flow_service.AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), code, str(person.id)
+    )
     mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
     with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_verify(db_session, mfa_token, "000000", _make_request())
+        auth_flow_service.AuthFlow.mfa_verify(
+            db_session, mfa_token, "000000", _make_request()
+        )
 
 
 def test_mfa_verify_response_success(db_session, person, monkeypatch):
@@ -409,9 +427,13 @@ def test_mfa_verify_response_success(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    setup = auth_flow_service.AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    setup = auth_flow_service.AuthFlow.mfa_setup(
+        db_session, str(person.id), label="device"
+    )
     code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    auth_flow_service.AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), code, str(person.id)
+    )
     mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
     response = auth_flow_service.AuthFlow.mfa_verify_response(
         db_session, mfa_token, pyotp.TOTP(setup["secret"]).now(), _make_request()
@@ -468,12 +490,20 @@ def test_login_response_mfa_required(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    setup = auth_flow_service.AuthFlow.mfa_setup(db_session, str(person.id), label="device")
+    setup = auth_flow_service.AuthFlow.mfa_setup(
+        db_session, str(person.id), label="device"
+    )
     code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    auth_flow_service.AuthFlow.mfa_confirm(
+        db_session, str(setup["method_id"]), code, str(person.id)
+    )
 
     result = auth_flow_service.AuthFlow.login_response(
-        db_session, "mfa-login@example.com", "secret", _make_request(), AuthProvider.local
+        db_session,
+        "mfa-login@example.com",
+        "secret",
+        _make_request(),
+        AuthProvider.local,
     )
     assert result["mfa_required"] is True
 
@@ -503,7 +533,9 @@ def test_login_radius_and_invalid_provider(db_session, person, monkeypatch):
     def _fake_authenticate(db, username, password, server_id):
         called["value"] = True
 
-    monkeypatch.setattr(auth_flow_service.radius_auth_service, "authenticate", _fake_authenticate)
+    monkeypatch.setattr(
+        auth_flow_service.radius_auth_service, "authenticate", _fake_authenticate
+    )
     credential = UserCredential(
         person_id=person.id,
         provider=AuthProvider.radius,
@@ -513,27 +545,41 @@ def test_login_radius_and_invalid_provider(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    auth_flow_service.AuthFlow.login(db_session, "radius@example.com", "secret", _make_request(), AuthProvider.radius)
+    auth_flow_service.AuthFlow.login(
+        db_session, "radius@example.com", "secret", _make_request(), AuthProvider.radius
+    )
     assert called["value"] is True
 
     with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.login(db_session, "radius@example.com", "secret", _make_request(), "bad")
+        auth_flow_service.AuthFlow.login(
+            db_session, "radius@example.com", "secret", _make_request(), "bad"
+        )
 
     with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.login(db_session, "missing@example.com", "secret", _make_request(), AuthProvider.radius)
+        auth_flow_service.AuthFlow.login(
+            db_session,
+            "missing@example.com",
+            "secret",
+            _make_request(),
+            AuthProvider.radius,
+        )
 
 
 def test_login_invalid_credentials(db_session, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.login(db_session, "missing@example.com", "secret", _make_request(), None)
+        auth_flow_service.AuthFlow.login(
+            db_session, "missing@example.com", "secret", _make_request(), None
+        )
 
 
 def test_password_reset_no_credentials(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     assert auth_flow_service.request_password_reset(db_session, person.email) is None
 
-    token = auth_flow_service._issue_password_reset_token(db_session, str(person.id), person.email)
+    token = auth_flow_service._issue_password_reset_token(
+        db_session, str(person.id), person.email
+    )
     with pytest.raises(HTTPException):
         auth_flow_service.reset_password(db_session, token, "new")
 

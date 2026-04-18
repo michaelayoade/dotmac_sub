@@ -28,7 +28,12 @@ from app.web.auth.dependencies import (
 )
 
 
-def _make_access_token(person_id: str, session_id: str, scopes: list[str] | None = None, roles: list[str] | None = None):
+def _make_access_token(
+    person_id: str,
+    session_id: str,
+    scopes: list[str] | None = None,
+    roles: list[str] | None = None,
+):
     now = datetime.now(UTC)
     payload = {
         "sub": person_id,
@@ -87,7 +92,9 @@ def test_require_user_auth_accepts_valid_token(db_session, person, monkeypatch):
     db_session.commit()
 
     tokens = AuthFlow._issue_tokens(db_session, str(person.id), _make_request())
-    auth = require_user_auth(authorization=f"Bearer {tokens['access_token']}", db=db_session)
+    auth = require_user_auth(
+        authorization=f"Bearer {tokens['access_token']}", db=db_session
+    )
     assert auth["subscriber_id"] == str(person.id)
     assert auth["session_id"]
 
@@ -138,8 +145,12 @@ def test_require_user_auth_accepts_system_user_token(db_session, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    tokens = AuthFlow._issue_tokens(db_session, "system_user", str(user.id), _make_request())
-    auth = require_user_auth(authorization=f"Bearer {tokens['access_token']}", db=db_session)
+    tokens = AuthFlow._issue_tokens(
+        db_session, "system_user", str(user.id), _make_request()
+    )
+    auth = require_user_auth(
+        authorization=f"Bearer {tokens['access_token']}", db=db_session
+    )
 
     assert auth["principal_type"] == "system_user"
     assert auth["principal_id"] == str(user.id)
@@ -174,7 +185,9 @@ def test_validate_session_token_accepts_system_user_cookie(db_session, monkeypat
     db_session.add(credential)
     db_session.commit()
 
-    tokens = AuthFlow._issue_tokens(db_session, "system_user", str(user.id), _make_request())
+    tokens = AuthFlow._issue_tokens(
+        db_session, "system_user", str(user.id), _make_request()
+    )
     request = _make_request()
     request._cookies = {"session_token": tokens["access_token"]}
 
@@ -195,17 +208,25 @@ def test_require_web_auth_redirects_unsafe_requests_to_referer(monkeypatch, db_s
         path="/admin/network/cpes",
         headers=[
             (b"host", b"oss.dotmac.ng"),
-            (b"referer", b"https://oss.dotmac.ng/admin/network/cpes/new?subscriber_id=123"),
+            (
+                b"referer",
+                b"https://oss.dotmac.ng/admin/network/cpes/new?subscriber_id=123",
+            ),
         ],
     )
 
     with pytest.raises(AuthenticationRequired) as exc:
         require_web_auth(request=request, db=db_session)
 
-    assert exc.value.redirect_url == "/auth/refresh?next=/admin/network/cpes/new%3Fsubscriber_id%3D123"
+    assert (
+        exc.value.redirect_url
+        == "/auth/refresh?next=/admin/network/cpes/new%3Fsubscriber_id%3D123"
+    )
 
 
-def test_require_web_auth_redirects_get_requests_to_current_path(monkeypatch, db_session):
+def test_require_web_auth_redirects_get_requests_to_current_path(
+    monkeypatch, db_session
+):
     monkeypatch.setattr(
         "app.web.auth.dependencies.validate_session_token",
         lambda request, db: None,
@@ -223,10 +244,15 @@ def test_require_web_auth_redirects_get_requests_to_current_path(monkeypatch, db
     with pytest.raises(AuthenticationRequired) as exc:
         require_web_auth(request=request, db=db_session)
 
-    assert exc.value.redirect_url == "/auth/refresh?next=/admin/network/cpes%3Fstatus%3Dactive"
+    assert (
+        exc.value.redirect_url
+        == "/auth/refresh?next=/admin/network/cpes%3Fstatus%3Dactive"
+    )
 
 
-def test_require_user_auth_loads_roles_and_scopes_from_db_when_missing(db_session, person, monkeypatch):
+def test_require_user_auth_loads_roles_and_scopes_from_db_when_missing(
+    db_session, person, monkeypatch
+):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
 
     role = Role(name="operator", is_active=True)
@@ -253,7 +279,9 @@ def test_require_user_auth_loads_roles_and_scopes_from_db_when_missing(db_sessio
     assert "tickets:read" in auth["scopes"]
 
 
-def test_require_audit_auth_loads_admin_role_from_db_when_jwt_has_no_claims(db_session, monkeypatch):
+def test_require_audit_auth_loads_admin_role_from_db_when_jwt_has_no_claims(
+    db_session, monkeypatch
+):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
 
     user = SystemUser(
@@ -367,7 +395,9 @@ def test_require_audit_auth_accepts_session_token(db_session, person):
     db_session.add(session)
     db_session.commit()
 
-    auth = require_audit_auth(authorization=None, x_session_token=refresh_token, db=db_session)
+    auth = require_audit_auth(
+        authorization=None, x_session_token=refresh_token, db=db_session
+    )
     assert auth["actor_type"] == "user"
 
 
@@ -423,7 +453,9 @@ def test_require_role_and_permission(db_session, person, monkeypatch):
     role_perm = RolePermission(role_id=role.id, permission_id=permission.id)
     db_session.add(role_perm)
     db_session.commit()
-    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
+    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(
+        person.id
+    )
 
 
 def test_require_user_auth_missing_token(db_session):
@@ -477,7 +509,9 @@ def test_require_audit_auth_sets_actor_id(db_session, person, monkeypatch):
     db_session.commit()
     token = _make_access_token(str(person.id), str(session.id), scopes=["audit:read"])
     request = Request({"type": "http", "headers": []})
-    auth = require_audit_auth(authorization=f"Bearer {token}", request=request, db=db_session)
+    auth = require_audit_auth(
+        authorization=f"Bearer {token}", request=request, db=db_session
+    )
     assert request.state.actor_id == str(person.id)
     assert auth["actor_type"] == "user"
 
@@ -494,7 +528,10 @@ def test_require_audit_auth_session_token_sets_actor_id(db_session, person):
     db_session.commit()
     request = Request({"type": "http", "headers": []})
     auth = require_audit_auth(
-        authorization=None, x_session_token=refresh_token, request=request, db=db_session
+        authorization=None,
+        x_session_token=refresh_token,
+        request=request,
+        db=db_session,
     )
     assert request.state.actor_id == str(person.id)
     assert auth["actor_type"] == "user"
@@ -513,7 +550,11 @@ def test_require_audit_auth_api_key_sets_actor_id(db_session, person):
     db_session.commit()
     request = Request({"type": "http", "headers": []})
     auth = require_audit_auth(
-        authorization=None, x_session_token=None, x_api_key=raw_key, request=request, db=db_session
+        authorization=None,
+        x_session_token=None,
+        x_api_key=raw_key,
+        request=request,
+        db=db_session,
     )
     assert request.state.actor_id == str(api_key.id)
     assert auth["actor_type"] == "api_key"
@@ -584,4 +625,6 @@ def test_require_permission_short_circuit(db_session, person, monkeypatch):
     token = _make_access_token(str(person.id), str(session.id), roles=["admin"])
     auth = require_user_auth(authorization=f"Bearer {token}", db=db_session)
     require_permission = auth_dep.require_permission("any:perm")
-    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(person.id)
+    assert require_permission(auth=auth, db=db_session)["subscriber_id"] == str(
+        person.id
+    )

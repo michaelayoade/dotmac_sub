@@ -1,4 +1,4 @@
-"""merge_task_executions_and_nin_verifications
+"""merge_task_executions_nin_and_olt_draining
 
 Revision ID: 85f2cdc1eedd
 Revises: 027_add_subscriber_nin_verifications, 033_add_olt_draining_status
@@ -6,10 +6,8 @@ Create Date: 2026-04-17 16:38:27.429878
 
 """
 
-
-
-revision = '85f2cdc1eedd'
-down_revision = ('027_add_subscriber_nin_verifications', '033_add_olt_draining_status')
+revision = "85f2cdc1eedd"
+down_revision = ("027_add_subscriber_nin_verifications", "033_add_olt_draining_status")
 branch_labels = None
 depends_on = None
 

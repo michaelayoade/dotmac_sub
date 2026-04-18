@@ -21,14 +21,20 @@ class TestApplyOrdering:
     def test_valid_order_by_asc(self, db_session):
         """Test valid order_by with asc direction."""
         query = db_session.query(ConnectorConfig)
-        allowed = {"name": ConnectorConfig.name, "created_at": ConnectorConfig.created_at}
+        allowed = {
+            "name": ConnectorConfig.name,
+            "created_at": ConnectorConfig.created_at,
+        }
         result = apply_ordering(query, "name", "asc", allowed)
         assert result is not None
 
     def test_valid_order_by_desc(self, db_session):
         """Test valid order_by with desc direction."""
         query = db_session.query(ConnectorConfig)
-        allowed = {"name": ConnectorConfig.name, "created_at": ConnectorConfig.created_at}
+        allowed = {
+            "name": ConnectorConfig.name,
+            "created_at": ConnectorConfig.created_at,
+        }
         result = apply_ordering(query, "name", "desc", allowed)
         assert result is not None
 

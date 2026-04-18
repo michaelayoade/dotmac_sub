@@ -37,9 +37,7 @@ def test_service_migration_jobs_are_scoped_to_actor_id(db_session):
 
     assert [item["job_id"] for item in jobs] == [first["job_id"]]
     assert (
-        migration_service.get_job(
-            db_session, first["job_id"], actor_id="system-user-1"
-        )
+        migration_service.get_job(db_session, first["job_id"], actor_id="system-user-1")
         is not None
     )
     assert (
@@ -81,8 +79,6 @@ def test_service_migration_page_options_scope_jobs_to_actor_id(db_session):
         actor_id="system-user-hidden",
     )
 
-    state = migration_service.page_options(
-        db_session, actor_id="system-user-visible"
-    )
+    state = migration_service.page_options(db_session, actor_id="system-user-visible")
 
     assert [item["actor_id"] for item in state["jobs"]] == ["system-user-visible"]

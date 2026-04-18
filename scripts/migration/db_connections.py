@@ -10,6 +10,7 @@ from contextlib import contextmanager
 # Load .env for standalone script execution
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -35,7 +36,9 @@ SPLYNX_MYSQL_PASS = os.environ.get(
 # SSH tunnel settings (used when SPLYNX_MYSQL_HOST is not set)
 SPLYNX_SSH_HOST = os.environ.get("SPLYNX_SSH_HOST", "138.68.165.175")
 SPLYNX_SSH_USER = os.environ.get("SPLYNX_SSH_USER", "root")
-SPLYNX_SSH_KEY = os.path.expanduser(os.environ.get("SPLYNX_SSH_KEY", "~/.ssh/id_ed25519"))
+SPLYNX_SSH_KEY = os.path.expanduser(
+    os.environ.get("SPLYNX_SSH_KEY", "~/.ssh/id_ed25519")
+)
 
 # --- DotMac Sub PostgreSQL ---
 DOTMAC_DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -63,13 +66,15 @@ def splynx_connection(
             "Set it via environment or .env before opening a Splynx connection."
         )
 
-    cursor_class = (
-        pymysql.cursors.DictCursor if dict_cursor else pymysql.cursors.Cursor
-    )
+    cursor_class = pymysql.cursors.DictCursor if dict_cursor else pymysql.cursors.Cursor
 
     # Direct connection if SPLYNX_MYSQL_HOST is set
     if SPLYNX_MYSQL_HOST:
-        logger.info("Connecting directly to Splynx MySQL at %s:%d", SPLYNX_MYSQL_HOST, SPLYNX_MYSQL_PORT)
+        logger.info(
+            "Connecting directly to Splynx MySQL at %s:%d",
+            SPLYNX_MYSQL_HOST,
+            SPLYNX_MYSQL_PORT,
+        )
         conn = pymysql.connect(
             host=SPLYNX_MYSQL_HOST,
             port=SPLYNX_MYSQL_PORT,

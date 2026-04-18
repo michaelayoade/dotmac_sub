@@ -30,9 +30,7 @@ def test_create_olt_sp_fails_without_ont() -> None:
 
 def test_create_olt_sp_fails_without_vlan_id() -> None:
     db = MagicMock()
-    result = execute_create_olt_service_port(
-        db, {"ont_unit_id": "abc"}, {}
-    )
+    result = execute_create_olt_service_port(db, {"ont_unit_id": "abc"}, {})
     assert result.status == "failed"
     assert result.detail is not None
     assert "VLAN" in result.detail
@@ -60,7 +58,9 @@ def test_create_olt_sp_success(mock_create: MagicMock, mock_resolve: MagicMock) 
 
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
 @patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
-def test_create_olt_sp_ssh_failure(mock_create: MagicMock, mock_resolve: MagicMock) -> None:
+def test_create_olt_sp_ssh_failure(
+    mock_create: MagicMock, mock_resolve: MagicMock
+) -> None:
     db = MagicMock()
     mock_resolve.return_value = {
         "olt": MagicMock(),
@@ -100,9 +100,7 @@ def test_ensure_nas_vlan_fails_without_vlan_id() -> None:
 
 def test_ensure_nas_vlan_fails_without_ip() -> None:
     db = MagicMock()
-    result = execute_ensure_nas_vlan(
-        db, {}, {"nas_device_id": "abc", "vlan_id": 203}
-    )
+    result = execute_ensure_nas_vlan(db, {}, {"nas_device_id": "abc", "vlan_id": 203})
     assert result.status == "failed"
     assert result.detail is not None
     assert "IP address" in result.detail
@@ -156,9 +154,7 @@ def test_push_wan_config_fails_without_device() -> None:
 def test_push_pppoe_fails_without_credentials() -> None:
     db = MagicMock()
     db.scalars.return_value.first.return_value = None
-    result = execute_push_tr069_pppoe_credentials(
-        db, {"subscriber_id": "sub2"}, {}
-    )
+    result = execute_push_tr069_pppoe_credentials(db, {"subscriber_id": "sub2"}, {})
     assert result.status == "failed"
     assert result.detail is not None
     assert "credentials not found" in result.detail
@@ -167,7 +163,9 @@ def test_push_pppoe_fails_without_credentials() -> None:
 def test_push_pppoe_skips_cpe_devices() -> None:
     db = MagicMock()
     result = execute_push_tr069_pppoe_credentials(
-        db, {"cpe_device_id": "cpe1"}, {"pppoe_username": "user", "pppoe_password": "pass"}
+        db,
+        {"cpe_device_id": "cpe1"},
+        {"pppoe_username": "user", "pppoe_password": "pass"},
     )
     assert result.status == "ok"
     assert result.detail is not None

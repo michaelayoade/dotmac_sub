@@ -32,10 +32,24 @@ def upgrade() -> None:
             sa.Column("checksum", sa.String(128), nullable=True),
             sa.Column("file_size_bytes", sa.Integer(), nullable=True),
             sa.Column("notes", sa.Text(), nullable=True),
-            sa.Column("is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.UniqueConstraint("vendor", "model", "version", name="uq_ont_firmware_vendor_model_version"),
+            sa.Column(
+                "is_active",
+                sa.Boolean(),
+                server_default=sa.text("true"),
+                nullable=False,
+            ),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.UniqueConstraint(
+                "vendor",
+                "model",
+                "version",
+                name="uq_ont_firmware_vendor_model_version",
+            ),
         )
 
 

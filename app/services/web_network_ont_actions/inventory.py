@@ -287,8 +287,14 @@ def apply_profile(
 ) -> Any:
     """Apply a profile template and audit the explicit admin action."""
     from app.services.network.ont_profile_apply import apply_profile_to_ont
+    from app.services.network_subscriber_bridge import default_subscriber_validator
 
-    result = apply_profile_to_ont(db, ont_id, profile_id)
+    result = apply_profile_to_ont(
+        db,
+        ont_id,
+        profile_id,
+        subscriber_context_provider=default_subscriber_validator,
+    )
     _log_action_audit(
         db,
         request=request,

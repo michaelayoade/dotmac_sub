@@ -156,11 +156,15 @@ def compare_olt_backups(
     removed_lines = sum(
         1 for line in diff_lines if line.startswith("-") and not line.startswith("---")
     )
-    return backup1, backup2, {
-        "unified_diff": "\n".join(diff_lines),
-        "added_lines": added_lines,
-        "removed_lines": removed_lines,
-    }
+    return (
+        backup1,
+        backup2,
+        {
+            "unified_diff": "\n".join(diff_lines),
+            "added_lines": added_lines,
+            "removed_lines": removed_lines,
+        },
+    )
 
 
 def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | None:
@@ -716,9 +720,7 @@ def backup_running_config_ssh(
     if not olt:
         return None, "OLT not found"
 
-    ok, message, config_text = (
-        olt_ssh_service.fetch_running_config_ssh(olt)
-    )
+    ok, message, config_text = olt_ssh_service.fetch_running_config_ssh(olt)
     if not ok or not config_text:
         return None, f"SSH config backup failed: {message}"
 

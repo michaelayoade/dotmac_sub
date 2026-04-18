@@ -52,7 +52,14 @@ def upgrade() -> None:
         "people",
         sa.Column(
             "party_status",
-            ENUM("lead", "contact", "customer", "subscriber", name="partystatus", create_type=False),
+            ENUM(
+                "lead",
+                "contact",
+                "customer",
+                "subscriber",
+                name="partystatus",
+                create_type=False,
+            ),
             nullable=False,
             server_default="contact",
         ),
@@ -76,7 +83,16 @@ def upgrade() -> None:
         sa.Column("person_id", UUID(as_uuid=True), nullable=False),
         sa.Column(
             "channel_type",
-            ENUM("email", "phone", "sms", "whatsapp", "facebook_messenger", "instagram_dm", name="personchanneltype", create_type=False),
+            ENUM(
+                "email",
+                "phone",
+                "sms",
+                "whatsapp",
+                "facebook_messenger",
+                "instagram_dm",
+                name="personchanneltype",
+                create_type=False,
+            ),
             nullable=False,
         ),
         sa.Column("address", sa.String(255), nullable=False),
@@ -87,8 +103,15 @@ def upgrade() -> None:
         sa.Column("metadata", sa.JSON, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["person_id"], ["people.id"], name="fk_person_channels_person_id"),
-        sa.UniqueConstraint("person_id", "channel_type", "address", name="uq_person_channels_person_type_address"),
+        sa.ForeignKeyConstraint(
+            ["person_id"], ["people.id"], name="fk_person_channels_person_id"
+        ),
+        sa.UniqueConstraint(
+            "person_id",
+            "channel_type",
+            "address",
+            name="uq_person_channels_person_type_address",
+        ),
     )
     op.create_index("ix_person_channels_person_id", "person_channels", ["person_id"])
     op.create_index("ix_person_channels_address", "person_channels", ["address"])
@@ -100,22 +123,42 @@ def upgrade() -> None:
         sa.Column("person_id", UUID(as_uuid=True), nullable=False),
         sa.Column(
             "from_status",
-            ENUM("lead", "contact", "customer", "subscriber", name="partystatus", create_type=False),
+            ENUM(
+                "lead",
+                "contact",
+                "customer",
+                "subscriber",
+                name="partystatus",
+                create_type=False,
+            ),
             nullable=True,
         ),
         sa.Column(
             "to_status",
-            ENUM("lead", "contact", "customer", "subscriber", name="partystatus", create_type=False),
+            ENUM(
+                "lead",
+                "contact",
+                "customer",
+                "subscriber",
+                name="partystatus",
+                create_type=False,
+            ),
             nullable=False,
         ),
         sa.Column("changed_by_id", UUID(as_uuid=True), nullable=True),
         sa.Column("reason", sa.String(255), nullable=True),
         sa.Column("metadata", sa.JSON, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["person_id"], ["people.id"], name="fk_person_status_logs_person_id"),
-        sa.ForeignKeyConstraint(["changed_by_id"], ["people.id"], name="fk_person_status_logs_changed_by_id"),
+        sa.ForeignKeyConstraint(
+            ["person_id"], ["people.id"], name="fk_person_status_logs_person_id"
+        ),
+        sa.ForeignKeyConstraint(
+            ["changed_by_id"], ["people.id"], name="fk_person_status_logs_changed_by_id"
+        ),
     )
-    op.create_index("ix_person_status_logs_person_id", "person_status_logs", ["person_id"])
+    op.create_index(
+        "ix_person_status_logs_person_id", "person_status_logs", ["person_id"]
+    )
 
     # 4. Create person_merge_logs table
     op.create_table(
@@ -126,10 +169,20 @@ def upgrade() -> None:
         sa.Column("merged_by_id", UUID(as_uuid=True), nullable=True),
         sa.Column("source_snapshot", sa.JSON, nullable=True),
         sa.Column("merged_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["target_person_id"], ["people.id"], name="fk_person_merge_logs_target_person_id"),
-        sa.ForeignKeyConstraint(["merged_by_id"], ["people.id"], name="fk_person_merge_logs_merged_by_id"),
+        sa.ForeignKeyConstraint(
+            ["target_person_id"],
+            ["people.id"],
+            name="fk_person_merge_logs_target_person_id",
+        ),
+        sa.ForeignKeyConstraint(
+            ["merged_by_id"], ["people.id"], name="fk_person_merge_logs_merged_by_id"
+        ),
     )
-    op.create_index("ix_person_merge_logs_target_person_id", "person_merge_logs", ["target_person_id"])
+    op.create_index(
+        "ix_person_merge_logs_target_person_id",
+        "person_merge_logs",
+        ["target_person_id"],
+    )
 
     # 5. Create account_roles table
     op.create_table(
@@ -139,7 +192,14 @@ def upgrade() -> None:
         sa.Column("person_id", UUID(as_uuid=True), nullable=False),
         sa.Column(
             "role",
-            ENUM("primary", "billing", "technical", "support", name="accountroletype", create_type=False),
+            ENUM(
+                "primary",
+                "billing",
+                "technical",
+                "support",
+                name="accountroletype",
+                create_type=False,
+            ),
             nullable=False,
             server_default="primary",
         ),
@@ -148,9 +208,20 @@ def upgrade() -> None:
         sa.Column("notes", sa.Text, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["account_id"], ["subscriber_accounts.id"], name="fk_account_roles_account_id"),
-        sa.ForeignKeyConstraint(["person_id"], ["people.id"], name="fk_account_roles_person_id"),
-        sa.UniqueConstraint("account_id", "person_id", "role", name="uq_account_roles_account_person_role"),
+        sa.ForeignKeyConstraint(
+            ["account_id"],
+            ["subscriber_accounts.id"],
+            name="fk_account_roles_account_id",
+        ),
+        sa.ForeignKeyConstraint(
+            ["person_id"], ["people.id"], name="fk_account_roles_person_id"
+        ),
+        sa.UniqueConstraint(
+            "account_id",
+            "person_id",
+            "role",
+            name="uq_account_roles_account_person_role",
+        ),
     )
     op.create_index("ix_account_roles_account_id", "account_roles", ["account_id"])
     op.create_index("ix_account_roles_person_id", "account_roles", ["person_id"])
@@ -558,7 +629,10 @@ def upgrade() -> None:
     """)
 
     # 14. Add person_channel_id to crm_messages and backfill from crm_contact_channels
-    op.add_column("crm_messages", sa.Column("person_channel_id", UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "crm_messages",
+        sa.Column("person_channel_id", UUID(as_uuid=True), nullable=True),
+    )
     op.create_foreign_key(
         "crm_messages_person_channel_id_fkey",
         "crm_messages",
@@ -625,7 +699,9 @@ def upgrade() -> None:
             END IF;
         END $$;
     """)
-    op.execute("ALTER TABLE service_orders DROP CONSTRAINT IF EXISTS service_orders_requested_by_contact_id_fkey")
+    op.execute(
+        "ALTER TABLE service_orders DROP CONSTRAINT IF EXISTS service_orders_requested_by_contact_id_fkey"
+    )
     op.create_foreign_key(
         "service_orders_requested_by_contact_id_fkey",
         "service_orders",
@@ -654,7 +730,9 @@ def downgrade() -> None:
             server_default="person",
         ),
     )
-    op.add_column("subscribers", sa.Column("organization_id", UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "subscribers", sa.Column("organization_id", UUID(as_uuid=True), nullable=True)
+    )
     op.create_foreign_key(
         "subscribers_organization_id_fkey",
         "subscribers",
@@ -669,26 +747,57 @@ def downgrade() -> None:
     )
     op.alter_column("subscribers", "person_id", nullable=True)
 
-    op.add_column("crm_leads", sa.Column("contact_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_leads", sa.Column("organization_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_leads", sa.Column("subscriber_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_leads", sa.Column("account_id", UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "crm_leads", sa.Column("contact_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_leads", sa.Column("organization_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_leads", sa.Column("subscriber_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_leads", sa.Column("account_id", UUID(as_uuid=True), nullable=True)
+    )
 
-    op.add_column("crm_quotes", sa.Column("contact_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_quotes", sa.Column("organization_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_quotes", sa.Column("subscriber_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_quotes", sa.Column("account_id", UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "crm_quotes", sa.Column("contact_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_quotes", sa.Column("organization_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_quotes", sa.Column("subscriber_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_quotes", sa.Column("account_id", UUID(as_uuid=True), nullable=True)
+    )
 
-    op.add_column("crm_conversations", sa.Column("contact_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_conversations", sa.Column("organization_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_conversations", sa.Column("subscriber_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("crm_conversations", sa.Column("account_id", UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "crm_conversations", sa.Column("contact_id", UUID(as_uuid=True), nullable=True)
+    )
+    op.add_column(
+        "crm_conversations",
+        sa.Column("organization_id", UUID(as_uuid=True), nullable=True),
+    )
+    op.add_column(
+        "crm_conversations",
+        sa.Column("subscriber_id", UUID(as_uuid=True), nullable=True),
+    )
+    op.add_column(
+        "crm_conversations", sa.Column("account_id", UUID(as_uuid=True), nullable=True)
+    )
     op.alter_column("crm_conversations", "person_id", nullable=True)
     op.alter_column("crm_leads", "person_id", nullable=True)
     op.alter_column("crm_quotes", "person_id", nullable=True)
 
-    op.add_column("crm_messages", sa.Column("contact_channel_id", UUID(as_uuid=True), nullable=True))
-    op.drop_constraint("crm_messages_person_channel_id_fkey", "crm_messages", type_="foreignkey")
+    op.add_column(
+        "crm_messages",
+        sa.Column("contact_channel_id", UUID(as_uuid=True), nullable=True),
+    )
+    op.drop_constraint(
+        "crm_messages_person_channel_id_fkey", "crm_messages", type_="foreignkey"
+    )
     op.drop_column("crm_messages", "person_channel_id")
 
     # Recreate deprecated tables
@@ -712,14 +821,23 @@ def downgrade() -> None:
         "crm_contact_channels",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column("contact_id", UUID(as_uuid=True), nullable=False),
-        sa.Column("channel_type", sa.Enum("email", "whatsapp", name="channeltype"), nullable=False),
+        sa.Column(
+            "channel_type",
+            sa.Enum("email", "whatsapp", name="channeltype"),
+            nullable=False,
+        ),
         sa.Column("address", sa.String(255), nullable=False),
         sa.Column("is_primary", sa.Boolean(), nullable=False),
         sa.Column("metadata", sa.JSON),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["contact_id"], ["crm_contacts.id"]),
-        sa.UniqueConstraint("contact_id", "channel_type", "address", name="uq_crm_contact_channels_contact_type_address"),
+        sa.UniqueConstraint(
+            "contact_id",
+            "channel_type",
+            "address",
+            name="uq_crm_contact_channels_contact_type_address",
+        ),
     )
     op.create_table(
         "contacts",
@@ -728,7 +846,11 @@ def downgrade() -> None:
         sa.Column("first_name", sa.String(80), nullable=False),
         sa.Column("last_name", sa.String(80), nullable=False),
         sa.Column("title", sa.String(120)),
-        sa.Column("role", sa.Enum("primary", "billing", "technical", "support", name="contactrole"), nullable=False),
+        sa.Column(
+            "role",
+            sa.Enum("primary", "billing", "technical", "support", name="contactrole"),
+            nullable=False,
+        ),
         sa.Column("is_primary", sa.Boolean(), nullable=False),
         sa.Column("notes", sa.Text()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -756,20 +878,88 @@ def downgrade() -> None:
         sa.ForeignKeyConstraint(["contact_id"], ["contacts.id"]),
     )
 
-    op.create_foreign_key("crm_leads_contact_id_fkey", "crm_leads", "crm_contacts", ["contact_id"], ["id"])
-    op.create_foreign_key("crm_leads_organization_id_fkey", "crm_leads", "organizations", ["organization_id"], ["id"])
-    op.create_foreign_key("crm_leads_subscriber_id_fkey", "crm_leads", "subscribers", ["subscriber_id"], ["id"])
-    op.create_foreign_key("crm_leads_account_id_fkey", "crm_leads", "subscriber_accounts", ["account_id"], ["id"])
+    op.create_foreign_key(
+        "crm_leads_contact_id_fkey", "crm_leads", "crm_contacts", ["contact_id"], ["id"]
+    )
+    op.create_foreign_key(
+        "crm_leads_organization_id_fkey",
+        "crm_leads",
+        "organizations",
+        ["organization_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_leads_subscriber_id_fkey",
+        "crm_leads",
+        "subscribers",
+        ["subscriber_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_leads_account_id_fkey",
+        "crm_leads",
+        "subscriber_accounts",
+        ["account_id"],
+        ["id"],
+    )
 
-    op.create_foreign_key("crm_quotes_contact_id_fkey", "crm_quotes", "crm_contacts", ["contact_id"], ["id"])
-    op.create_foreign_key("crm_quotes_organization_id_fkey", "crm_quotes", "organizations", ["organization_id"], ["id"])
-    op.create_foreign_key("crm_quotes_subscriber_id_fkey", "crm_quotes", "subscribers", ["subscriber_id"], ["id"])
-    op.create_foreign_key("crm_quotes_account_id_fkey", "crm_quotes", "subscriber_accounts", ["account_id"], ["id"])
+    op.create_foreign_key(
+        "crm_quotes_contact_id_fkey",
+        "crm_quotes",
+        "crm_contacts",
+        ["contact_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_quotes_organization_id_fkey",
+        "crm_quotes",
+        "organizations",
+        ["organization_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_quotes_subscriber_id_fkey",
+        "crm_quotes",
+        "subscribers",
+        ["subscriber_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_quotes_account_id_fkey",
+        "crm_quotes",
+        "subscriber_accounts",
+        ["account_id"],
+        ["id"],
+    )
 
-    op.create_foreign_key("crm_conversations_contact_id_fkey", "crm_conversations", "crm_contacts", ["contact_id"], ["id"])
-    op.create_foreign_key("crm_conversations_organization_id_fkey", "crm_conversations", "organizations", ["organization_id"], ["id"])
-    op.create_foreign_key("crm_conversations_subscriber_id_fkey", "crm_conversations", "subscribers", ["subscriber_id"], ["id"])
-    op.create_foreign_key("crm_conversations_account_id_fkey", "crm_conversations", "subscriber_accounts", ["account_id"], ["id"])
+    op.create_foreign_key(
+        "crm_conversations_contact_id_fkey",
+        "crm_conversations",
+        "crm_contacts",
+        ["contact_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_conversations_organization_id_fkey",
+        "crm_conversations",
+        "organizations",
+        ["organization_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_conversations_subscriber_id_fkey",
+        "crm_conversations",
+        "subscribers",
+        ["subscriber_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "crm_conversations_account_id_fkey",
+        "crm_conversations",
+        "subscriber_accounts",
+        ["account_id"],
+        ["id"],
+    )
 
     op.create_foreign_key(
         "crm_messages_contact_channel_id_fkey",
@@ -779,7 +969,9 @@ def downgrade() -> None:
         ["id"],
     )
 
-    op.execute("ALTER TABLE service_orders DROP CONSTRAINT IF EXISTS service_orders_requested_by_contact_id_fkey")
+    op.execute(
+        "ALTER TABLE service_orders DROP CONSTRAINT IF EXISTS service_orders_requested_by_contact_id_fkey"
+    )
     op.create_foreign_key(
         "service_orders_requested_by_contact_id_fkey",
         "service_orders",
@@ -793,7 +985,9 @@ def downgrade() -> None:
     op.drop_index("ix_account_roles_account_id", table_name="account_roles")
     op.drop_table("account_roles")
 
-    op.drop_index("ix_person_merge_logs_target_person_id", table_name="person_merge_logs")
+    op.drop_index(
+        "ix_person_merge_logs_target_person_id", table_name="person_merge_logs"
+    )
     op.drop_table("person_merge_logs")
 
     op.drop_index("ix_person_status_logs_person_id", table_name="person_status_logs")

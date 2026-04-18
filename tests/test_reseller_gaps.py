@@ -32,7 +32,9 @@ class TestResellerEventTypes:
 
 
 class TestAccountDetail:
-    def test_get_account_detail_returns_none_for_wrong_reseller(self, db_session) -> None:
+    def test_get_account_detail_returns_none_for_wrong_reseller(
+        self, db_session
+    ) -> None:
         from app.models.subscriber import Reseller, Subscriber
 
         reseller1 = Reseller(name="Reseller A", is_active=True)
@@ -77,11 +79,22 @@ class TestAccountDetail:
         db_session.add(reseller)
         db_session.commit()
 
-        account = Subscriber(first_name="Sub", last_name="User", email="sub@example.com", reseller_id=reseller.id)
+        account = Subscriber(
+            first_name="Sub",
+            last_name="User",
+            email="sub@example.com",
+            reseller_id=reseller.id,
+        )
         db_session.add(account)
         db_session.commit()
 
-        offer = CatalogOffer(name="Basic 10Mbps", status=OfferStatus.active, service_type=ServiceType.residential, access_type=AccessType.fiber, price_basis=PriceBasis.flat)
+        offer = CatalogOffer(
+            name="Basic 10Mbps",
+            status=OfferStatus.active,
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        )
         db_session.add(offer)
         db_session.commit()
 
@@ -116,7 +129,12 @@ class TestInvoiceVisibility:
         db_session.add_all([reseller, other])
         db_session.commit()
 
-        account = Subscriber(first_name="Inv", last_name="User", email="inv@example.com", reseller_id=reseller.id)
+        account = Subscriber(
+            first_name="Inv",
+            last_name="User",
+            email="inv@example.com",
+            reseller_id=reseller.id,
+        )
         db_session.add(account)
         db_session.commit()
 
@@ -139,7 +157,12 @@ class TestInvoiceVisibility:
         db_session.add(reseller)
         db_session.commit()
 
-        account = Subscriber(first_name="Det", last_name="User", email="det@example.com", reseller_id=reseller.id)
+        account = Subscriber(
+            first_name="Det",
+            last_name="User",
+            email="det@example.com",
+            reseller_id=reseller.id,
+        )
         db_session.add(account)
         db_session.commit()
 
@@ -174,8 +197,22 @@ class TestAccountSearch:
         db_session.add(reseller)
         db_session.commit()
 
-        db_session.add(Subscriber(first_name="Alice", last_name="Smith", email="alice@example.com", reseller_id=reseller.id))
-        db_session.add(Subscriber(first_name="Bob", last_name="Jones", email="bob@example.com", reseller_id=reseller.id))
+        db_session.add(
+            Subscriber(
+                first_name="Alice",
+                last_name="Smith",
+                email="alice@example.com",
+                reseller_id=reseller.id,
+            )
+        )
+        db_session.add(
+            Subscriber(
+                first_name="Bob",
+                last_name="Jones",
+                email="bob@example.com",
+                reseller_id=reseller.id,
+            )
+        )
         db_session.commit()
 
         from app.services.reseller_portal import list_accounts
@@ -194,7 +231,14 @@ class TestAccountSearch:
         db_session.add(reseller)
         db_session.commit()
 
-        db_session.add(Subscriber(first_name="Test", last_name="User", email="unique@example.com", reseller_id=reseller.id))
+        db_session.add(
+            Subscriber(
+                first_name="Test",
+                last_name="User",
+                email="unique@example.com",
+                reseller_id=reseller.id,
+            )
+        )
         db_session.commit()
 
         from app.services.reseller_portal import list_accounts
@@ -259,7 +303,9 @@ class TestRouteRegistration:
         from app.web.reseller.routes import router
 
         for route in router.routes:
-            if getattr(route, "path", None) == "/reseller/accounts" and "GET" in getattr(route, "methods", set()):
+            if getattr(
+                route, "path", None
+            ) == "/reseller/accounts" and "GET" in getattr(route, "methods", set()):
                 assert True
                 return
         raise AssertionError("GET /reseller/accounts route not found")
@@ -282,7 +328,9 @@ class TestResellerProfile:
 
         found = False
         for route in router.routes:
-            if getattr(route, "path", "") == "/reseller/profile" and "POST" in getattr(route, "methods", set()):
+            if getattr(route, "path", "") == "/reseller/profile" and "POST" in getattr(
+                route, "methods", set()
+            ):
                 found = True
                 break
         assert found
@@ -290,7 +338,9 @@ class TestResellerProfile:
     def test_profile_update_changes_contact_email(self, db_session) -> None:
         from app.models.subscriber import Reseller
 
-        reseller = Reseller(name="Profile Test", contact_email="old@example.com", is_active=True)
+        reseller = Reseller(
+            name="Profile Test", contact_email="old@example.com", is_active=True
+        )
         db_session.add(reseller)
         db_session.commit()
         db_session.refresh(reseller)

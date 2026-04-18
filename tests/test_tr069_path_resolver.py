@@ -74,9 +74,7 @@ class TestResolveIGD:
 
     def test_wifi_ssid(self) -> None:
         path = tr069_path_resolver.resolve(TR069_ROOT_IGD, "wifi.ssid")
-        assert path == (
-            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"
-        )
+        assert path == ("InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID")
 
     def test_lan_ip(self) -> None:
         path = tr069_path_resolver.resolve(TR069_ROOT_IGD, "lan.ip_address")
@@ -92,8 +90,7 @@ class TestResolveIGD:
     def test_mac_address(self) -> None:
         path = tr069_path_resolver.resolve(TR069_ROOT_IGD, "system.mac_address")
         assert path == (
-            "InternetGatewayDevice.LANDevice.1"
-            ".LANEthernetInterfaceConfig.1.MACAddress"
+            "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress"
         )
 
 
@@ -102,19 +99,25 @@ class TestInstanceIndex:
 
     def test_wifi_ssid_band_2(self) -> None:
         path = tr069_path_resolver.resolve(
-            TR069_ROOT_DEVICE, "wifi.ssid", instance_index=2,
+            TR069_ROOT_DEVICE,
+            "wifi.ssid",
+            instance_index=2,
         )
         assert path == "Device.WiFi.SSID.2.SSID"
 
     def test_ethernet_port_3(self) -> None:
         path = tr069_path_resolver.resolve(
-            TR069_ROOT_DEVICE, "ethernet.port_enable", instance_index=3,
+            TR069_ROOT_DEVICE,
+            "ethernet.port_enable",
+            instance_index=3,
         )
         assert path == "Device.Ethernet.Interface.3.Enable"
 
     def test_pppoe_instance_2_igd(self) -> None:
         path = tr069_path_resolver.resolve(
-            TR069_ROOT_IGD, "wan.pppoe_username", instance_index=2,
+            TR069_ROOT_IGD,
+            "wan.pppoe_username",
+            instance_index=2,
         )
         assert "WANConnectionDevice.2." in path
 
@@ -125,10 +128,13 @@ class TestInstanceIndex:
     def test_no_placeholder_unaffected(self) -> None:
         """Parameters without {i} are unaffected by instance_index."""
         path_default = tr069_path_resolver.resolve(
-            TR069_ROOT_DEVICE, "system.manufacturer",
+            TR069_ROOT_DEVICE,
+            "system.manufacturer",
         )
         path_index_5 = tr069_path_resolver.resolve(
-            TR069_ROOT_DEVICE, "system.manufacturer", instance_index=5,
+            TR069_ROOT_DEVICE,
+            "system.manufacturer",
+            instance_index=5,
         )
         assert path_default == path_index_5
 
@@ -191,27 +197,29 @@ class TestObjectBases:
 
     def test_device_ethernet_ports(self) -> None:
         base = tr069_path_resolver.resolve_object_base(
-            TR069_ROOT_DEVICE, "ethernet_ports",
+            TR069_ROOT_DEVICE,
+            "ethernet_ports",
         )
         assert base == "Device.Ethernet.Interface."
 
     def test_igd_ethernet_ports(self) -> None:
         base = tr069_path_resolver.resolve_object_base(
-            TR069_ROOT_IGD, "ethernet_ports",
+            TR069_ROOT_IGD,
+            "ethernet_ports",
         )
-        assert base == (
-            "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig."
-        )
+        assert base == ("InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.")
 
     def test_device_lan_hosts(self) -> None:
         base = tr069_path_resolver.resolve_object_base(
-            TR069_ROOT_DEVICE, "lan_hosts",
+            TR069_ROOT_DEVICE,
+            "lan_hosts",
         )
         assert base == "Device.Hosts.Host."
 
     def test_igd_lan_hosts(self) -> None:
         base = tr069_path_resolver.resolve_object_base(
-            TR069_ROOT_IGD, "lan_hosts",
+            TR069_ROOT_IGD,
+            "lan_hosts",
         )
         assert base == "InternetGatewayDevice.LANDevice.1.Hosts.Host."
 

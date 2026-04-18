@@ -28,7 +28,9 @@ def test_revoke_api_key_requires_owner(db_session, subscriber):
         label="Owner key",
         expires_in=None,
     )
-    key = api_keys_service.list_api_keys_for_subscriber(db_session, str(subscriber.id))[0]
+    key = api_keys_service.list_api_keys_for_subscriber(db_session, str(subscriber.id))[
+        0
+    ]
 
     assert key.is_active is True
 

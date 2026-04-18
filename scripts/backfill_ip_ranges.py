@@ -138,9 +138,7 @@ def main() -> None:
         existing_pools = db.query(IpPool).all()
         existing_blocks = db.query(IpBlock).all()
         linked_addresses = (
-            db.query(IPv4Address)
-            .filter(IPv4Address.pool_id.isnot(None))
-            .count()
+            db.query(IPv4Address).filter(IPv4Address.pool_id.isnot(None)).count()
         )
         if linked_addresses:
             raise RuntimeError(
@@ -159,7 +157,9 @@ def main() -> None:
             block_notes = payload.pop("block_notes")
             pool, error = web_network_ip.create_ip_pool(db, payload)
             if error or pool is None:
-                raise RuntimeError(f"Failed to create pool {payload['name']} ({payload['cidr']}): {error}")
+                raise RuntimeError(
+                    f"Failed to create pool {payload['name']} ({payload['cidr']}): {error}"
+                )
             created_pools.append(pool)
             block, error = web_network_ip.create_ip_block(
                 db,
@@ -171,7 +171,9 @@ def main() -> None:
                 },
             )
             if error or block is None:
-                raise RuntimeError(f"Failed to create block for {pool.name} ({pool.cidr}): {error}")
+                raise RuntimeError(
+                    f"Failed to create block for {pool.name} ({pool.cidr}): {error}"
+                )
             created_blocks.append(block)
 
         reconcile_result = web_network_ip.reconcile_ipv4_pool_memberships(db)

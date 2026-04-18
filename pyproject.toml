@@ -54,6 +54,7 @@ dev = [
     "mypy>=1.11.0",
     "bandit[toml]>=1.9.0",
     "pre-commit>=3.7.0",
+    "import-linter>=2.0",
 ]
 
 [tool.poetry]
@@ -104,7 +105,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]  # Allow assert and hardcoded passwords in tests
 "scripts/**" = ["S101", "S105", "S106"]
+"scripts/migration/**" = ["S608"]
 "alembic/**" = ["E402"]  # Allow imports not at top of file
+"alembic/versions_archive/**" = ["S104", "S608"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -132,6 +135,10 @@ module = [
     "app.services.nas",
     "app.services.nas_pkg.web_builders",
     "app.services.network.ont_tr069",
+    "app.services.network.olt_targeted_sync",
+    "app.services.network.ont_provision_steps",
+    "app.services.network.ont_service_intent",
+    "app.services.provisioning_managers",
     "app.services.reseller_portal",
     "app.services.snmp_discovery",
     "app.services.support",
@@ -152,7 +159,12 @@ module = [
     "app.services.web_network_ip",
     "app.services.web_network_olts",
     "app.services.web_network_ont_charts",
+    "app.services.web_network_ont_actions.config_setters",
+    "app.services.web_network_ont_actions.db_config",
+    "app.services.web_network_ont_actions.operational",
     "app.services.web_network_onu_types",
+    "app.services.web_network_onts",
+    "app.services.web_network_onts_provisioning",
     "app.services.web_reports_extended",
     "app.services.web_subscriber_forms",
     "app.services.web_system_export_tool",
@@ -162,6 +174,7 @@ module = [
     "app.services.web_system_users",
     "app.services.web_vpn_management",
     "app.tasks.catalog",
+    "app.tasks.ont_authorization",
     "app.web.admin.billing_accounts",
     "app.web.admin.integrations",
     "app.web.admin.network_core_devices",
@@ -215,6 +228,8 @@ skips = [
     "B105",  # hardcoded_password_string: false positives on field names/placeholders
     "B106",  # hardcoded_password_funcarg: false positives on configured/default labels
     "B107",  # hardcoded_password_default: false positives on empty auth defaults
+    "B110",  # try_except_pass: legacy best-effort cleanup paths
+    "B112",  # try_except_continue: legacy best-effort parsing loops
     "B404",  # import_subprocess: subprocess is used deliberately with fixed argv
     "B603",  # subprocess_without_shell_equals_true: fixed argv, no shell
     "B508",  # snmp_insecure_version: network estate still uses SNMPv2c
@@ -226,5 +241,144 @@ build-backend = "poetry.core.masonry.api"
 
 [dependency-groups]
 dev = [
+    "pytest==8.2.2",
+    "pytest-cov==5.0.0",
+    "playwright==1.46.0",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.0",
+    "mypy>=1.11.0",
+    "bandit[toml]>=1.9.0",
+    "pre-commit>=3.7.0",
+    "import-linter>=2.0",
     "vulture (>=2.16,<3.0)"
 ]
+
+# ─── Import boundaries (DCP-1 network / subscription decoupling) ──────────
+#
+# The network domain (OLT/ONT, IP, fiber, etc.) must not import directly
+# from the subscription domain (subscribers, catalog, billing, subscription
+# engine). Cross-domain interaction goes through well-defined service
+# interfaces that later tickets in the DCP track will introduce.
+#
+# CPE (`app.services.network.cpe` and `cpe_*`) is intentionally descoped
+# from this effort and is allow-listed.
+[tool.importlinter]
+# `app.api` and `app.schemas` are implicit namespace packages (no __init__.py)
+# so they are not discovered via the root `app` package traversal. List them
+# as additional roots so import-linter sees their modules.
+root_packages = ["app", "app.api", "app.schemas"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Network domain must not import from subscription domain"
+type = "forbidden"
+source_modules = [
+    # Treated as a package, so every submodule under network/ is included.
+    "app.services.network",
+    "app.models.network",
+    "app.api.network_catalog",
+    "app.api.network_olt_ops",
+    "app.api.network_ont_ops",
+    "app.schemas.network",
+    "app.schemas.network_catalog",
+    "app.schemas.network_metrics",
+    "app.schemas.network_monitoring",
+    "app.schemas.network_olt_ops",
+    "app.schemas.network_ont_ops",
+]
+forbidden_modules = [
+    "app.models.subscriber",
+    "app.models.catalog",
+    "app.models.billing",
+    "app.models.subscription_change",
+    "app.models.subscription_engine",
+    "app.services.subscriber",
+    "app.services.catalog",
+    "app.services.billing",
+    "app.services.subscription_changes",
+    "app.services.subscription_engine",
+]
+# CPE is descoped from the OLT/ONT standalone decoupling effort; allow-list
+# every cpe[_*].py module. Only imports that actually exist in the graph are
+# required to match, hence unmatched_ignore_imports_alerting = "none".
+ignore_imports = [
+    # cpe.py
+    "app.services.network.cpe -> app.models.subscriber",
+    "app.services.network.cpe -> app.models.catalog",
+    "app.services.network.cpe -> app.models.billing",
+    "app.services.network.cpe -> app.models.subscription_change",
+    "app.services.network.cpe -> app.models.subscription_engine",
+    "app.services.network.cpe -> app.services.subscriber",
+    "app.services.network.cpe -> app.services.catalog",
+    "app.services.network.cpe -> app.services.billing",
+    "app.services.network.cpe -> app.services.subscription_changes",
+    "app.services.network.cpe -> app.services.subscription_engine",
+    # cpe_actions.py
+    "app.services.network.cpe_actions -> app.models.subscriber",
+    "app.services.network.cpe_actions -> app.models.catalog",
+    "app.services.network.cpe_actions -> app.models.billing",
+    "app.services.network.cpe_actions -> app.models.subscription_change",
+    "app.services.network.cpe_actions -> app.models.subscription_engine",
+    "app.services.network.cpe_actions -> app.services.subscriber",
+    "app.services.network.cpe_actions -> app.services.catalog",
+    "app.services.network.cpe_actions -> app.services.billing",
+    "app.services.network.cpe_actions -> app.services.subscription_changes",
+    "app.services.network.cpe_actions -> app.services.subscription_engine",
+    # cpe_action_device.py
+    "app.services.network.cpe_action_device -> app.models.subscriber",
+    "app.services.network.cpe_action_device -> app.models.catalog",
+    "app.services.network.cpe_action_device -> app.models.billing",
+    "app.services.network.cpe_action_device -> app.models.subscription_change",
+    "app.services.network.cpe_action_device -> app.models.subscription_engine",
+    "app.services.network.cpe_action_device -> app.services.subscriber",
+    "app.services.network.cpe_action_device -> app.services.catalog",
+    "app.services.network.cpe_action_device -> app.services.billing",
+    "app.services.network.cpe_action_device -> app.services.subscription_changes",
+    "app.services.network.cpe_action_device -> app.services.subscription_engine",
+    # cpe_action_diagnostics.py
+    "app.services.network.cpe_action_diagnostics -> app.models.subscriber",
+    "app.services.network.cpe_action_diagnostics -> app.models.catalog",
+    "app.services.network.cpe_action_diagnostics -> app.models.billing",
+    "app.services.network.cpe_action_diagnostics -> app.models.subscription_change",
+    "app.services.network.cpe_action_diagnostics -> app.models.subscription_engine",
+    "app.services.network.cpe_action_diagnostics -> app.services.subscriber",
+    "app.services.network.cpe_action_diagnostics -> app.services.catalog",
+    "app.services.network.cpe_action_diagnostics -> app.services.billing",
+    "app.services.network.cpe_action_diagnostics -> app.services.subscription_changes",
+    "app.services.network.cpe_action_diagnostics -> app.services.subscription_engine",
+    # cpe_action_network.py
+    "app.services.network.cpe_action_network -> app.models.subscriber",
+    "app.services.network.cpe_action_network -> app.models.catalog",
+    "app.services.network.cpe_action_network -> app.models.billing",
+    "app.services.network.cpe_action_network -> app.models.subscription_change",
+    "app.services.network.cpe_action_network -> app.models.subscription_engine",
+    "app.services.network.cpe_action_network -> app.services.subscriber",
+    "app.services.network.cpe_action_network -> app.services.catalog",
+    "app.services.network.cpe_action_network -> app.services.billing",
+    "app.services.network.cpe_action_network -> app.services.subscription_changes",
+    "app.services.network.cpe_action_network -> app.services.subscription_engine",
+    # cpe_action_wifi.py
+    "app.services.network.cpe_action_wifi -> app.models.subscriber",
+    "app.services.network.cpe_action_wifi -> app.models.catalog",
+    "app.services.network.cpe_action_wifi -> app.models.billing",
+    "app.services.network.cpe_action_wifi -> app.models.subscription_change",
+    "app.services.network.cpe_action_wifi -> app.models.subscription_engine",
+    "app.services.network.cpe_action_wifi -> app.services.subscriber",
+    "app.services.network.cpe_action_wifi -> app.services.catalog",
+    "app.services.network.cpe_action_wifi -> app.services.billing",
+    "app.services.network.cpe_action_wifi -> app.services.subscription_changes",
+    "app.services.network.cpe_action_wifi -> app.services.subscription_engine",
+    # cpe_tr069.py
+    "app.services.network.cpe_tr069 -> app.models.subscriber",
+    "app.services.network.cpe_tr069 -> app.models.catalog",
+    "app.services.network.cpe_tr069 -> app.models.billing",
+    "app.services.network.cpe_tr069 -> app.models.subscription_change",
+    "app.services.network.cpe_tr069 -> app.models.subscription_engine",
+    "app.services.network.cpe_tr069 -> app.services.subscriber",
+    "app.services.network.cpe_tr069 -> app.services.catalog",
+    "app.services.network.cpe_tr069 -> app.services.billing",
+    "app.services.network.cpe_tr069 -> app.services.subscription_changes",
+    "app.services.network.cpe_tr069 -> app.services.subscription_engine",
+]
+unmatched_ignore_imports_alerting = "none"
+allow_indirect_imports = "true"

@@ -24,17 +24,16 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    existing_columns = {col["name"] for col in inspector.get_columns("wireguard_servers")}
+    existing_columns = {
+        col["name"] for col in inspector.get_columns("wireguard_servers")
+    }
 
     if "interface_name" not in existing_columns:
         op.add_column(
             "wireguard_servers",
             sa.Column(
-                "interface_name",
-                sa.String(32),
-                nullable=False,
-                server_default="wg0"
-            )
+                "interface_name", sa.String(32), nullable=False, server_default="wg0"
+            ),
         )
 
 

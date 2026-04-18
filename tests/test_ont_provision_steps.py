@@ -145,22 +145,17 @@ class TestValidatePrerequisites:
             OntUnit,
             PonPort,
         )
-        from app.models.subscriber import Subscriber
         from app.models.tr069 import Tr069AcsServer
         from app.services.network.ont_provision_steps import validate_prerequisites
 
-        subscriber = Subscriber(
-            first_name="Preflight",
-            last_name="No PPPoE",
-            email=f"preflight-{uuid.uuid4().hex[:8]}@test.local",
-        )
+        # OntAssignment.subscriber_id is optional; no subscriber needed.
         acs = Tr069AcsServer(
             name="DotMac ACS",
             base_url="http://genieacs:7557",
             cwmp_url="http://acs.example/cwmp",
             is_active=True,
         )
-        db_session.add_all([subscriber, acs])
+        db_session.add(acs)
         db_session.flush()
 
         olt = OLTDevice(
@@ -201,7 +196,6 @@ class TestValidatePrerequisites:
         db_session.add(
             OntAssignment(
                 ont_unit_id=ont.id,
-                subscriber_id=subscriber.id,
                 pon_port_id=pon.id,
                 active=True,
             )
@@ -300,7 +294,9 @@ class TestWaitTr069Bootstrap:
 class TestApplySavedServiceConfig:
     """Test deferred TR-069 service config behavior."""
 
-    def test_missing_pppoe_password_is_needs_input_not_failure(self, db_session) -> None:
+    def test_missing_pppoe_password_is_needs_input_not_failure(
+        self, db_session
+    ) -> None:
         from app.models.network import OntUnit
         from app.services.network.ont_provision_steps import apply_saved_service_config
 
@@ -334,7 +330,9 @@ class TestApplySavedServiceConfig:
         assert result.success is True
         assert result.step_name == "apply_saved_service_config"
         assert result.data is not None
-        assert result.data["needs_input"] == ["PPPoE username and password are required."]
+        assert result.data["needs_input"] == [
+            "PPPoE username and password are required."
+        ]
         # Steps now includes capability probing
         assert any(
             s["step"] == "probe_wan_capabilities" and s["success"]

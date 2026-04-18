@@ -21,7 +21,9 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     columns = {col["name"] for col in inspector.get_columns("project_task_comments")}
     if "attachments" not in columns:
-        op.add_column("project_task_comments", sa.Column("attachments", sa.JSON(), nullable=True))
+        op.add_column(
+            "project_task_comments", sa.Column("attachments", sa.JSON(), nullable=True)
+        )
 
 
 def downgrade() -> None:

@@ -38,9 +38,13 @@ def upgrade() -> None:
             sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("subscriber_id", postgresql.UUID(as_uuid=True), nullable=True),
             sa.Column("subscription_id", postgresql.UUID(as_uuid=True), nullable=True),
-            sa.Column("network_device_id", postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "network_device_id", postgresql.UUID(as_uuid=True), nullable=True
+            ),
             sa.Column("pop_site_id", postgresql.UUID(as_uuid=True), nullable=True),
-            sa.Column("source", speedtestsource, nullable=False, server_default="manual"),
+            sa.Column(
+                "source", speedtestsource, nullable=False, server_default="manual"
+            ),
             sa.Column("target_label", sa.String(length=160), nullable=True),
             sa.Column("provider", sa.String(length=120), nullable=True),
             sa.Column("server_name", sa.String(length=160), nullable=True),
@@ -53,20 +57,45 @@ def upgrade() -> None:
             sa.Column("packet_loss_pct", sa.Float(), nullable=True),
             sa.Column("tested_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("notes", sa.Text(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("CURRENT_TIMESTAMP"),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("CURRENT_TIMESTAMP"),
+            ),
             sa.ForeignKeyConstraint(["subscriber_id"], ["subscribers.id"]),
             sa.ForeignKeyConstraint(["subscription_id"], ["subscriptions.id"]),
             sa.ForeignKeyConstraint(["network_device_id"], ["network_devices.id"]),
             sa.ForeignKeyConstraint(["pop_site_id"], ["pop_sites.id"]),
             sa.PrimaryKeyConstraint("id"),
         )
-        op.create_index("ix_speed_test_results_subscriber_id", "speed_test_results", ["subscriber_id"])
-        op.create_index("ix_speed_test_results_subscription_id", "speed_test_results", ["subscription_id"])
-        op.create_index("ix_speed_test_results_network_device_id", "speed_test_results", ["network_device_id"])
-        op.create_index("ix_speed_test_results_pop_site_id", "speed_test_results", ["pop_site_id"])
-        op.create_index("ix_speed_test_results_tested_at", "speed_test_results", ["tested_at"])
-
+        op.create_index(
+            "ix_speed_test_results_subscriber_id",
+            "speed_test_results",
+            ["subscriber_id"],
+        )
+        op.create_index(
+            "ix_speed_test_results_subscription_id",
+            "speed_test_results",
+            ["subscription_id"],
+        )
+        op.create_index(
+            "ix_speed_test_results_network_device_id",
+            "speed_test_results",
+            ["network_device_id"],
+        )
+        op.create_index(
+            "ix_speed_test_results_pop_site_id", "speed_test_results", ["pop_site_id"]
+        )
+        op.create_index(
+            "ix_speed_test_results_tested_at", "speed_test_results", ["tested_at"]
+        )
 
 
 def downgrade() -> None:
@@ -74,11 +103,21 @@ def downgrade() -> None:
     inspector = sa.inspect(bind)
 
     if inspector.has_table("speed_test_results"):
-        op.drop_index("ix_speed_test_results_tested_at", table_name="speed_test_results")
-        op.drop_index("ix_speed_test_results_pop_site_id", table_name="speed_test_results")
-        op.drop_index("ix_speed_test_results_network_device_id", table_name="speed_test_results")
-        op.drop_index("ix_speed_test_results_subscription_id", table_name="speed_test_results")
-        op.drop_index("ix_speed_test_results_subscriber_id", table_name="speed_test_results")
+        op.drop_index(
+            "ix_speed_test_results_tested_at", table_name="speed_test_results"
+        )
+        op.drop_index(
+            "ix_speed_test_results_pop_site_id", table_name="speed_test_results"
+        )
+        op.drop_index(
+            "ix_speed_test_results_network_device_id", table_name="speed_test_results"
+        )
+        op.drop_index(
+            "ix_speed_test_results_subscription_id", table_name="speed_test_results"
+        )
+        op.drop_index(
+            "ix_speed_test_results_subscriber_id", table_name="speed_test_results"
+        )
         op.drop_table("speed_test_results")
 
     speedtestsource = postgresql.ENUM(name="speedtestsource")

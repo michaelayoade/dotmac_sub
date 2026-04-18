@@ -39,13 +39,17 @@ def upgrade() -> None:
             sa.Column("rate_limit_profile", sa.String(length=120), nullable=True),
             sa.Column("match_expression", sa.String(length=255), nullable=True),
             sa.Column("priority", sa.Integer(), nullable=False, server_default="100"),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("notes", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["nas_device_id"], ["nas_devices.id"]),
             sa.PrimaryKeyConstraint("id"),
-            sa.UniqueConstraint("nas_device_id", "name", name="uq_nas_connection_rules_device_name"),
+            sa.UniqueConstraint(
+                "nas_device_id", "name", name="uq_nas_connection_rules_device_name"
+            ),
         )
         op.create_index(
             "ix_nas_connection_rules_device_active",
@@ -59,5 +63,7 @@ def downgrade() -> None:
     inspector = inspect(bind)
 
     if inspector.has_table("nas_connection_rules"):
-        op.drop_index("ix_nas_connection_rules_device_active", table_name="nas_connection_rules")
+        op.drop_index(
+            "ix_nas_connection_rules_device_active", table_name="nas_connection_rules"
+        )
         op.drop_table("nas_connection_rules")

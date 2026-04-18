@@ -25,6 +25,7 @@ from app.services.network.olt_web_audit import (
 
 logger = logging.getLogger(__name__)
 
+
 def _olt_sync_lock_key(olt_id: str) -> int:
     """Return a deterministic positive bigint advisory-lock key for an OLT."""
     digest = blake2b(olt_id.encode("utf-8"), digest_size=8).digest()
@@ -139,7 +140,10 @@ def _ensure_canonical_pon_port(
         _retire_duplicate_pon_port(db, survivor=pon_port, duplicate=duplicate_port)
     pon_port.is_active = True
     pon_port.name = fsp
-    if resolved_port_number is not None and pon_port.port_number != resolved_port_number:
+    if (
+        resolved_port_number is not None
+        and pon_port.port_number != resolved_port_number
+    ):
         pon_port.port_number = resolved_port_number
     if (
         resolved_card_port is not None
@@ -235,7 +239,7 @@ def _infer_pon_repair_target(
 
     assignments = sorted(
         getattr(port, "ont_assignments", []) or [],
-        key=lambda assignment: (not bool(getattr(assignment, "active", False))),
+        key=lambda assignment: not bool(getattr(assignment, "active", False)),
     )
     for assignment in assignments:
         ont = getattr(assignment, "ont_unit", None)
@@ -256,7 +260,11 @@ def repair_pon_ports_for_olt(
 
     olt = get_olt_or_none(db, olt_id)
     if not olt:
-        return False, "OLT not found", {"scanned": 0, "repaired": 0, "merged": 0, "unresolved": 0}
+        return (
+            False,
+            "OLT not found",
+            {"scanned": 0, "repaired": 0, "merged": 0, "unresolved": 0},
+        )
 
     ports = list(
         db.scalars(

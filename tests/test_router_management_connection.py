@@ -18,10 +18,12 @@ def test_check_dangerous_commands_blocks_shutdown():
 
 
 def test_check_dangerous_commands_allows_safe():
-    check_dangerous_commands([
-        "/queue simple set [find] queue=sfq/sfq",
-        "/ip address add address=10.0.0.1/24 interface=ether1",
-    ])
+    check_dangerous_commands(
+        [
+            "/queue simple set [find] queue=sfq/sfq",
+            "/ip address add address=10.0.0.1/24 interface=ether1",
+        ]
+    )
 
 
 def test_check_dangerous_commands_case_insensitive():

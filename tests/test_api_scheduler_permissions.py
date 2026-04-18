@@ -5,7 +5,11 @@ from app.api import scheduler as scheduler_api
 
 def _get_route(path: str, method: str) -> APIRoute:
     for route in scheduler_api.router.routes:
-        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+        if (
+            isinstance(route, APIRoute)
+            and route.path == path
+            and method in route.methods
+        ):
             return route
     raise AssertionError(f"Route not found: {method} {path}")
 
@@ -33,9 +37,19 @@ def _route_has_permission(path: str, method: str, expected: str) -> bool:
 
 def test_scheduler_api_routes_require_settings_permissions():
     assert _route_has_permission("/scheduler/tasks", "GET", "system:settings:read")
-    assert _route_has_permission("/scheduler/tasks/{task_id}", "GET", "system:settings:read")
+    assert _route_has_permission(
+        "/scheduler/tasks/{task_id}", "GET", "system:settings:read"
+    )
     assert _route_has_permission("/scheduler/tasks", "POST", "system:settings:write")
-    assert _route_has_permission("/scheduler/tasks/{task_id}", "PATCH", "system:settings:write")
-    assert _route_has_permission("/scheduler/tasks/{task_id}", "DELETE", "system:settings:write")
-    assert _route_has_permission("/scheduler/tasks/refresh", "POST", "system:settings:write")
-    assert _route_has_permission("/scheduler/tasks/{task_id}/enqueue", "POST", "system:settings:write")
+    assert _route_has_permission(
+        "/scheduler/tasks/{task_id}", "PATCH", "system:settings:write"
+    )
+    assert _route_has_permission(
+        "/scheduler/tasks/{task_id}", "DELETE", "system:settings:write"
+    )
+    assert _route_has_permission(
+        "/scheduler/tasks/refresh", "POST", "system:settings:write"
+    )
+    assert _route_has_permission(
+        "/scheduler/tasks/{task_id}/enqueue", "POST", "system:settings:write"
+    )

@@ -315,7 +315,10 @@ def _ensure_ip_assignment_for_version(
                 detail=f"No available {version_key} addresses in pool {pool.name}.",
             )
 
-    if address.assignment and address.assignment.subscriber_id != subscription.subscriber_id:
+    if (
+        address.assignment
+        and address.assignment.subscriber_id != subscription.subscriber_id
+    ):
         raise HTTPException(
             status_code=400,
             detail=f"{version_key} address is already assigned.",

@@ -180,9 +180,7 @@ def test_create_cpe_device_rejects_parked_inventory_cpe(
     )
     network_service.ont_assignments.delete(db_session, str(assignment.id))
     parked_cpe = db_session.scalars(
-        select(CPEDevice)
-        .where(CPEDevice.serial_number == "CREATE-PARKED-ONT")
-        .limit(1)
+        select(CPEDevice).where(CPEDevice.serial_number == "CREATE-PARKED-ONT").limit(1)
     ).first()
     assert parked_cpe is not None
 
@@ -388,7 +386,9 @@ def test_create_ont_from_tr069_device_clears_previous_active_link(db_session):
     assert candidate.ont_unit_id == ont.id
 
 
-def test_link_tr069_device_to_ont_refreshes_previous_ont_snapshot(db_session, acs_server):
+def test_link_tr069_device_to_ont_refreshes_previous_ont_snapshot(
+    db_session, acs_server
+):
     old_ont = OntUnit(
         serial_number="ONT-OLD-SNAPSHOT",
         is_active=True,
@@ -490,10 +490,13 @@ def test_update_olt_reassigns_linked_tr069_devices_to_new_acs(db_session):
         "is_active": True,
     }
 
-    with patch.object(
-        web_network_olts_service, "_queue_acs_propagation", return_value=None
-    ), patch.object(
-        web_network_olts_service, "sync_monitoring_device", return_value=None
+    with (
+        patch.object(
+            web_network_olts_service, "_queue_acs_propagation", return_value=None
+        ),
+        patch.object(
+            web_network_olts_service, "sync_monitoring_device", return_value=None
+        ),
     ):
         updated, error = web_network_olts_service.update_olt(
             db_session,
@@ -917,7 +920,9 @@ def test_sync_from_genieacs_truncates_long_oui(db_session, acs_server):
         )
         client.extract_parameter_value.return_value = None
 
-        result = tr069_service.cpe_devices.sync_from_genieacs(db_session, str(acs_server.id))
+        result = tr069_service.cpe_devices.sync_from_genieacs(
+            db_session, str(acs_server.id)
+        )
 
     assert result["created"] == 1
     created = tr069_service.cpe_devices.list(
@@ -952,7 +957,9 @@ def test_sync_from_genieacs_skips_discoveryservice(db_session, acs_server):
         )
         client.extract_parameter_value.return_value = None
 
-        result = tr069_service.cpe_devices.sync_from_genieacs(db_session, str(acs_server.id))
+        result = tr069_service.cpe_devices.sync_from_genieacs(
+            db_session, str(acs_server.id)
+        )
 
     assert result["created"] == 0
 
@@ -967,7 +974,9 @@ def test_create_acs_server_requires_reachable_genieacs(db_session):
     }
 
     with patch("app.services.web_network_tr069.GenieACSClient") as mock_client_cls:
-        mock_client_cls.return_value.count_devices.side_effect = GenieACSError("Request error: Connection refused")
+        mock_client_cls.return_value.count_devices.side_effect = GenieACSError(
+            "Request error: Connection refused"
+        )
 
         with pytest.raises(ValueError) as exc_info:
             web_network_tr069_service.create_acs_server(db_session, values)
@@ -978,7 +987,9 @@ def test_create_acs_server_requires_reachable_genieacs(db_session):
 def test_queue_bulk_action_uses_correlated_enqueue(monkeypatch):
     captured: dict[str, object] = {}
 
-    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra):
+    def _fake_enqueue(
+        task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
+    ):
         captured["task"] = task
         captured["args"] = args
         captured["kwargs"] = kwargs

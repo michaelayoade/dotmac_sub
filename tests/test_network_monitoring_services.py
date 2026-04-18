@@ -835,7 +835,9 @@ def test_get_device_health_table_uses_latest_metrics(db_session, network_device)
     assert row["memory"] == 84.0
 
 
-def test_poll_device_system_metrics_uses_mgmt_ip_backed_device(db_session, network_device, monkeypatch):
+def test_poll_device_system_metrics_uses_mgmt_ip_backed_device(
+    db_session, network_device, monkeypatch
+):
     network_device.mgmt_ip = "10.0.0.9"
     network_device.vendor = "mikrotik"
     network_device.snmp_community = "encrypted-community"
@@ -861,7 +863,9 @@ def test_poll_device_system_metrics_uses_mgmt_ip_backed_device(db_session, netwo
         lambda device, metrics: pushed.update(metrics),
     )
 
-    result = monitoring_metrics_service.poll_device_system_metrics(db_session, network_device)
+    result = monitoring_metrics_service.poll_device_system_metrics(
+        db_session, network_device
+    )
     db_session.commit()
 
     assert result["stored"] == 4
@@ -870,7 +874,9 @@ def test_poll_device_system_metrics_uses_mgmt_ip_backed_device(db_session, netwo
     assert pushed["temperature"] == 48.0
 
 
-def test_poll_onu_signal_strength_delegates_to_olt_inventory(db_session, network_device, monkeypatch):
+def test_poll_onu_signal_strength_delegates_to_olt_inventory(
+    db_session, network_device, monkeypatch
+):
     network_device.mgmt_ip = "10.20.30.40"
     network_device.vendor = "huawei"
     db_session.add(
@@ -902,7 +908,9 @@ def test_poll_onu_signal_strength_delegates_to_olt_inventory(db_session, network
         lambda db: (-25.0, -28.0),
     )
 
-    result = monitoring_metrics_service.poll_onu_signal_strength(db_session, network_device)
+    result = monitoring_metrics_service.poll_onu_signal_strength(
+        db_session, network_device
+    )
 
     assert result["polled"] == 12
     assert result["stored"] == 9
@@ -966,7 +974,9 @@ def test_notify_alert_uses_policy_engine_before_admin_fallback(
         lambda db, alert, status: 2,
     )
 
-    alert_evaluation_task._notify_alert(db_session, alert, rule, metric, action="triggered")
+    alert_evaluation_task._notify_alert(
+        db_session, alert, rule, metric, action="triggered"
+    )
     db_session.commit()
 
     from app.models.notification import Notification

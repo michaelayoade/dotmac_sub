@@ -200,9 +200,7 @@ class TestRestoreSubscription:
 
         assert restored is False  # FUP lock still active
         assert subscription.status == SubscriptionStatus.suspended
-        assert has_active_lock(
-            db_session, str(subscription.id), EnforcementReason.fup
-        )
+        assert has_active_lock(db_session, str(subscription.id), EnforcementReason.fup)
 
     def test_dual_lock_full_restore(self, db_session):
         """Overdue + FUP both cleared → subscription restores."""
@@ -457,17 +455,26 @@ class TestComputeAccountStatus:
         sub_b = _make_subscription(db_session, subscriber, offer)
 
         suspend_subscription(
-            db_session, str(sub_a.id),
-            reason=EnforcementReason.overdue, source="test", emit=False,
+            db_session,
+            str(sub_a.id),
+            reason=EnforcementReason.overdue,
+            source="test",
+            emit=False,
         )
         suspend_subscription(
-            db_session, str(sub_b.id),
-            reason=EnforcementReason.overdue, source="test", emit=False,
+            db_session,
+            str(sub_b.id),
+            reason=EnforcementReason.overdue,
+            source="test",
+            emit=False,
         )
 
         restore_subscription(
-            db_session, str(sub_a.id),
-            trigger="payment", resolved_by="payment:1", emit=False,
+            db_session,
+            str(sub_a.id),
+            trigger="payment",
+            resolved_by="payment:1",
+            emit=False,
         )
 
         status = compute_account_status(db_session, str(subscriber.id))
@@ -559,19 +566,28 @@ class TestRestoreWithReasonFilter:
         subscription = _make_subscription(db_session, subscriber, offer)
 
         suspend_subscription(
-            db_session, str(subscription.id),
-            reason=EnforcementReason.overdue, source="test", emit=False,
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test",
+            emit=False,
         )
         suspend_subscription(
-            db_session, str(subscription.id),
-            reason=EnforcementReason.fup, source="test", emit=False,
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.fup,
+            source="test",
+            emit=False,
         )
 
         # Resolve only FUP lock via admin
         restore_subscription(
-            db_session, str(subscription.id),
-            trigger="admin", resolved_by="admin:1",
-            reason=EnforcementReason.fup, emit=False,
+            db_session,
+            str(subscription.id),
+            trigger="admin",
+            resolved_by="admin:1",
+            reason=EnforcementReason.fup,
+            emit=False,
         )
 
         # Overdue lock still active
@@ -590,8 +606,11 @@ class TestRestoreWithReasonFilter:
         subscription = _make_subscription(db_session, subscriber, offer)
 
         result = restore_subscription(
-            db_session, str(subscription.id),
-            trigger="payment", resolved_by="test", emit=False,
+            db_session,
+            str(subscription.id),
+            trigger="payment",
+            resolved_by="test",
+            emit=False,
         )
         assert result is False
 
@@ -617,17 +636,17 @@ class TestEventEmission:
             emitted.append((event_type, payload))
             return original_emit(db, event_type, payload, **kwargs)
 
-        monkeypatch.setattr(
-            "app.services.account_lifecycle.emit_event", mock_emit
-        )
+        monkeypatch.setattr("app.services.account_lifecycle.emit_event", mock_emit)
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
         subscription = _make_subscription(db_session, subscriber, offer)
 
         suspend_subscription(
-            db_session, str(subscription.id),
-            reason=EnforcementReason.overdue, source="test:1",
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:1",
             emit=True,
         )
 
@@ -644,23 +663,27 @@ class TestEventEmission:
             emitted.append((event_type, payload))
             return original_emit(db, event_type, payload, **kwargs)
 
-        monkeypatch.setattr(
-            "app.services.account_lifecycle.emit_event", mock_emit
-        )
+        monkeypatch.setattr("app.services.account_lifecycle.emit_event", mock_emit)
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
         subscription = _make_subscription(db_session, subscriber, offer)
 
         suspend_subscription(
-            db_session, str(subscription.id),
-            reason=EnforcementReason.overdue, source="test:1", emit=True,
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:1",
+            emit=True,
         )
         emitted.clear()
 
         suspend_subscription(
-            db_session, str(subscription.id),
-            reason=EnforcementReason.fup, source="test:2", emit=True,
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.fup,
+            source="test:2",
+            emit=True,
         )
 
         event_types = [e[0] for e in emitted]
@@ -676,21 +699,25 @@ class TestEventEmission:
             emitted.append((event_type, payload))
             return original_emit(db, event_type, payload, **kwargs)
 
-        monkeypatch.setattr(
-            "app.services.account_lifecycle.emit_event", mock_emit
-        )
+        monkeypatch.setattr("app.services.account_lifecycle.emit_event", mock_emit)
 
         subscriber = _make_subscriber(db_session)
         offer = _make_offer(db_session)
         subscription = _make_subscription(db_session, subscriber, offer)
 
         suspend_subscription(
-            db_session, str(subscription.id),
-            reason=EnforcementReason.overdue, source="test:1", emit=False,
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="test:1",
+            emit=False,
         )
         restore_subscription(
-            db_session, str(subscription.id),
-            trigger="payment", resolved_by="payment:1", emit=True,
+            db_session,
+            str(subscription.id),
+            trigger="payment",
+            resolved_by="payment:1",
+            emit=True,
         )
 
         event_types = [e[0] for e in emitted]

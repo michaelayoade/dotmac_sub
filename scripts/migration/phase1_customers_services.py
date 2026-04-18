@@ -108,6 +108,7 @@ def _parse_date(val) -> datetime | None:
         return val.replace(tzinfo=UTC) if val.tzinfo is None else val
     try:
         from datetime import date as date_type
+
         if isinstance(val, date_type):
             return datetime(val.year, val.month, val.day, tzinfo=UTC)
     except (ValueError, TypeError):
@@ -120,7 +121,9 @@ def _map_customer_status(status_raw: str | None, *, is_deleted: bool):
 
     if is_deleted:
         return SubscriberStatus.canceled
-    status_str = CUSTOMER_STATUS_MAP.get((status_raw or "new").strip().lower(), "active")
+    status_str = CUSTOMER_STATUS_MAP.get(
+        (status_raw or "new").strip().lower(), "active"
+    )
     return {
         "new": SubscriberStatus.new,
         "active": SubscriberStatus.active,
@@ -135,7 +138,9 @@ def _map_service_status(status_raw: str | None, *, is_deleted: bool):
 
     if is_deleted:
         return SubscriptionStatus.canceled
-    status_str = SERVICE_STATUS_MAP.get((status_raw or "active").strip().lower(), "active")
+    status_str = SERVICE_STATUS_MAP.get(
+        (status_raw or "active").strip().lower(), "active"
+    )
     return {
         "active": SubscriptionStatus.active,
         "blocked": SubscriptionStatus.blocked,
@@ -224,7 +229,8 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
             if raw_partner_id and raw_partner_id not in (0, "0") and not reseller_id:
                 logger.warning(
                     "Customer %d has partner_id=%s with no reseller mapping",
-                    cid, raw_partner_id,
+                    cid,
+                    raw_partner_id,
                 )
 
             # Category → metadata
@@ -304,15 +310,19 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
                     db.flush()
                     subscriber.organization_id = org.id
 
-                db.add(SplynxIdMapping(
-                    entity_type=SplynxEntityType.customer,
-                    splynx_id=cid,
-                    dotmac_id=subscriber.id,
-                ))
+                db.add(
+                    SplynxIdMapping(
+                        entity_type=SplynxEntityType.customer,
+                        splynx_id=cid,
+                        dotmac_id=subscriber.id,
+                    )
+                )
                 savepoint.commit()
             except Exception as e:
                 savepoint.rollback()
-                logger.warning("Failed to create subscriber for customer %d: %s", cid, e)
+                logger.warning(
+                    "Failed to create subscriber for customer %d: %s", cid, e
+                )
                 skipped += 1
                 continue
 
@@ -323,7 +333,9 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
         logger.info("Customers batch: %d created so far (%d skipped)", created, skipped)
 
     db.flush()
-    logger.info("Customers: %d created, %d skipped, %d total", created, skipped, len(mapping))
+    logger.info(
+        "Customers: %d created, %d skipped, %d total", created, skipped, len(mapping)
+    )
     return mapping
 
 
@@ -383,7 +395,8 @@ def migrate_custom_fields(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
 
 
 def migrate_services(
-    conn, db,
+    conn,
+    db,
     customer_mapping: dict[int, uuid.UUID],
 ) -> dict[int, uuid.UUID]:
     """Migrate Splynx services_internet → Subscription + AccessCredential."""
@@ -425,9 +438,7 @@ def migrate_services(
     }
 
     # Track usernames for dedup
-    existing_usernames = set(
-        db.scalars(select(AccessCredential.username)).all()
-    )
+    existing_usernames = set(db.scalars(select(AccessCredential.username)).all())
 
     mapping: dict[int, uuid.UUID] = dict(existing_maps)
     created = 0
@@ -461,8 +472,16 @@ def migrate_services(
             # Parse dates — handle '0000-00-00'
             start_date = row.get("start_date")
             end_date = row.get("end_date")
-            start_at = _parse_date(start_date) if start_date and str(start_date) != "0000-00-00" else None
-            end_at = _parse_date(end_date) if end_date and str(end_date) != "0000-00-00" else None
+            start_at = (
+                _parse_date(start_date)
+                if start_date and str(start_date) != "0000-00-00"
+                else None
+            )
+            end_at = (
+                _parse_date(end_date)
+                if end_date and str(end_date) != "0000-00-00"
+                else None
+            )
 
             # Discount fields
             has_discount = row.get("discount") in ("1", 1, True)
@@ -471,7 +490,11 @@ def migrate_services(
             # Map Splynx discount_type to DotMac enum
             raw_disc_type = row.get("discount_type")
             disc_type_map = {"percent": "percentage", "fixed": "fixed"}
-            mapped_disc_type = disc_type_map.get(raw_disc_type, raw_disc_type) if raw_disc_type else None
+            mapped_disc_type = (
+                disc_type_map.get(raw_disc_type, raw_disc_type)
+                if raw_disc_type
+                else None
+            )
 
             billing_mode = _map_billing_mode(row.get("billing_type"))
 
@@ -495,10 +518,16 @@ def migrate_services(
                 ipv6_address=(row.get("ipv6") or "")[:128] or None,
                 mac_address=(row.get("mac") or "")[:64] or None,
                 discount=has_discount,
-                discount_value=Decimal(str(row.get("discount_value") or "0")) if has_discount else None,
+                discount_value=Decimal(str(row.get("discount_value") or "0"))
+                if has_discount
+                else None,
                 discount_type=mapped_disc_type if has_discount else None,
-                discount_start_at=_parse_date(discount_start) if discount_start and str(discount_start) != "0000-00-00" else None,
-                discount_end_at=_parse_date(discount_end) if discount_end and str(discount_end) != "0000-00-00" else None,
+                discount_start_at=_parse_date(discount_start)
+                if discount_start and str(discount_start) != "0000-00-00"
+                else None,
+                discount_end_at=_parse_date(discount_end)
+                if discount_end and str(discount_end) != "0000-00-00"
+                else None,
                 discount_description=(row.get("discount_text") or "")[:512] or None,
                 service_status_raw=status_raw,
             )
@@ -517,18 +546,23 @@ def migrate_services(
                     cred = AccessCredential(
                         subscriber_id=subscriber_id,
                         username=login[:120],
-                        secret_hash=encrypt_credential(password[:255]) if password else None,
-                        is_active=not is_deleted and status_enum == SubscriptionStatus.active,
+                        secret_hash=encrypt_credential(password[:255])
+                        if password
+                        else None,
+                        is_active=not is_deleted
+                        and status_enum == SubscriptionStatus.active,
                     )
                     db.add(cred)
                     existing_usernames.add(login)
                     creds_created += 1
 
-                db.add(SplynxIdMapping(
-                    entity_type=SplynxEntityType.service,
-                    splynx_id=sid,
-                    dotmac_id=subscription.id,
-                ))
+                db.add(
+                    SplynxIdMapping(
+                        entity_type=SplynxEntityType.service,
+                        splynx_id=sid,
+                        dotmac_id=subscription.id,
+                    )
+                )
                 savepoint.commit()
             except Exception as e:
                 savepoint.rollback()
@@ -542,19 +576,25 @@ def migrate_services(
         db.flush()
         logger.info(
             "Services batch: %d created, %d creds (%d skipped)",
-            created, creds_created, skipped,
+            created,
+            creds_created,
+            skipped,
         )
 
     db.flush()
     logger.info(
         "Services: %d created, %d access credentials, %d skipped, %d total",
-        created, creds_created, skipped, len(mapping),
+        created,
+        creds_created,
+        skipped,
+        len(mapping),
     )
     return mapping
 
 
 def migrate_custom_services(
-    conn, db,
+    conn,
+    db,
     customer_mapping: dict[int, uuid.UUID],
 ) -> None:
     """Migrate Splynx services_custom → Subscription."""
@@ -609,7 +649,11 @@ def migrate_custom_services(
         status_enum = _map_service_status(status_raw, is_deleted=is_deleted)
 
         start_date = row.get("start_date")
-        start_at = _parse_date(start_date) if start_date and str(start_date) != "0000-00-00" else None
+        start_at = (
+            _parse_date(start_date)
+            if start_date and str(start_date) != "0000-00-00"
+            else None
+        )
 
         subscription = Subscription(
             subscriber_id=subscriber_id,
@@ -629,11 +673,13 @@ def migrate_custom_services(
         try:
             db.add(subscription)
             db.flush()
-            db.add(SplynxIdMapping(
-                entity_type=SplynxEntityType.service,
-                splynx_id=mapping_id,
-                dotmac_id=subscription.id,
-            ))
+            db.add(
+                SplynxIdMapping(
+                    entity_type=SplynxEntityType.service,
+                    splynx_id=mapping_id,
+                    dotmac_id=subscription.id,
+                )
+            )
             savepoint.commit()
         except Exception as e:
             savepoint.rollback()
@@ -656,13 +702,34 @@ def run_phase1(dry_run: bool = True) -> None:
             if dry_run:
                 logger.info("DRY RUN — counting source data only")
                 tables = [
-                    ("customers (non-lead)", "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead'"),
-                    ("customers (non-lead, active)", "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead' AND status='active' AND deleted='0'"),
-                    ("customers (non-lead, blocked)", "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead' AND status='blocked' AND deleted='0'"),
-                    ("customers (non-lead, deleted)", "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead' AND deleted='1'"),
-                    ("customer_billing", "SELECT COUNT(*) as cnt FROM customer_billing"),
-                    ("customers_values", "SELECT COUNT(*) as cnt FROM customers_values"),
-                    ("services_internet", "SELECT COUNT(*) as cnt FROM services_internet"),
+                    (
+                        "customers (non-lead)",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead'",
+                    ),
+                    (
+                        "customers (non-lead, active)",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead' AND status='active' AND deleted='0'",
+                    ),
+                    (
+                        "customers (non-lead, blocked)",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead' AND status='blocked' AND deleted='0'",
+                    ),
+                    (
+                        "customers (non-lead, deleted)",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE category != 'lead' AND deleted='1'",
+                    ),
+                    (
+                        "customer_billing",
+                        "SELECT COUNT(*) as cnt FROM customer_billing",
+                    ),
+                    (
+                        "customers_values",
+                        "SELECT COUNT(*) as cnt FROM customers_values",
+                    ),
+                    (
+                        "services_internet",
+                        "SELECT COUNT(*) as cnt FROM services_internet",
+                    ),
                     ("services_custom", "SELECT COUNT(*) as cnt FROM services_custom"),
                 ]
                 for name, query in tables:
@@ -693,9 +760,11 @@ def run_phase1(dry_run: bool = True) -> None:
 
             # Summary
             from app.models.splynx_mapping import SplynxIdMapping
+
             counts = db.execute(
-                select(SplynxIdMapping.entity_type, func.count(SplynxIdMapping.id))
-                .group_by(SplynxIdMapping.entity_type)
+                select(
+                    SplynxIdMapping.entity_type, func.count(SplynxIdMapping.id)
+                ).group_by(SplynxIdMapping.entity_type)
             ).all()
             logger.info("=== Phase 1 complete ===")
             logger.info("--- SplynxIdMapping summary ---")
@@ -708,4 +777,6 @@ if __name__ == "__main__":
         run_phase1(dry_run=False)
     else:
         run_phase1(dry_run=True)
-        print("\nTo execute: poetry run python -m scripts.migration.phase1_customers_services --execute")
+        print(
+            "\nTo execute: poetry run python -m scripts.migration.phase1_customers_services --execute"
+        )

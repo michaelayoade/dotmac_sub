@@ -425,12 +425,10 @@ from app.models.subscriber import (  # noqa: F401
     ChannelType,
     ContactMethod,
     Gender,
-    NINVerificationStatus,
     Reseller,
     Subscriber,
     SubscriberChannel,
     SubscriberCustomField,
-    SubscriberNINVerification,
     SubscriberStatus,
 )
 from app.models.subscription_change import (  # noqa: F401

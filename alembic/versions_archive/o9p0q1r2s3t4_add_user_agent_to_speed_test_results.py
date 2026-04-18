@@ -25,7 +25,10 @@ def upgrade() -> None:
         return
     columns = {c["name"] for c in inspector.get_columns("speed_test_results")}
     if "user_agent" not in columns:
-        op.add_column("speed_test_results", sa.Column("user_agent", sa.String(length=500), nullable=True))
+        op.add_column(
+            "speed_test_results",
+            sa.Column("user_agent", sa.String(length=500), nullable=True),
+        )
 
 
 def downgrade() -> None:

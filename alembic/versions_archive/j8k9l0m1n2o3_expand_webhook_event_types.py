@@ -20,54 +20,54 @@ Adds new event types to support comprehensive webhook event system:
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = 'j8k9l0m1n2o3'
-down_revision = 'i7j8k9l0m1n2'
+revision = "j8k9l0m1n2o3"
+down_revision = "i7j8k9l0m1n2"
 branch_labels = None
 depends_on = None
 
 # New enum values to add
 NEW_VALUES = [
     # Subscriber events
-    'subscriber.updated',
-    'subscriber.suspended',
-    'subscriber.reactivated',
+    "subscriber.updated",
+    "subscriber.suspended",
+    "subscriber.reactivated",
     # Subscription events
-    'subscription.activated',
-    'subscription.suspended',
-    'subscription.resumed',
-    'subscription.canceled',
-    'subscription.upgraded',
-    'subscription.downgraded',
-    'subscription.expiring',
+    "subscription.activated",
+    "subscription.suspended",
+    "subscription.resumed",
+    "subscription.canceled",
+    "subscription.upgraded",
+    "subscription.downgraded",
+    "subscription.expiring",
     # Invoice events
-    'invoice.sent',
-    'invoice.overdue',
+    "invoice.sent",
+    "invoice.overdue",
     # Payment events
-    'payment.failed',
-    'payment.refunded',
+    "payment.failed",
+    "payment.refunded",
     # Usage events
-    'usage.warning',
-    'usage.exhausted',
-    'usage.topped_up',
+    "usage.warning",
+    "usage.exhausted",
+    "usage.topped_up",
     # Provisioning events
-    'provisioning.started',
-    'provisioning.failed',
+    "provisioning.started",
+    "provisioning.failed",
     # Service order events
-    'service_order.created',
-    'service_order.assigned',
-    'service_order.completed',
+    "service_order.created",
+    "service_order.assigned",
+    "service_order.completed",
     # Appointment events
-    'appointment.scheduled',
-    'appointment.missed',
+    "appointment.scheduled",
+    "appointment.missed",
     # Network events
-    'device.offline',
-    'device.online',
-    'session.started',
-    'session.ended',
+    "device.offline",
+    "device.online",
+    "session.started",
+    "session.ended",
     # Ticket events
-    'ticket.created',
-    'ticket.escalated',
-    'ticket.resolved',
+    "ticket.created",
+    "ticket.escalated",
+    "ticket.resolved",
 ]
 
 
@@ -75,9 +75,7 @@ def upgrade() -> None:
     # Add new values to the webhookeventtype enum
     # Using raw SQL since SQLAlchemy doesn't support altering enums directly
     for value in NEW_VALUES:
-        op.execute(
-            f"ALTER TYPE webhookeventtype ADD VALUE IF NOT EXISTS '{value}'"
-        )
+        op.execute(f"ALTER TYPE webhookeventtype ADD VALUE IF NOT EXISTS '{value}'")
 
 
 def downgrade() -> None:

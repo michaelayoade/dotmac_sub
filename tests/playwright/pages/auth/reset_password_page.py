@@ -23,7 +23,9 @@ class ResetPasswordPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the reset password page is loaded."""
-        expect(self.page.get_by_role("heading", name="Reset Password", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Reset Password", exact=True)
+        ).to_be_visible()
 
     def fill_password(self, password: str) -> None:
         """Fill the new password field."""

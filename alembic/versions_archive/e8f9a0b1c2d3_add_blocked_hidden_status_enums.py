@@ -31,7 +31,9 @@ def _column_exists(bind, table_name: str, column_name: str) -> bool:
     tables = set(inspector.get_table_names())
     if table_name not in tables:
         return False
-    return column_name in {column["name"] for column in inspector.get_columns(table_name)}
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
 
 
 def _get_enum_names(bind) -> set[str]:

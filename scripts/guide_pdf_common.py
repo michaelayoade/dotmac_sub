@@ -61,7 +61,9 @@ def _image_to_data_uri(path: Path, max_width: int, quality: int) -> str:
             mime = "image/png"
         else:
             img = img.convert("RGB")
-            img.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+            img.save(
+                buffer, format="JPEG", quality=quality, optimize=True, progressive=True
+            )
             mime = "image/jpeg"
 
     data = base64.b64encode(buffer.getvalue()).decode()
@@ -78,7 +80,9 @@ def embed_images(html: str, screenshots_dir: Path, max_width: int, quality: int)
             return match.group(0)
         return f'src="{_image_to_data_uri(image_path, max_width=max_width, quality=quality)}"'
 
-    return re.sub(r'src="([^"]+\.(?:png|jpg|jpeg|webp))"', replace_img, html, flags=re.IGNORECASE)
+    return re.sub(
+        r'src="([^"]+\.(?:png|jpg|jpeg|webp))"', replace_img, html, flags=re.IGNORECASE
+    )
 
 
 def _build_html(config: GuideConfig, md_html: str) -> str:

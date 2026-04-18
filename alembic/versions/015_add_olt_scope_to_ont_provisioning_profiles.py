@@ -42,9 +42,8 @@ def upgrade() -> None:
             sa.Column("olt_device_id", sa.UUID(), nullable=True),
         )
 
-    if (
-        "fk_ont_provisioning_profiles_olt_device_id"
-        not in _fk_names("ont_provisioning_profiles")
+    if "fk_ont_provisioning_profiles_olt_device_id" not in _fk_names(
+        "ont_provisioning_profiles"
     ):
         op.create_foreign_key(
             "fk_ont_provisioning_profiles_olt_device_id",
@@ -73,9 +72,8 @@ def downgrade() -> None:
             "ix_ont_provisioning_profiles_olt_device_id",
             table_name="ont_provisioning_profiles",
         )
-    if (
-        "fk_ont_provisioning_profiles_olt_device_id"
-        in _fk_names("ont_provisioning_profiles")
+    if "fk_ont_provisioning_profiles_olt_device_id" in _fk_names(
+        "ont_provisioning_profiles"
     ):
         op.drop_constraint(
             "fk_ont_provisioning_profiles_olt_device_id",

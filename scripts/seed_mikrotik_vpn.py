@@ -32,7 +32,7 @@ MIKROTIK_VPN_CONFIG = {
         "Uses TCP protocol and AES-256-CBC for maximum RouterOS compatibility. "
         "Run this as a separate OpenVPN instance on port 1195."
     ),
-    "listen_address": "0.0.0.0", # noqa: S104
+    "listen_address": "0.0.0.0",  # noqa: S104
     "port": 1195,
     "protocol": VpnProtocol.tcp,
     "vpn_network": "10.9.0.0",
@@ -101,9 +101,11 @@ def create_mikrotik_vpn_server(db, args):
     """Create or update the MikroTik VPN server configuration."""
 
     # Check if server already exists
-    existing = db.query(VpnServer).filter(
-        VpnServer.name == MIKROTIK_VPN_CONFIG["name"]
-    ).first()
+    existing = (
+        db.query(VpnServer)
+        .filter(VpnServer.name == MIKROTIK_VPN_CONFIG["name"])
+        .first()
+    )
 
     if existing and not args.force:
         print(f"MikroTik VPN Service already exists (ID: {existing.id})")
@@ -114,7 +116,14 @@ def create_mikrotik_vpn_server(db, args):
         # Update existing server
         print(f"Updating existing MikroTik VPN Service (ID: {existing.id})...")
         for key, value in MIKROTIK_VPN_CONFIG.items():
-            if key not in ("ca_cert", "ca_key", "server_cert", "server_key", "dh_params", "tls_auth_key"):
+            if key not in (
+                "ca_cert",
+                "ca_key",
+                "server_cert",
+                "server_key",
+                "dh_params",
+                "tls_auth_key",
+            ):
                 setattr(existing, key, value)
 
         if args.public_host:
@@ -196,7 +205,7 @@ Server Details:
   - VPN Network: {server.vpn_network}/{server.vpn_netmask}
   - Cipher: {server.cipher.value}
   - Auth: {server.auth_digest.value}
-  - Public Host: {server.public_host or 'NOT SET (configure in admin UI)'}
+  - Public Host: {server.public_host or "NOT SET (configure in admin UI)"}
 
 Next Steps:
 

@@ -75,9 +75,11 @@ def ip_management(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def reconcile_ip_pool_memberships(request: Request, db: Session = Depends(get_db)):
-    redirect_url = web_network_ip_actions_service.reconcile_ipv4_pool_memberships_redirect(
-        request,
-        db,
+    redirect_url = (
+        web_network_ip_actions_service.reconcile_ipv4_pool_memberships_redirect(
+            request,
+            db,
+        )
     )
     return RedirectResponse(url=redirect_url, status_code=303)
 
@@ -214,7 +216,9 @@ def ip_block_create(request: Request, db: Session = Depends(get_db)):
         parse_form_data_sync(request),
     )
     if result.success:
-        return RedirectResponse(result.redirect_url or "/admin/network/ip-management", status_code=303)
+        return RedirectResponse(
+            result.redirect_url or "/admin/network/ip-management", status_code=303
+        )
 
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
@@ -237,7 +241,9 @@ def ip_pool_create(request: Request, db: Session = Depends(get_db)):
         parse_form_data_sync(request),
     )
     if result.success:
-        return RedirectResponse(result.redirect_url or "/admin/network/ip-management", status_code=303)
+        return RedirectResponse(
+            result.redirect_url or "/admin/network/ip-management", status_code=303
+        )
 
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
@@ -586,7 +592,9 @@ def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
             status_code=404,
         )
     if result.success:
-        return RedirectResponse(result.redirect_url or "/admin/network/ip-management", status_code=303)
+        return RedirectResponse(
+            result.redirect_url or "/admin/network/ip-management", status_code=303
+        )
 
     if result.form_context:
         context = _base_context(

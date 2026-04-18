@@ -39,7 +39,6 @@ from app.models.network import (
     WanServiceType,
 )
 from app.models.ont_autofind import OltAutofindCandidate
-from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.network import olt_authorization_workflow
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -60,21 +59,6 @@ from app.services.network.vlan_chain import (
     VlanChainWarning,
     validate_chain,
 )
-
-
-def _create_business_subscriber(db_session) -> Subscriber:
-    """Create a minimal business subscriber for ownership constraints."""
-    subscriber = Subscriber(
-        first_name="Test",
-        last_name="Business",
-        email=f"business-{uuid.uuid4().hex[:8]}@example.test",
-        company_name=f"Test Org {uuid.uuid4().hex[:8]}",
-    )
-    subscriber.category = SubscriberCategory.business
-    db_session.add(subscriber)
-    db_session.commit()
-    db_session.refresh(subscriber)
-    return subscriber
 
 
 def _add_olt_auth_profile(
@@ -335,7 +319,9 @@ def test_force_authorize_requires_autofind_rediscovery_after_delete(
     )
 
     def _unexpected_authorize(*_args, **_kwargs):
-        raise AssertionError("authorize_ont should not run without autofind rediscovery")
+        raise AssertionError(
+            "authorize_ont should not run without autofind rediscovery"
+        )
 
     monkeypatch.setattr(
         "app.services.network.olt_ssh.authorize_ont",
@@ -426,7 +412,9 @@ def test_force_authorize_rejects_stale_cached_autofind_after_delete(
     )
 
     def _unexpected_authorize(*_args, **_kwargs):
-        raise AssertionError("stale cached autofind data must not authorize after delete")
+        raise AssertionError(
+            "stale cached autofind data must not authorize after delete"
+        )
 
     monkeypatch.setattr(
         "app.services.network.olt_ssh.authorize_ont",
@@ -1750,8 +1738,7 @@ class TestWebNetworkOltsMigration:
         assert ok is True
         assert status == "success"
         assert (
-            msg
-            == "ONT authorization and OLT network provisioning completed. "
+            msg == "ONT authorization and OLT network provisioning completed. "
             "Next action: configure ONT."
         )
         assert captured == {
@@ -1995,14 +1982,11 @@ class TestGetProfileTemplates:
     def test_get_profile_templates_returns_active_only(self, db_session) -> None:
         from app.services.web_network_onts import get_profile_templates
 
-        org = _create_business_subscriber(db_session)
         active = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
             name="Active Profile Test",
             is_active=True,
         )
         inactive = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
             name="Inactive Profile Test",
             is_active=False,
         )
@@ -2188,17 +2172,26 @@ class TestProvisioningUiTemplates:
 
         assert "Quick Status Strip" not in detail_template
         assert 'id="operational-health-container"' not in detail_template
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"' not in detail_template
+        assert (
+            'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"'
+            not in detail_template
+        )
         assert "Optical Signal Detail" not in detail_template
         assert "Status — single ONT state section" in detail_template
 
     def test_ont_detail_template_removes_duplicate_provisioning_controls(self) -> None:
         detail_template = Path("templates/admin/network/onts/detail.html").read_text()
 
-        assert '_sidebar_network_config.html' not in detail_template
-        assert '_service_intent_summary.html' not in detail_template
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/profile-form"' not in detail_template
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/firmware-form"' not in detail_template
+        assert "_sidebar_network_config.html" not in detail_template
+        assert "_service_intent_summary.html" not in detail_template
+        assert (
+            'hx-get="/admin/network/onts/{{ ont.id }}/profile-form"'
+            not in detail_template
+        )
+        assert (
+            'hx-get="/admin/network/onts/{{ ont.id }}/firmware-form"'
+            not in detail_template
+        )
         assert "/admin/network/onts/{{ ont.id }}/provision" in detail_template
 
 
@@ -2253,7 +2246,9 @@ class TestOntLocationDetailsHelpers:
         assert "/provision-status" not in template
 
     def test_provisioning_profile_links_use_profile_catalog_routes(self) -> None:
-        provision_template = Path("templates/admin/network/onts/provision.html").read_text()
+        provision_template = Path(
+            "templates/admin/network/onts/provision.html"
+        ).read_text()
         preview_template = Path(
             "templates/admin/network/onts/_profile_preview.html"
         ).read_text()
@@ -2596,7 +2591,6 @@ class TestProfileWanServiceVlanScope:
         try:
             ont_provisioning_profiles.create(
                 db_session,
-                owner_subscriber_id=None,
                 name="Missing Mgmt VLAN Profile",
                 olt_device_id=str(olt.id),
                 mgmt_vlan_tag=201,
@@ -2614,7 +2608,6 @@ class TestProfileWanServiceVlanScope:
 
         profile = ont_provisioning_profiles.create(
             db_session,
-            owner_subscriber_id=None,
             name="Valid Mgmt VLAN Profile",
             olt_device_id=str(olt.id),
             mgmt_vlan_tag=201,

@@ -857,29 +857,33 @@ class Subscribers(ListResponseMixin):
         )
 
         # Total and active counts in single query
-        counts = db.query(
-            func.count(Subscriber.id).label("total"),
-            func.count(Subscriber.id).filter(Subscriber.is_active.is_(True)).label(
-                "active"
-            ),
-            func.count(Subscriber.id)
-            .filter(Subscriber.status == SubscriberStatus.suspended)
-            .label("suspended"),
-            func.count(Subscriber.id)
-            .filter(Subscriber.status == SubscriberStatus.canceled)
-            .label("canceled"),
-            func.count(Subscriber.id)
-            .filter(effective_created_at >= thirty_days_ago)
-            .label("new_this_month"),
-            func.count(Subscriber.id)
-            .filter(
-                and_(
-                    Subscriber.status == SubscriberStatus.canceled,
-                    effective_updated_at >= thirty_days_ago,
+        counts = (
+            db.query(
+                func.count(Subscriber.id).label("total"),
+                func.count(Subscriber.id)
+                .filter(Subscriber.is_active.is_(True))
+                .label("active"),
+                func.count(Subscriber.id)
+                .filter(Subscriber.status == SubscriberStatus.suspended)
+                .label("suspended"),
+                func.count(Subscriber.id)
+                .filter(Subscriber.status == SubscriberStatus.canceled)
+                .label("canceled"),
+                func.count(Subscriber.id)
+                .filter(effective_created_at >= thirty_days_ago)
+                .label("new_this_month"),
+                func.count(Subscriber.id)
+                .filter(
+                    and_(
+                        Subscriber.status == SubscriberStatus.canceled,
+                        effective_updated_at >= thirty_days_ago,
+                    )
                 )
+                .label("churned_recent"),
             )
-            .label("churned_recent"),
-        ).filter(visible_filter).one()
+            .filter(visible_filter)
+            .one()
+        )
 
         total = counts.total or 0
         active_count = counts.active or 0

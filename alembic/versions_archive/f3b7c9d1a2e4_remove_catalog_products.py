@@ -18,7 +18,9 @@ def upgrade() -> None:
     existing_tables = set(inspector.get_table_names())
 
     if "catalog_offers" in existing_tables:
-        catalog_columns = {col["name"] for col in inspector.get_columns("catalog_offers")}
+        catalog_columns = {
+            col["name"] for col in inspector.get_columns("catalog_offers")
+        }
         if "product_id" in catalog_columns:
             op.drop_column("catalog_offers", "product_id")
 
@@ -36,7 +38,10 @@ def downgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column("catalog_offers", sa.Column("product_id", postgresql.UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "catalog_offers",
+        sa.Column("product_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
     op.create_foreign_key(
         "fk_catalog_offers_product_id_catalog_products",
         "catalog_offers",

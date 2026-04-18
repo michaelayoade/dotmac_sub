@@ -29,21 +29,40 @@ branch_labels = None
 depends_on = None
 
 
+def _drop_constraint_if_exists(table_name: str, constraint_name: str) -> None:
+    """Drop a foreign key constraint when upgrading older schemas."""
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing = {fk["name"] for fk in inspector.get_foreign_keys(table_name)}
+    if constraint_name in existing:
+        op.drop_constraint(constraint_name, table_name, type_="foreignkey")
+
+
+def _drop_column_if_exists(table_name: str, column_name: str) -> None:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing = {col["name"] for col in inspector.get_columns(table_name)}
+    if column_name in existing:
+        op.drop_column(table_name, column_name)
+
+
 def upgrade() -> None:
     """Remove subscription_id from device tables."""
     # Drop foreign key constraints first, then columns
 
     # cpe_devices
-    op.drop_constraint(
-        "cpe_devices_subscription_id_fkey", "cpe_devices", type_="foreignkey"
+    _drop_constraint_if_exists(
+        "cpe_devices",
+        "cpe_devices_subscription_id_fkey",
     )
-    op.drop_column("cpe_devices", "subscription_id")
+    _drop_column_if_exists("cpe_devices", "subscription_id")
 
     # ip_assignments - has both subscription_id and subscription_add_on_id
-    op.drop_constraint(
-        "ip_assignments_subscription_id_fkey", "ip_assignments", type_="foreignkey"
+    _drop_constraint_if_exists(
+        "ip_assignments",
+        "ip_assignments_subscription_id_fkey",
     )
-    op.drop_column("ip_assignments", "subscription_id")
+    _drop_column_if_exists("ip_assignments", "subscription_id")
 
     # Check if subscription_add_on_id column exists before dropping
     conn = op.get_bind()
@@ -58,18 +77,18 @@ def upgrade() -> None:
         op.drop_column("ip_assignments", "subscription_add_on_id")
 
     # ont_assignments
-    op.drop_constraint(
-        "ont_assignments_subscription_id_fkey", "ont_assignments", type_="foreignkey"
+    _drop_constraint_if_exists(
+        "ont_assignments",
+        "ont_assignments_subscription_id_fkey",
     )
-    op.drop_column("ont_assignments", "subscription_id")
+    _drop_column_if_exists("ont_assignments", "subscription_id")
 
     # splitter_port_assignments
-    op.drop_constraint(
-        "splitter_port_assignments_subscription_id_fkey",
+    _drop_constraint_if_exists(
         "splitter_port_assignments",
-        type_="foreignkey",
+        "splitter_port_assignments_subscription_id_fkey",
     )
-    op.drop_column("splitter_port_assignments", "subscription_id")
+    _drop_column_if_exists("splitter_port_assignments", "subscription_id")
 
 
 def downgrade() -> None:
@@ -118,7 +137,9 @@ def downgrade() -> None:
     )
     op.add_column(
         "ip_assignments",
-        sa.Column("subscription_add_on_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "subscription_add_on_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
     )
     op.create_foreign_key(
         "ip_assignments_subscription_add_on_id_fkey",

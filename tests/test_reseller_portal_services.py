@@ -353,7 +353,10 @@ def test_login_mfa_required(db_session):
     mock_request = MagicMock()
 
     with patch.object(reseller_portal, "auth_flow_service") as mock_auth:
-        mock_auth.auth_flow.login.return_value = {"mfa_required": True, "mfa_token": "mfa-123"}
+        mock_auth.auth_flow.login.return_value = {
+            "mfa_required": True,
+            "mfa_token": "mfa-123",
+        }
 
         result = reseller_portal.login(
             db_session,
@@ -503,7 +506,9 @@ def test_session_from_access_token_missing_sub(db_session):
         mock_auth.decode_access_token.return_value = {"session_id": "sess-123"}
 
         with pytest.raises(HTTPException) as exc_info:
-            reseller_portal._session_from_access_token(db_session, "token", "user@example.com", False)
+            reseller_portal._session_from_access_token(
+                db_session, "token", "user@example.com", False
+            )
 
         assert exc_info.value.status_code == 401
         assert "Invalid session" in exc_info.value.detail
@@ -515,7 +520,9 @@ def test_session_from_access_token_missing_session_id(db_session):
         mock_auth.decode_access_token.return_value = {"sub": "person-123"}
 
         with pytest.raises(HTTPException) as exc_info:
-            reseller_portal._session_from_access_token(db_session, "token", "user@example.com", False)
+            reseller_portal._session_from_access_token(
+                db_session, "token", "user@example.com", False
+            )
 
         assert exc_info.value.status_code == 401
         assert "Invalid session" in exc_info.value.detail
@@ -530,7 +537,9 @@ def test_session_from_access_token_auth_session_not_found(db_session):
         }
 
         with pytest.raises(HTTPException) as exc_info:
-            reseller_portal._session_from_access_token(db_session, "token", "user@example.com", False)
+            reseller_portal._session_from_access_token(
+                db_session, "token", "user@example.com", False
+            )
 
         assert exc_info.value.status_code == 401
         assert "Invalid session" in exc_info.value.detail
@@ -560,7 +569,9 @@ def test_session_from_access_token_session_inactive(db_session, person):
         }
 
         with pytest.raises(HTTPException) as exc_info:
-            reseller_portal._session_from_access_token(db_session, "token", "user@example.com", False)
+            reseller_portal._session_from_access_token(
+                db_session, "token", "user@example.com", False
+            )
 
         assert exc_info.value.status_code == 401
 
@@ -916,7 +927,9 @@ def test_create_impersonation_session_wrong_reseller(db_session, reseller_accoun
     assert exc_info.value.status_code == 404
 
 
-def test_create_impersonation_session_success_no_subscriptions(db_session, reseller_account, reseller):
+def test_create_impersonation_session_success_no_subscriptions(
+    db_session, reseller_account, reseller
+):
     """Test create_customer_impersonation_session creates session."""
     token = reseller_portal.create_customer_impersonation_session(
         db_session,
@@ -929,7 +942,9 @@ def test_create_impersonation_session_success_no_subscriptions(db_session, resel
     assert len(token) > 20
 
 
-def test_create_impersonation_session_with_active_subscription(db_session, reseller, subscriber):
+def test_create_impersonation_session_with_active_subscription(
+    db_session, reseller, subscriber
+):
     """Test impersonation session with active subscription."""
     from app.models.subscriber import Subscriber
     from app.schemas.catalog import SubscriptionCreate
@@ -971,6 +986,7 @@ def test_create_impersonation_session_with_active_subscription(db_session, resel
 
     # Set status to active to hit the active subscription path
     from app.models.catalog import SubscriptionStatus
+
     subscription.status = SubscriptionStatus.active
     db_session.commit()
 
@@ -985,12 +1001,15 @@ def test_create_impersonation_session_with_active_subscription(db_session, resel
 
     # Verify the customer session has the subscription
     from app.services import customer_portal
+
     session = customer_portal.get_customer_session(token)
     assert session is not None
     assert session["subscription_id"] == str(subscription.id)
 
 
-def test_create_impersonation_session_with_pending_subscription(db_session, reseller, subscriber):
+def test_create_impersonation_session_with_pending_subscription(
+    db_session, reseller, subscriber
+):
     """Test impersonation session with non-active subscription (fallback path)."""
     from app.models.subscriber import Subscriber
     from app.schemas.catalog import SubscriptionCreate
@@ -1042,6 +1061,7 @@ def test_create_impersonation_session_with_pending_subscription(db_session, rese
 
     # Verify the customer session has the subscription
     from app.services import customer_portal
+
     session = customer_portal.get_customer_session(token)
     assert session is not None
     assert session["subscription_id"] == str(subscription.id)

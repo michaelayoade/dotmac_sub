@@ -126,12 +126,11 @@ def seed_vendor_capabilities(db: Session) -> int:
     Returns:
         Number of capability rows inserted.
     """
-    count = db.scalar(
-        select(func.count()).select_from(VendorModelCapability)
-    )
+    count = db.scalar(select(func.count()).select_from(VendorModelCapability))
     if count and count > 0:
         logger.debug(
-            "Vendor capabilities table already has %d rows, skipping seed.", count,
+            "Vendor capabilities table already has %d rows, skipping seed.",
+            count,
         )
         return 0
 

@@ -6,10 +6,8 @@ Create Date: 2026-03-17 05:37:30.387244
 
 """
 
-
-
-revision = '7bc16c950bb4'
-down_revision = ('k5l6m7n8o9p0', 'p4q5r6s7t8u9')
+revision = "7bc16c950bb4"
+down_revision = ("k5l6m7n8o9p0", "p4q5r6s7t8u9")
 branch_labels = None
 depends_on = None
 

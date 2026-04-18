@@ -131,6 +131,7 @@ class FakeGenieACSClient:
         self.calls.append(("get_device", {"device_id": device_id}))
         if self.should_fail:
             from app.services.genieacs import GenieACSError
+
             raise GenieACSError("Device not found")
         return {
             "DeviceId": device_id,
@@ -139,11 +140,15 @@ class FakeGenieACSClient:
         }
 
     def get_parameters(self, device_id: str, params: list[str]) -> dict:
-        self.calls.append(("get_parameters", {"device_id": device_id, "params": params}))
+        self.calls.append(
+            ("get_parameters", {"device_id": device_id, "params": params})
+        )
         return {param: f"value_{param}" for param in params}
 
     def set_parameters(self, device_id: str, params: dict) -> bool:
-        self.calls.append(("set_parameters", {"device_id": device_id, "params": params}))
+        self.calls.append(
+            ("set_parameters", {"device_id": device_id, "params": params})
+        )
         return not self.should_fail
 
     def reboot(self, device_id: str) -> bool:

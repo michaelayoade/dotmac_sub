@@ -1,7 +1,5 @@
 """Tests for settings seed services."""
 
-
-
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import NotificationChannel, NotificationTemplate
 from app.services import settings_seed
@@ -22,10 +20,14 @@ class TestSeedAuthSettings:
 
         settings_seed.seed_auth_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.auth,
-            DomainSetting.key == "jwt_algorithm",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.auth,
+                DomainSetting.key == "jwt_algorithm",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "RS256"
 
@@ -37,10 +39,14 @@ class TestSeedAuthSettings:
 
         settings_seed.seed_auth_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.auth,
-            DomainSetting.key == "jwt_access_ttl_minutes",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.auth,
+                DomainSetting.key == "jwt_access_ttl_minutes",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "30"
 
@@ -52,10 +58,14 @@ class TestSeedAuthSettings:
 
         settings_seed.seed_auth_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.auth,
-            DomainSetting.key == "refresh_cookie_name",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.auth,
+                DomainSetting.key == "refresh_cookie_name",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "custom_refresh"
 
@@ -72,10 +82,14 @@ class TestSeedAuditSettings:
         """Test audit enabled setting is seeded."""
         settings_seed.seed_audit_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.audit,
-            DomainSetting.key == "enabled",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.audit,
+                DomainSetting.key == "enabled",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json is True
 
@@ -83,10 +97,14 @@ class TestSeedAuditSettings:
         """Test audit methods setting is seeded."""
         settings_seed.seed_audit_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.audit,
-            DomainSetting.key == "methods",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.audit,
+                DomainSetting.key == "methods",
+            )
+            .first()
+        )
         assert setting is not None
         assert "POST" in setting.value_json
 
@@ -103,10 +121,14 @@ class TestSeedImportsSettings:
         """Test max file bytes setting is seeded."""
         settings_seed.seed_imports_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.imports,
-            DomainSetting.key == "max_file_bytes",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.imports,
+                DomainSetting.key == "max_file_bytes",
+            )
+            .first()
+        )
         assert setting is not None
         assert int(setting.value_text) == 5 * 1024 * 1024
 
@@ -114,10 +136,14 @@ class TestSeedImportsSettings:
         """Test import rollback window setting is seeded."""
         settings_seed.seed_imports_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.imports,
-            DomainSetting.key == "import_rollback_window_hours",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.imports,
+                DomainSetting.key == "import_rollback_window_hours",
+            )
+            .first()
+        )
         assert setting is not None
         assert int(setting.value_text) == 24
 
@@ -125,10 +151,14 @@ class TestSeedImportsSettings:
         """Test import background threshold setting is seeded."""
         settings_seed.seed_imports_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.imports,
-            DomainSetting.key == "import_background_threshold_rows",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.imports,
+                DomainSetting.key == "import_background_threshold_rows",
+            )
+            .first()
+        )
         assert setting is not None
         assert int(setting.value_text) == 1000
 
@@ -136,10 +166,14 @@ class TestSeedImportsSettings:
         """Test import jobs log setting is seeded."""
         settings_seed.seed_imports_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.imports,
-            DomainSetting.key == "import_jobs_log",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.imports,
+                DomainSetting.key == "import_jobs_log",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json == []
 
@@ -156,10 +190,14 @@ class TestSeedGisSettings:
         """Test GIS sync enabled setting is seeded."""
         settings_seed.seed_gis_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.gis,
-            DomainSetting.key == "sync_enabled",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.gis,
+                DomainSetting.key == "sync_enabled",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json is True
 
@@ -167,10 +205,14 @@ class TestSeedGisSettings:
         """Test GIS sync interval setting is seeded."""
         settings_seed.seed_gis_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.gis,
-            DomainSetting.key == "sync_interval_minutes",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.gis,
+                DomainSetting.key == "sync_interval_minutes",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "60"
 
@@ -189,10 +231,14 @@ class TestSeedUsageSettings:
 
         settings_seed.seed_usage_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.usage,
-            DomainSetting.key == "usage_rating_enabled",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.usage,
+                DomainSetting.key == "usage_rating_enabled",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json is True
 
@@ -217,15 +263,21 @@ class TestSeedNotificationSettings:
 
         settings_seed.seed_notification_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.notification,
-            DomainSetting.key == "alert_notifications_enabled",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.notification,
+                DomainSetting.key == "alert_notifications_enabled",
+            )
+            .first()
+        )
         assert setting is not None
 
 
 class TestSeedNotificationTemplates:
-    def test_seed_missing_notification_templates_does_not_commit(self, db_session, monkeypatch):
+    def test_seed_missing_notification_templates_does_not_commit(
+        self, db_session, monkeypatch
+    ):
         commit_called = False
 
         def _unexpected_commit():
@@ -243,9 +295,11 @@ class TestSeedNotificationTemplates:
     def test_seeds_suspension_warning_template(self, db_session):
         settings_seed.seed_notification_templates(db_session)
 
-        template = db_session.query(NotificationTemplate).filter(
-            NotificationTemplate.code == "suspension_warning"
-        ).first()
+        template = (
+            db_session.query(NotificationTemplate)
+            .filter(NotificationTemplate.code == "suspension_warning")
+            .first()
+        )
 
         assert template is not None
         assert template.channel == NotificationChannel.email
@@ -255,9 +309,9 @@ class TestSeedNotificationTemplates:
 
         codes = {
             (row.code, row.channel)
-            for row in db_session.query(NotificationTemplate).filter(
-                NotificationTemplate.channel == NotificationChannel.sms
-            ).all()
+            for row in db_session.query(NotificationTemplate)
+            .filter(NotificationTemplate.channel == NotificationChannel.sms)
+            .all()
         }
 
         assert ("invoice_overdue", NotificationChannel.sms) in codes
@@ -279,10 +333,14 @@ class TestSeedCollectionsSettings:
 
         settings_seed.seed_collections_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.collections,
-            DomainSetting.key == "dunning_enabled",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "dunning_enabled",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json is False
 
@@ -292,10 +350,14 @@ class TestSeedCollectionsSettings:
 
         settings_seed.seed_collections_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.collections,
-            DomainSetting.key == "prepaid_skip_holidays",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "prepaid_skip_holidays",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json == ["2026-01-01"]
 
@@ -306,7 +368,8 @@ class TestSeedBillingNotificationSettings:
 
         settings = {
             row.key: row.value_text
-            for row in db_session.query(DomainSetting).filter(
+            for row in db_session.query(DomainSetting)
+            .filter(
                 DomainSetting.domain == SettingDomain.billing,
                 DomainSetting.key.in_(
                     [
@@ -316,7 +379,8 @@ class TestSeedBillingNotificationSettings:
                         "dunning_escalation_days",
                     ]
                 ),
-            ).all()
+            )
+            .all()
         }
 
         assert settings["suspension_grace_hours"] == "48"
@@ -344,10 +408,14 @@ class TestSeedGeocodingSettings:
 
         settings_seed.seed_geocoding_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.geocoding,
-            DomainSetting.key == "enabled",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "enabled",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_json is True
 
@@ -361,10 +429,14 @@ class TestSeedGeocodingSettings:
 
         settings_seed.seed_geocoding_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.geocoding,
-            DomainSetting.key == "provider",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.geocoding,
+                DomainSetting.key == "provider",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "google"
 
@@ -384,10 +456,14 @@ class TestSeedSchedulerSettings:
 
         settings_seed.seed_scheduler_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.scheduler,
-            DomainSetting.key == "broker_url",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.scheduler,
+                DomainSetting.key == "broker_url",
+            )
+            .first()
+        )
         assert setting is not None
         assert "redis://" in setting.value_text
 
@@ -397,10 +473,14 @@ class TestSeedSchedulerSettings:
 
         settings_seed.seed_scheduler_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.scheduler,
-            DomainSetting.key == "timezone",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.scheduler,
+                DomainSetting.key == "timezone",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "America/New_York"
 
@@ -422,10 +502,14 @@ class TestSeedRadiusSettings:
 
         settings_seed.seed_radius_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.radius,
-            DomainSetting.key == "auth_server_id",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.radius,
+                DomainSetting.key == "auth_server_id",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -443,10 +527,14 @@ class TestSeedBillingSettings:
 
         settings_seed.seed_billing_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "default_currency",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key == "default_currency",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "EUR"
 
@@ -456,10 +544,14 @@ class TestSeedBillingSettings:
 
         settings_seed.seed_billing_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "invoice_number_prefix",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key == "invoice_number_prefix",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "INVOICE-"
 
@@ -469,10 +561,14 @@ class TestSeedBillingSettings:
 
         settings_seed.seed_billing_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "auto_suspend_on_overdue",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key == "auto_suspend_on_overdue",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "false"
 
@@ -483,14 +579,22 @@ class TestSeedBillingSettings:
 
         settings_seed.seed_billing_settings(db_session)
 
-        refund = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "refund_policy",
-        ).first()
-        invoice_timing = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.billing,
-            DomainSetting.key == "invoice_timing",
-        ).first()
+        refund = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key == "refund_policy",
+            )
+            .first()
+        )
+        invoice_timing = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key == "invoice_timing",
+            )
+            .first()
+        )
         assert refund is not None
         assert refund.value_text == "prorated"
         assert invoice_timing is not None
@@ -511,10 +615,14 @@ class TestSeedCatalogSettings:
 
         settings_seed.seed_catalog_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.catalog,
-            DomainSetting.key == "default_proration_policy",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.catalog,
+                DomainSetting.key == "default_proration_policy",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "none"
 
@@ -533,10 +641,14 @@ class TestSeedSubscriberSettings:
 
         settings_seed.seed_subscriber_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.subscriber,
-            DomainSetting.key == "default_account_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.subscriber,
+                DomainSetting.key == "default_account_status",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "pending"
 
@@ -555,10 +667,14 @@ class TestSeedUsagePolicySettings:
 
         settings_seed.seed_usage_policy_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.usage,
-            DomainSetting.key == "default_charge_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.usage,
+                DomainSetting.key == "default_charge_status",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -576,10 +692,14 @@ class TestSeedCollectionsPolicySettings:
 
         settings_seed.seed_collections_policy_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.collections,
-            DomainSetting.key == "default_dunning_case_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "default_dunning_case_status",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -597,10 +717,14 @@ class TestSeedAuthPolicySettings:
 
         settings_seed.seed_auth_policy_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.auth,
-            DomainSetting.key == "default_auth_provider",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.auth,
+                DomainSetting.key == "default_auth_provider",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "ldap"
 
@@ -619,10 +743,14 @@ class TestSeedProvisioningSettings:
 
         settings_seed.seed_provisioning_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.provisioning,
-            DomainSetting.key == "default_service_order_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.provisioning,
+                DomainSetting.key == "default_service_order_status",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -640,10 +768,14 @@ class TestSeedProjectsSettings:
 
         settings_seed.seed_projects_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.projects,
-            DomainSetting.key == "default_project_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.projects,
+                DomainSetting.key == "default_project_status",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -663,10 +795,14 @@ class TestSeedNetworkPolicySettings:
 
         from app.models.domain_settings import SettingDomain
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.network,
-            DomainSetting.key == "default_device_type",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.network,
+                DomainSetting.key == "default_device_type",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -684,10 +820,14 @@ class TestSeedRadiusPolicySettings:
 
         settings_seed.seed_radius_policy_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.radius,
-            DomainSetting.key == "default_auth_port",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.radius,
+                DomainSetting.key == "default_auth_port",
+            )
+            .first()
+        )
         assert setting is not None
         assert setting.value_text == "1645"
 
@@ -706,10 +846,14 @@ class TestSeedInventorySettings:
 
         settings_seed.seed_inventory_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.inventory,
-            DomainSetting.key == "default_reservation_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.inventory,
+                DomainSetting.key == "default_reservation_status",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -727,10 +871,14 @@ class TestSeedLifecycleSettings:
 
         settings_seed.seed_lifecycle_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.lifecycle,
-            DomainSetting.key == "default_event_type",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.lifecycle,
+                DomainSetting.key == "default_event_type",
+            )
+            .first()
+        )
         assert setting is not None
 
 
@@ -748,8 +896,12 @@ class TestSeedCommsSettings:
 
         settings_seed.seed_comms_settings(db_session)
 
-        setting = db_session.query(DomainSetting).filter(
-            DomainSetting.domain == SettingDomain.comms,
-            DomainSetting.key == "default_notification_status",
-        ).first()
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.comms,
+                DomainSetting.key == "default_notification_status",
+            )
+            .first()
+        )
         assert setting is not None

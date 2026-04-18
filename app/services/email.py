@@ -495,10 +495,7 @@ def _configured_domain_url(db: Session | None, key: str) -> str:
 
 
 def _configured_app_url(db: Session | None) -> str:
-    return _normalize_base_url(
-        _env_value("APP_URL")
-        or _setting_value(db, "app_url")
-    )
+    return _normalize_base_url(_env_value("APP_URL") or _setting_value(db, "app_url"))
 
 
 def _get_app_url(db: Session | None, *, next_login_path: str | None = None) -> str:

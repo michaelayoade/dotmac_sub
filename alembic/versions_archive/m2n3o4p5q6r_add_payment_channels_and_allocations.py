@@ -65,8 +65,12 @@ def upgrade() -> None:
         sa.Column("account_type", collection_account_type, nullable=False),
         sa.Column("bank_name", sa.String(length=120), nullable=True),
         sa.Column("account_last4", sa.String(length=4), nullable=True),
-        sa.Column("currency", sa.String(length=3), nullable=False, server_default="NGN"),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "currency", sa.String(length=3), nullable=False, server_default="NGN"
+        ),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -78,7 +82,12 @@ def upgrade() -> None:
         sa.Column("id", sa.UUID(), primary_key=True),
         sa.Column("name", sa.String(length=160), nullable=False),
         sa.Column("channel_type", payment_channel_type, nullable=False),
-        sa.Column("provider_id", sa.UUID(), sa.ForeignKey("payment_providers.id"), nullable=True),
+        sa.Column(
+            "provider_id",
+            sa.UUID(),
+            sa.ForeignKey("payment_providers.id"),
+            nullable=True,
+        ),
         sa.Column(
             "default_collection_account_id",
             sa.UUID(),
@@ -86,8 +95,12 @@ def upgrade() -> None:
             nullable=True,
         ),
         sa.Column("fee_rules", sa.JSON(), nullable=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
+        sa.Column(
+            "is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")
+        ),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
@@ -97,7 +110,12 @@ def upgrade() -> None:
     op.create_table(
         "payment_channel_accounts",
         sa.Column("id", sa.UUID(), primary_key=True),
-        sa.Column("channel_id", sa.UUID(), sa.ForeignKey("payment_channels.id"), nullable=False),
+        sa.Column(
+            "channel_id",
+            sa.UUID(),
+            sa.ForeignKey("payment_channels.id"),
+            nullable=False,
+        ),
         sa.Column(
             "collection_account_id",
             sa.UUID(),
@@ -106,8 +124,12 @@ def upgrade() -> None:
         ),
         sa.Column("currency", sa.String(length=3), nullable=True),
         sa.Column("priority", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_default", sa.Boolean(), nullable=False, server_default=sa.text("false")
+        ),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint(
@@ -125,11 +147,15 @@ def upgrade() -> None:
 
     op.add_column(
         "payment_methods",
-        sa.Column("payment_channel_id", sa.UUID(), sa.ForeignKey("payment_channels.id")),
+        sa.Column(
+            "payment_channel_id", sa.UUID(), sa.ForeignKey("payment_channels.id")
+        ),
     )
     op.add_column(
         "payments",
-        sa.Column("payment_channel_id", sa.UUID(), sa.ForeignKey("payment_channels.id")),
+        sa.Column(
+            "payment_channel_id", sa.UUID(), sa.ForeignKey("payment_channels.id")
+        ),
     )
     op.add_column(
         "payments",
@@ -143,8 +169,12 @@ def upgrade() -> None:
     op.create_table(
         "payment_allocations",
         sa.Column("id", sa.UUID(), primary_key=True),
-        sa.Column("payment_id", sa.UUID(), sa.ForeignKey("payments.id"), nullable=False),
-        sa.Column("invoice_id", sa.UUID(), sa.ForeignKey("invoices.id"), nullable=False),
+        sa.Column(
+            "payment_id", sa.UUID(), sa.ForeignKey("payments.id"), nullable=False
+        ),
+        sa.Column(
+            "invoice_id", sa.UUID(), sa.ForeignKey("invoices.id"), nullable=False
+        ),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False, server_default="0.00"),
         sa.Column("memo", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -225,9 +255,7 @@ def upgrade() -> None:
     for currency in currencies:
         name = f"Unassigned {currency}"
         existing = bind.execute(
-            sa.text(
-                "SELECT id FROM collection_accounts WHERE name = :name"
-            ),
+            sa.text("SELECT id FROM collection_accounts WHERE name = :name"),
             {"name": name},
         ).fetchone()
         if existing:
@@ -377,7 +405,9 @@ def downgrade() -> None:
     op.drop_column("payments", "payment_channel_id")
     op.drop_column("payment_methods", "payment_channel_id")
 
-    op.drop_index("ix_payment_channel_accounts_lookup", table_name="payment_channel_accounts")
+    op.drop_index(
+        "ix_payment_channel_accounts_lookup", table_name="payment_channel_accounts"
+    )
     op.drop_table("payment_channel_accounts")
     op.drop_table("payment_channels")
     op.drop_table("collection_accounts")

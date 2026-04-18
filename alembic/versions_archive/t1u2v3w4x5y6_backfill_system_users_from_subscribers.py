@@ -168,4 +168,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Data backfill is intentionally non-destructive and not auto-reverted.
     pass
-

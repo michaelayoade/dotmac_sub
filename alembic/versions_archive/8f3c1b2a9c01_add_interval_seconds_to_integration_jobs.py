@@ -21,7 +21,10 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     columns = {col["name"] for col in inspector.get_columns("integration_jobs")}
     if "interval_seconds" not in columns:
-        op.add_column("integration_jobs", sa.Column("interval_seconds", sa.Integer(), nullable=True))
+        op.add_column(
+            "integration_jobs",
+            sa.Column("interval_seconds", sa.Integer(), nullable=True),
+        )
 
 
 def downgrade() -> None:

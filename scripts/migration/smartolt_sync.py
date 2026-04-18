@@ -31,14 +31,11 @@ logger = logging.getLogger("smartolt_sync")
 
 # ── SmartOLT API config ─────────────────────────────────────────────────────
 
-SMARTOLT_API_URL = os.environ.get(
-    "SMARTOLT_API_URL", "https://dotmac.smartolt.com/api"
-)
+SMARTOLT_API_URL = os.environ.get("SMARTOLT_API_URL", "https://dotmac.smartolt.com/api")
 SMARTOLT_API_KEY = os.environ.get("SMARTOLT_API_KEY", "")
 if not SMARTOLT_API_KEY:
     logger.warning(
-        "SMARTOLT_API_KEY not set — set via env var or .env file. "
-        "API calls will fail."
+        "SMARTOLT_API_KEY not set — set via env var or .env file. API calls will fail."
     )
 
 HEADERS = {"X-Token": SMARTOLT_API_KEY}
@@ -507,14 +504,15 @@ def sync_onts(
         from app.services.credential_crypto import encrypt_credential
     except ImportError:
         encrypt_credential = None  # type: ignore[assignment]
-        logger.warning("credential_crypto not available — PPPoE passwords will be stored plaintext")
+        logger.warning(
+            "credential_crypto not available — PPPoE passwords will be stored plaintext"
+        )
 
     # Build DB ONT index: (olt_uuid, db_board, port, onu_index) -> row
     db_ont_index: dict[tuple, dict] = {}
     rows = db.execute(
         text(
-            "SELECT id, serial_number, name, board, port, olt_device_id "
-            "FROM ont_units"
+            "SELECT id, serial_number, name, board, port, olt_device_id FROM ont_units"
         )
     ).fetchall()
     for r in rows:
@@ -538,9 +536,7 @@ def sync_onts(
 
     # Track PON ports: (olt_uuid, board, port) -> pon_port_uuid
     pon_port_index: dict[tuple, str] = {}
-    for r in db.execute(
-        text("SELECT id, olt_id, name FROM pon_ports")
-    ).fetchall():
+    for r in db.execute(text("SELECT id, olt_id, name FROM pon_ports")).fetchall():
         # Parse name like "pon-0/2/4" -> (olt_id, "0/2", "4")
         parts = r.name.replace("pon-", "").rsplit("/", 1)
         if len(parts) == 2:
@@ -571,7 +567,9 @@ def sync_onts(
 
         # Build common update fields from SmartOLT data
         zone_id = zone_map.get(o.get("zone_id") or "") if o.get("zone_id") else None
-        onu_type_id = type_map.get(o.get("onu_type_id") or "") if o.get("onu_type_id") else None
+        onu_type_id = (
+            type_map.get(o.get("onu_type_id") or "") if o.get("onu_type_id") else None
+        )
         wan_mode = WAN_MODE_MAP.get(o.get("wan_mode", ""))
         onu_mode = ONU_MODE_MAP.get(o.get("mode", ""))
         online_status = STATUS_MAP.get(o.get("status"), "unknown")
@@ -764,10 +762,7 @@ def link_subscribers(
     # Get existing ONT assignments keyed by ont_unit_id
     existing_assignments: dict[str, dict] = {}
     for r in db.execute(
-        text(
-            "SELECT id, ont_unit_id, subscriber_id, active "
-            "FROM ont_assignments"
-        )
+        text("SELECT id, ont_unit_id, subscriber_id, active FROM ont_assignments")
     ).fetchall():
         existing_assignments[str(r.ont_unit_id)] = {
             "id": str(r.id),
@@ -778,9 +773,7 @@ def link_subscribers(
     # Get PON port for each ONT
     ont_pon_ports: dict[str, str] = {}
     for r in db.execute(
-        text(
-            "SELECT oa.ont_unit_id, oa.pon_port_id FROM ont_assignments oa"
-        )
+        text("SELECT oa.ont_unit_id, oa.pon_port_id FROM ont_assignments oa")
     ).fetchall():
         ont_pon_ports[str(r.ont_unit_id)] = str(r.pon_port_id)
 
@@ -842,9 +835,7 @@ def link_subscribers(
                 pon_port_id = pon_port_index.get(bp)
 
             if not pon_port_id:
-                stats.errors.append(
-                    f"No PON port for ONT {sn} (uuid={ont_uuid})"
-                )
+                stats.errors.append(f"No PON port for ONT {sn} (uuid={ont_uuid})")
                 continue
 
             if not dry_run:
@@ -906,11 +897,15 @@ def main() -> None:
     group.add_argument("--dry-run", action="store_true", help="Preview changes only")
     group.add_argument("--execute", action="store_true", help="Apply changes to DB")
     parser.add_argument(
-        "--cache", action="store_true", default=True,
+        "--cache",
+        action="store_true",
+        default=True,
         help="Use cached SmartOLT data from /tmp/smartolt_onus.json if available",
     )
     parser.add_argument(
-        "--no-cache", action="store_false", dest="cache",
+        "--no-cache",
+        action="store_false",
+        dest="cache",
         help="Force fresh API fetch (ignore cache)",
     )
     args = parser.parse_args()

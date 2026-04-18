@@ -7,7 +7,9 @@ from fastapi import Request
 from app.services import crm_portal
 
 
-def test_tickets_list_context_skips_unfiltered_fetch_when_mapping_missing(monkeypatch) -> None:
+def test_tickets_list_context_skips_unfiltered_fetch_when_mapping_missing(
+    monkeypatch,
+) -> None:
     request = Mock(spec=Request)
     customer = {"id": "cust-1"}
 
@@ -49,7 +51,9 @@ def test_ticket_detail_context_rejects_access_when_mapping_missing(monkeypatch) 
     client.get_ticket.assert_not_called()
 
 
-def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(monkeypatch) -> None:
+def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(
+    monkeypatch,
+) -> None:
     request = Mock(spec=Request)
     customer = {"id": "cust-1"}
 
@@ -72,7 +76,9 @@ def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(monkeypatch)
     client.list_ticket_comments.assert_not_called()
 
 
-def test_handle_ticket_comment_rejects_ticket_with_wrong_subscriber(monkeypatch) -> None:
+def test_handle_ticket_comment_rejects_ticket_with_wrong_subscriber(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "app.services.crm_portal.resolve_crm_subscriber_id",
         lambda *_args, **_kwargs: "crm-sub-1",
@@ -94,7 +100,9 @@ def test_handle_ticket_comment_rejects_ticket_with_wrong_subscriber(monkeypatch)
     client.create_ticket_comment.assert_not_called()
 
 
-def test_work_orders_list_context_skips_unfiltered_fetch_when_mapping_missing(monkeypatch) -> None:
+def test_work_orders_list_context_skips_unfiltered_fetch_when_mapping_missing(
+    monkeypatch,
+) -> None:
     request = Mock(spec=Request)
     customer = {"id": "cust-1"}
 
@@ -158,10 +166,15 @@ def test_work_orders_list_context_merges_multiple_allowed_accounts(monkeypatch) 
         request, Mock(), customer, ["sub-1", "sub-2"]
     )
 
-    assert [work_order["id"] for work_order in context["work_orders"]] == ["wo-2", "wo-1"]
+    assert [work_order["id"] for work_order in context["work_orders"]] == [
+        "wo-2",
+        "wo-1",
+    ]
 
 
-def test_reseller_account_tickets_context_skips_unfiltered_fetch_when_mapping_missing(monkeypatch) -> None:
+def test_reseller_account_tickets_context_skips_unfiltered_fetch_when_mapping_missing(
+    monkeypatch,
+) -> None:
     request = Mock(spec=Request)
 
     monkeypatch.setattr(

@@ -34,6 +34,8 @@ def test_should_skip_observability_for_health_and_metrics():
 
 def test_request_path_prefers_route_template():
     request = _build_request("/admin/network/olts/123")
-    request.scope["route"] = type("Route", (), {"path": "/admin/network/olts/{olt_id}"})()
+    request.scope["route"] = type(
+        "Route", (), {"path": "/admin/network/olts/{olt_id}"}
+    )()
 
     assert observability_module._request_path(request) == "/admin/network/olts/{olt_id}"

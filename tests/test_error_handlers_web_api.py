@@ -67,7 +67,9 @@ def _request(app: FastAPI, method: str, path: str, **kwargs) -> httpx.Response:
 
 
 def test_web_404_renders_html_template() -> None:
-    resp = _request(_build_app(), "GET", "/missing-page", headers={"accept": "text/html"})
+    resp = _request(
+        _build_app(), "GET", "/missing-page", headers={"accept": "text/html"}
+    )
     assert resp.status_code == 404
     assert "text/html" in resp.headers.get("content-type", "")
     assert "Page not found" in resp.text
@@ -75,7 +77,9 @@ def test_web_404_renders_html_template() -> None:
 
 
 def test_web_http_exception_renders_html_template() -> None:
-    resp = _request(_build_app(), "GET", "/web-http-403", headers={"accept": "text/html"})
+    resp = _request(
+        _build_app(), "GET", "/web-http-403", headers={"accept": "text/html"}
+    )
     assert resp.status_code == 403
     assert "text/html" in resp.headers.get("content-type", "")
     assert "Forbidden area" in resp.text
@@ -89,7 +93,9 @@ def test_web_500_renders_html_template() -> None:
 
 
 def test_api_http_exception_returns_json() -> None:
-    resp = _request(_build_app(), "GET", "/api/v1/http-403", headers={"accept": "text/html"})
+    resp = _request(
+        _build_app(), "GET", "/api/v1/http-403", headers={"accept": "text/html"}
+    )
     assert resp.status_code == 403
     assert "application/json" in resp.headers.get("content-type", "")
     body = resp.json()

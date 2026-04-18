@@ -39,7 +39,9 @@ class TestCustomerRouteRegistration:
 
         found = False
         for route in router.routes:
-            if getattr(route, "path", "") == "/portal/support/new" and "GET" in getattr(route, "methods", set()):
+            if getattr(route, "path", "") == "/portal/support/new" and "GET" in getattr(
+                route, "methods", set()
+            ):
                 found = True
                 break
         assert found, "GET /portal/support/new route not found"
@@ -49,7 +51,9 @@ class TestCustomerRouteRegistration:
 
         found = False
         for route in router.routes:
-            if getattr(route, "path", "") == "/portal/support/new" and "POST" in getattr(route, "methods", set()):
+            if getattr(
+                route, "path", ""
+            ) == "/portal/support/new" and "POST" in getattr(route, "methods", set()):
                 found = True
                 break
         assert found, "POST /portal/support/new route not found"
@@ -59,16 +63,28 @@ class TestCustomerRouteRegistration:
         from app.web.customer.routes import router
 
         for route in router.routes:
-            if getattr(route, "path", "") == "/portal/profile/password" and "GET" in getattr(route, "methods", set()):
-                raise AssertionError("GET /portal/profile/password must not exist (PPPoE credential safety)")
+            if getattr(
+                route, "path", ""
+            ) == "/portal/profile/password" and "GET" in getattr(
+                route, "methods", set()
+            ):
+                raise AssertionError(
+                    "GET /portal/profile/password must not exist (PPPoE credential safety)"
+                )
 
     def test_password_change_post_route_removed(self) -> None:
         """Password change route must not exist — credentials are shared with PPPoE."""
         from app.web.customer.routes import router
 
         for route in router.routes:
-            if getattr(route, "path", "") == "/portal/profile/password" and "POST" in getattr(route, "methods", set()):
-                raise AssertionError("POST /portal/profile/password must not exist (PPPoE credential safety)")
+            if getattr(
+                route, "path", ""
+            ) == "/portal/profile/password" and "POST" in getattr(
+                route, "methods", set()
+            ):
+                raise AssertionError(
+                    "POST /portal/profile/password must not exist (PPPoE credential safety)"
+                )
 
     def test_support_info_route_exists(self) -> None:
         """Public support contact page must be accessible without auth."""
@@ -76,7 +92,11 @@ class TestCustomerRouteRegistration:
 
         found = False
         for route in auth_router.routes:
-            if getattr(route, "path", "") == "/portal/auth/support-info" and "GET" in getattr(route, "methods", set()):
+            if getattr(
+                route, "path", ""
+            ) == "/portal/auth/support-info" and "GET" in getattr(
+                route, "methods", set()
+            ):
                 found = True
                 break
         assert found, "GET /portal/auth/support-info route not found"
@@ -87,7 +107,11 @@ class TestCustomerRouteRegistration:
         found = False
         for route in router.routes:
             path = getattr(route, "path", "")
-            if "/portal/support/" in path and "comment" in path and "POST" in getattr(route, "methods", set()):
+            if (
+                "/portal/support/" in path
+                and "comment" in path
+                and "POST" in getattr(route, "methods", set())
+            ):
                 found = True
                 break
         assert found, "POST /portal/support/{ticket}/comment route not found"
@@ -170,6 +194,7 @@ class TestEventEmissionHelper:
         db = MagicMock()
         with patch("app.web.customer.routes.emit_event", create=True):
             from app.web.customer.routes import _emit_customer_event
+
             _emit_customer_event(db, "customer_login", {"subscriber_id": "test"})
 
 
@@ -184,7 +209,9 @@ class TestNotificationsRoute:
 
         found = False
         for route in router.routes:
-            if getattr(route, "path", "") == "/portal/notifications" and "GET" in getattr(route, "methods", set()):
+            if getattr(
+                route, "path", ""
+            ) == "/portal/notifications" and "GET" in getattr(route, "methods", set()):
                 found = True
                 break
         assert found, "GET /portal/notifications route not found"
@@ -195,7 +222,11 @@ class TestNotificationsRoute:
         found = False
         for route in router.routes:
             path = getattr(route, "path", "")
-            if "/portal/billing/invoices/" in path and "pdf" in path and "GET" in getattr(route, "methods", set()):
+            if (
+                "/portal/billing/invoices/" in path
+                and "pdf" in path
+                and "GET" in getattr(route, "methods", set())
+            ):
                 found = True
                 break
         assert found, "GET /portal/billing/invoices/{id}/pdf route not found"
@@ -217,7 +248,9 @@ class TestCaptiveRedirectPersistence:
         payload = SubscriberUpdate(captive_redirect_enabled=True)
         assert payload.captive_redirect_enabled is True
 
-    def test_save_radius_config_persists_explicit_captive_redirect_toggle(self, db_session) -> None:
+    def test_save_radius_config_persists_explicit_captive_redirect_toggle(
+        self, db_session
+    ) -> None:
         from app.services.domain_settings import radius_settings
         from app.services.web_system_config import save_radius_config
 
@@ -274,7 +307,9 @@ class TestRestrictedContextHelpers:
         db = MagicMock()
         db.query.return_value = scalar_query
 
-        total = get_total_outstanding_balance(db, "00000000-0000-0000-0000-000000000001")
+        total = get_total_outstanding_balance(
+            db, "00000000-0000-0000-0000-000000000001"
+        )
 
         assert total == 125.5
 
@@ -316,13 +351,17 @@ class TestPlanChangeUiHelpers:
 
         assert "prorated invoice or credit note" in copy["billing_message"]
 
-    def test_get_fup_status_uses_highest_active_rule_threshold_for_allowance(self) -> None:
+    def test_get_fup_status_uses_highest_active_rule_threshold_for_allowance(
+        self,
+    ) -> None:
         from app.models.fup import FupDataUnit
         from app.services.customer_portal_flow_services import _get_fup_status
 
         db = MagicMock()
         subscription_id = "00000000-0000-0000-0000-000000000123"
-        db.get.return_value = SimpleNamespace(next_billing_at=datetime(2026, 3, 30, tzinfo=UTC))
+        db.get.return_value = SimpleNamespace(
+            next_billing_at=datetime(2026, 3, 30, tzinfo=UTC)
+        )
 
         query = MagicMock()
         db.query.return_value = query
@@ -332,8 +371,18 @@ class TestPlanChangeUiHelpers:
         policy = SimpleNamespace(
             is_active=True,
             rules=[
-                SimpleNamespace(is_active=True, sort_order=1, threshold_amount=80, threshold_unit=FupDataUnit.gb),
-                SimpleNamespace(is_active=True, sort_order=2, threshold_amount=120, threshold_unit=FupDataUnit.gb),
+                SimpleNamespace(
+                    is_active=True,
+                    sort_order=1,
+                    threshold_amount=80,
+                    threshold_unit=FupDataUnit.gb,
+                ),
+                SimpleNamespace(
+                    is_active=True,
+                    sort_order=2,
+                    threshold_amount=120,
+                    threshold_unit=FupDataUnit.gb,
+                ),
             ],
             offer=None,
         )
@@ -370,7 +419,12 @@ class TestPlanChangeUiHelpers:
         policy = SimpleNamespace(
             is_active=True,
             rules=[
-                SimpleNamespace(is_active=True, sort_order=1, threshold_amount=10, threshold_unit=FupDataUnit.gb),
+                SimpleNamespace(
+                    is_active=True,
+                    sort_order=1,
+                    threshold_amount=10,
+                    threshold_unit=FupDataUnit.gb,
+                ),
             ],
             offer=None,
         )
@@ -378,14 +432,18 @@ class TestPlanChangeUiHelpers:
         from unittest.mock import patch
 
         with patch("app.services.fup.FupPolicies.get_by_offer", return_value=policy):
-            status = _get_fup_status(db_session, str(catalog_offer.id), str(subscription.id))
+            status = _get_fup_status(
+                db_session, str(catalog_offer.id), str(subscription.id)
+            )
 
         assert status is not None
         assert status["usage_gb"] == 3.0
 
 
 class TestPortalServiceVisibility:
-    def test_services_page_includes_blocked_subscription(self, db_session, subscription, subscriber) -> None:
+    def test_services_page_includes_blocked_subscription(
+        self, db_session, subscription, subscriber
+    ) -> None:
         from app.models.catalog import SubscriptionStatus
         from app.services.customer_portal_flow_services import get_services_page
 
@@ -463,7 +521,9 @@ class TestPortalNotificationsPage:
 
 
 class TestPaymentSuccessBanner:
-    def test_payment_success_only_marks_service_restored_after_post_payment_check(self) -> None:
+    def test_payment_success_only_marks_service_restored_after_post_payment_check(
+        self,
+    ) -> None:
         from unittest.mock import patch
 
         from app.web.customer.routes import customer_verify_payment
@@ -480,10 +540,22 @@ class TestPaymentSuccessBanner:
         template_response = MagicMock(name="template_response")
 
         with (
-            patch("app.web.customer.routes.get_current_customer_from_request", return_value=customer),
-            patch("app.web.customer.routes.customer_portal.verify_and_record_payment", return_value=result),
-            patch("app.web.customer.routes.is_subscriber_restricted", side_effect=[True, False]),
-            patch("app.web.customer.routes.templates.TemplateResponse", return_value=template_response) as render,
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_payment",
+                return_value=result,
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                side_effect=[True, False],
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
         ):
             response = customer_verify_payment(
                 request=request,
@@ -497,7 +569,9 @@ class TestPaymentSuccessBanner:
         assert context["was_restricted"] is True
         assert context["service_restored"] is True
 
-    def test_payment_success_does_not_claim_restoration_after_partial_payment(self) -> None:
+    def test_payment_success_does_not_claim_restoration_after_partial_payment(
+        self,
+    ) -> None:
         from unittest.mock import patch
 
         from app.web.customer.routes import customer_verify_payment
@@ -514,10 +588,22 @@ class TestPaymentSuccessBanner:
         template_response = MagicMock(name="template_response")
 
         with (
-            patch("app.web.customer.routes.get_current_customer_from_request", return_value=customer),
-            patch("app.web.customer.routes.customer_portal.verify_and_record_payment", return_value=result),
-            patch("app.web.customer.routes.is_subscriber_restricted", side_effect=[True, True]),
-            patch("app.web.customer.routes.templates.TemplateResponse", return_value=template_response) as render,
+            patch(
+                "app.web.customer.routes.get_current_customer_from_request",
+                return_value=customer,
+            ),
+            patch(
+                "app.web.customer.routes.customer_portal.verify_and_record_payment",
+                return_value=result,
+            ),
+            patch(
+                "app.web.customer.routes.is_subscriber_restricted",
+                side_effect=[True, True],
+            ),
+            patch(
+                "app.web.customer.routes.templates.TemplateResponse",
+                return_value=template_response,
+            ) as render,
         ):
             response = customer_verify_payment(
                 request=request,
@@ -731,10 +817,14 @@ class TestSuspendResumeServiceLayer:
         assert result["days"] == 7
 
         # Verify lock was created
-        lock = db_session.query(EnforcementLock).filter(
-            EnforcementLock.subscription_id == subscription.id,
-            EnforcementLock.reason == EnforcementReason.customer_hold,
-        ).first()
+        lock = (
+            db_session.query(EnforcementLock)
+            .filter(
+                EnforcementLock.subscription_id == subscription.id,
+                EnforcementLock.reason == EnforcementReason.customer_hold,
+            )
+            .first()
+        )
         assert lock is not None
         assert lock.is_active is True
 
@@ -791,10 +881,14 @@ class TestSuspendResumeServiceLayer:
         assert subscription.status == SubscriptionStatus.active
 
         # Verify lock was resolved
-        lock = db_session.query(EnforcementLock).filter(
-            EnforcementLock.subscription_id == subscription.id,
-            EnforcementLock.reason == EnforcementReason.customer_hold,
-        ).first()
+        lock = (
+            db_session.query(EnforcementLock)
+            .filter(
+                EnforcementLock.subscription_id == subscription.id,
+                EnforcementLock.reason == EnforcementReason.customer_hold,
+            )
+            .first()
+        )
         assert lock is not None
         assert lock.is_active is False
 
@@ -1037,9 +1131,7 @@ class TestVacationHoldCeleryTask:
         mock_session.rollback = db_session.rollback
         mock_session.scalars = db_session.scalars
 
-        with patch(
-            "app.tasks.vacation_holds.SessionLocal", return_value=mock_session
-        ):
+        with patch("app.tasks.vacation_holds.SessionLocal", return_value=mock_session):
             result = resume_expired_holds()
 
         assert result["total"] >= 1
@@ -1080,9 +1172,7 @@ class TestVacationHoldCeleryTask:
         mock_session.rollback = db_session.rollback
         mock_session.scalars = db_session.scalars
 
-        with patch(
-            "app.tasks.vacation_holds.SessionLocal", return_value=mock_session
-        ):
+        with patch("app.tasks.vacation_holds.SessionLocal", return_value=mock_session):
             result = resume_expired_holds()
 
         # Should not resume since resume_at is in the future
@@ -1123,9 +1213,7 @@ class TestVacationHoldCeleryTask:
         mock_session.scalars = db_session.scalars
 
         # Mock restore_subscription to raise an error
-        with patch(
-            "app.tasks.vacation_holds.SessionLocal", return_value=mock_session
-        ):
+        with patch("app.tasks.vacation_holds.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.vacation_holds.restore_subscription",
                 side_effect=Exception("Test error"),
