@@ -23,7 +23,10 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     # Create event status enum
     event_status_enum = postgresql.ENUM(
-        "pending", "processing", "completed", "failed",
+        "pending",
+        "processing",
+        "completed",
+        "failed",
         name="eventstatus",
         create_type=False,
     )
@@ -33,13 +36,18 @@ def upgrade() -> None:
     op.create_table(
         "event_store",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("event_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True),
+        sa.Column(
+            "event_id", postgresql.UUID(as_uuid=True), nullable=False, unique=True
+        ),
         sa.Column("event_type", sa.String(100), nullable=False),
         sa.Column("payload", postgresql.JSONB, nullable=False, server_default="{}"),
         sa.Column(
             "status",
             postgresql.ENUM(
-                "pending", "processing", "completed", "failed",
+                "pending",
+                "processing",
+                "completed",
+                "failed",
                 name="eventstatus",
                 create_type=False,
             ),

@@ -151,9 +151,7 @@ def _run_snmp_walk(
         raise RuntimeError(f"Only SNMP v2c supported, got {version}")
 
     community = (
-        decrypt_credential(target.snmp_community)
-        if target.snmp_community
-        else ""
+        decrypt_credential(target.snmp_community) if target.snmp_community else ""
     )
     if not community:
         raise RuntimeError("SNMP community not configured")
@@ -464,9 +462,7 @@ def discover_olt_hardware_audited(
     return ok, message, stats
 
 
-def _update_olt_system_info(
-    db: Session, olt: OLTDevice, sys_lines: list[str]
-) -> None:
+def _update_olt_system_info(db: Session, olt: OLTDevice, sys_lines: list[str]) -> None:
     """Update OLT firmware/software version from sysDescr."""
     if not sys_lines:
         return
@@ -509,9 +505,7 @@ def _upsert_shelves(
     """Upsert OltShelf records from chassis entities."""
     existing = {
         s.shelf_number: s
-        for s in db.scalars(
-            select(OltShelf).where(OltShelf.olt_id == olt.id)
-        ).all()
+        for s in db.scalars(select(OltShelf).where(OltShelf.olt_id == olt.id)).all()
     }
 
     result: dict[int, OltShelf] = dict(existing)
@@ -602,7 +596,9 @@ def _upsert_cards(
             resolved_shelf = shelf_by_number.get(0)
             shelf_num = 0
         if not resolved_shelf:
-            stats.errors.append(f"No shelf for card {entity.name} (entity {entity.index})")
+            stats.errors.append(
+                f"No shelf for card {entity.name} (entity {entity.index})"
+            )
             continue
 
         key = (shelf_num, slot_num)

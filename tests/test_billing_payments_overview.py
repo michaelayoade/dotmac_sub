@@ -19,7 +19,9 @@ from app.services.web_billing_payments import (
 )
 
 
-def _create_payment_method(db_session, account_id, method_type: PaymentMethodType) -> PaymentMethod:
+def _create_payment_method(
+    db_session, account_id, method_type: PaymentMethodType
+) -> PaymentMethod:
     method = PaymentMethod(
         account_id=account_id,
         method_type=method_type,
@@ -98,7 +100,9 @@ def test_build_payments_list_data_filters_by_status_and_method(db_session, subsc
 
 
 def test_build_payments_list_data_search_and_date_range(db_session, subscriber):
-    method = _create_payment_method(db_session, subscriber.id, PaymentMethodType.transfer)
+    method = _create_payment_method(
+        db_session, subscriber.id, PaymentMethodType.transfer
+    )
     now = datetime.now(UTC)
     _create_payment(
         db_session,
@@ -159,7 +163,9 @@ def test_render_payments_csv_contains_narration_and_method(db_session, subscribe
 
 
 def test_build_payments_list_data_unallocated_only(db_session, subscriber):
-    method = _create_payment_method(db_session, subscriber.id, PaymentMethodType.transfer)
+    method = _create_payment_method(
+        db_session, subscriber.id, PaymentMethodType.transfer
+    )
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
@@ -271,7 +277,9 @@ def test_build_payments_list_data_filters_by_partner(db_session):
     assert result["selected_partner_id"] == str(reseller_a.id)
 
 
-def test_build_payments_list_data_includes_status_totals_for_filtered_set(db_session, subscriber):
+def test_build_payments_list_data_includes_status_totals_for_filtered_set(
+    db_session, subscriber
+):
     now = datetime.now(UTC)
     _create_payment(
         db_session,

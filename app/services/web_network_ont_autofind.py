@@ -237,7 +237,11 @@ def sync_olt_autofind_entries(
                 None,
             )
         collision = by_exact_key.get((fsp, serial_number))
-        if collision is not None and candidate is not None and collision.id != candidate.id:
+        if (
+            collision is not None
+            and candidate is not None
+            and collision.id != candidate.id
+        ):
             candidate.is_active = False
             candidate.resolution_reason = "duplicate"
             candidate.resolved_at = now
@@ -283,8 +287,7 @@ def sync_olt_autofind_entries(
 
     for candidate in active_entries:
         keys = {
-            (candidate.fsp, serial)
-            for serial in _candidate_serial_values(candidate)
+            (candidate.fsp, serial) for serial in _candidate_serial_values(candidate)
         }
         if keys.intersection(seen_keys):
             continue
@@ -346,7 +349,10 @@ def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
     if candidate.is_active:
         return False, "Candidate is already active"
     if candidate.resolution_reason != "disappeared":
-        return False, f"Cannot restore candidate with resolution: {candidate.resolution_reason}"
+        return (
+            False,
+            f"Cannot restore candidate with resolution: {candidate.resolution_reason}",
+        )
 
     candidate.is_active = True
     candidate.resolution_reason = None
@@ -402,16 +408,17 @@ def build_unconfigured_onts_page_data(
     if selected_resolution not in {"authorized", "disappeared"}:
         selected_resolution = ""
 
-    query = (
-        db.query(OltAutofindCandidate, OLTDevice)
-        .join(OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id)
+    query = db.query(OltAutofindCandidate, OLTDevice).join(
+        OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id
     )
     if selected_view == "active":
         query = query.filter(OltAutofindCandidate.is_active.is_(True))
     elif selected_view == "history":
         query = query.filter(OltAutofindCandidate.is_active.is_(False))
     if selected_resolution:
-        query = query.filter(OltAutofindCandidate.resolution_reason == selected_resolution)
+        query = query.filter(
+            OltAutofindCandidate.resolution_reason == selected_resolution
+        )
     if olt_id:
         query = query.filter(OltAutofindCandidate.olt_id == olt_id)
     if search:

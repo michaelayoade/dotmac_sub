@@ -81,7 +81,9 @@ def validate_all_parsers_task() -> dict:
     summary = {}
     for cmd_key, validations in results.items():
         total = len(validations)
-        passed = sum(1 for v in validations if v.get("success") and v.get("row_count", 0) > 0)
+        passed = sum(
+            1 for v in validations if v.get("success") and v.get("row_count", 0) > 0
+        )
         warnings = sum(1 for v in validations if v.get("warnings"))
 
         summary[cmd_key] = {
@@ -130,11 +132,13 @@ def capture_all_olts_task(force: bool = False) -> dict:
                 correlation_id=f"olt_capture:{olt.id}",
                 source="capture_all_olts_task",
             )
-            results.append({
-                "olt_id": str(olt.id),
-                "olt_name": olt.name,
-                "task_id": task.id,
-            })
+            results.append(
+                {
+                    "olt_id": str(olt.id),
+                    "olt_name": olt.name,
+                    "task_id": task.id,
+                }
+            )
 
         return {
             "queued": len(results),

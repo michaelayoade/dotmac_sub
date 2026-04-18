@@ -19,7 +19,9 @@ def run_simple_v2c_walk(
         host = f"{host}:{linked.snmp_port}"
     if (linked.snmp_version or "v2c").lower() not in {"v2c", "2c"}:
         raise RuntimeError("Only SNMP v2c is supported for ONU telemetry sync")
-    community = decrypt_credential(linked.snmp_community) if linked.snmp_community else ""
+    community = (
+        decrypt_credential(linked.snmp_community) if linked.snmp_community else ""
+    )
     if not community:
         raise RuntimeError("SNMP community is not configured")
 

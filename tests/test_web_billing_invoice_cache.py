@@ -41,4 +41,6 @@ def test_build_cache_page_state_loads_accounts_without_distinct_subscriber_rows(
     )
 
     assert state["accounts"]
-    assert str(subscriber_account.id) in {str(account.id) for account in state["accounts"]}
+    assert str(subscriber_account.id) in {
+        str(account.id) for account in state["accounts"]
+    }

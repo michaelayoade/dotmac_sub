@@ -30,6 +30,7 @@ from app.services.network.olt_ssh_ont._common import OntStatusEntry, RegisteredO
 # 1. Event type definitions
 # ---------------------------------------------------------------------------
 
+
 class TestOltEventTypes:
     """Verify OLT/ONT event types are registered."""
 
@@ -220,9 +221,11 @@ class TestOltOntStatusBySerial:
         assert "may only contain" in message
         assert status == {}
 
+
 # ---------------------------------------------------------------------------
 # 2. OLT CRUD emits events
 # ---------------------------------------------------------------------------
+
 
 class TestOltCrudEvents:
     """Verify OLT CRUD operations emit events."""
@@ -273,6 +276,7 @@ class TestOltCrudEvents:
 # 3. Multi-vendor signal parsing
 # ---------------------------------------------------------------------------
 
+
 class TestMultiVendorSignalParsing:
     """Test signal value parsing across vendors."""
 
@@ -315,6 +319,7 @@ class TestMultiVendorSignalParsing:
 # 4. Online status parsing
 # ---------------------------------------------------------------------------
 
+
 class TestOnlineStatusParsing:
     def test_code_1_is_online(self) -> None:
         assert _parse_online_status("1") is True
@@ -350,6 +355,7 @@ class TestOfflineReasonDerivation:
 # 5. Signal classification
 # ---------------------------------------------------------------------------
 
+
 class TestSignalClassification:
     def test_good_signal(self) -> None:
         assert classify_signal(-20.0) == "good"
@@ -364,13 +370,20 @@ class TestSignalClassification:
         assert classify_signal(None) == "unknown"
 
     def test_custom_thresholds(self) -> None:
-        assert classify_signal(-22.0, warn_threshold=-20.0, crit_threshold=-24.0) == "warning"
-        assert classify_signal(-25.0, warn_threshold=-20.0, crit_threshold=-24.0) == "critical"
+        assert (
+            classify_signal(-22.0, warn_threshold=-20.0, crit_threshold=-24.0)
+            == "warning"
+        )
+        assert (
+            classify_signal(-25.0, warn_threshold=-20.0, crit_threshold=-24.0)
+            == "critical"
+        )
 
 
 # ---------------------------------------------------------------------------
 # 6. DeviceStatus enum on OLTDevice
 # ---------------------------------------------------------------------------
+
 
 class TestDeviceStatusEnum:
     def test_enum_values(self) -> None:
@@ -407,6 +420,7 @@ class TestDeviceStatusEnum:
 # 7. Firmware version extraction
 # ---------------------------------------------------------------------------
 
+
 class TestFirmwareExtraction:
     def test_huawei_vrp_version(self) -> None:
         from app.services.web_network_olts import _extract_firmware_version
@@ -436,6 +450,7 @@ VRP (R) software, Version V800R021C10SPC100
 # 8. OLT schema fields
 # ---------------------------------------------------------------------------
 
+
 class TestOltSchemaFields:
     def test_create_schema_has_firmware_fields(self) -> None:
         schema = OLTDeviceCreate(
@@ -460,6 +475,7 @@ class TestOltSchemaFields:
 # 9. Backup integrity hash
 # ---------------------------------------------------------------------------
 
+
 class TestBackupIntegrity:
     def test_sha256_hash_computed(self) -> None:
         config_text = "# OLT Config\nsysname test-olt\n"
@@ -482,11 +498,15 @@ class TestBackupIntegrity:
 # 10. Notification handler template mapping
 # ---------------------------------------------------------------------------
 
+
 class TestNotificationTemplateMapping:
     def test_ont_events_mapped_to_templates(self) -> None:
         from app.services.events.handlers.notification import EVENT_TYPE_TO_TEMPLATE
 
         assert EVENT_TYPE_TO_TEMPLATE[EventType.ont_offline] == "ont_offline"
         assert EVENT_TYPE_TO_TEMPLATE[EventType.ont_online] == "ont_online"
-        assert EVENT_TYPE_TO_TEMPLATE[EventType.ont_signal_degraded] == "ont_signal_degraded"
+        assert (
+            EVENT_TYPE_TO_TEMPLATE[EventType.ont_signal_degraded]
+            == "ont_signal_degraded"
+        )
         assert EVENT_TYPE_TO_TEMPLATE[EventType.ont_discovered] == "ont_discovered"

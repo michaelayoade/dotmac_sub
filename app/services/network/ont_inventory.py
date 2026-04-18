@@ -109,7 +109,9 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     db.refresh(ont)
 
     parts = []
-    if active_assignment is not None and getattr(active_assignment, "pon_port_id", None):
+    if active_assignment is not None and getattr(
+        active_assignment, "pon_port_id", None
+    ):
         parts.append("OLT service state removed")
     if active_assignments:
         assignment_count = len(active_assignments)

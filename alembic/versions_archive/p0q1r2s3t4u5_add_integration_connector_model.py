@@ -28,11 +28,19 @@ def upgrade() -> None:
 
     # Create enum types separately with checkfirst
     connector_type_enum = sa.Enum(
-        "payment", "accounting", "messaging", "network", "crm", "voice", "custom",
+        "payment",
+        "accounting",
+        "messaging",
+        "network",
+        "crm",
+        "voice",
+        "custom",
         name="integrationconnectortype",
     )
     status_type_enum = sa.Enum(
-        "enabled", "disabled", "not_installed",
+        "enabled",
+        "disabled",
+        "not_installed",
         name="integrationconnectorstatus",
     )
     connector_type_enum.create(bind, checkfirst=True)
@@ -40,12 +48,22 @@ def upgrade() -> None:
 
     # Use postgresql ENUM with create_type=False so table DDL doesn't re-create them
     ct_col = ENUM(
-        "payment", "accounting", "messaging", "network", "crm", "voice", "custom",
-        name="integrationconnectortype", create_type=False,
+        "payment",
+        "accounting",
+        "messaging",
+        "network",
+        "crm",
+        "voice",
+        "custom",
+        name="integrationconnectortype",
+        create_type=False,
     )
     st_col = ENUM(
-        "enabled", "disabled", "not_installed",
-        name="integrationconnectorstatus", create_type=False,
+        "enabled",
+        "disabled",
+        "not_installed",
+        name="integrationconnectorstatus",
+        create_type=False,
     )
 
     op.create_table(

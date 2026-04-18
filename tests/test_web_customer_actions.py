@@ -71,7 +71,9 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
     assert updated.payment_method == "transfer"
 
 
-def test_update_business_customer_applies_billing_overrides_to_linked_subscribers(db_session):
+def test_update_business_customer_applies_billing_overrides_to_linked_subscribers(
+    db_session,
+):
     tax_rate = TaxRate(name="Reduced VAT", rate=Decimal("0.050"))
     organization = Subscriber(
         first_name="Acme",
@@ -162,9 +164,7 @@ def test_deactivate_business_customer_suspends_member_subscriptions(db_session):
     assert subscriber.is_active is False
     assert subscriber.status == SubscriberStatus.suspended
     assert subscription.status == SubscriptionStatus.suspended
-    assert has_active_lock(
-        db_session, str(subscription.id), EnforcementReason.admin
-    )
+    assert has_active_lock(db_session, str(subscription.id), EnforcementReason.admin)
 
 
 def test_bulk_activate_business_restores_admin_locked_member(db_session):

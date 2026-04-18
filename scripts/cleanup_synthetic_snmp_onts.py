@@ -98,7 +98,9 @@ def _audit_ont(db: Session, ont: OntUnit) -> AuditRow:
         and not looks_synthetic_ont_serial(vendor_serial)
         and is_plausible_vendor_serial(vendor_serial)
     )
-    conflict = _real_serial_conflict(db, ont, vendor_serial if has_real_vendor_serial else None)
+    conflict = _real_serial_conflict(
+        db, ont, vendor_serial if has_real_vendor_serial else None
+    )
 
     if has_real_vendor_serial and not conflict:
         return AuditRow(
@@ -187,7 +189,9 @@ def _write_report(path: Path, rows: list[AuditRow]) -> None:
                     "ont_id": str(ont.id),
                     "serial_number": ont.serial_number,
                     "vendor_serial_number": ont.vendor_serial_number,
-                    "olt_device_id": str(ont.olt_device_id) if ont.olt_device_id else "",
+                    "olt_device_id": str(ont.olt_device_id)
+                    if ont.olt_device_id
+                    else "",
                     "external_id": ont.external_id,
                     "board": ont.board,
                     "port": ont.port,

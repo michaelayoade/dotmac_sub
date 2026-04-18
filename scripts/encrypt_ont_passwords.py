@@ -41,7 +41,13 @@ def run(*, dry_run: bool = True) -> dict[str, int]:
     from app.services.credential_crypto import encrypt_credential, is_encrypted
 
     db = SessionLocal()
-    stats = {"total": 0, "encrypted": 0, "already_encrypted": 0, "empty": 0, "errors": 0}
+    stats = {
+        "total": 0,
+        "encrypted": 0,
+        "already_encrypted": 0,
+        "empty": 0,
+        "errors": 0,
+    }
 
     try:
         onts = db.scalars(
@@ -69,7 +75,8 @@ def run(*, dry_run: bool = True) -> dict[str, int]:
             except Exception as exc:
                 logger.warning(
                     "Failed to encrypt password for ONT %s: %s",
-                    ont.serial_number, exc,
+                    ont.serial_number,
+                    exc,
                 )
                 stats["errors"] += 1
 
@@ -94,7 +101,8 @@ def main() -> None:
         description="Bulk-encrypt plaintext PPPoE passwords in ont_units",
     )
     parser.add_argument(
-        "--execute", action="store_true",
+        "--execute",
+        action="store_true",
         help="Actually encrypt (default is dry-run)",
     )
     args = parser.parse_args()

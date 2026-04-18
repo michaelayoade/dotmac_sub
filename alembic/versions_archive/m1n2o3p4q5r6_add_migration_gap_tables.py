@@ -145,9 +145,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default=sa.text("now()"),
             ),
-            sa.UniqueConstraint(
-                "subscription_id", name="uq_fup_states_subscription"
-            ),
+            sa.UniqueConstraint("subscription_id", name="uq_fup_states_subscription"),
         )
 
     # --- 2. radius_active_sessions ---
@@ -254,9 +252,7 @@ def upgrade() -> None:
                 nullable=False,
             ),
             sa.Column("snapshot_date", sa.Date, nullable=False),
-            sa.Column(
-                "mrr_amount", sa.Numeric(12, 2), nullable=False
-            ),
+            sa.Column("mrr_amount", sa.Numeric(12, 2), nullable=False),
             sa.Column(
                 "currency",
                 sa.String(3),
@@ -281,9 +277,7 @@ def upgrade() -> None:
                 name="uq_mrr_snapshot_subscriber_date",
             ),
         )
-        op.create_index(
-            "ix_mrr_snapshots_date", "mrr_snapshots", ["snapshot_date"]
-        )
+        op.create_index("ix_mrr_snapshots_date", "mrr_snapshots", ["snapshot_date"])
         op.create_index(
             "ix_mrr_snapshots_subscriber", "mrr_snapshots", ["subscriber_id"]
         )
@@ -350,9 +344,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="sent",
             ),
-            sa.Column(
-                "sent_at", sa.DateTime(timezone=True), nullable=True
-            ),
+            sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("external_id", sa.String(200), nullable=True),
             sa.Column("splynx_message_id", sa.Integer, nullable=True),
             sa.Column("metadata", postgresql.JSON, nullable=True),

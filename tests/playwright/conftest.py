@@ -94,7 +94,9 @@ def _ensure_active_customer_subscription(subscriber_id: str) -> str | None:
         db.close()
 
 
-def _ensure_reseller_setup(reseller_subscriber_id: str, customer_subscriber_id: str) -> dict[str, str]:
+def _ensure_reseller_setup(
+    reseller_subscriber_id: str, customer_subscriber_id: str
+) -> dict[str, str]:
     db = SessionLocal()
     try:
         reseller_subscriber = db.get(Subscriber, reseller_subscriber_id)
@@ -122,9 +124,14 @@ def _ensure_reseller_setup(reseller_subscriber_id: str, customer_subscriber_id: 
         customer_subscriber.reseller_id = reseller.id
 
         db.commit()
-        return {"reseller_id": str(reseller.id), "subscriber_id": str(reseller_subscriber.id)}
+        return {
+            "reseller_id": str(reseller.id),
+            "subscriber_id": str(reseller_subscriber.id),
+        }
     finally:
         db.close()
+
+
 @pytest.fixture(scope="session")
 def settings() -> E2ESettings:
     if os.getenv("PLAYWRIGHT_BASE_URL") is None:
@@ -242,7 +249,9 @@ def test_identities(settings: E2ESettings, api_context, admin_token: str) -> dic
     headers = bearer_headers(admin_token)
 
     agent_email = _email_for_username(settings.agent_username)
-    agent_person = ensure_person(api_context, admin_token, "Agent", "Support", agent_email)
+    agent_person = ensure_person(
+        api_context, admin_token, "Agent", "Support", agent_email
+    )
     ensure_user_credential(
         api_context,
         admin_token,
@@ -297,7 +306,9 @@ def test_identities(settings: E2ESettings, api_context, admin_token: str) -> dic
     )
     reseller_profile = {
         "person": reseller_person,
-        **_ensure_reseller_setup(reseller_person["id"], customer_profile["person"]["id"]),
+        **_ensure_reseller_setup(
+            reseller_person["id"], customer_profile["person"]["id"]
+        ),
     }
 
     return {
@@ -310,7 +321,9 @@ def test_identities(settings: E2ESettings, api_context, admin_token: str) -> dic
 
 @pytest.fixture(scope="session")
 def agent_token(settings: E2ESettings, api_context, test_identities: dict) -> str:
-    return login_for_token(api_context, settings.agent_username, settings.agent_password)
+    return login_for_token(
+        api_context, settings.agent_username, settings.agent_password
+    )
 
 
 @pytest.fixture(scope="session")
@@ -322,7 +335,9 @@ def _storage_state_path(role: str) -> Path:
     return Path(__file__).parent / ".auth" / f"{role}.json"
 
 
-def _write_storage_state(_browser, settings: E2ESettings, token: str, role: str) -> Path:
+def _write_storage_state(
+    _browser, settings: E2ESettings, token: str, role: str
+) -> Path:
     path = _storage_state_path(role)
     path.parent.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(settings.base_url)
@@ -382,7 +397,9 @@ def user_storage_state(browser, settings: E2ESettings, user_token: str) -> Path:
 
 
 @pytest.fixture()
-def admin_auth_api_context(playwright_instance, settings: E2ESettings, admin_storage_state: Path):
+def admin_auth_api_context(
+    playwright_instance, settings: E2ESettings, admin_storage_state: Path
+):
     context = playwright_instance.request.new_context(
         base_url=settings.base_url,
         storage_state=str(admin_storage_state),
@@ -546,7 +563,9 @@ def customer_page(customer_context):
 
 
 @pytest.fixture()
-def customer_api_context(playwright_instance, settings: E2ESettings, test_identities: dict):
+def customer_api_context(
+    playwright_instance, settings: E2ESettings, test_identities: dict
+):
     """Request context with a real customer portal session cookie."""
     customer = test_identities["customer"]
     account_id = customer["account"]["id"]
@@ -565,7 +584,9 @@ def customer_api_context(playwright_instance, settings: E2ESettings, test_identi
 
     context = playwright_instance.request.new_context(
         base_url=settings.base_url,
-        extra_http_headers={"Cookie": f"{customer_portal.SESSION_COOKIE_NAME}={customer_session}"},
+        extra_http_headers={
+            "Cookie": f"{customer_portal.SESSION_COOKIE_NAME}={customer_session}"
+        },
     )
     yield context
     context.dispose()

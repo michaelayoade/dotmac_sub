@@ -41,4 +41,3 @@ def test_hook_form_defaults_applies_template():
     assert defaults["url"] == "https://n8n.example/hook"
     assert defaults["retry_max"] == 4
     assert defaults["retry_backoff_ms"] == 750
-

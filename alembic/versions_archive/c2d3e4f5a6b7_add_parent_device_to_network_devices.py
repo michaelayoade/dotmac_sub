@@ -51,7 +51,9 @@ def downgrade() -> None:
     columns = [c["name"] for c in inspector.get_columns("network_devices")]
 
     if "parent_device_id" in columns:
-        op.drop_index("ix_network_devices_parent_device_id", table_name="network_devices")
+        op.drop_index(
+            "ix_network_devices_parent_device_id", table_name="network_devices"
+        )
         op.drop_constraint(
             "fk_network_devices_parent_device_id",
             "network_devices",

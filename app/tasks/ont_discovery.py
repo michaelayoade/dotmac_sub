@@ -132,7 +132,9 @@ def discover_single_olt_onts(olt_id: str) -> dict[str, int | str]:
                     {"key": lock_key},
                 )
             except Exception:
-                logger.exception("Failed to release ONT discovery lock for OLT %s", olt_id)
+                logger.exception(
+                    "Failed to release ONT discovery lock for OLT %s", olt_id
+                )
         db.close()
 
 
@@ -172,7 +174,9 @@ def discover_all_olt_onts() -> dict[str, int]:
                 source="discover_all_olt_onts",
             )
             dispatched += 1
-            logger.debug("Dispatched ONT discovery task for OLT %s (%s)", olt.name, olt.id)
+            logger.debug(
+                "Dispatched ONT discovery task for OLT %s (%s)", olt.name, olt.id
+            )
 
         logger.info(
             "Parallel ONT discovery orchestrator complete: dispatched %d tasks",

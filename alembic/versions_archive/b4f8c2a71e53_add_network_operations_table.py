@@ -54,7 +54,8 @@ def upgrade() -> None:
     )
 
     if not inspector.has_table("network_operations"):
-        conn.execute(text("""
+        conn.execute(
+            text("""
             CREATE TABLE network_operations (
                 id UUID PRIMARY KEY,
                 operation_type networkoperationtype NOT NULL,
@@ -75,7 +76,8 @@ def upgrade() -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
-        """))
+        """)
+        )
 
         op.create_index(
             "ix_netops_target",
@@ -93,11 +95,13 @@ def upgrade() -> None:
             ["parent_id"],
         )
         # Partial unique index: one active operation per correlation key
-        conn.execute(text(
-            "CREATE UNIQUE INDEX uq_netops_active_correlation "
-            "ON network_operations (correlation_key) "
-            "WHERE status IN ('pending', 'running', 'waiting')"
-        ))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_netops_active_correlation "
+                "ON network_operations (correlation_key) "
+                "WHERE status IN ('pending', 'running', 'waiting')"
+            )
+        )
 
 
 def downgrade() -> None:

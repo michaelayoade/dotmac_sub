@@ -40,7 +40,9 @@ def upgrade() -> None:
             server_default="system_user",
         ),
         sa.Column("phone", sa.String(length=40), nullable=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
@@ -56,7 +58,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["role_id"], ["roles.id"]),
         sa.ForeignKeyConstraint(["system_user_id"], ["system_users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("system_user_id", "role_id", name="uq_system_user_roles_user_role"),
+        sa.UniqueConstraint(
+            "system_user_id", "role_id", name="uq_system_user_roles_user_role"
+        ),
     )
 
     op.create_table(
@@ -65,7 +69,9 @@ def upgrade() -> None:
         sa.Column("system_user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("permission_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("granted_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("granted_by_system_user_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "granted_by_system_user_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
         sa.ForeignKeyConstraint(["permission_id"], ["permissions.id"]),
         sa.ForeignKeyConstraint(["system_user_id"], ["system_users.id"]),
         sa.ForeignKeyConstraint(["granted_by_system_user_id"], ["system_users.id"]),
@@ -93,10 +99,21 @@ def upgrade() -> None:
     bind = op.get_bind()
     uc_cols = {c["name"] for c in sa.inspect(bind).get_columns("user_credentials")}
     if "subscriber_id" in uc_cols:
-        op.alter_column("user_credentials", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        op.alter_column(
+            "user_credentials",
+            "subscriber_id",
+            existing_type=postgresql.UUID(as_uuid=True),
+            nullable=True,
+        )
         principal_col = "subscriber_id"
     elif "person_id" in uc_cols:
-        op.alter_column("user_credentials", "person_id", new_column_name="subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        op.alter_column(
+            "user_credentials",
+            "person_id",
+            new_column_name="subscriber_id",
+            existing_type=postgresql.UUID(as_uuid=True),
+            nullable=True,
+        )
         principal_col = "subscriber_id"
     else:
         principal_col = None
@@ -122,10 +139,21 @@ def upgrade() -> None:
     )
     mfa_cols = {c["name"] for c in sa.inspect(bind).get_columns("mfa_methods")}
     if "subscriber_id" in mfa_cols:
-        op.alter_column("mfa_methods", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        op.alter_column(
+            "mfa_methods",
+            "subscriber_id",
+            existing_type=postgresql.UUID(as_uuid=True),
+            nullable=True,
+        )
         mfa_principal = "subscriber_id"
     elif "person_id" in mfa_cols:
-        op.alter_column("mfa_methods", "person_id", new_column_name="subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        op.alter_column(
+            "mfa_methods",
+            "person_id",
+            new_column_name="subscriber_id",
+            existing_type=postgresql.UUID(as_uuid=True),
+            nullable=True,
+        )
         mfa_principal = "subscriber_id"
     else:
         mfa_principal = None
@@ -157,10 +185,21 @@ def upgrade() -> None:
     )
     sess_cols = {c["name"] for c in sa.inspect(bind).get_columns("sessions")}
     if "subscriber_id" in sess_cols:
-        op.alter_column("sessions", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        op.alter_column(
+            "sessions",
+            "subscriber_id",
+            existing_type=postgresql.UUID(as_uuid=True),
+            nullable=True,
+        )
         sess_principal = "subscriber_id"
     elif "person_id" in sess_cols:
-        op.alter_column("sessions", "person_id", new_column_name="subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        op.alter_column(
+            "sessions",
+            "person_id",
+            new_column_name="subscriber_id",
+            existing_type=postgresql.UUID(as_uuid=True),
+            nullable=True,
+        )
         sess_principal = "subscriber_id"
     else:
         sess_principal = None
@@ -185,22 +224,47 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_api_keys_system_user_id_system_users", "api_keys", type_="foreignkey")
+    op.drop_constraint(
+        "fk_api_keys_system_user_id_system_users", "api_keys", type_="foreignkey"
+    )
     op.drop_column("api_keys", "system_user_id")
 
     op.drop_constraint("ck_sessions_exactly_one_principal", "sessions", type_="check")
-    op.alter_column("sessions", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=False)
-    op.drop_constraint("fk_sessions_system_user_id_system_users", "sessions", type_="foreignkey")
+    op.alter_column(
+        "sessions",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
+    op.drop_constraint(
+        "fk_sessions_system_user_id_system_users", "sessions", type_="foreignkey"
+    )
     op.drop_column("sessions", "system_user_id")
 
-    op.drop_constraint("ck_mfa_methods_exactly_one_principal", "mfa_methods", type_="check")
+    op.drop_constraint(
+        "ck_mfa_methods_exactly_one_principal", "mfa_methods", type_="check"
+    )
     op.drop_index("ix_mfa_methods_primary_per_system_user", table_name="mfa_methods")
-    op.alter_column("mfa_methods", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=False)
-    op.drop_constraint("fk_mfa_methods_system_user_id_system_users", "mfa_methods", type_="foreignkey")
+    op.alter_column(
+        "mfa_methods",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
+    op.drop_constraint(
+        "fk_mfa_methods_system_user_id_system_users", "mfa_methods", type_="foreignkey"
+    )
     op.drop_column("mfa_methods", "system_user_id")
 
-    op.drop_constraint("ck_user_credentials_exactly_one_principal", "user_credentials", type_="check")
-    op.alter_column("user_credentials", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=False)
+    op.drop_constraint(
+        "ck_user_credentials_exactly_one_principal", "user_credentials", type_="check"
+    )
+    op.alter_column(
+        "user_credentials",
+        "subscriber_id",
+        existing_type=postgresql.UUID(as_uuid=True),
+        nullable=False,
+    )
     op.drop_constraint(
         "fk_user_credentials_system_user_id_system_users",
         "user_credentials",

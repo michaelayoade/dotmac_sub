@@ -160,7 +160,9 @@ class TestBuildRadiusReplyAttributes:
         db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
         db.query.return_value.filter.return_value.all.return_value = []
         mock_subscription.radius_profile_id = mock_profile.id
-        attrs = build_radius_reply_attributes(db, mock_subscription, profile=mock_profile)
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
         attr_names = [a["attribute"] for a in attrs]
         assert "Service-Type" in attr_names
         assert "Framed-Protocol" in attr_names
@@ -168,7 +170,9 @@ class TestBuildRadiusReplyAttributes:
         assert "Session-Timeout" in attr_names
         assert "Framed-IP-Address" in attr_names
         rate_limit = next(
-            attr["value"] for attr in attrs if attr["attribute"] == "Mikrotik-Rate-Limit"
+            attr["value"]
+            for attr in attrs
+            if attr["attribute"] == "Mikrotik-Rate-Limit"
         )
         assert rate_limit == "50000k/25000k"
 
@@ -179,7 +183,9 @@ class TestBuildRadiusReplyAttributes:
         db.get.return_value = mock_profile
         db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
         db.query.return_value.filter.return_value.all.return_value = []
-        attrs = build_radius_reply_attributes(db, mock_subscription, profile=mock_profile)
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
         attr_names = [a["attribute"] for a in attrs]
         assert "Calling-Station-Id" in attr_names
         assert "Framed-Protocol" not in attr_names
@@ -194,7 +200,9 @@ class TestBuildRadiusReplyAttributes:
         db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
         db.query.return_value.filter.return_value.all.return_value = []
         db.query.return_value.filter.return_value.filter.return_value.first.return_value = None
-        attrs = build_radius_reply_attributes(db, mock_subscription, profile=mock_profile)
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
         attr_names = [a["attribute"] for a in attrs]
         assert "NAS-Port-Type" in attr_names
         assert "Tunnel-Type" in attr_names
@@ -207,7 +215,9 @@ class TestBuildRadiusReplyAttributes:
         db.get.return_value = mock_profile
         db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
         db.query.return_value.filter.return_value.all.return_value = []
-        attrs = build_radius_reply_attributes(db, mock_subscription, profile=mock_profile)
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
         attr_names = [a["attribute"] for a in attrs]
         svc_type = next(a for a in attrs if a["attribute"] == "Service-Type")
         assert svc_type["value"] == "Login-User"
@@ -221,11 +231,12 @@ class TestBuildRadiusReplyAttributes:
         db.get.return_value = mock_profile
         db.query.return_value.filter.return_value.filter.return_value.order_by.return_value.all.return_value = []
         db.query.return_value.filter.return_value.all.return_value = []
-        attrs = build_radius_reply_attributes(db, mock_subscription, profile=mock_profile)
+        attrs = build_radius_reply_attributes(
+            db, mock_subscription, profile=mock_profile
+        )
         attr_names = [a["attribute"] for a in attrs]
         assert "Framed-IP-Address" in attr_names
         assert "Framed-IPv6-Prefix" in attr_names
-
 
 
 # ---------------------------------------------------------------------------
@@ -235,53 +246,71 @@ class TestBuildRadiusReplyAttributes:
 
 class TestMikrotikCommands:
     def test_pppoe_create(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.pppoe, "create")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.pppoe, "create"
+        )
         assert len(cmds) == 1
-        assert '/ppp secret add' in cmds[0]
-        assert 'service=pppoe' in cmds[0]
+        assert "/ppp secret add" in cmds[0]
+        assert "service=pppoe" in cmds[0]
         assert mock_profile.name in cmds[0]
 
     def test_pppoe_delete(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.pppoe, "delete")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.pppoe, "delete"
+        )
         assert len(cmds) == 1
-        assert '/ppp secret remove' in cmds[0]
+        assert "/ppp secret remove" in cmds[0]
 
     def test_pppoe_suspend(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.pppoe, "suspend")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.pppoe, "suspend"
+        )
         assert len(cmds) == 2
-        assert 'disabled=yes' in cmds[0]
-        assert '/ppp active remove' in cmds[1]
+        assert "disabled=yes" in cmds[0]
+        assert "/ppp active remove" in cmds[1]
 
     def test_dhcp_create(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.dhcp, "create")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.dhcp, "create"
+        )
         assert len(cmds) == 1
-        assert '/ip dhcp-server lease add' in cmds[0]
-        assert 'mac-address=' in cmds[0]
+        assert "/ip dhcp-server lease add" in cmds[0]
+        assert "mac-address=" in cmds[0]
 
     def test_dhcp_delete(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.dhcp, "delete")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.dhcp, "delete"
+        )
         assert len(cmds) == 1
-        assert '/ip dhcp-server lease remove' in cmds[0]
+        assert "/ip dhcp-server lease remove" in cmds[0]
 
     def test_hotspot_create(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.hotspot, "create")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.hotspot, "create"
+        )
         assert len(cmds) == 1
-        assert '/ip hotspot user add' in cmds[0]
+        assert "/ip hotspot user add" in cmds[0]
         assert mock_profile.name in cmds[0]
 
     def test_hotspot_suspend(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.hotspot, "suspend")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.hotspot, "suspend"
+        )
         assert len(cmds) == 2
-        assert 'disabled=yes' in cmds[0]
-        assert '/ip hotspot active remove' in cmds[1]
+        assert "disabled=yes" in cmds[0]
+        assert "/ip hotspot active remove" in cmds[1]
 
     def test_static_suspend(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.static, "suspend")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.static, "suspend"
+        )
         assert len(cmds) == 1
-        assert 'blocked-subscribers' in cmds[0]
+        assert "blocked-subscribers" in cmds[0]
 
     def test_ipoe_create(self, mock_subscription, mock_profile):
-        cmds = _mikrotik_commands(mock_subscription, mock_profile, ConnectionType.ipoe, "create")
+        cmds = _mikrotik_commands(
+            mock_subscription, mock_profile, ConnectionType.ipoe, "create"
+        )
         assert len(cmds) == 1
-        assert '/ip dhcp-server lease add' in cmds[0]
-        assert 'use-src-mac=yes' in cmds[0]
+        assert "/ip dhcp-server lease add" in cmds[0]
+        assert "use-src-mac=yes" in cmds[0]

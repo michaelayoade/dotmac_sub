@@ -150,7 +150,11 @@ def capture_olt_samples(
             captured_at = datetime.fromisoformat(existing["captured_at"])
             age_hours = (datetime.now(UTC) - captured_at).total_seconds() / 3600
             if age_hours < 24:
-                return True, f"Recent samples exist (captured {age_hours:.1f}h ago)", None
+                return (
+                    True,
+                    f"Recent samples exist (captured {age_hours:.1f}h ago)",
+                    None,
+                )
         except (json.JSONDecodeError, KeyError):
             pass
 
@@ -201,7 +205,9 @@ def capture_olt_samples(
                 if cmd_key == "display_version" and not firmware_version:
                     firmware_version = _extract_firmware_version(output, vendor)
 
-                logger.debug("Captured %s from OLT %s (%.1fs)", cmd_key, olt.name, duration)
+                logger.debug(
+                    "Captured %s from OLT %s (%.1fs)", cmd_key, olt.name, duration
+                )
 
             except Exception as e:
                 duration = time.monotonic() - cmd_start
@@ -217,7 +223,9 @@ def capture_olt_samples(
                         duration_sec=duration,
                     )
                 )
-                logger.warning("Failed to capture %s from OLT %s: %s", cmd_key, olt.name, e)
+                logger.warning(
+                    "Failed to capture %s from OLT %s: %s", cmd_key, olt.name, e
+                )
 
     finally:
         transport.close()

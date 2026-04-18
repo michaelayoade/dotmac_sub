@@ -25,7 +25,9 @@ def upgrade() -> None:
     if "project_comments" not in existing_tables:
         op.create_table(
             "project_comments",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+            sa.Column(
+                "id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+            ),
             sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("author_person_id", postgresql.UUID(as_uuid=True), nullable=True),
             sa.Column("body", sa.Text(), nullable=False),

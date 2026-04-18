@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = 'ffdddc71211e'
-down_revision = '007_acs_periodic_inform_interval'
+revision = "ffdddc71211e"
+down_revision = "007_acs_periodic_inform_interval"
 branch_labels = None
 depends_on = None
 

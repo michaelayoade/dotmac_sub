@@ -60,11 +60,13 @@ def _add_step(
     message: str,
 ) -> None:
     """Add a step to the result's step list."""
-    result.steps.append({
-        "name": name,
-        "success": success,
-        "message": message,
-    })
+    result.steps.append(
+        {
+            "name": name,
+            "success": success,
+            "message": message,
+        }
+    )
 
 
 def poll_olt_reachability(
@@ -112,9 +114,7 @@ def poll_olt_reachability(
             return True, f"OLT reachable after {int(elapsed)} seconds"
 
         last_error = msg
-        logger.debug(
-            "OLT %s not reachable (attempt %d): %s", olt.name, attempts, msg
-        )
+        logger.debug("OLT %s not reachable (attempt %d): %s", olt.name, attempts, msg)
         time.sleep(poll_interval_sec)
 
     total_elapsed = time.time() - start_time + initial_wait_sec
@@ -209,8 +209,7 @@ def upgrade_with_verification(
     if dry_run:
         result.success = True
         result.message = (
-            f"Dry run: Would upgrade from {fw_info.current_version} "
-            f"to {image.version}"
+            f"Dry run: Would upgrade from {fw_info.current_version} to {image.version}"
         )
         _add_step(result, "Dry run preview", True, result.message)
         result.duration_sec = time.time() - start_time
@@ -273,7 +272,9 @@ def upgrade_with_verification(
     # Verify new version
     verify_ok, verify_msg, verify_info = olt_ssh_service.get_firmware_info(olt)
     if not verify_ok:
-        result.message = f"Could not verify firmware version after upgrade: {verify_msg}"
+        result.message = (
+            f"Could not verify firmware version after upgrade: {verify_msg}"
+        )
         _add_step(result, "Verify firmware version", False, result.message)
         result.duration_sec = time.time() - start_time
         return result

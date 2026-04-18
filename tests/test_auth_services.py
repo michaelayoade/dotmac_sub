@@ -322,7 +322,9 @@ def test_web_login_submit_supports_system_user(db_session, monkeypatch):
     assert "session_token=" in response.headers.get("set-cookie", "")
 
 
-def test_web_login_submit_issues_lean_session_cookie_for_system_user(db_session, monkeypatch):
+def test_web_login_submit_issues_lean_session_cookie_for_system_user(
+    db_session, monkeypatch
+):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
 
     user = SystemUser(
@@ -398,7 +400,9 @@ def test_web_refresh_issues_session_cookie_via_module_helper(monkeypatch, db_ses
         issue_session,
     )
 
-    response = web_auth_service.refresh(request, db_session, next_url="/admin/dashboard")
+    response = web_auth_service.refresh(
+        request, db_session, next_url="/admin/dashboard"
+    )
 
     assert response.status_code == 303
     assert response.headers.get("location") == "/admin/dashboard"

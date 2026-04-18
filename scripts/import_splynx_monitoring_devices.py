@@ -71,9 +71,13 @@ def fetch_splynx_devices() -> list[dict]:
     ORDER BY mt.title, m.title
     """
     cmd = [
-        "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
+        "ssh",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=no",
         "root@138.68.165.175",
-        f"mysql -u root -N -B -e \"{query}\" splynx",
+        f'mysql -u root -N -B -e "{query}" splynx',
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
@@ -87,24 +91,28 @@ def fetch_splynx_devices() -> list[dict]:
         parts = line.split("\t")
         if len(parts) < 16:
             continue
-        devices.append({
-            "splynx_id": int(parts[0]),
-            "name": parts[1].strip(),
-            "ip": parts[2].strip(),
-            "model": parts[3].strip() or None,
-            "parent_id": int(parts[4]) if parts[4] and parts[4] != "0" else None,
-            "snmp_community": parts[5].strip() or "public",
-            "snmp_version": parts[6].strip() or "2c",
-            "snmp_port": int(parts[7]) if parts[7] else 161,
-            "is_ping": parts[8] == "1",
-            "send_notifications": parts[9] == "1",
-            "delay_timer": int(parts[10]) if parts[10] and parts[10] != "NULL" else 0,
-            "ping_state": parts[11].strip(),
-            "snmp_state": parts[12].strip(),
-            "type_name": parts[13].strip(),
-            "vendor_name": parts[14].strip(),
-            "site_name": parts[15].strip() if parts[15] != "NULL" else None,
-        })
+        devices.append(
+            {
+                "splynx_id": int(parts[0]),
+                "name": parts[1].strip(),
+                "ip": parts[2].strip(),
+                "model": parts[3].strip() or None,
+                "parent_id": int(parts[4]) if parts[4] and parts[4] != "0" else None,
+                "snmp_community": parts[5].strip() or "public",
+                "snmp_version": parts[6].strip() or "2c",
+                "snmp_port": int(parts[7]) if parts[7] else 161,
+                "is_ping": parts[8] == "1",
+                "send_notifications": parts[9] == "1",
+                "delay_timer": int(parts[10])
+                if parts[10] and parts[10] != "NULL"
+                else 0,
+                "ping_state": parts[11].strip(),
+                "snmp_state": parts[12].strip(),
+                "type_name": parts[13].strip(),
+                "vendor_name": parts[14].strip(),
+                "site_name": parts[15].strip() if parts[15] != "NULL" else None,
+            }
+        )
 
     return devices
 
@@ -139,7 +147,9 @@ def import_devices(devices: list[dict], dry_run: bool = False) -> dict[str, int]
         ip = d["ip"]
         splynx_id = d["splynx_id"]
         device_type_str = TYPE_MAP.get(d["type_name"], "other")
-        vendor_str = VENDOR_MAP.get(d["vendor_name"], d["vendor_name"].lower() if d["vendor_name"] else "other")
+        vendor_str = VENDOR_MAP.get(
+            d["vendor_name"], d["vendor_name"].lower() if d["vendor_name"] else "other"
+        )
         role_str = ROLE_MAP.get(device_type_str, "edge")
 
         try:
@@ -161,13 +171,24 @@ def import_devices(devices: list[dict], dry_run: bool = False) -> dict[str, int]
                 if changed:
                     updated += 1
                     if not dry_run:
-                        logger.info("  Updated: %s (%s) — splynx_id=%d", existing.name, ip, splynx_id)
+                        logger.info(
+                            "  Updated: %s (%s) — splynx_id=%d",
+                            existing.name,
+                            ip,
+                            splynx_id,
+                        )
                 else:
                     skipped += 1
                 continue
 
             if dry_run:
-                logger.info("  [DRY RUN] Would create: %s (%s) type=%s vendor=%s", d["name"], ip, device_type_str, vendor_str)
+                logger.info(
+                    "  [DRY RUN] Would create: %s (%s) type=%s vendor=%s",
+                    d["name"],
+                    ip,
+                    device_type_str,
+                    vendor_str,
+                )
                 created += 1
                 continue
 
@@ -188,13 +209,21 @@ def import_devices(devices: list[dict], dry_run: bool = False) -> dict[str, int]
                 send_notifications=d["send_notifications"],
                 notification_delay_minutes=d["delay_timer"],
                 splynx_monitoring_id=splynx_id,
-                status=DeviceStatus.online if d["ping_state"] == "up" else DeviceStatus.offline,
+                status=DeviceStatus.online
+                if d["ping_state"] == "up"
+                else DeviceStatus.offline,
                 notes=f"Imported from Splynx monitoring (id={splynx_id})",
                 is_active=True,
             )
             db.add(device)
             created += 1
-            logger.info("  Created: %s (%s) type=%s vendor=%s", d["name"], ip, device_type_str, vendor_str)
+            logger.info(
+                "  Created: %s (%s) type=%s vendor=%s",
+                d["name"],
+                ip,
+                device_type_str,
+                vendor_str,
+            )
 
         except Exception as exc:
             errors += 1
@@ -207,12 +236,19 @@ def import_devices(devices: list[dict], dry_run: bool = False) -> dict[str, int]
         logger.info("[DRY RUN] Would create %d devices", created)
 
     db.close()
-    return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description="Import Splynx monitoring devices")
-    parser.add_argument("--dry-run", action="store_true", help="Preview without creating records")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview without creating records"
+    )
     args = parser.parse_args()
 
     logger.info("Fetching devices from Splynx (138.68.165.175)...")
@@ -221,6 +257,7 @@ def main():
 
     # Summary by type
     from collections import Counter
+
     by_type = Counter(d["type_name"] for d in devices)
     by_vendor = Counter(d["vendor_name"] for d in devices)
     logger.info("By type: %s", dict(by_type))
@@ -228,8 +265,13 @@ def main():
 
     logger.info("Importing into DotMac Sub%s...", " (DRY RUN)" if args.dry_run else "")
     result = import_devices(devices, dry_run=args.dry_run)
-    logger.info("Done: created=%d updated=%d skipped=%d errors=%d",
-                result["created"], result["updated"], result["skipped"], result["errors"])
+    logger.info(
+        "Done: created=%d updated=%d skipped=%d errors=%d",
+        result["created"],
+        result["updated"],
+        result["skipped"],
+        result["errors"],
+    )
 
 
 if __name__ == "__main__":

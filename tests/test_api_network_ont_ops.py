@@ -43,9 +43,7 @@ class TestOntActionSchemas:
         assert req.ssid == "MyNetwork"
 
     def test_bulk_action_request_validation(self):
-        req = OntBulkActionRequest(
-            ont_ids=["id1", "id2"], action="reboot", params={}
-        )
+        req = OntBulkActionRequest(ont_ids=["id1", "id2"], action="reboot", params={})
         assert len(req.ont_ids) == 2
         assert req.action == "reboot"
 
@@ -54,9 +52,7 @@ class TestOntActionSchemas:
             OntBulkActionRequest(ont_ids=[], action="reboot", params={})
 
     def test_connection_request_credentials_valid(self):
-        req = OntConnectionRequestCredentials(
-            username="admin", password="secret123"
-        )
+        req = OntConnectionRequestCredentials(username="admin", password="secret123")
         assert req.periodic_inform_interval == 3600
 
     def test_connection_request_credentials_interval(self):
@@ -149,4 +145,6 @@ class TestRouterRegistration:
         assert any("/ont-units/{ont_id}/enriched" in p for p in paths)
         assert any("/ont-units/bulk-action" in p for p in paths)
         assert any("/ont-units/{ont_id}/connection-request" in p for p in paths)
-        assert any("/ont-units/{ont_id}/connection-request-credentials" in p for p in paths)
+        assert any(
+            "/ont-units/{ont_id}/connection-request-credentials" in p for p in paths
+        )

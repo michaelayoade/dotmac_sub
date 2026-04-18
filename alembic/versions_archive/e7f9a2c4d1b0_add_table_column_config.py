@@ -67,10 +67,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_subscribers_email_created_at", table_name="subscribers")
     op.drop_index(
-        "ix_subscribers_email_created_at", table_name="subscribers"
+        "ix_subscribers_status_is_active_created_at", table_name="subscribers"
     )
-    op.drop_index("ix_subscribers_status_is_active_created_at", table_name="subscribers")
     op.drop_index(
         "ix_table_column_config_user_table_order", table_name="table_column_config"
     )

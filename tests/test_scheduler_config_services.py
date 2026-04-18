@@ -159,12 +159,14 @@ class TestEffectiveBool:
     def test_env_takes_precedence(self, db_session, monkeypatch):
         """Test env var takes precedence over db setting."""
         monkeypatch.setenv("TEST_BOOL_ENV", "true")
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="test_bool",
-            value_text="false",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="test_bool",
+                value_text="false",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_bool(
@@ -175,12 +177,14 @@ class TestEffectiveBool:
     def test_db_value_when_no_env(self, db_session):
         """Test uses db value when no env var."""
         os.environ.pop("TEST_BOOL_ENV2", None)
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="test_bool2",
-            value_text="true",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="test_bool2",
+                value_text="true",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_bool(
@@ -204,12 +208,14 @@ class TestEffectiveInt:
     def test_env_takes_precedence(self, db_session, monkeypatch):
         """Test env var takes precedence over db setting."""
         monkeypatch.setenv("TEST_INT_ENV", "100")
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="test_int",
-            value_text="50",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="test_int",
+                value_text="50",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_int(
@@ -220,12 +226,14 @@ class TestEffectiveInt:
     def test_db_value_when_no_env(self, db_session):
         """Test uses db value when no env var."""
         os.environ.pop("TEST_INT_ENV2", None)
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="test_int2",
-            value_text="75",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="test_int2",
+                value_text="75",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_int(
@@ -245,12 +253,14 @@ class TestEffectiveInt:
     def test_default_for_invalid_db_value(self, db_session):
         """Test uses default when db value is invalid."""
         os.environ.pop("TEST_INT_ENV4", None)
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="invalid_int",
-            value_text="not_a_number",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="invalid_int",
+                value_text="not_a_number",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_int(
@@ -265,12 +275,14 @@ class TestEffectiveStr:
     def test_env_takes_precedence(self, db_session, monkeypatch):
         """Test env var takes precedence over db setting."""
         monkeypatch.setenv("TEST_STR_ENV", "env_value")
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="test_str",
-            value_text="db_value",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="test_str",
+                value_text="db_value",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_str(
@@ -281,12 +293,14 @@ class TestEffectiveStr:
     def test_db_value_when_no_env(self, db_session):
         """Test uses db value when no env var."""
         os.environ.pop("TEST_STR_ENV2", None)
-        db_session.add(DomainSetting(
-            domain=SettingDomain.scheduler,
-            key="test_str2",
-            value_text="db_value",
-            is_active=True,
-        ))
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.scheduler,
+                key="test_str2",
+                value_text="db_value",
+                is_active=True,
+            )
+        )
         db_session.commit()
 
         result = scheduler_config._effective_str(
@@ -299,7 +313,11 @@ class TestEffectiveStr:
         os.environ.pop("TEST_STR_ENV3", None)
 
         result = scheduler_config._effective_str(
-            db_session, SettingDomain.scheduler, "nonexistent", "TEST_STR_ENV3", "fallback"
+            db_session,
+            SettingDomain.scheduler,
+            "nonexistent",
+            "TEST_STR_ENV3",
+            "fallback",
         )
         assert result == "fallback"
 
@@ -322,9 +340,11 @@ class TestSyncScheduledTask:
             interval_seconds=3600,
         )
 
-        task = db_session.query(ScheduledTask).filter(
-            ScheduledTask.task_name == "app.tasks.test.run_test"
-        ).first()
+        task = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.task_name == "app.tasks.test.run_test")
+            .first()
+        )
 
         assert task is not None
         assert task.name == "test_task"
@@ -341,9 +361,11 @@ class TestSyncScheduledTask:
             interval_seconds=3600,
         )
 
-        task = db_session.query(ScheduledTask).filter(
-            ScheduledTask.task_name == "app.tasks.disabled.run"
-        ).first()
+        task = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.task_name == "app.tasks.disabled.run")
+            .first()
+        )
 
         assert task is None
 
@@ -454,8 +476,12 @@ class TestGetCeleryConfig:
     def test_returns_default_config(self, monkeypatch):
         """Test returns default config when nothing configured."""
         # Clear env vars
-        for var in ["CELERY_BROKER_URL", "CELERY_RESULT_BACKEND",
-                    "CELERY_TIMEZONE", "REDIS_URL"]:
+        for var in [
+            "CELERY_BROKER_URL",
+            "CELERY_RESULT_BACKEND",
+            "CELERY_TIMEZONE",
+            "REDIS_URL",
+        ]:
             monkeypatch.delenv(var, raising=False)
 
         # Mock SessionLocal to return a mock session
@@ -532,7 +558,11 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
-            with patch.object(scheduler_config.integration_service, "list_interval_jobs", return_value=[]):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
                 schedule = scheduler_config.build_beat_schedule()
 
         assert "gis_sync" in schedule
@@ -551,7 +581,11 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
-            with patch.object(scheduler_config.integration_service, "list_interval_jobs", return_value=[]):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
                 schedule = scheduler_config.build_beat_schedule()
 
         assert "gis_sync" not in schedule
@@ -573,11 +607,18 @@ class TestBuildBeatSchedule:
         mock_job.interval_minutes = 15
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
-            with patch.object(scheduler_config.integration_service, "list_interval_jobs", return_value=[mock_job]):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[mock_job],
+            ):
                 schedule = scheduler_config.build_beat_schedule()
 
         assert "integration_job_job-123" in schedule
-        assert schedule["integration_job_job-123"]["task"] == "app.tasks.integrations.run_integration_job"
+        assert (
+            schedule["integration_job_job-123"]["task"]
+            == "app.tasks.integrations.run_integration_job"
+        )
         assert schedule["integration_job_job-123"]["schedule"] == timedelta(minutes=15)
         assert schedule["integration_job_job-123"]["args"] == ["job-123"]
 
@@ -597,11 +638,17 @@ class TestBuildBeatSchedule:
 
         mock_session = MagicMock()
         mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
-        mock_session.query.return_value.filter.return_value.all.return_value = [mock_task]
+        mock_session.query.return_value.filter.return_value.all.return_value = [
+            mock_task
+        ]
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
-            with patch.object(scheduler_config.integration_service, "list_interval_jobs", return_value=[]):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
                 schedule = scheduler_config.build_beat_schedule()
 
         assert "scheduled_task_task-456" in schedule
@@ -623,7 +670,11 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
         with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
-            with patch.object(scheduler_config.integration_service, "list_interval_jobs", return_value=[]):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
                 schedule = scheduler_config.build_beat_schedule()
 
         assert schedule["gis_sync"]["schedule"] == timedelta(minutes=1)

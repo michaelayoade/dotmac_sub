@@ -46,7 +46,9 @@ def store_oauth_state(state: str, data: dict) -> None:
     """
     client = get_redis()
     if client is None:
-        logger.error("failed_to_store_oauth_state error=Redis unavailable (circuit open)")
+        logger.error(
+            "failed_to_store_oauth_state error=Redis unavailable (circuit open)"
+        )
         raise RuntimeError("Redis unavailable for OAuth state storage")
     try:
         client.setex(
@@ -113,7 +115,9 @@ def verify_oauth_state(state: str) -> dict[str, Any] | None:
     """
     client = get_redis()
     if client is None:
-        logger.error("failed_to_verify_oauth_state error=Redis unavailable (circuit open)")
+        logger.error(
+            "failed_to_verify_oauth_state error=Redis unavailable (circuit open)"
+        )
         return None
     try:
         key = f"{STATE_PREFIX}{state}"
@@ -139,7 +143,9 @@ def delete_oauth_state(state: str) -> bool:
     """
     client = get_redis()
     if client is None:
-        logger.error("failed_to_delete_oauth_state error=Redis unavailable (circuit open)")
+        logger.error(
+            "failed_to_delete_oauth_state error=Redis unavailable (circuit open)"
+        )
         return False
     try:
         key = f"{STATE_PREFIX}{state}"

@@ -18,7 +18,13 @@ from app.models.network import OLTDevice
 logger = logging.getLogger(__name__)
 
 # Specific SSH-related exceptions that can occur during OLT operations
-_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
+_SSH_CONNECTION_ERRORS = (
+    SSHException,
+    OSError,
+    socket.timeout,
+    TimeoutError,
+    ConnectionError,
+)
 
 
 @dataclass
@@ -177,7 +183,9 @@ def get_line_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]
         entries = _parse_profile_table(output)
         return True, f"Found {len(entries)} line profile(s)", entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error reading line profiles from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error reading line profiles from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", []
     finally:
         transport.close()
@@ -210,7 +218,12 @@ def get_service_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntr
         entries = _parse_profile_table(output)
         return True, f"Found {len(entries)} service profile(s)", entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error reading service profiles from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error reading service profiles from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
         return False, f"Error: {exc}", []
     finally:
         transport.close()
@@ -271,7 +284,12 @@ def get_tr069_server_profiles(
 
         return True, f"Found {len(profiles)} TR-069 server profile(s)", profiles
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error reading TR-069 profiles from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error reading TR-069 profiles from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
         return False, f"Error: {exc}", []
     finally:
         transport.close()
@@ -337,11 +355,14 @@ def ensure_wan_srvprofile(
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
             return True, f"ONT WAN profile {profile_id} already exists."
 
-        create_cmd = f'ont wan-profile profile-id {profile_id}'
+        create_cmd = f"ont wan-profile profile-id {profile_id}"
         output = _run_slow(create_cmd)
         if core.is_error_output(output):
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            return False, f"OLT rejected ONT WAN profile create: {output.strip()[-200:]}"
+            return (
+                False,
+                f"OLT rejected ONT WAN profile create: {output.strip()[-200:]}",
+            )
 
         commands = [
             "connection-type route",
@@ -357,7 +378,10 @@ def ensure_wan_srvprofile(
         verify = core._run_huawei_cmd(channel, display_cmd, prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
         if core.is_error_output(verify):
-            return False, f"ONT WAN profile verification failed: {verify.strip()[-200:]}"
+            return (
+                False,
+                f"ONT WAN profile verification failed: {verify.strip()[-200:]}",
+            )
         return True, f"ONT WAN profile {profile_id} ready for PPPoE VLAN {vlan_id}."
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
@@ -492,7 +516,9 @@ def create_tr069_server_profile(
         )
         return True, f"TR-069 profile '{profile_name}' created successfully"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error creating TR-069 profile on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error creating TR-069 profile on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()

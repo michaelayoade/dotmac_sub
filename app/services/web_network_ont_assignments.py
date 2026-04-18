@@ -99,6 +99,7 @@ def resolve_pon_port_for_ont(db: Session, ont) -> dict[str, object]:
         olt_device = getattr(ont, "olt_device", None)
         if not olt_device:
             from app.models.network import OLTDevice
+
             olt_device = db.get(OLTDevice, olt_device_id)
         if olt_device:
             olt_name = f" ({olt_device.name})"
@@ -236,7 +237,9 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     network_service.ont_assignments.create(db=db, payload=payload)
 
 
-def form_payload(values: dict[str, object], db: Session | None = None) -> dict[str, object]:
+def form_payload(
+    values: dict[str, object], db: Session | None = None
+) -> dict[str, object]:
     """Return template-friendly form payload.
 
     If db is provided and account_id is set, looks up the subscriber label

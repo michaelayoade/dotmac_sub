@@ -68,9 +68,7 @@ class TestApplyOrdering:
         db_session.commit()
 
         query = db_session.query(CoverageArea)
-        result = apply_ordering(
-            query, "name", "asc", {"name": CoverageArea.name}
-        )
+        result = apply_ordering(query, "name", "asc", {"name": CoverageArea.name})
         items = result.all()
         assert items[0].name == "Alpha"
         assert items[1].name == "Beta"
@@ -83,9 +81,7 @@ class TestApplyOrdering:
         db_session.commit()
 
         query = db_session.query(CoverageArea)
-        result = apply_ordering(
-            query, "name", "desc", {"name": CoverageArea.name}
-        )
+        result = apply_ordering(query, "name", "desc", {"name": CoverageArea.name})
         items = result.all()
         assert items[0].name == "Beta"
 
@@ -93,9 +89,7 @@ class TestApplyOrdering:
         """Test raises for invalid order_by column."""
         query = db_session.query(CoverageArea)
         with pytest.raises(HTTPException) as exc_info:
-            apply_ordering(
-                query, "invalid", "asc", {"name": CoverageArea.name}
-            )
+            apply_ordering(query, "invalid", "asc", {"name": CoverageArea.name})
         assert exc_info.value.status_code == 400
 
 
@@ -105,7 +99,9 @@ class TestApplyPagination:
     def test_applies_limit_and_offset(self, db_session):
         """Test applies limit and offset."""
         for i in range(5):
-            db_session.add(CoverageArea(name=f"Area{i}", geometry_geojson=VALID_POLYGON))
+            db_session.add(
+                CoverageArea(name=f"Area{i}", geometry_geojson=VALID_POLYGON)
+            )
         db_session.commit()
 
         query = db_session.query(CoverageArea).order_by(CoverageArea.name)
@@ -163,39 +159,49 @@ class TestExtractPolygon:
     def test_raises_for_invalid_polygon_coordinates(self):
         """Test raises for invalid Polygon coordinates."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service._extract_polygon({"type": "Polygon", "coordinates": None})
+            qualification_service._extract_polygon(
+                {"type": "Polygon", "coordinates": None}
+            )
         assert exc_info.value.status_code == 400
 
     def test_raises_for_invalid_multipolygon_coordinates(self):
         """Test raises for invalid MultiPolygon coordinates."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service._extract_polygon({"type": "MultiPolygon", "coordinates": None})
+            qualification_service._extract_polygon(
+                {"type": "MultiPolygon", "coordinates": None}
+            )
         assert exc_info.value.status_code == 400
 
     def test_raises_for_unsupported_geometry_type(self):
         """Test raises for unsupported geometry type."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service._extract_polygon({"type": "Point", "coordinates": [0, 0]})
+            qualification_service._extract_polygon(
+                {"type": "Point", "coordinates": [0, 0]}
+            )
         assert exc_info.value.status_code == 400
         assert "Polygon" in str(exc_info.value.detail)
 
     def test_raises_for_polygon_with_too_few_points(self):
         """Test raises for polygon ring with less than 4 points."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service._extract_polygon({
-                "type": "Polygon",
-                "coordinates": [[[0, 0], [1, 1], [0, 0]]],
-            })
+            qualification_service._extract_polygon(
+                {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1, 1], [0, 0]]],
+                }
+            )
         assert exc_info.value.status_code == 400
         assert "4+" in str(exc_info.value.detail)
 
     def test_raises_for_invalid_coordinate_format(self):
         """Test raises for invalid coordinate format."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service._extract_polygon({
-                "type": "Polygon",
-                "coordinates": [[0, 1, 2, 3, 4]],  # Not a list of [lon, lat] pairs
-            })
+            qualification_service._extract_polygon(
+                {
+                    "type": "Polygon",
+                    "coordinates": [[0, 1, 2, 3, 4]],  # Not a list of [lon, lat] pairs
+                }
+            )
         assert exc_info.value.status_code == 400
 
 
@@ -217,13 +223,25 @@ class TestPointInPolygon:
 
     def test_detects_point_inside(self):
         """Test detects point inside polygon."""
-        points = [(-122.5, 37.5), (-122.5, 38.0), (-122.0, 38.0), (-122.0, 37.5), (-122.5, 37.5)]
+        points = [
+            (-122.5, 37.5),
+            (-122.5, 38.0),
+            (-122.0, 38.0),
+            (-122.0, 37.5),
+            (-122.5, 37.5),
+        ]
         result = qualification_service._point_in_polygon(-122.25, 37.75, points)
         assert result is True
 
     def test_detects_point_outside(self):
         """Test detects point outside polygon."""
-        points = [(-122.5, 37.5), (-122.5, 38.0), (-122.0, 38.0), (-122.0, 37.5), (-122.5, 37.5)]
+        points = [
+            (-122.5, 37.5),
+            (-122.5, 38.0),
+            (-122.0, 38.0),
+            (-122.0, 37.5),
+            (-122.5, 37.5),
+        ]
         result = qualification_service._point_in_polygon(-121.0, 39.0, points)
         assert result is False
 
@@ -251,7 +269,9 @@ class TestHaversineKm:
     def test_calculates_distance(self):
         """Test calculates distance between two points."""
         # San Francisco to Los Angeles ~ 559 km
-        distance = qualification_service._haversine_km(-122.4194, 37.7749, -118.2437, 34.0522)
+        distance = qualification_service._haversine_km(
+            -122.4194, 37.7749, -118.2437, 34.0522
+        )
         assert 550 < distance < 570
 
     def test_returns_zero_for_same_point(self):
@@ -322,8 +342,12 @@ class TestCoverageAreasList:
 
     def test_lists_active_areas_by_default(self, db_session):
         """Test lists only active areas by default."""
-        active = CoverageArea(name="Active", geometry_geojson=VALID_POLYGON, is_active=True)
-        inactive = CoverageArea(name="Inactive", geometry_geojson=VALID_POLYGON, is_active=False)
+        active = CoverageArea(
+            name="Active", geometry_geojson=VALID_POLYGON, is_active=True
+        )
+        inactive = CoverageArea(
+            name="Inactive", geometry_geojson=VALID_POLYGON, is_active=False
+        )
         db_session.add_all([active, inactive])
         db_session.commit()
 
@@ -342,8 +366,12 @@ class TestCoverageAreasList:
 
     def test_filters_by_zone_key(self, db_session):
         """Test filters by zone_key."""
-        area1 = CoverageArea(name="Zone1", zone_key="z1", geometry_geojson=VALID_POLYGON)
-        area2 = CoverageArea(name="Zone2", zone_key="z2", geometry_geojson=VALID_POLYGON)
+        area1 = CoverageArea(
+            name="Zone1", zone_key="z1", geometry_geojson=VALID_POLYGON
+        )
+        area2 = CoverageArea(
+            name="Zone2", zone_key="z2", geometry_geojson=VALID_POLYGON
+        )
         db_session.add_all([area1, area2])
         db_session.commit()
 
@@ -362,8 +390,16 @@ class TestCoverageAreasList:
 
     def test_filters_by_buildout_status(self, db_session):
         """Test filters by buildout_status."""
-        ready = CoverageArea(name="Ready", buildout_status=BuildoutStatus.ready, geometry_geojson=VALID_POLYGON)
-        planned = CoverageArea(name="Planned", buildout_status=BuildoutStatus.planned, geometry_geojson=VALID_POLYGON)
+        ready = CoverageArea(
+            name="Ready",
+            buildout_status=BuildoutStatus.ready,
+            geometry_geojson=VALID_POLYGON,
+        )
+        planned = CoverageArea(
+            name="Planned",
+            buildout_status=BuildoutStatus.planned,
+            geometry_geojson=VALID_POLYGON,
+        )
         db_session.add_all([ready, planned])
         db_session.commit()
 
@@ -382,8 +418,12 @@ class TestCoverageAreasList:
 
     def test_filters_by_is_active_explicit(self, db_session):
         """Test filters by explicit is_active value."""
-        active = CoverageArea(name="Active", geometry_geojson=VALID_POLYGON, is_active=True)
-        inactive = CoverageArea(name="Inactive", geometry_geojson=VALID_POLYGON, is_active=False)
+        active = CoverageArea(
+            name="Active", geometry_geojson=VALID_POLYGON, is_active=True
+        )
+        inactive = CoverageArea(
+            name="Inactive", geometry_geojson=VALID_POLYGON, is_active=False
+        )
         db_session.add_all([active, inactive])
         db_session.commit()
 
@@ -411,7 +451,9 @@ class TestCoverageAreasUpdate:
         db_session.commit()
 
         payload = CoverageAreaUpdate(name="Updated")
-        result = qualification_service.coverage_areas.update(db_session, str(area.id), payload)
+        result = qualification_service.coverage_areas.update(
+            db_session, str(area.id), payload
+        )
         assert result.name == "Updated"
 
     def test_updates_geometry_recalculates_bounds(self, db_session):
@@ -438,7 +480,9 @@ class TestCoverageAreasUpdate:
             ],
         }
         payload = CoverageAreaUpdate(geometry_geojson=new_polygon)
-        result = qualification_service.coverage_areas.update(db_session, str(area.id), payload)
+        result = qualification_service.coverage_areas.update(
+            db_session, str(area.id), payload
+        )
         assert result.min_latitude == 36.0
         assert result.max_latitude == 37.0
 
@@ -446,7 +490,9 @@ class TestCoverageAreasUpdate:
         """Test raises for not found."""
         payload = CoverageAreaUpdate(name="Test")
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.coverage_areas.update(db_session, str(uuid.uuid4()), payload)
+            qualification_service.coverage_areas.update(
+                db_session, str(uuid.uuid4()), payload
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -482,13 +528,17 @@ class TestServiceQualificationsGet:
         db_session.add(qual)
         db_session.commit()
 
-        result = qualification_service.service_qualifications.get(db_session, str(qual.id))
+        result = qualification_service.service_qualifications.get(
+            db_session, str(qual.id)
+        )
         assert result.id == qual.id
 
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.service_qualifications.get(db_session, str(uuid.uuid4()))
+            qualification_service.service_qualifications.get(
+                db_session, str(uuid.uuid4())
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -515,8 +565,12 @@ class TestServiceQualificationsList:
 
     def test_filters_by_status(self, db_session):
         """Test filters by status."""
-        eligible = ServiceQualification(latitude=37.75, longitude=-122.25, status=QualificationStatus.eligible)
-        ineligible = ServiceQualification(latitude=37.80, longitude=-122.30, status=QualificationStatus.ineligible)
+        eligible = ServiceQualification(
+            latitude=37.75, longitude=-122.25, status=QualificationStatus.eligible
+        )
+        ineligible = ServiceQualification(
+            latitude=37.80, longitude=-122.30, status=QualificationStatus.ineligible
+        )
         db_session.add_all([eligible, ineligible])
         db_session.commit()
 
@@ -538,7 +592,9 @@ class TestServiceQualificationsList:
         db_session.add(area)
         db_session.commit()
 
-        q1 = ServiceQualification(latitude=37.75, longitude=-122.25, coverage_area_id=area.id)
+        q1 = ServiceQualification(
+            latitude=37.75, longitude=-122.25, coverage_area_id=area.id
+        )
         q2 = ServiceQualification(latitude=37.80, longitude=-122.30)
         db_session.add_all([q1, q2])
         db_session.commit()
@@ -947,7 +1003,9 @@ class TestServiceQualificationsCheck:
         requests = db_session.query(BuildoutRequest).all()
         assert len(requests) == 1
 
-    def test_does_not_create_buildout_request_for_not_planned_status(self, db_session, subscriber):
+    def test_does_not_create_buildout_request_for_not_planned_status(
+        self, db_session, subscriber
+    ):
         """Test does not create buildout request when buildout_status is not_planned."""
         area = CoverageArea(
             name="Not Planned Area",
@@ -1058,7 +1116,9 @@ class TestBuildoutRequestsGet:
         db_session.add(request)
         db_session.commit()
 
-        result = qualification_service.buildout_requests.get(db_session, str(request.id))
+        result = qualification_service.buildout_requests.get(
+            db_session, str(request.id)
+        )
         assert result.id == request.id
 
     def test_raises_for_not_found(self, db_session):
@@ -1091,8 +1151,12 @@ class TestBuildoutRequestsList:
 
     def test_filters_by_status(self, db_session):
         """Test filters by status."""
-        submitted = BuildoutRequest(requested_by="u1", status=BuildoutRequestStatus.submitted)
-        approved = BuildoutRequest(requested_by="u2", status=BuildoutRequestStatus.approved)
+        submitted = BuildoutRequest(
+            requested_by="u1", status=BuildoutRequestStatus.submitted
+        )
+        approved = BuildoutRequest(
+            requested_by="u2", status=BuildoutRequestStatus.approved
+        )
         db_session.add_all([submitted, approved])
         db_session.commit()
 
@@ -1142,14 +1206,18 @@ class TestBuildoutRequestsUpdate:
         db_session.commit()
 
         payload = BuildoutRequestUpdate(notes="updated")
-        result = qualification_service.buildout_requests.update(db_session, str(request.id), payload)
+        result = qualification_service.buildout_requests.update(
+            db_session, str(request.id), payload
+        )
         assert result.notes == "updated"
 
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         payload = BuildoutRequestUpdate(notes="test")
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.buildout_requests.update(db_session, str(uuid.uuid4()), payload)
+            qualification_service.buildout_requests.update(
+                db_session, str(uuid.uuid4()), payload
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -1158,7 +1226,9 @@ class TestBuildoutRequestsApprove:
 
     def test_approves_request_and_creates_project(self, db_session):
         """Test approves request and creates project."""
-        request = BuildoutRequest(requested_by="user", status=BuildoutRequestStatus.submitted)
+        request = BuildoutRequest(
+            requested_by="user", status=BuildoutRequestStatus.submitted
+        )
         db_session.add(request)
         db_session.commit()
 
@@ -1166,7 +1236,9 @@ class TestBuildoutRequestsApprove:
             target_ready_date=datetime.now(UTC) + timedelta(days=30),
             notes="Approved for buildout",
         )
-        result = qualification_service.buildout_requests.approve(db_session, str(request.id), payload)
+        result = qualification_service.buildout_requests.approve(
+            db_session, str(request.id), payload
+        )
         assert result.id is not None
         assert result.status == BuildoutProjectStatus.planned
 
@@ -1190,14 +1262,18 @@ class TestBuildoutRequestsApprove:
         db_session.commit()
 
         payload = BuildoutApproveRequest()
-        result = qualification_service.buildout_requests.approve(db_session, str(request.id), payload)
+        result = qualification_service.buildout_requests.approve(
+            db_session, str(request.id), payload
+        )
         assert result.id == project.id
 
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         payload = BuildoutApproveRequest()
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.buildout_requests.approve(db_session, str(uuid.uuid4()), payload)
+            qualification_service.buildout_requests.approve(
+                db_session, str(uuid.uuid4()), payload
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -1228,7 +1304,9 @@ class TestBuildoutProjectsGet:
         db_session.add(project)
         db_session.commit()
 
-        result = qualification_service.buildout_projects.get(db_session, str(project.id))
+        result = qualification_service.buildout_projects.get(
+            db_session, str(project.id)
+        )
         assert result.id == project.id
 
     def test_raises_for_not_found(self, db_session):
@@ -1284,8 +1362,12 @@ class TestBuildoutProjectsList:
         db_session.add(area)
         db_session.commit()
 
-        with_area = BuildoutProject(status=BuildoutProjectStatus.planned, coverage_area_id=area.id)
-        without_area = BuildoutProject(status=BuildoutProjectStatus.planned, coverage_area_id=None)
+        with_area = BuildoutProject(
+            status=BuildoutProjectStatus.planned, coverage_area_id=area.id
+        )
+        without_area = BuildoutProject(
+            status=BuildoutProjectStatus.planned, coverage_area_id=None
+        )
         db_session.add_all([with_area, without_area])
         db_session.commit()
 
@@ -1307,12 +1389,16 @@ class TestBuildoutProjectsUpdate:
 
     def test_updates_project(self, db_session):
         """Test updates project."""
-        project = BuildoutProject(status=BuildoutProjectStatus.planned, progress_percent=0)
+        project = BuildoutProject(
+            status=BuildoutProjectStatus.planned, progress_percent=0
+        )
         db_session.add(project)
         db_session.commit()
 
         payload = BuildoutProjectUpdate(progress_percent=50)
-        result = qualification_service.buildout_projects.update(db_session, str(project.id), payload)
+        result = qualification_service.buildout_projects.update(
+            db_session, str(project.id), payload
+        )
         assert result.progress_percent == 50
 
     def test_creates_update_record_on_status_change(self, db_session):
@@ -1322,16 +1408,22 @@ class TestBuildoutProjectsUpdate:
         db_session.commit()
 
         payload = BuildoutProjectUpdate(status=BuildoutProjectStatus.in_progress)
-        qualification_service.buildout_projects.update(db_session, str(project.id), payload)
+        qualification_service.buildout_projects.update(
+            db_session, str(project.id), payload
+        )
 
-        updates = db_session.query(BuildoutUpdate).filter_by(project_id=project.id).all()
+        updates = (
+            db_session.query(BuildoutUpdate).filter_by(project_id=project.id).all()
+        )
         assert len(updates) >= 1
 
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         payload = BuildoutProjectUpdate(progress_percent=25)
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.buildout_projects.update(db_session, str(uuid.uuid4()), payload)
+            qualification_service.buildout_projects.update(
+                db_session, str(uuid.uuid4()), payload
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -1351,7 +1443,9 @@ class TestBuildoutProjectsDelete:
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.buildout_projects.delete(db_session, str(uuid.uuid4()))
+            qualification_service.buildout_projects.delete(
+                db_session, str(uuid.uuid4())
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -1390,7 +1484,9 @@ class TestBuildoutMilestonesGet:
         db_session.add(milestone)
         db_session.commit()
 
-        result = qualification_service.buildout_milestones.get(db_session, str(milestone.id))
+        result = qualification_service.buildout_milestones.get(
+            db_session, str(milestone.id)
+        )
         assert result.id == milestone.id
 
     def test_raises_for_not_found(self, db_session):
@@ -1431,8 +1527,14 @@ class TestBuildoutMilestonesList:
         db_session.add(project)
         db_session.commit()
 
-        pending = BuildoutMilestone(project_id=project.id, name="Pending", status=BuildoutMilestoneStatus.pending)
-        completed = BuildoutMilestone(project_id=project.id, name="Done", status=BuildoutMilestoneStatus.completed)
+        pending = BuildoutMilestone(
+            project_id=project.id,
+            name="Pending",
+            status=BuildoutMilestoneStatus.pending,
+        )
+        completed = BuildoutMilestone(
+            project_id=project.id, name="Done", status=BuildoutMilestoneStatus.completed
+        )
         db_session.add_all([pending, completed])
         db_session.commit()
 
@@ -1463,14 +1565,18 @@ class TestBuildoutMilestonesUpdate:
         db_session.commit()
 
         payload = BuildoutMilestoneUpdate(name="Updated")
-        result = qualification_service.buildout_milestones.update(db_session, str(milestone.id), payload)
+        result = qualification_service.buildout_milestones.update(
+            db_session, str(milestone.id), payload
+        )
         assert result.name == "Updated"
 
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         payload = BuildoutMilestoneUpdate(name="Test")
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.buildout_milestones.update(db_session, str(uuid.uuid4()), payload)
+            qualification_service.buildout_milestones.update(
+                db_session, str(uuid.uuid4()), payload
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -1494,7 +1600,9 @@ class TestBuildoutMilestonesDelete:
     def test_raises_for_not_found(self, db_session):
         """Test raises for not found."""
         with pytest.raises(HTTPException) as exc_info:
-            qualification_service.buildout_milestones.delete(db_session, str(uuid.uuid4()))
+            qualification_service.buildout_milestones.delete(
+                db_session, str(uuid.uuid4())
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -1529,8 +1637,16 @@ class TestBuildoutUpdatesList:
         db_session.add(project)
         db_session.commit()
 
-        u1 = BuildoutUpdate(project_id=project.id, status=BuildoutProjectStatus.planned, message="Created")
-        u2 = BuildoutUpdate(project_id=project.id, status=BuildoutProjectStatus.in_progress, message="Started")
+        u1 = BuildoutUpdate(
+            project_id=project.id,
+            status=BuildoutProjectStatus.planned,
+            message="Created",
+        )
+        u2 = BuildoutUpdate(
+            project_id=project.id,
+            status=BuildoutProjectStatus.in_progress,
+            message="Started",
+        )
         db_session.add_all([u1, u2])
         db_session.commit()
 

@@ -52,5 +52,9 @@ class TestAdminDashboard:
         dashboard.goto()
         dashboard.expect_loaded()
         dashboard.click_tickets_link()
-        admin_page.wait_for_url("**/admin/support/tickets**", wait_until="domcontentloaded")
-        expect(admin_page.get_by_role("heading", name="Support Tickets")).to_be_visible()
+        admin_page.wait_for_url(
+            "**/admin/support/tickets**", wait_until="domcontentloaded"
+        )
+        expect(
+            admin_page.get_by_role("heading", name="Support Tickets")
+        ).to_be_visible()

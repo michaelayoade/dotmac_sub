@@ -569,9 +569,7 @@ class TestRegionZones:
         assert exc_info.value.status_code == 404
 
     def test_list_region_zones(self, db_session):
-        catalog_service.region_zones.create(
-            db_session, RegionZoneCreate(name="South")
-        )
+        catalog_service.region_zones.create(db_session, RegionZoneCreate(name="South"))
         items = catalog_service.region_zones.list(
             db_session,
             is_active=None,
@@ -839,9 +837,7 @@ class TestRadiusAttributes:
         profile = _make_radius_profile(db_session)
         attr = catalog_service.radius_attributes.create(
             db_session,
-            RadiusAttributeCreate(
-                profile_id=profile.id, attribute="Attr", value="old"
-            ),
+            RadiusAttributeCreate(profile_id=profile.id, attribute="Attr", value="old"),
         )
         updated = catalog_service.radius_attributes.update(
             db_session,
@@ -892,9 +888,7 @@ class TestOfferRadiusProfiles:
         with pytest.raises(HTTPException) as exc_info:
             catalog_service.offer_radius_profiles.create(
                 db_session,
-                OfferRadiusProfileCreate(
-                    offer_id=uuid.uuid4(), profile_id=profile.id
-                ),
+                OfferRadiusProfileCreate(offer_id=uuid.uuid4(), profile_id=profile.id),
             )
         assert exc_info.value.status_code == 404
 
@@ -903,9 +897,7 @@ class TestOfferRadiusProfiles:
         with pytest.raises(HTTPException) as exc_info:
             catalog_service.offer_radius_profiles.create(
                 db_session,
-                OfferRadiusProfileCreate(
-                    offer_id=offer.id, profile_id=uuid.uuid4()
-                ),
+                OfferRadiusProfileCreate(offer_id=offer.id, profile_id=uuid.uuid4()),
             )
         assert exc_info.value.status_code == 404
 
@@ -1406,9 +1398,7 @@ class TestOfferAddOnLinks:
                 {"add_on_id": str(addon2.id), "is_required": False, "max_quantity": 3},
             ],
         )
-        links = catalog_service.offer_addons.list(
-            db_session, offer_id=str(offer.id)
-        )
+        links = catalog_service.offer_addons.list(db_session, offer_id=str(offer.id))
         assert len(links) == 2
 
         # Sync again: remove addon1, add addon3, keep addon2
@@ -1448,9 +1438,13 @@ class TestSubscriptions:
         assert sub.id is not None
         assert sub.status == SubscriptionStatus.pending
 
-    def test_create_subscription_inherits_offer_radius_profile(self, db_session, subscriber):
+    def test_create_subscription_inherits_offer_radius_profile(
+        self, db_session, subscriber
+    ):
         offer = _make_offer(db_session)
-        profile = _make_radius_profile(db_session, download_speed=50000, upload_speed=25000)
+        profile = _make_radius_profile(
+            db_session, download_speed=50000, upload_speed=25000
+        )
         catalog_service.offer_radius_profiles.create(
             db_session,
             OfferRadiusProfileCreate(offer_id=offer.id, profile_id=profile.id),
@@ -1543,11 +1537,15 @@ class TestSubscriptions:
         second_profile = _make_radius_profile(db_session, name="Plan B Profile")
         catalog_service.offer_radius_profiles.create(
             db_session,
-            OfferRadiusProfileCreate(offer_id=first_offer.id, profile_id=first_profile.id),
+            OfferRadiusProfileCreate(
+                offer_id=first_offer.id, profile_id=first_profile.id
+            ),
         )
         catalog_service.offer_radius_profiles.create(
             db_session,
-            OfferRadiusProfileCreate(offer_id=second_offer.id, profile_id=second_profile.id),
+            OfferRadiusProfileCreate(
+                offer_id=second_offer.id, profile_id=second_profile.id
+            ),
         )
 
         sub = catalog_service.subscriptions.create(
@@ -1658,7 +1656,9 @@ class TestSubscriptions:
                 end_at=past,
             ),
         )
-        result = catalog_service.subscriptions.expire_subscriptions(db_session, run_at=now)
+        result = catalog_service.subscriptions.expire_subscriptions(
+            db_session, run_at=now
+        )
         assert result["subscriptions_expired"] >= 1
         db_session.refresh(sub)
         assert sub.status == SubscriptionStatus.expired

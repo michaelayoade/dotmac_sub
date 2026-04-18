@@ -77,7 +77,9 @@ def test_ont_detail_page_data_uses_unified_subscriber_name_and_status(db_session
     db_session.add(pon)
     db_session.flush()
 
-    ont = OntUnit(serial_number="ONT-DETAIL-NAME-001", is_active=True, olt_device_id=olt.id)
+    ont = OntUnit(
+        serial_number="ONT-DETAIL-NAME-001", is_active=True, olt_device_id=olt.id
+    )
     db_session.add(ont)
     db_session.flush()
 
@@ -170,7 +172,7 @@ def test_ont_detail_page_data_exposes_connected_customer_device_count_from_snaps
                     "MACAddress": "AA:BB:CC:00:00:03",
                     "Active": "false",
                 },
-            ]
+            ],
         },
     )
     db_session.add(ont)
@@ -395,8 +397,16 @@ def test_ont_detail_page_data_includes_recent_provisioning_runs(db_session):
             status=ProvisioningRunStatus.success,
             output_payload={
                 "results": [
-                    {"step_type": "create_olt_service_port", "status": "success", "detail": "Service port created"},
-                    {"step_type": "push_tr069_pppoe_credentials", "status": "success", "detail": "PPPoE pushed"},
+                    {
+                        "step_type": "create_olt_service_port",
+                        "status": "success",
+                        "detail": "Service port created",
+                    },
+                    {
+                        "step_type": "push_tr069_pppoe_credentials",
+                        "status": "success",
+                        "detail": "PPPoE pushed",
+                    },
                 ]
             },
         )

@@ -76,9 +76,7 @@ def upgrade() -> None:
     if "offer_reseller_availability" not in existing_tables:
         op.create_table(
             "offer_reseller_availability",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "offer_id",
                 postgresql.UUID(as_uuid=True),
@@ -91,27 +89,21 @@ def upgrade() -> None:
                 sa.ForeignKey("resellers.id", ondelete="CASCADE"),
                 nullable=False,
             ),
-            sa.Column(
-                "is_active", sa.Boolean, server_default=sa.text("true")
-            ),
+            sa.Column("is_active", sa.Boolean, server_default=sa.text("true")),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),
                 nullable=False,
                 server_default=sa.text("now()"),
             ),
-            sa.UniqueConstraint(
-                "offer_id", "reseller_id", name="uq_offer_reseller"
-            ),
+            sa.UniqueConstraint("offer_id", "reseller_id", name="uq_offer_reseller"),
         )
 
     # --- 2. offer_location_availability ---
     if "offer_location_availability" not in existing_tables:
         op.create_table(
             "offer_location_availability",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "offer_id",
                 postgresql.UUID(as_uuid=True),
@@ -124,27 +116,21 @@ def upgrade() -> None:
                 sa.ForeignKey("pop_sites.id", ondelete="CASCADE"),
                 nullable=False,
             ),
-            sa.Column(
-                "is_active", sa.Boolean, server_default=sa.text("true")
-            ),
+            sa.Column("is_active", sa.Boolean, server_default=sa.text("true")),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),
                 nullable=False,
                 server_default=sa.text("now()"),
             ),
-            sa.UniqueConstraint(
-                "offer_id", "pop_site_id", name="uq_offer_location"
-            ),
+            sa.UniqueConstraint("offer_id", "pop_site_id", name="uq_offer_location"),
         )
 
     # --- 3. offer_category_availability ---
     if "offer_category_availability" not in existing_tables:
         op.create_table(
             "offer_category_availability",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "offer_id",
                 postgresql.UUID(as_uuid=True),
@@ -163,9 +149,7 @@ def upgrade() -> None:
                 ),
                 nullable=False,
             ),
-            sa.Column(
-                "is_active", sa.Boolean, server_default=sa.text("true")
-            ),
+            sa.Column("is_active", sa.Boolean, server_default=sa.text("true")),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),
@@ -183,9 +167,7 @@ def upgrade() -> None:
     if "offer_billing_mode_availability" not in existing_tables:
         op.create_table(
             "offer_billing_mode_availability",
-            sa.Column(
-                "id", postgresql.UUID(as_uuid=True), primary_key=True
-            ),
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
             sa.Column(
                 "offer_id",
                 postgresql.UUID(as_uuid=True),
@@ -202,9 +184,7 @@ def upgrade() -> None:
                 ),
                 nullable=False,
             ),
-            sa.Column(
-                "is_active", sa.Boolean, server_default=sa.text("true")
-            ),
+            sa.Column("is_active", sa.Boolean, server_default=sa.text("true")),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),
@@ -293,6 +273,4 @@ def downgrade() -> None:
     op.drop_table("offer_reseller_availability")
 
     # Drop enum (only ledgercategory is new — others pre-existed)
-    postgresql.ENUM(name="ledgercategory").drop(
-        op.get_bind(), checkfirst=True
-    )
+    postgresql.ENUM(name="ledgercategory").drop(op.get_bind(), checkfirst=True)

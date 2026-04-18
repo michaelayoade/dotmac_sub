@@ -36,10 +36,30 @@ def _matched_route(router, path: str, method: str = "GET"):
 
 
 def test_topology_link_update_can_change_endpoints(db_session):
-    source_a = NetworkDevice(name="Source A", role=DeviceRole.core, status=DeviceStatus.online, is_active=True)
-    target_a = NetworkDevice(name="Target A", role=DeviceRole.edge, status=DeviceStatus.online, is_active=True)
-    source_b = NetworkDevice(name="Source B", role=DeviceRole.core, status=DeviceStatus.online, is_active=True)
-    target_b = NetworkDevice(name="Target B", role=DeviceRole.edge, status=DeviceStatus.online, is_active=True)
+    source_a = NetworkDevice(
+        name="Source A",
+        role=DeviceRole.core,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    target_a = NetworkDevice(
+        name="Target A",
+        role=DeviceRole.edge,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    source_b = NetworkDevice(
+        name="Source B",
+        role=DeviceRole.core,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
+    target_b = NetworkDevice(
+        name="Target B",
+        role=DeviceRole.edge,
+        status=DeviceStatus.online,
+        is_active=True,
+    )
     db_session.add_all([source_a, target_a, source_b, target_b])
     db_session.flush()
 
@@ -86,8 +106,12 @@ def test_topology_link_update_can_change_endpoints(db_session):
 
 
 def test_topology_link_update_allows_same_interfaces_on_same_link(db_session):
-    source = NetworkDevice(name="Source", role=DeviceRole.core, status=DeviceStatus.online, is_active=True)
-    target = NetworkDevice(name="Target", role=DeviceRole.edge, status=DeviceStatus.online, is_active=True)
+    source = NetworkDevice(
+        name="Source", role=DeviceRole.core, status=DeviceStatus.online, is_active=True
+    )
+    target = NetworkDevice(
+        name="Target", role=DeviceRole.edge, status=DeviceStatus.online, is_active=True
+    )
     db_session.add_all([source, target])
     db_session.flush()
 
@@ -187,15 +211,30 @@ def test_node_summary_includes_device_interfaces(db_session):
     db_session.add(device)
     db_session.flush()
 
-    iface_a = DeviceInterface(device_id=device.id, name="xe-0/0/0", status="up", speed_mbps=1000, monitored=True)
-    iface_b = DeviceInterface(device_id=device.id, name="xe-0/0/1", status="down", speed_mbps=10000, monitored=False)
+    iface_a = DeviceInterface(
+        device_id=device.id,
+        name="xe-0/0/0",
+        status="up",
+        speed_mbps=1000,
+        monitored=True,
+    )
+    iface_b = DeviceInterface(
+        device_id=device.id,
+        name="xe-0/0/1",
+        status="down",
+        speed_mbps=10000,
+        monitored=False,
+    )
     db_session.add_all([iface_a, iface_b])
     db_session.flush()
 
     summary = topology_service.node_summary(db_session, str(device.id))
 
     assert summary["interface_count"] == 2
-    assert {iface["name"] for iface in summary["interfaces"]} == {"xe-0/0/0", "xe-0/0/1"}
+    assert {iface["name"] for iface in summary["interfaces"]} == {
+        "xe-0/0/0",
+        "xe-0/0/1",
+    }
 
 
 def test_topology_graph_aggregates_and_filters_by_pop_site(db_session):
@@ -224,10 +263,15 @@ def test_topology_graph_aggregates_and_filters_by_pop_site(db_session):
     db_session.flush()
 
     full_graph = topology_service.list_nodes_and_edges(db_session)
-    filtered_graph = topology_service.list_nodes_and_edges(db_session, pop_site_id=str(site_a.id))
+    filtered_graph = topology_service.list_nodes_and_edges(
+        db_session, pop_site_id=str(site_a.id)
+    )
 
     assert full_graph["stats"]["site_count"] == 2
-    assert {item["pop_site_name"] for item in full_graph["site_summaries"]} == {"POP A", "POP B"}
+    assert {item["pop_site_name"] for item in full_graph["site_summaries"]} == {
+        "POP A",
+        "POP B",
+    }
     assert {node["pop_site_name"] for node in filtered_graph["nodes"]} == {"POP A"}
 
 
@@ -244,7 +288,9 @@ def test_get_device_interfaces_returns_full_inventory(db_session):
 
     db_session.add_all(
         [
-            DeviceInterface(device_id=device.id, name=f"ge-0/0/{index:03d}", monitored=True)
+            DeviceInterface(
+                device_id=device.id, name=f"ge-0/0/{index:03d}", monitored=True
+            )
             for index in range(205)
         ]
     )
@@ -262,9 +308,18 @@ def test_legacy_weathermap_redirect_route_exists():
 
 
 def test_topology_routes_include_ajax_endpoints():
-    assert _matched_route(topology_routes.router, "/network/topology/api/interfaces/123") is not None
-    assert _matched_route(topology_routes.router, "/network/topology/api/node/123") is not None
-    assert _matched_route(topology_routes.router, "/network/topology/api/graph") is not None
+    assert (
+        _matched_route(topology_routes.router, "/network/topology/api/interfaces/123")
+        is not None
+    )
+    assert (
+        _matched_route(topology_routes.router, "/network/topology/api/node/123")
+        is not None
+    )
+    assert (
+        _matched_route(topology_routes.router, "/network/topology/api/graph")
+        is not None
+    )
 
 
 def test_topology_link_form_restores_selected_interfaces():
@@ -285,4 +340,6 @@ def test_admin_labels_switched_to_topology():
     design_system = Path("templates/admin/design_system/modules.html").read_text()
     assert "'topology': 'Network Topology'" in layout
     assert '"href": "/admin/network/topology"' in network_hub
-    assert '"label": "Network Topology", "url": "/admin/network/topology"' in design_system
+    assert (
+        '"label": "Network Topology", "url": "/admin/network/topology"' in design_system
+    )

@@ -208,7 +208,9 @@ def test_check_subscription_access_allows_owner_principal_id(db_session, subscri
     assert allowed.id == subscription.id
 
 
-def test_check_subscription_access_denies_non_owner_subscriber(db_session, subscription):
+def test_check_subscription_access_denies_non_owner_subscriber(
+    db_session, subscription
+):
     user = {
         "roles": [],
         "principal_type": "subscriber",
@@ -236,7 +238,9 @@ def test_get_user_active_subscription_uses_principal_id(db_session, subscription
     assert current.id == subscription.id
 
 
-def test_get_user_active_subscription_allows_blocked_subscription(db_session, subscription):
+def test_get_user_active_subscription_allows_blocked_subscription(
+    db_session, subscription
+):
     from app.models.catalog import SubscriptionStatus
 
     subscription.status = SubscriptionStatus.blocked
@@ -275,11 +279,11 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
                     [
                         (
                             b"1-0",
-                                {
-                                    b"subscription_id": str(subscription_id).encode(),
-                                    b"nas_device_id": str(nas.id).encode(),
-                                    b"rx_bps": b"1000",
-                                    b"tx_bps": b"2000",
+                            {
+                                b"subscription_id": str(subscription_id).encode(),
+                                b"nas_device_id": str(nas.id).encode(),
+                                b"rx_bps": b"1000",
+                                b"tx_bps": b"2000",
                                 b"sample_at": datetime.now(UTC).isoformat().encode(),
                             },
                         )

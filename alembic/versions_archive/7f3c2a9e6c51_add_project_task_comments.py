@@ -26,8 +26,18 @@ def upgrade() -> None:
         op.create_table(
             "project_task_comments",
             sa.Column("id", UUID(as_uuid=True), primary_key=True, nullable=False),
-            sa.Column("task_id", UUID(as_uuid=True), sa.ForeignKey("project_tasks.id"), nullable=False),
-            sa.Column("author_person_id", UUID(as_uuid=True), sa.ForeignKey("people.id"), nullable=True),
+            sa.Column(
+                "task_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("project_tasks.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "author_person_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("people.id"),
+                nullable=True,
+            ),
             sa.Column("body", sa.Text(), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         )

@@ -27,7 +27,9 @@ class TestDesiredServicePort:
             ServicePortMatchResult,
         )
 
-        desired = DesiredServicePort(vlan_id=100, gem_index=1, tag_transform="translate")
+        desired = DesiredServicePort(
+            vlan_id=100, gem_index=1, tag_transform="translate"
+        )
         actual = ActualServicePort(
             index=5,
             vlan_id=100,
@@ -45,7 +47,9 @@ class TestDesiredServicePort:
             ServicePortMatchResult,
         )
 
-        desired = DesiredServicePort(vlan_id=100, gem_index=1, tag_transform="translate")
+        desired = DesiredServicePort(
+            vlan_id=100, gem_index=1, tag_transform="translate"
+        )
         actual = ActualServicePort(
             index=5,
             vlan_id=100,
@@ -571,7 +575,9 @@ class TestBuildDesiredStateFromProfile:
         db_session.commit()
 
         # Build desired state
-        desired, err = build_desired_state_from_profile(db_session, str(ont.id), profile)
+        desired, err = build_desired_state_from_profile(
+            db_session, str(ont.id), profile
+        )
 
         assert err == ""
         assert desired is not None
@@ -658,7 +664,9 @@ class TestProvisioningPreflight:
         assert "Authorize the ONT" in checks["OLT authorization"]["message"]
         assert checks["OLT authorization"]["blocks_authorization"] is False
 
-    def test_preflight_allows_authorized_ont_with_required_inventory(self, db_session) -> None:
+    def test_preflight_allows_authorized_ont_with_required_inventory(
+        self, db_session
+    ) -> None:
         from app.services.network.ont_provisioning.preflight import (
             validate_prerequisites,
         )

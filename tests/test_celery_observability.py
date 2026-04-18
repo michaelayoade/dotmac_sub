@@ -55,7 +55,9 @@ def test_task_signal_handlers_emit_structured_logs(caplog):
     )
 
     start_record = next(
-        record for record in caplog.records if record.getMessage() == "celery_task_start"
+        record
+        for record in caplog.records
+        if record.getMessage() == "celery_task_start"
     )
     complete_record = next(
         record
@@ -99,7 +101,9 @@ def test_enqueue_celery_task_uses_headers_and_logs(monkeypatch, caplog):
     assert captured["headers"]["correlation_id"] == "webhook_event:event-1"
     assert captured["headers"]["source"] == "event_webhook_handler"
     queued_record = next(
-        record for record in caplog.records if record.getMessage() == "celery_task_queued"
+        record
+        for record in caplog.records
+        if record.getMessage() == "celery_task_queued"
     )
     assert queued_record.task_id == "task-3"
     assert queued_record.correlation_id == "webhook_event:event-1"
@@ -132,7 +136,9 @@ def test_poll_all_olt_signals_uses_correlated_enqueue(monkeypatch):
         def close(self):
             return None
 
-    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra):
+    def _fake_enqueue(
+        task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
+    ):
         captured.append(
             {
                 "task": task,
@@ -146,7 +152,9 @@ def test_poll_all_olt_signals_uses_correlated_enqueue(monkeypatch):
         return SimpleNamespace(id=f"task-{len(captured)}")
 
     monkeypatch.setattr(olt_polling_module, "SessionLocal", lambda: _FakeSession())
-    monkeypatch.setattr(olt_polling_module, "_mark_stale_onts_offline", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(
+        olt_polling_module, "_mark_stale_onts_offline", lambda *_args, **_kwargs: 1
+    )
     monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
 
     result = olt_polling_module.poll_all_olt_signals()
@@ -184,7 +192,9 @@ def test_capture_all_olts_task_uses_correlated_enqueue(monkeypatch):
         def close(self):
             return None
 
-    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra):
+    def _fake_enqueue(
+        task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
+    ):
         task_id = f"task-{len(captured) + 1}"
         captured.append(
             {

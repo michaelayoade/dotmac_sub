@@ -127,7 +127,9 @@ def step0_fix_serials_and_import(
         return
 
     # Load OLT name → ID mapping
-    olt_rows = db.execute(text("SELECT id, name FROM olt_devices WHERE is_active = true")).fetchall()
+    olt_rows = db.execute(
+        text("SELECT id, name FROM olt_devices WHERE is_active = true")
+    ).fetchall()
     olt_id_by_name: dict[str, str] = {name: str(oid) for oid, name in olt_rows}
 
     # Build CSV lookup: (olt_name, board, port, onu_id) → row data
@@ -145,13 +147,19 @@ def step0_fix_serials_and_import(
             if olt and board and port and onu_id:
                 dotmac_olt = _OLT_NAME_MAP.get(olt, olt)
                 csv_by_position[(dotmac_olt, board, port, onu_id)] = row
-    logger.info("  Loaded %d CSV entries (%d with position)", len(csv_by_serial), len(csv_by_position))
+    logger.info(
+        "  Loaded %d CSV entries (%d with position)",
+        len(csv_by_serial),
+        len(csv_by_position),
+    )
 
     # Phase 1: Fix HW- synthetic serials by matching OLT position
-    hw_onts = db.execute(text(
-        "SELECT id, serial_number, olt_device_id, board, port "
-        "FROM ont_units WHERE serial_number LIKE 'HW-%' AND is_active = true"
-    )).fetchall()
+    hw_onts = db.execute(
+        text(
+            "SELECT id, serial_number, olt_device_id, board, port "
+            "FROM ont_units WHERE serial_number LIKE 'HW-%' AND is_active = true"
+        )
+    ).fetchall()
     logger.info("  Found %d HW- synthetic serials to fix", len(hw_onts))
 
     for ont_id, hw_serial, olt_device_id, board_slot, port_val in hw_onts:
@@ -196,7 +204,9 @@ def step0_fix_serials_and_import(
 
         # Check real serial doesn't already exist
         existing = db.execute(
-            text("SELECT id FROM ont_units WHERE UPPER(serial_number) = UPPER(:sn) AND is_active = true"),
+            text(
+                "SELECT id FROM ont_units WHERE UPPER(serial_number) = UPPER(:sn) AND is_active = true"
+            ),
             {"sn": real_serial},
         ).fetchone()
         if existing:
@@ -206,7 +216,12 @@ def step0_fix_serials_and_import(
         pppoe_pass = (csv_row.get("Password") or "").strip()
 
         if dry_run:
-            logger.info("  [DRY RUN] %s → %s (PPPoE:%s)", hw_serial, real_serial, pppoe_user or "none")
+            logger.info(
+                "  [DRY RUN] %s → %s (PPPoE:%s)",
+                hw_serial,
+                real_serial,
+                pppoe_user or "none",
+            )
         else:
             updates = {"sn": real_serial, "oid": ont_id}
             update_sql = "UPDATE ont_units SET serial_number = :sn"
@@ -226,7 +241,11 @@ def step0_fix_serials_and_import(
 
     if not dry_run and stats.serials_fixed:
         db.commit()
-    logger.info("  Fixed %d synthetic serials, filled %d PPPoE", stats.serials_fixed, stats.pppoe_filled)
+    logger.info(
+        "  Fixed %d synthetic serials, filled %d PPPoE",
+        stats.serials_fixed,
+        stats.pppoe_filled,
+    )
 
     # Phase 2: Create ONT records for CSV entries not in our DB
     # Re-read after phase 1 commits to include freshly fixed serials
@@ -252,31 +271,47 @@ def step0_fix_serials_and_import(
         name = (csv_row.get("Name") or "").strip()
 
         if dry_run:
-            logger.info("  [DRY RUN] Would create ONT %s (%s, PPPoE:%s)", real_serial, onu_type, pppoe_user or "none")
+            logger.info(
+                "  [DRY RUN] Would create ONT %s (%s, PPPoE:%s)",
+                real_serial,
+                onu_type,
+                pppoe_user or "none",
+            )
         else:
             import uuid
 
             new_id = str(uuid.uuid4())
             display_name = name or real_serial
-            db.execute(text("""
+            db.execute(
+                text("""
                 INSERT INTO ont_units (id, serial_number, vendor, model, olt_device_id,
                     board, port, pppoe_username, pppoe_password, name, address_or_comment,
                     is_active, pon_type, created_at, updated_at)
                 VALUES (:id, :sn, 'Huawei', :model, :olt_id,
                     :board, :port, :user, :pass, :name, :addr,
                     true, 'gpon', NOW(), NOW())
-            """), {
-                "id": new_id, "sn": real_serial, "model": onu_type or None,
-                "olt_id": olt_id, "board": f"0/{board}" if board else None,
-                "port": port_str or None, "user": pppoe_user or None,
-                "pass": pppoe_pass or None, "name": display_name,
-                "addr": display_name,
-            })
+            """),
+                {
+                    "id": new_id,
+                    "sn": real_serial,
+                    "model": onu_type or None,
+                    "olt_id": olt_id,
+                    "board": f"0/{board}" if board else None,
+                    "port": port_str or None,
+                    "user": pppoe_user or None,
+                    "pass": pppoe_pass or None,
+                    "name": display_name,
+                    "addr": display_name,
+                },
+            )
             # Create an active assignment (no subscriber yet — step 2 will link)
-            db.execute(text("""
+            db.execute(
+                text("""
                 INSERT INTO ont_assignments (id, ont_unit_id, active, created_at, updated_at)
                 VALUES (:id, :ont_id, true, NOW(), NOW())
-            """), {"id": str(uuid.uuid4()), "ont_id": new_id})
+            """),
+                {"id": str(uuid.uuid4()), "ont_id": new_id},
+            )
         stats.onts_created += 1
 
     if not dry_run and stats.onts_created:
@@ -287,7 +322,9 @@ def step0_fix_serials_and_import(
 # ── Step 1: Sync GenieACS → DB ──────────────────────────────────────────────
 
 
-def step1_sync_genieacs(db, acs_server_id: str, *, dry_run: bool, stats: MigrationStats) -> None:
+def step1_sync_genieacs(
+    db, acs_server_id: str, *, dry_run: bool, stats: MigrationStats
+) -> None:
     """Sync GenieACS device list into tr069_cpe_devices and auto-link to ONTs."""
     from app.models.tr069 import Tr069AcsServer
     from app.services.genieacs import GenieACSClient
@@ -306,7 +343,9 @@ def step1_sync_genieacs(db, acs_server_id: str, *, dry_run: bool, stats: Migrati
         client = GenieACSClient(server.base_url)
         devices = client.list_devices()
         stats.genieacs_devices = len(devices)
-        logger.info("  [DRY RUN] Would sync %d GenieACS devices", stats.genieacs_devices)
+        logger.info(
+            "  [DRY RUN] Would sync %d GenieACS devices", stats.genieacs_devices
+        )
         return
 
     result = CpeDevices.sync_from_genieacs(db, acs_server_id)
@@ -499,7 +538,9 @@ def step3_push_config_via_tr069(
                 sub_ids.add(str(assignment.subscriber_id))
     if sub_ids:
         subs = db.execute(
-            text("SELECT id, display_name, first_name, last_name FROM subscribers WHERE id = ANY(:ids)"),
+            text(
+                "SELECT id, display_name, first_name, last_name FROM subscribers WHERE id = ANY(:ids)"
+            ),
             {"ids": list(sub_ids)},
         ).fetchall()
         for sid, display, first, last in subs:
@@ -512,7 +553,9 @@ def step3_push_config_via_tr069(
     for i, (cpe_dev, ont) in enumerate(linked_devices, 1):
         serial = ont.serial_number or "unknown"
         pppoe_user = ont.pppoe_username
-        pppoe_pass = decrypt_credential(ont.pppoe_password) if ont.pppoe_password else ""
+        pppoe_pass = (
+            decrypt_credential(ont.pppoe_password) if ont.pppoe_password else ""
+        )
 
         if not pppoe_user or not pppoe_pass:
             stats.pppoe_skipped += 1
@@ -562,7 +605,9 @@ def step3_push_config_via_tr069(
                 "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Password": pppoe_pass,
             }
         try:
-            client.set_parameter_values(device_id, pppoe_params, connection_request=False)
+            client.set_parameter_values(
+                device_id, pppoe_params, connection_request=False
+            )
             stats.pppoe_pushed += 1
             logger.info(
                 "  [%d/%d] PPPoE pushed to %s (user:%s)",
@@ -585,13 +630,22 @@ def step3_push_config_via_tr069(
         # ── Push WiFi SSID ──
         ssid = _build_wifi_ssid(ont, subscriber_names, wifi_ssid_prefix)
         if ssid:
-            wifi_params = build_tr069_params(root, {
-                "LANDevice.1.WLANConfiguration.1.SSID": ssid,
-            }) if root == TR069_ROOT_IGD else {
-                "Device.WiFi.SSID.1.SSID": ssid,
-            }
+            wifi_params = (
+                build_tr069_params(
+                    root,
+                    {
+                        "LANDevice.1.WLANConfiguration.1.SSID": ssid,
+                    },
+                )
+                if root == TR069_ROOT_IGD
+                else {
+                    "Device.WiFi.SSID.1.SSID": ssid,
+                }
+            )
             try:
-                client.set_parameter_values(device_id, wifi_params, connection_request=False)
+                client.set_parameter_values(
+                    device_id, wifi_params, connection_request=False
+                )
                 stats.wifi_pushed += 1
             except GenieACSError as exc:
                 stats.wifi_failed += 1
@@ -739,7 +793,11 @@ def _detect_and_cache_data_model(db, client, device_id: str, ont) -> str | None:
 
     try:
         device = client.get_device(device_id)
-        root = TR069_ROOT_DEVICE if isinstance(device.get("Device"), dict) else TR069_ROOT_IGD
+        root = (
+            TR069_ROOT_DEVICE
+            if isinstance(device.get("Device"), dict)
+            else TR069_ROOT_IGD
+        )
         ont.tr069_data_model = root
         db.flush()
         return root

@@ -8,19 +8,49 @@ from scripts.migration import phase3_operational_data as phase3
 
 def test_map_customer_status_matches_splynx_1to1():
     assert phase1._map_customer_status("new", is_deleted=False) == SubscriberStatus.new
-    assert phase1._map_customer_status("active", is_deleted=False) == SubscriberStatus.active
-    assert phase1._map_customer_status("blocked", is_deleted=False) == SubscriberStatus.blocked
-    assert phase1._map_customer_status("disabled", is_deleted=False) == SubscriberStatus.disabled
-    assert phase1._map_customer_status("active", is_deleted=True) == SubscriberStatus.canceled
+    assert (
+        phase1._map_customer_status("active", is_deleted=False)
+        == SubscriberStatus.active
+    )
+    assert (
+        phase1._map_customer_status("blocked", is_deleted=False)
+        == SubscriberStatus.blocked
+    )
+    assert (
+        phase1._map_customer_status("disabled", is_deleted=False)
+        == SubscriberStatus.disabled
+    )
+    assert (
+        phase1._map_customer_status("active", is_deleted=True)
+        == SubscriberStatus.canceled
+    )
 
 
 def test_map_service_status_matches_splynx_1to1():
-    assert phase1._map_service_status("active", is_deleted=False) == SubscriptionStatus.active
-    assert phase1._map_service_status("blocked", is_deleted=False) == SubscriptionStatus.blocked
-    assert phase1._map_service_status("disabled", is_deleted=False) == SubscriptionStatus.disabled
-    assert phase1._map_service_status("hidden", is_deleted=False) == SubscriptionStatus.hidden
-    assert phase1._map_service_status("stopped", is_deleted=False) == SubscriptionStatus.stopped
-    assert phase1._map_service_status("active", is_deleted=True) == SubscriptionStatus.canceled
+    assert (
+        phase1._map_service_status("active", is_deleted=False)
+        == SubscriptionStatus.active
+    )
+    assert (
+        phase1._map_service_status("blocked", is_deleted=False)
+        == SubscriptionStatus.blocked
+    )
+    assert (
+        phase1._map_service_status("disabled", is_deleted=False)
+        == SubscriptionStatus.disabled
+    )
+    assert (
+        phase1._map_service_status("hidden", is_deleted=False)
+        == SubscriptionStatus.hidden
+    )
+    assert (
+        phase1._map_service_status("stopped", is_deleted=False)
+        == SubscriptionStatus.stopped
+    )
+    assert (
+        phase1._map_service_status("active", is_deleted=True)
+        == SubscriptionStatus.canceled
+    )
 
 
 def test_map_billing_mode_uses_splynx_billing_type():

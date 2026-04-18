@@ -143,9 +143,8 @@ def verify_ont_authorized(
                 f"OLT accepted the authorization write, but readback failed: {msg}",
                 {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
             )
-        if (
-            status_entry is None
-            or not _serial_matches(status_entry.serial_number, serial_number)
+        if status_entry is None or not _serial_matches(
+            status_entry.serial_number, serial_number
         ):
             serial_verification = _verify_by_serial("ONT-ID readback mismatch")
             if serial_verification is not None:

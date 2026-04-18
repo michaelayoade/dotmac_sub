@@ -150,11 +150,7 @@ def infer_profile_from_samples(
         return None
 
     internet_counts = Counter(
-        {
-            key: count
-            for key, count in all_service_counts.items()
-            if key[0] != mgmt_vlan
-        }
+        {key: count for key, count in all_service_counts.items() if key[0] != mgmt_vlan}
     )
     internet_service = _choose_service(internet_counts)
     if internet_service is None:
@@ -289,9 +285,15 @@ def apply_observed_profile(
     """Apply observed OLT service layout to a scoped profile."""
     changed = False
 
-    expected_name = f"{_site_name(profile.olt_device)} PPPoE mgmt{observed.mgmt_vlan_tag}"
+    expected_name = (
+        f"{_site_name(profile.olt_device)} PPPoE mgmt{observed.mgmt_vlan_tag}"
+    )
     internet = next(
-        (svc for svc in observed.services if svc.service_type == WanServiceType.internet),
+        (
+            svc
+            for svc in observed.services
+            if svc.service_type == WanServiceType.internet
+        ),
         None,
     )
     if internet:

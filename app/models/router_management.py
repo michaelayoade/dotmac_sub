@@ -210,9 +210,7 @@ class RouterInterface(Base):
 
 class RouterConfigSnapshot(Base):
     __tablename__ = "router_config_snapshots"
-    __table_args__ = (
-        Index("ix_router_config_snapshots_router_id", "router_id"),
-    )
+    __table_args__ = (Index("ix_router_config_snapshots_router_id", "router_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

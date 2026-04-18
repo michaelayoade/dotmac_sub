@@ -99,7 +99,9 @@ def timed_operation(operation: str):
 T = TypeVar("T")
 
 
-def track_redis_operation(operation: str) -> Callable[[Callable[..., T]], Callable[..., T]]:
+def track_redis_operation(
+    operation: str,
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator to track Redis operation metrics."""
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:

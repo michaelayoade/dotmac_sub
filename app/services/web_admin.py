@@ -42,8 +42,10 @@ def get_current_user(request) -> dict:
         )
         principal_id = str(getattr(user, "id", ""))
         person_id = getattr(user, "person_id", None)
-        subscriber_id = "" if principal_type == "system_user" else str(
-            person_id if person_id else principal_id
+        subscriber_id = (
+            ""
+            if principal_type == "system_user"
+            else str(person_id if person_id else principal_id)
         )
         return {
             "id": principal_id,

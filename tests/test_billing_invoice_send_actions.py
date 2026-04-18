@@ -17,7 +17,9 @@ from app.services.web_billing_invoice_bulk import (
 )
 
 
-def test_bulk_send_calls_invoice_notification_helper(db_session, subscriber, monkeypatch):
+def test_bulk_send_calls_invoice_notification_helper(
+    db_session, subscriber, monkeypatch
+):
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
@@ -128,7 +130,9 @@ def test_bulk_mark_paid_updates_only_eligible_statuses(db_session, subscriber):
     assert inv_draft.status == InvoiceStatus.draft
 
 
-def test_bulk_queue_pdf_exports_reports_ready_and_queued(db_session, subscriber, monkeypatch):
+def test_bulk_queue_pdf_exports_reports_ready_and_queued(
+    db_session, subscriber, monkeypatch
+):
     now = datetime.now(UTC)
     inv_ready = Invoice(
         account_id=subscriber.id,

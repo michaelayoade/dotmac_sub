@@ -61,49 +61,63 @@ def upgrade() -> None:
     _create_enum_if_missing("healthstatus", HEALTH_STATUS_VALUES)
 
     if _has_column("nas_devices", "health_status"):
-        op.execute(sa.text(
-            "ALTER TABLE nas_devices ALTER COLUMN health_status DROP DEFAULT"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE nas_devices "
-            "ALTER COLUMN health_status TYPE healthstatus "
-            "USING health_status::healthstatus"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE nas_devices "
-            "ALTER COLUMN health_status SET DEFAULT 'unknown'::healthstatus"
-        ))
+        op.execute(
+            sa.text("ALTER TABLE nas_devices ALTER COLUMN health_status DROP DEFAULT")
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE nas_devices "
+                "ALTER COLUMN health_status TYPE healthstatus "
+                "USING health_status::healthstatus"
+            )
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE nas_devices "
+                "ALTER COLUMN health_status SET DEFAULT 'unknown'::healthstatus"
+            )
+        )
 
     if _has_column("network_devices", "health_status"):
-        op.execute(sa.text(
-            "ALTER TABLE network_devices ALTER COLUMN health_status DROP DEFAULT"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE network_devices "
-            "ALTER COLUMN health_status TYPE healthstatus "
-            "USING health_status::healthstatus"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE network_devices "
-            "ALTER COLUMN health_status SET DEFAULT 'unknown'::healthstatus"
-        ))
+        op.execute(
+            sa.text(
+                "ALTER TABLE network_devices ALTER COLUMN health_status DROP DEFAULT"
+            )
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE network_devices "
+                "ALTER COLUMN health_status TYPE healthstatus "
+                "USING health_status::healthstatus"
+            )
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE network_devices "
+                "ALTER COLUMN health_status SET DEFAULT 'unknown'::healthstatus"
+            )
+        )
 
     # 2. provisioninglogstatus enum
     _create_enum_if_missing("provisioninglogstatus", PROVISIONING_LOG_STATUS_VALUES)
 
     if _has_column("provisioning_logs", "status"):
-        op.execute(sa.text(
-            "ALTER TABLE provisioning_logs ALTER COLUMN status DROP DEFAULT"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE provisioning_logs "
-            "ALTER COLUMN status TYPE provisioninglogstatus "
-            "USING status::provisioninglogstatus"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE provisioning_logs "
-            "ALTER COLUMN status SET DEFAULT 'pending'::provisioninglogstatus"
-        ))
+        op.execute(
+            sa.text("ALTER TABLE provisioning_logs ALTER COLUMN status DROP DEFAULT")
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE provisioning_logs "
+                "ALTER COLUMN status TYPE provisioninglogstatus "
+                "USING status::provisioninglogstatus"
+            )
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE provisioning_logs "
+                "ALTER COLUMN status SET DEFAULT 'pending'::provisioninglogstatus"
+            )
+        )
 
     # 3. executionmethod enum
     _create_enum_if_missing("executionmethod", EXECUTION_METHOD_VALUES)
@@ -145,18 +159,22 @@ def upgrade() -> None:
     _create_enum_if_missing("wirelessmaststatus", WIRELESS_MAST_STATUS_VALUES)
 
     if _has_column("wireless_masts", "status"):
-        op.execute(sa.text(
-            "ALTER TABLE wireless_masts ALTER COLUMN status DROP DEFAULT"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE wireless_masts "
-            "ALTER COLUMN status TYPE wirelessmaststatus "
-            "USING status::wirelessmaststatus"
-        ))
-        op.execute(sa.text(
-            "ALTER TABLE wireless_masts "
-            "ALTER COLUMN status SET DEFAULT 'active'::wirelessmaststatus"
-        ))
+        op.execute(
+            sa.text("ALTER TABLE wireless_masts ALTER COLUMN status DROP DEFAULT")
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE wireless_masts "
+                "ALTER COLUMN status TYPE wirelessmaststatus "
+                "USING status::wirelessmaststatus"
+            )
+        )
+        op.execute(
+            sa.text(
+                "ALTER TABLE wireless_masts "
+                "ALTER COLUMN status SET DEFAULT 'active'::wirelessmaststatus"
+            )
+        )
 
     # 7. hardwareunitstatus enum
     _create_enum_if_missing("hardwareunitstatus", HARDWARE_UNIT_STATUS_VALUES)

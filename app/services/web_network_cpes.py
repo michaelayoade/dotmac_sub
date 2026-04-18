@@ -422,7 +422,10 @@ def validate_mikrotik_api_config(cpe: CPEDevice) -> tuple[bool, str]:
         return False, "API panel is for MikroTik devices"
     if not api_host:
         return False, "API host is not configured"
-    return True, f"API configuration looks valid ({api_host}:{api_port}) user={api_user or 'n/a'}"
+    return (
+        True,
+        f"API configuration looks valid ({api_host}:{api_port}) user={api_user or 'n/a'}",
+    )
 
 
 def build_cpe_detail_data(

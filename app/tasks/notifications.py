@@ -66,7 +66,6 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
     retried = 0
     failed = 0
     for notification in notifications:
-
         # Update status before sending
         notification.status = NotificationStatus.sending
         db.commit()

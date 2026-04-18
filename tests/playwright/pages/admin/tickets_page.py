@@ -22,9 +22,9 @@ class AdminTicketsPage(BasePage):
 
     def expect_loaded(self) -> None:
         expect(
-            self.page.get_by_role("heading", name="Support Tickets", exact=True).or_(
-                self.page.get_by_text("Support Tickets", exact=False)
-            ).first
+            self.page.get_by_role("heading", name="Support Tickets", exact=True)
+            .or_(self.page.get_by_text("Support Tickets", exact=False))
+            .first
         ).to_be_visible()
 
 

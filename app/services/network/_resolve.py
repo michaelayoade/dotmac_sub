@@ -178,7 +178,10 @@ def resolve_genieacs_with_reason(
         server = _resolve_server_by_id(db, str(linked.acs_server_id))
         if server:
             client = GenieACSClient(server.base_url)
-            return (client, linked.genieacs_device_id), "resolved_via_linked_tr069_device"
+            return (
+                client,
+                linked.genieacs_device_id,
+            ), "resolved_via_linked_tr069_device"
     if linked and linked.acs_server_id:
         logger.debug(
             "Linked TR-069 placeholder for ONT %s has no GenieACS device id yet",
@@ -205,7 +208,9 @@ def resolve_genieacs_with_reason(
         SettingDomain.tr069,
         "default_acs_server_id",
     )
-    default_server = _resolve_server_by_id(db, str(default_server_id)) if default_server_id else None
+    default_server = (
+        _resolve_server_by_id(db, str(default_server_id)) if default_server_id else None
+    )
 
     # Try servers in priority order
     servers_to_try = []
@@ -227,7 +232,11 @@ def resolve_genieacs_with_reason(
                 _cache_genieacs_device_id(db, linked, found_device_id)
                 return (client, found_device_id), reason
         except GenieACSError:
-            logger.debug("GenieACS search failed for ONT %s on %s", ont.serial_number, server.name)
+            logger.debug(
+                "GenieACS search failed for ONT %s on %s",
+                ont.serial_number,
+                server.name,
+            )
 
     if not servers_to_try:
         return (

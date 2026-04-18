@@ -19,7 +19,9 @@ def upgrade() -> None:
     conn = op.get_bind()
     inspector = sa.inspect(conn)
     olt_columns = {col["name"] for col in inspector.get_columns("olt_devices")}
-    backup_columns = {col["name"] for col in inspector.get_columns("olt_config_backups")}
+    backup_columns = {
+        col["name"] for col in inspector.get_columns("olt_config_backups")
+    }
 
     # OLT firmware tracking
     if "firmware_version" not in olt_columns:
@@ -35,7 +37,10 @@ def upgrade() -> None:
 
     # OLT device status enum
     devicestatus_enum = sa.Enum(
-        "active", "inactive", "maintenance", "retired",
+        "active",
+        "inactive",
+        "maintenance",
+        "retired",
         name="devicestatus",
         create_constraint=False,
     )
@@ -51,8 +56,12 @@ def upgrade() -> None:
             ),
         )
         # Backfill: active devices get 'active', inactive get 'inactive'
-        op.execute("UPDATE olt_devices SET status = 'active' WHERE is_active = TRUE AND status IS NULL")
-        op.execute("UPDATE olt_devices SET status = 'inactive' WHERE is_active = FALSE AND status IS NULL")
+        op.execute(
+            "UPDATE olt_devices SET status = 'active' WHERE is_active = TRUE AND status IS NULL"
+        )
+        op.execute(
+            "UPDATE olt_devices SET status = 'inactive' WHERE is_active = FALSE AND status IS NULL"
+        )
 
     # Backup integrity hash
     if "file_hash" not in backup_columns:
@@ -66,7 +75,9 @@ def downgrade() -> None:
     conn = op.get_bind()
     inspector = sa.inspect(conn)
     olt_columns = {col["name"] for col in inspector.get_columns("olt_devices")}
-    backup_columns = {col["name"] for col in inspector.get_columns("olt_config_backups")}
+    backup_columns = {
+        col["name"] for col in inspector.get_columns("olt_config_backups")
+    }
 
     if "file_hash" in backup_columns:
         op.drop_column("olt_config_backups", "file_hash")

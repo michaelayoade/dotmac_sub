@@ -102,9 +102,7 @@ def _validate_assignment_target(
     active: bool,
     current_assignment_id: object | None = None,
 ) -> tuple[OntUnit, PonPort | None]:
-    ont = db.scalar(
-        select(OntUnit).where(OntUnit.id == ont_unit_id).with_for_update()
-    )
+    ont = db.scalar(select(OntUnit).where(OntUnit.id == ont_unit_id).with_for_update())
     if not ont:
         raise HTTPException(status_code=404, detail="ONT unit not found")
 
@@ -121,11 +119,14 @@ def _validate_assignment_target(
                 detail="PON port does not belong to the ONT's OLT",
             )
         if active and pon_port.max_ont_capacity is not None:
-            assigned_count = db.scalar(
-                select(func.count(OntAssignment.id))
-                .where(OntAssignment.pon_port_id == pon_port.id)
-                .where(OntAssignment.active.is_(True))
-            ) or 0
+            assigned_count = (
+                db.scalar(
+                    select(func.count(OntAssignment.id))
+                    .where(OntAssignment.pon_port_id == pon_port.id)
+                    .where(OntAssignment.active.is_(True))
+                )
+                or 0
+            )
             if assigned_count >= pon_port.max_ont_capacity:
                 raise HTTPException(
                     status_code=409,
@@ -273,17 +274,23 @@ class OLTDevices(CRUDManager[OLTDevice]):
     @classmethod
     def delete(cls, db: Session, device_id: str) -> None:
         device = cls.get(db, device_id)
-        linked_onts = db.scalar(
-            select(func.count(OntUnit.id))
-            .where(OntUnit.olt_device_id == device.id)
-            .where(OntUnit.is_active.is_(True))
-        ) or 0
-        active_assignments = db.scalar(
-            select(func.count(OntAssignment.id))
-            .join(PonPort, OntAssignment.pon_port_id == PonPort.id)
-            .where(PonPort.olt_id == device.id)
-            .where(OntAssignment.active.is_(True))
-        ) or 0
+        linked_onts = (
+            db.scalar(
+                select(func.count(OntUnit.id))
+                .where(OntUnit.olt_device_id == device.id)
+                .where(OntUnit.is_active.is_(True))
+            )
+            or 0
+        )
+        active_assignments = (
+            db.scalar(
+                select(func.count(OntAssignment.id))
+                .join(PonPort, OntAssignment.pon_port_id == PonPort.id)
+                .where(PonPort.olt_id == device.id)
+                .where(OntAssignment.active.is_(True))
+            )
+            or 0
+        )
         if linked_onts or active_assignments:
             raise HTTPException(
                 status_code=409,
@@ -301,9 +308,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
         super().delete(db, device_id)
 
     @staticmethod
-    def propagate_acs_to_onts(
-        db: Session, olt_id: str
-    ) -> dict[str, int]:
+    def propagate_acs_to_onts(db: Session, olt_id: str) -> dict[str, int]:
         """Propagate OLT's ACS server to all its unbound ONTs.
 
         Returns stats dict with updated, already_bound, total counts.
@@ -320,9 +325,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
             )
 
         onts = list(
-            db.scalars(
-                select(OntUnit).where(OntUnit.olt_device_id == olt.id)
-            ).all()
+            db.scalars(select(OntUnit).where(OntUnit.olt_device_id == olt.id)).all()
         )
         total = len(onts)
         updated = 0
@@ -338,9 +341,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
         return {"updated": updated, "already_bound": already_bound, "total": total}
 
     @staticmethod
-    def backfill_pon_ports(
-        db: Session, olt_id: str
-    ) -> dict[str, int]:
+    def backfill_pon_ports(db: Session, olt_id: str) -> dict[str, int]:
         """Create missing PON ports from ONT board/port data and link assignments.
 
         Returns stats dict with ports_created, assignments_linked, total_onts.
@@ -350,18 +351,14 @@ class OLTDevices(CRUDManager[OLTDevice]):
             raise HTTPException(status_code=404, detail="OLT device not found")
 
         onts = list(
-            db.scalars(
-                select(OntUnit).where(OntUnit.olt_device_id == olt.id)
-            ).all()
+            db.scalars(select(OntUnit).where(OntUnit.olt_device_id == olt.id)).all()
         )
         total_onts = len(onts)
         ports_created = 0
         assignments_linked = 0
 
         existing_ports: dict[str, PonPort] = {}
-        for port in db.scalars(
-            select(PonPort).where(PonPort.olt_id == olt.id)
-        ).all():
+        for port in db.scalars(select(PonPort).where(PonPort.olt_id == olt.id)).all():
             key = f"{getattr(port, 'board', '')}/{getattr(port, 'port', '')}"
             existing_ports[key] = port
 
@@ -783,16 +780,12 @@ class OntUnits(CRUDManager[OntUnit]):
             search_clean = search.strip().upper()
             decoded = decode_huawei_hex_serial(search_clean)
             if decoded:
-                serial_conditions.append(
-                    OntUnit.serial_number.ilike(f"%{decoded}%")
-                )
+                serial_conditions.append(OntUnit.serial_number.ilike(f"%{decoded}%"))
 
             # If search looks like a vendor+serial, also search for the hex form
             encoded = encode_to_hex_serial(search_clean)
             if encoded:
-                serial_conditions.append(
-                    OntUnit.serial_number.ilike(f"%{encoded}%")
-                )
+                serial_conditions.append(OntUnit.serial_number.ilike(f"%{encoded}%"))
 
             stmt = (
                 stmt.outerjoin(
@@ -996,8 +989,10 @@ class OntAssignments(CRUDManager[OntAssignment]):
             service_address_id=target_service_address_id,
         )
 
-        original_ont = ont if original_ont_unit_id == ont.id else db.get(
-            OntUnit, original_ont_unit_id
+        original_ont = (
+            ont
+            if original_ont_unit_id == ont.id
+            else db.get(OntUnit, original_ont_unit_id)
         )
 
         for attempt in range(3):

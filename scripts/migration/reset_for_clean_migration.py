@@ -178,7 +178,7 @@ def reset_database(dry_run: bool = True) -> None:
         logger.info("--- Current data counts ---")
         for table in TRUNCATE_TABLES:
             try:
-                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() # noqa: S608
+                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()  # noqa: S608
                 if cnt and cnt > 0:
                     logger.info("  %s: %d rows (will truncate)", table, cnt)
             except Exception:
@@ -187,7 +187,7 @@ def reset_database(dry_run: bool = True) -> None:
         logger.info("--- Preserved data ---")
         for table in PRESERVE_TABLES:
             try:
-                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() # noqa: S608
+                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()  # noqa: S608
                 logger.info("  %s: %d rows (keeping)", table, cnt)
             except Exception:
                 db.rollback()
@@ -263,8 +263,14 @@ def reset_database(dry_run: bool = True) -> None:
         logger.info("=== Database reset complete ===")
 
         # Verify
-        for table in ["subscribers", "subscriptions", "invoices", "payments", "system_users"]:
-            cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() # noqa: S608
+        for table in [
+            "subscribers",
+            "subscriptions",
+            "invoices",
+            "payments",
+            "system_users",
+        ]:
+            cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()  # noqa: S608
             logger.info("  POST-RESET %s: %d", table, cnt)
 
 
@@ -273,4 +279,6 @@ if __name__ == "__main__":
         reset_database(dry_run=False)
     else:
         reset_database(dry_run=True)
-        print("\nTo execute: poetry run python scripts/migration/reset_for_clean_migration.py --execute")
+        print(
+            "\nTo execute: poetry run python scripts/migration/reset_for_clean_migration.py --execute"
+        )

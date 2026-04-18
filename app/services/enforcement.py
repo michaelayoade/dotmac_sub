@@ -732,7 +732,9 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
     return stats
 
 
-def cleanup_subscription_on_suspend(db: Session, subscription_id: str) -> dict[str, int]:
+def cleanup_subscription_on_suspend(
+    db: Session, subscription_id: str
+) -> dict[str, int]:
     """Cleanup when a subscription is suspended.
 
     Unlike cancellation, suspension is reversible so we:

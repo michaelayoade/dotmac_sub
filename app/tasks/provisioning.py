@@ -34,4 +34,3 @@ def run_service_migration_job(*, job_id: str):
         raise
     finally:
         session.close()
-

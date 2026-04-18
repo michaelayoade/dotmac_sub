@@ -19,7 +19,9 @@ class PaymentsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the payments page is loaded."""
-        expect(self.page.get_by_role("heading", name="Payments", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Payments", exact=True)
+        ).to_be_visible()
 
     def filter_by_status(self, status: str) -> None:
         """Filter payments by status."""

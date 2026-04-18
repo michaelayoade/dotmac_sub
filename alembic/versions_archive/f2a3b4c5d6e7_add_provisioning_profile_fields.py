@@ -26,8 +26,18 @@ depends_on: Sequence[str] | None = None
 
 # (table, column_name, column_type, kwargs)
 _PROFILE_COLUMNS: list[tuple[str, str, sa.types.TypeEngine, dict]] = [
-    ("ont_provisioning_profiles", "internet_config_ip_index", sa.Integer(), {"server_default": "0"}),
-    ("ont_provisioning_profiles", "wan_config_profile_id", sa.Integer(), {"server_default": "0"}),
+    (
+        "ont_provisioning_profiles",
+        "internet_config_ip_index",
+        sa.Integer(),
+        {"server_default": "0"},
+    ),
+    (
+        "ont_provisioning_profiles",
+        "wan_config_profile_id",
+        sa.Integer(),
+        {"server_default": "0"},
+    ),
     ("ont_provisioning_profiles", "pppoe_omci_vlan", sa.Integer(), {}),
     ("ont_provisioning_profiles", "cr_username", sa.String(120), {}),
     ("ont_provisioning_profiles", "cr_password", sa.String(120), {}),
@@ -55,7 +65,9 @@ def downgrade() -> None:
     conn = op.get_bind()
     inspector = inspect(conn)
 
-    for table, col_name, _col_type, _kwargs in reversed(_PROFILE_COLUMNS + _ONT_COLUMNS):
+    for table, col_name, _col_type, _kwargs in reversed(
+        _PROFILE_COLUMNS + _ONT_COLUMNS
+    ):
         columns = [c["name"] for c in inspector.get_columns(table)]
         if col_name in columns:
             op.drop_column(table, col_name)

@@ -1,6 +1,5 @@
 """Tests for contact wrapper service."""
 
-
 from app.services import contact as contact_service
 
 

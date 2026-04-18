@@ -39,7 +39,9 @@ def test_webhook_endpoint_subscription_delivery_flow(db_session):
     updated = webhook_service.webhook_deliveries.update(
         db_session,
         str(delivery.id),
-        WebhookDeliveryUpdate(status=WebhookDeliveryStatus.delivered, response_status=200),
+        WebhookDeliveryUpdate(
+            status=WebhookDeliveryStatus.delivered, response_status=200
+        ),
     )
     assert updated.status == WebhookDeliveryStatus.delivered
 
@@ -80,10 +82,14 @@ def test_webhook_delivery_logs_structured_lifecycle(db_session, caplog):
     )
 
     created_record = next(
-        record for record in caplog.records if record.getMessage() == "webhook_delivery_created"
+        record
+        for record in caplog.records
+        if record.getMessage() == "webhook_delivery_created"
     )
     updated_record = next(
-        record for record in caplog.records if record.getMessage() == "webhook_delivery_updated"
+        record
+        for record in caplog.records
+        if record.getMessage() == "webhook_delivery_updated"
     )
 
     assert created_record.event == "webhook_delivery"

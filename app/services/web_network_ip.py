@@ -877,9 +877,10 @@ def assign_ipv4_address(
     previous_assignment = active_assignment or existing_assignment
     # Check if already assigned to the same subscriber - skip reassignment
     if active_assignment:
-        if str(
-            getattr(active_assignment, "subscriber_id", "") or ""
-        ) == normalized_subscriber_id:
+        if (
+            str(getattr(active_assignment, "subscriber_id", "") or "")
+            == normalized_subscriber_id
+        ):
             return {
                 "address": address_record,
                 "assignment": active_assignment,

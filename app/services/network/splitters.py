@@ -265,7 +265,9 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
         limit: int,
         offset: int,
     ) -> dict[str, object]:
-        del subscription_id  # Reserved for compatibility; assignments are not subscription-scoped.
+        del (
+            subscription_id
+        )  # Reserved for compatibility; assignments are not subscription-scoped.
         query = db.query(SplitterPortAssignment)
         query = apply_optional_equals(
             query,

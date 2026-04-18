@@ -60,9 +60,7 @@ def resolve_allowed_subscriber_ids(session: dict, db: Session) -> list[str]:
     return [fallback] if fallback else []
 
 
-def resolve_customer_subscription(
-    db: Session, session: dict
-) -> Subscription | None:
+def resolve_customer_subscription(db: Session, session: dict) -> Subscription | None:
     """Resolve the active subscription visible to the current customer session."""
     account_id, session_subscription_id = resolve_customer_account(session, db)
     account_id_str = str(account_id) if account_id else None

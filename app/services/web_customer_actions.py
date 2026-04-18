@@ -201,7 +201,9 @@ def bulk_update_customer_status_from_payload(
             status_code=400, detail="customer_ids and status are required"
         )
     if new_status not in ("active", "inactive"):
-        raise HTTPException(status_code=400, detail="status must be 'active' or 'inactive'")
+        raise HTTPException(
+            status_code=400, detail="status must be 'active' or 'inactive'"
+        )
     return bulk_update_customer_status(
         db=db,
         customer_ids=customer_ids,

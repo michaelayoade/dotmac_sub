@@ -27,7 +27,9 @@ def upgrade() -> None:
     # where the enum is created with all values in a later migration).
     existing_enums = {
         row[0]
-        for row in bind.execute(sa.text("SELECT typname FROM pg_type WHERE typtype = 'e'"))
+        for row in bind.execute(
+            sa.text("SELECT typname FROM pg_type WHERE typtype = 'e'")
+        )
     }
 
     if "subscriberstatus" in existing_enums:

@@ -19,23 +19,29 @@ class CustomerUsagePage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the usage page is loaded."""
-        expect(self.page.get_by_role("heading", name="Usage", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Usage", exact=True)
+        ).to_be_visible()
 
     def expect_usage_chart_visible(self) -> None:
         """Assert usage chart is visible."""
-        expect(self.page.locator("[data-testid='usage-chart']").or_(
-            self.page.locator("canvas").or_(
-                self.page.locator("svg")
-            )
-        ).first).to_be_visible()
+        expect(
+            self.page.locator("[data-testid='usage-chart']")
+            .or_(self.page.locator("canvas").or_(self.page.locator("svg")))
+            .first
+        ).to_be_visible()
 
     def expect_usage_summary_visible(self) -> None:
         """Assert usage summary is visible."""
-        expect(self.page.locator("[data-testid='usage-summary']").or_(
-            self.page.get_by_text("Total", exact=False).or_(
-                self.page.get_by_text("GB", exact=False)
+        expect(
+            self.page.locator("[data-testid='usage-summary']")
+            .or_(
+                self.page.get_by_text("Total", exact=False).or_(
+                    self.page.get_by_text("GB", exact=False)
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
     def select_time_period(self, period: str) -> None:
         """Select time period for usage display."""
@@ -45,23 +51,29 @@ class CustomerUsagePage(BasePage):
 
     def get_total_usage(self) -> str:
         """Get total usage value."""
-        usage_element = self.page.locator("[data-testid='total-usage']").or_(
-            self.page.get_by_text("GB", exact=False)
-        ).first
+        usage_element = (
+            self.page.locator("[data-testid='total-usage']")
+            .or_(self.page.get_by_text("GB", exact=False))
+            .first
+        )
         return usage_element.text_content() or ""
 
     def get_upload_usage(self) -> str:
         """Get upload usage value."""
-        upload_element = self.page.locator("[data-testid='upload-usage']").or_(
-            self.page.get_by_text("Upload", exact=False)
-        ).first
+        upload_element = (
+            self.page.locator("[data-testid='upload-usage']")
+            .or_(self.page.get_by_text("Upload", exact=False))
+            .first
+        )
         return upload_element.text_content() or ""
 
     def get_download_usage(self) -> str:
         """Get download usage value."""
-        download_element = self.page.locator("[data-testid='download-usage']").or_(
-            self.page.get_by_text("Download", exact=False)
-        ).first
+        download_element = (
+            self.page.locator("[data-testid='download-usage']")
+            .or_(self.page.get_by_text("Download", exact=False))
+            .first
+        )
         return download_element.text_content() or ""
 
     def export_usage_data(self) -> None:

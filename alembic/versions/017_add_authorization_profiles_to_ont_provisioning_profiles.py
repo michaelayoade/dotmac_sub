@@ -40,8 +40,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if _has_column("ont_provisioning_profiles", "authorization_service_profile_id"):
-        op.drop_column(
-            "ont_provisioning_profiles", "authorization_service_profile_id"
-        )
+        op.drop_column("ont_provisioning_profiles", "authorization_service_profile_id")
     if _has_column("ont_provisioning_profiles", "authorization_line_profile_id"):
         op.drop_column("ont_provisioning_profiles", "authorization_line_profile_id")

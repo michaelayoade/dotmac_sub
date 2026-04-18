@@ -4,6 +4,7 @@ Revision ID: q1r2s3t4u5v6
 Revises: j1k2l3m4n5o6
 Create Date: 2026-03-10
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa
@@ -23,7 +24,12 @@ def upgrade() -> None:
     if "is_active" not in columns:
         op.add_column(
             "organizations",
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+            sa.Column(
+                "is_active",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("true"),
+            ),
         )
 
 

@@ -80,8 +80,7 @@ def seed_pppoe_sequence(
             existing.next_value = start_value
             db.commit()
             return (
-                f"PPPoE sequence '{SEQUENCE_KEY}' updated: "
-                f"{old_value} → {start_value}"
+                f"PPPoE sequence '{SEQUENCE_KEY}' updated: {old_value} → {start_value}"
             )
 
         db.add(DocumentSequence(key=SEQUENCE_KEY, next_value=start_value))

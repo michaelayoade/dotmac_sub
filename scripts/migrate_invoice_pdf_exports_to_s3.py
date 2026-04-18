@@ -38,9 +38,9 @@ def main() -> None:
                 continue
 
             local_path = _resolve_local_path(export.file_path)
-            local_like = export.file_path.startswith("uploads/") or export.file_path.startswith(
-                "/app/uploads/"
-            )
+            local_like = export.file_path.startswith(
+                "uploads/"
+            ) or export.file_path.startswith("/app/uploads/")
             if not local_like:
                 skipped += 1
                 continue
@@ -64,7 +64,9 @@ def main() -> None:
                 else f"invoice-export-{export.id}.pdf",
                 content_type="application/pdf",
                 data=payload,
-                uploaded_by=str(export.requested_by_id) if export.requested_by_id else None,
+                uploaded_by=str(export.requested_by_id)
+                if export.requested_by_id
+                else None,
                 owner_subscriber_id=owner_sub_id,
             )
             export.file_path = uploaded.storage_key_or_relative_path

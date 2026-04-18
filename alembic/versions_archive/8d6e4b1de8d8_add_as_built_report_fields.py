@@ -17,9 +17,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("as_built_routes", sa.Column("report_file_path", sa.String(length=500), nullable=True))
-    op.add_column("as_built_routes", sa.Column("report_file_name", sa.String(length=255), nullable=True))
-    op.add_column("as_built_routes", sa.Column("report_generated_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "as_built_routes",
+        sa.Column("report_file_path", sa.String(length=500), nullable=True),
+    )
+    op.add_column(
+        "as_built_routes",
+        sa.Column("report_file_name", sa.String(length=255), nullable=True),
+    )
+    op.add_column(
+        "as_built_routes",
+        sa.Column("report_generated_at", sa.DateTime(timezone=True), nullable=True),
+    )
 
 
 def downgrade() -> None:

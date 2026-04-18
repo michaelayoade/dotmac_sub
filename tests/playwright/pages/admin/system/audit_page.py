@@ -19,7 +19,9 @@ class AuditPage(BasePage):
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                self.page.goto(f"{self.base_url}{path}", wait_until="commit", timeout=30000)
+                self.page.goto(
+                    f"{self.base_url}{path}", wait_until="commit", timeout=30000
+                )
                 return
             except PlaywrightError as exc:
                 last_error = exc
@@ -28,7 +30,9 @@ class AuditPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the audit page is loaded."""
-        expect(self.page.get_by_role("heading", name="Audit Log", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Audit Log", exact=True)
+        ).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search audit logs."""

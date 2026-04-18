@@ -56,7 +56,9 @@ class TestLegalDocumentList:
         results = legal.legal_documents.list(
             db_session, document_type=LegalDocumentType.terms_of_service
         )
-        assert all(d.document_type == LegalDocumentType.terms_of_service for d in results)
+        assert all(
+            d.document_type == LegalDocumentType.terms_of_service for d in results
+        )
 
     def test_list_by_published(self, db_session):
         """Test filtering by published status."""
@@ -129,12 +131,14 @@ class TestLegalDocumentList:
     def test_list_pagination(self, db_session):
         """Test pagination."""
         for i in range(5):
-            db_session.add(LegalDocument(
-                document_type=LegalDocumentType.other,
-                title=f"Doc {i}",
-                slug=f"doc-page-{i}",
-                version="1.0",
-            ))
+            db_session.add(
+                LegalDocument(
+                    document_type=LegalDocumentType.other,
+                    title=f"Doc {i}",
+                    slug=f"doc-page-{i}",
+                    version="1.0",
+                )
+            )
         db_session.commit()
 
         page1 = legal.legal_documents.list(db_session, limit=2, offset=0)
@@ -464,6 +468,7 @@ class TestLegalDocumentFileUpload:
 
     def test_upload_file(self, db_session, monkeypatch):
         """Test uploading a file."""
+
         class _Storage:
             def upload(self, key: str, data: bytes, content_type: str | None):
                 return None

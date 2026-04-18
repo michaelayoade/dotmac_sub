@@ -23,7 +23,9 @@ def upgrade() -> None:
     if "snmp_enabled" not in existing:
         op.add_column(
             "olt_devices",
-            sa.Column("snmp_enabled", sa.Boolean(), server_default="false", nullable=False),
+            sa.Column(
+                "snmp_enabled", sa.Boolean(), server_default="false", nullable=False
+            ),
         )
     if "snmp_port" not in existing:
         op.add_column(
@@ -33,7 +35,9 @@ def upgrade() -> None:
     if "snmp_version" not in existing:
         op.add_column(
             "olt_devices",
-            sa.Column("snmp_version", sa.String(10), server_default="v2c", nullable=True),
+            sa.Column(
+                "snmp_version", sa.String(10), server_default="v2c", nullable=True
+            ),
         )
 
     # Set snmp_enabled = true where snmp_ro_community is populated (column may not exist)

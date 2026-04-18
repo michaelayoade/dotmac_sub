@@ -30,16 +30,12 @@ def test_set_wifi_config_translates_security_mode_for_tr098_device(monkeypatch) 
     cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(
-            self, _device_id, params, *, connection_request=True
-        ):
+        def set_parameter_values(self, _device_id, params, *, connection_request=True):
             calls.append(dict(params))
             cache.update(params)
             return {"queued": True}
 
-        def get_parameter_values(
-            self, _device_id, _paths, *, connection_request=True
-        ):
+        def get_parameter_values(self, _device_id, _paths, *, connection_request=True):
             return {"queued": True}
 
         def get_device(self, _device_id):
@@ -160,7 +156,9 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
     assert refresh_calls == [("device-1", "InternetGatewayDevice.", True)]
 
 
-def test_set_wifi_password_fails_when_device_cache_does_not_confirm(monkeypatch) -> None:
+def test_set_wifi_password_fails_when_device_cache_does_not_confirm(
+    monkeypatch,
+) -> None:
     """Regression: set_parameter_values returning 200 is not proof of applied value.
 
     If GenieACS accepts the task but the device cache never reflects the target

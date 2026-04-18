@@ -21,30 +21,47 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    existing_columns = {column["name"] for column in inspector.get_columns("tr069_acs_servers")}
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("tr069_acs_servers")
+    }
 
     if "cwmp_url" not in existing_columns:
-        op.add_column("tr069_acs_servers", sa.Column("cwmp_url", sa.String(length=255), nullable=True))
+        op.add_column(
+            "tr069_acs_servers",
+            sa.Column("cwmp_url", sa.String(length=255), nullable=True),
+        )
     if "cwmp_username" not in existing_columns:
-        op.add_column("tr069_acs_servers", sa.Column("cwmp_username", sa.String(length=120), nullable=True))
+        op.add_column(
+            "tr069_acs_servers",
+            sa.Column("cwmp_username", sa.String(length=120), nullable=True),
+        )
     if "cwmp_password" not in existing_columns:
-        op.add_column("tr069_acs_servers", sa.Column("cwmp_password", sa.String(length=255), nullable=True))
+        op.add_column(
+            "tr069_acs_servers",
+            sa.Column("cwmp_password", sa.String(length=255), nullable=True),
+        )
     if "connection_request_username" not in existing_columns:
         op.add_column(
             "tr069_acs_servers",
-            sa.Column("connection_request_username", sa.String(length=120), nullable=True),
+            sa.Column(
+                "connection_request_username", sa.String(length=120), nullable=True
+            ),
         )
     if "connection_request_password" not in existing_columns:
         op.add_column(
             "tr069_acs_servers",
-            sa.Column("connection_request_password", sa.String(length=255), nullable=True),
+            sa.Column(
+                "connection_request_password", sa.String(length=255), nullable=True
+            ),
         )
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    existing_columns = {column["name"] for column in inspector.get_columns("tr069_acs_servers")}
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("tr069_acs_servers")
+    }
 
     if "connection_request_password" in existing_columns:
         op.drop_column("tr069_acs_servers", "connection_request_password")

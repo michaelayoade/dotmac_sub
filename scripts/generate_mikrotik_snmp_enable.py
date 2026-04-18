@@ -25,16 +25,18 @@ def main() -> None:
 
     db = SessionLocal()
 
-    rows = db.execute(text(
-        "SELECT nd.name, nd.mgmt_ip, COALESCE(nd.vendor, 'unknown') as vendor "
-        "FROM network_devices nd "
-        "WHERE nd.snmp_enabled = true AND nd.is_active = true "
-        "AND nd.mgmt_ip IS NOT NULL "
-        "AND nd.id NOT IN ("
-        "  SELECT DISTINCT device_id FROM device_interfaces WHERE snmp_index IS NOT NULL"
-        ") "
-        "ORDER BY nd.vendor, nd.mgmt_ip"
-    )).all()
+    rows = db.execute(
+        text(
+            "SELECT nd.name, nd.mgmt_ip, COALESCE(nd.vendor, 'unknown') as vendor "
+            "FROM network_devices nd "
+            "WHERE nd.snmp_enabled = true AND nd.is_active = true "
+            "AND nd.mgmt_ip IS NOT NULL "
+            "AND nd.id NOT IN ("
+            "  SELECT DISTINCT device_id FROM device_interfaces WHERE snmp_index IS NOT NULL"
+            ") "
+            "ORDER BY nd.vendor, nd.mgmt_ip"
+        )
+    ).all()
 
     mikrotik = [r for r in rows if r.vendor.lower() in ("mikrotik", "routeros")]
     huawei = [r for r in rows if r.vendor.lower() == "huawei"]
@@ -52,7 +54,9 @@ def main() -> None:
     print(f"# === MikroTik RouterOS ({len(mikrotik)} devices) ===")
     print("# Paste into RouterOS terminal (Winbox > New Terminal):")
     print("/snmp set enabled=yes trap-community=public")
-    print(f"/snmp community set 0 name=public addresses={server_ip} read-access=yes write-access=no")
+    print(
+        f"/snmp community set 0 name=public addresses={server_ip} read-access=yes write-access=no"
+    )
     print()
     for r in mikrotik:
         print(f"#   {r.name} ({r.mgmt_ip})")

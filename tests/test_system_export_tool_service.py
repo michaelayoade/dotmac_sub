@@ -128,7 +128,10 @@ def test_export_content_xlsx(db_session):
         export_format="xlsx",
     )
     assert payload.startswith(b"PK")
-    assert media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert (
+        media_type
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     assert extension == "xlsx"
     assert row_count >= 1
 
@@ -236,10 +239,14 @@ def test_list_export_schedules_filters_non_export_tasks(db_session):
     schedules = export_service.list_export_schedules(db_session)
     ids = {str(item.id) for item in schedules}
     assert str(export_schedule.id) in ids
-    assert all(item.task_name == export_service.EXPORT_SCHEDULE_TASK_NAME for item in schedules)
+    assert all(
+        item.task_name == export_service.EXPORT_SCHEDULE_TASK_NAME for item in schedules
+    )
 
 
-def test_execute_scheduled_export_updates_last_run_and_sends_email(db_session, monkeypatch):
+def test_execute_scheduled_export_updates_last_run_and_sends_email(
+    db_session, monkeypatch
+):
     subscriber = Subscriber(
         first_name="Scheduled",
         last_name="Export",
@@ -347,7 +354,9 @@ def test_process_export_job_writes_file_and_marks_completed(db_session, monkeypa
         requested_by_email="ops@example.com",
         row_count=12001,
     )
-    monkeypatch.setattr(export_service.email_service, "send_email", lambda **kwargs: True)
+    monkeypatch.setattr(
+        export_service.email_service, "send_email", lambda **kwargs: True
+    )
     result = export_service.process_export_job(db_session, job_id=str(job["id"]))
 
     assert result["status"] == "completed"

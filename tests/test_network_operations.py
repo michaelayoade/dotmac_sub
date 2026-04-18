@@ -148,10 +148,14 @@ class TestNetworkOperationLifecycle:
         network_operations.mark_waiting(db_session, str(op.id), "next_inform")
 
         start_record = next(
-            record for record in caplog.records if record.getMessage().startswith("Operation started")
+            record
+            for record in caplog.records
+            if record.getMessage().startswith("Operation started")
         )
         waiting_record = next(
-            record for record in caplog.records if record.getMessage() == "Operation waiting"
+            record
+            for record in caplog.records
+            if record.getMessage() == "Operation waiting"
         )
 
         assert start_record.operation_id == str(op.id)
@@ -171,7 +175,9 @@ class TestNetworkOperationLifecycle:
         network_operations.mark_running(db_session, str(op.id))
         partial = {"discovered": 10, "created": 8}
         updated = network_operations.mark_failed(
-            db_session, str(op.id), "Failed on ONT 11",
+            db_session,
+            str(op.id),
+            "Failed on ONT 11",
             output_payload=partial,
         )
         assert updated.status == NetworkOperationStatus.failed
@@ -187,9 +193,7 @@ class TestNetworkOperationLifecycle:
             _make_target_id(),
         )
         network_operations.mark_running(db_session, str(op.id))
-        updated = network_operations.mark_waiting(
-            db_session, str(op.id), "next_inform"
-        )
+        updated = network_operations.mark_waiting(db_session, str(op.id), "next_inform")
         assert updated.status == NetworkOperationStatus.waiting
         assert updated.waiting_reason == "next_inform"
 
@@ -521,14 +525,10 @@ class TestParentStatusDerivation:
                 network_operations.mark_succeeded(db_session, str(child.id))
             elif status == NetworkOperationStatus.failed:
                 network_operations.mark_running(db_session, str(child.id))
-                network_operations.mark_failed(
-                    db_session, str(child.id), "test error"
-                )
+                network_operations.mark_failed(db_session, str(child.id), "test error")
             elif status == NetworkOperationStatus.waiting:
                 network_operations.mark_running(db_session, str(child.id))
-                network_operations.mark_waiting(
-                    db_session, str(child.id), "test wait"
-                )
+                network_operations.mark_waiting(db_session, str(child.id), "test wait")
         db_session.flush()
         return parent
 
@@ -538,9 +538,7 @@ class TestParentStatusDerivation:
             db_session,
             [NetworkOperationStatus.succeeded, NetworkOperationStatus.succeeded],
         )
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.succeeded
         assert updated.completed_at is not None
 
@@ -550,12 +548,9 @@ class TestParentStatusDerivation:
             db_session,
             [NetworkOperationStatus.succeeded, NetworkOperationStatus.running],
         )
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.running
         assert updated.completed_at is None
-
 
     def test_any_failed(self, db_session):
         """Parent is failed when any child is failed (and none running)."""
@@ -563,9 +558,7 @@ class TestParentStatusDerivation:
             db_session,
             [NetworkOperationStatus.succeeded, NetworkOperationStatus.failed],
         )
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.failed
         assert updated.completed_at is not None
 
@@ -575,9 +568,7 @@ class TestParentStatusDerivation:
             db_session,
             [NetworkOperationStatus.succeeded, NetworkOperationStatus.pending],
         )
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.pending
         assert updated.completed_at is None
 
@@ -587,9 +578,7 @@ class TestParentStatusDerivation:
             db_session,
             [NetworkOperationStatus.succeeded, NetworkOperationStatus.waiting],
         )
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.waiting
         assert updated.completed_at is None
 
@@ -603,18 +592,14 @@ class TestParentStatusDerivation:
             target_id,
         )
         db_session.flush()
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.pending
         assert updated.completed_at is None
 
     def test_nonexistent_parent_raises_404(self, db_session):
         """update_parent_status raises 404 for nonexistent parent."""
         with pytest.raises(HTTPException) as exc_info:
-            network_operations.update_parent_status(
-                db_session, str(uuid.uuid4())
-            )
+            network_operations.update_parent_status(db_session, str(uuid.uuid4()))
         assert exc_info.value.status_code == 404
 
 
@@ -891,9 +876,7 @@ class TestParentReDerivation:
         db_session.flush()
 
         # Parent derives to failed
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.failed
 
         # Retry child2 — mark it running again (new child op in real code,
@@ -903,8 +886,6 @@ class TestParentReDerivation:
         db_session.flush()
 
         # Parent should re-derive to running (bypassing terminal check)
-        updated = network_operations.update_parent_status(
-            db_session, str(parent.id)
-        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.running
         assert updated.completed_at is None

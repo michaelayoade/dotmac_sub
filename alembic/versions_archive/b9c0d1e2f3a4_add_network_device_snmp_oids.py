@@ -27,17 +27,44 @@ def upgrade() -> None:
     op.create_table(
         "network_device_snmp_oids",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("device_id", UUID(as_uuid=True), sa.ForeignKey("network_devices.id"), nullable=False),
+        sa.Column(
+            "device_id",
+            UUID(as_uuid=True),
+            sa.ForeignKey("network_devices.id"),
+            nullable=False,
+        ),
         sa.Column("title", sa.String(length=200), nullable=False),
         sa.Column("oid", sa.String(length=160), nullable=False),
-        sa.Column("check_interval_seconds", sa.Integer(), nullable=False, server_default=sa.text("60")),
-        sa.Column("rrd_data_source_type", sa.String(length=16), nullable=False, server_default="gauge"),
-        sa.Column("is_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "check_interval_seconds",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("60"),
+        ),
+        sa.Column(
+            "rrd_data_source_type",
+            sa.String(length=16),
+            nullable=False,
+            server_default="gauge",
+        ),
+        sa.Column(
+            "is_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("last_poll_status", sa.String(length=16), nullable=True),
         sa.Column("last_polled_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
     )
     op.create_index(
         "ix_network_device_snmp_oids_device_id",
@@ -52,5 +79,7 @@ def downgrade() -> None:
     inspector = inspect(bind)
     if not inspector.has_table("network_device_snmp_oids"):
         return
-    op.drop_index("ix_network_device_snmp_oids_device_id", table_name="network_device_snmp_oids")
+    op.drop_index(
+        "ix_network_device_snmp_oids_device_id", table_name="network_device_snmp_oids"
+    )
     op.drop_table("network_device_snmp_oids")

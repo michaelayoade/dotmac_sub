@@ -70,7 +70,13 @@ def upgrade() -> None:
             "ont_units",
             sa.Column(
                 "online_status",
-                sa.Enum("online", "offline", "unknown", name="onuonlinestatus", create_type=False),
+                sa.Enum(
+                    "online",
+                    "offline",
+                    "unknown",
+                    name="onuonlinestatus",
+                    create_type=False,
+                ),
                 server_default="unknown",
                 nullable=False,
             ),
@@ -85,7 +91,14 @@ def upgrade() -> None:
             "ont_units",
             sa.Column(
                 "offline_reason",
-                sa.Enum("power_fail", "los", "dying_gasp", "unknown", name="onuofflinereason", create_type=False),
+                sa.Enum(
+                    "power_fail",
+                    "los",
+                    "dying_gasp",
+                    "unknown",
+                    name="onuofflinereason",
+                    create_type=False,
+                ),
                 nullable=True,
             ),
         )

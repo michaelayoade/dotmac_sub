@@ -19,7 +19,9 @@ class OffersPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the services page is loaded."""
-        expect(self.page.get_by_role("heading", name="Service Catalog", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Service Catalog", exact=True)
+        ).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search tariffs."""

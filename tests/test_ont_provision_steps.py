@@ -300,7 +300,9 @@ class TestWaitTr069Bootstrap:
 class TestApplySavedServiceConfig:
     """Test deferred TR-069 service config behavior."""
 
-    def test_missing_pppoe_password_is_needs_input_not_failure(self, db_session) -> None:
+    def test_missing_pppoe_password_is_needs_input_not_failure(
+        self, db_session
+    ) -> None:
         from app.models.network import OntUnit
         from app.services.network.ont_provision_steps import apply_saved_service_config
 
@@ -334,7 +336,9 @@ class TestApplySavedServiceConfig:
         assert result.success is True
         assert result.step_name == "apply_saved_service_config"
         assert result.data is not None
-        assert result.data["needs_input"] == ["PPPoE username and password are required."]
+        assert result.data["needs_input"] == [
+            "PPPoE username and password are required."
+        ]
         # Steps now includes capability probing
         assert any(
             s["step"] == "probe_wan_capabilities" and s["success"]

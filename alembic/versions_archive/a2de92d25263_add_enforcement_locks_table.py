@@ -31,14 +31,15 @@ def upgrade() -> None:
     )
 
     # Add customer_hold value if enum already exists (idempotent)
-    conn.execute(text(
-        "ALTER TYPE enforcementreason ADD VALUE IF NOT EXISTS 'customer_hold'"
-    ))
+    conn.execute(
+        text("ALTER TYPE enforcementreason ADD VALUE IF NOT EXISTS 'customer_hold'")
+    )
 
     if not inspector.has_table("enforcement_locks"):
         # Use raw SQL for the reason column to avoid SQLAlchemy trying to
         # re-create the enum type via the before_create event.
-        conn.execute(text("""
+        conn.execute(
+            text("""
             CREATE TABLE enforcement_locks (
                 id UUID PRIMARY KEY,
                 subscription_id UUID NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
@@ -54,7 +55,8 @@ def upgrade() -> None:
                 CONSTRAINT ck_enforcement_locks_resolved_metadata
                     CHECK (is_active = true OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL))
             )
-        """))
+        """)
+        )
 
         op.create_index(
             "ix_enforcement_locks_subscription_active",
@@ -67,11 +69,13 @@ def upgrade() -> None:
             ["subscriber_id", "is_active"],
         )
         # Partial unique index: one active lock per reason per subscription
-        conn.execute(text(
-            "CREATE UNIQUE INDEX uq_enforcement_locks_active_reason "
-            "ON enforcement_locks (subscription_id, reason) "
-            "WHERE is_active = true"
-        ))
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_enforcement_locks_active_reason "
+                "ON enforcement_locks (subscription_id, reason) "
+                "WHERE is_active = true"
+            )
+        )
 
 
 def downgrade() -> None:

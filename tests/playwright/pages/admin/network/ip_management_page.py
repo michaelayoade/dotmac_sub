@@ -12,13 +12,18 @@ class IPManagementPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/network/ip-management") -> None:
         """Navigate to the IP management page."""
-        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
+        self.page.goto(
+            f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000
+        )
 
     def expect_loaded(self) -> None:
         """Assert the IP management page is loaded."""
-        expect(self.page.get_by_role("heading", name="IP Address Management", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="IP Address Management", exact=True)
+        ).to_be_visible()
 
     def click_new_pool(self) -> None:
         """Click new IP pool button."""

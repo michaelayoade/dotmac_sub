@@ -101,7 +101,9 @@ class TestCustomerServices:
         page.expect_loaded()
         page.request_upgrade()
         customer_page.wait_for_url("**/portal/services/*/change")
-        expect(customer_page.get_by_role("heading", name="Change Your Plan")).to_be_visible()
+        expect(
+            customer_page.get_by_role("heading", name="Change Your Plan")
+        ).to_be_visible()
 
 
 class TestCustomerSupport:

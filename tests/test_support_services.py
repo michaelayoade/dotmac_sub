@@ -46,7 +46,9 @@ def test_ticket_create_defaults_to_open_and_generates_number(db_session, subscri
 
 
 def test_ticket_resolved_and_closed_set_timestamps(db_session, subscriber):
-    ticket = support_service.tickets.create(db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id))
+    ticket = support_service.tickets.create(
+        db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
+    )
 
     resolved = support_service.tickets.update(
         db_session,
@@ -93,7 +95,9 @@ def test_field_visit_tag_creates_work_order_once(db_session, subscriber):
     assert db_session.query(ServiceOrder).count() == 1
 
 
-def test_merge_moves_comments_assignees_and_blocks_source_mutations(db_session, subscriber):
+def test_merge_moves_comments_assignees_and_blocks_source_mutations(
+    db_session, subscriber
+):
     source = support_service.tickets.create(
         db_session,
         TicketCreate(
@@ -119,7 +123,9 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(db_session, 
     support_service.tickets.create_comment(
         db_session,
         str(source.id),
-        TicketCommentCreate(body="Please fix", is_internal=False, author_person_id=subscriber.id),
+        TicketCommentCreate(
+            body="Please fix", is_internal=False, author_person_id=subscriber.id
+        ),
         actor_id=str(subscriber.id),
     )
 
@@ -135,10 +141,18 @@ def test_merge_moves_comments_assignees_and_blocks_source_mutations(db_session, 
     assert source.status == TicketStatus.merged
     assert source.merged_into_ticket_id == target.id
 
-    target_comments = db_session.query(TicketComment).filter(TicketComment.ticket_id == target.id).all()
+    target_comments = (
+        db_session.query(TicketComment)
+        .filter(TicketComment.ticket_id == target.id)
+        .all()
+    )
     assert any("Please fix" in item.body for item in target_comments)
 
-    assignee_rows = db_session.query(TicketAssignee).filter(TicketAssignee.ticket_id == target.id).all()
+    assignee_rows = (
+        db_session.query(TicketAssignee)
+        .filter(TicketAssignee.ticket_id == target.id)
+        .all()
+    )
     assert any(str(row.person_id) == str(subscriber.id) for row in assignee_rows)
 
     with pytest.raises(HTTPException) as exc:

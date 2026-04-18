@@ -96,7 +96,9 @@ def _splynx_get(endpoint: str, params: dict | None = None) -> list | dict | None
         return resp.json()
     if resp.status_code == 404:
         return None
-    logger.warning("API %s returned %d: %s", endpoint, resp.status_code, resp.text[:200])
+    logger.warning(
+        "API %s returned %d: %s", endpoint, resp.status_code, resp.text[:200]
+    )
     return None
 
 
@@ -113,11 +115,15 @@ def sync_nas_clients() -> int:
 
         from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
 
-        mappings = db.execute(
-            select(SplynxIdMapping).where(
-                SplynxIdMapping.entity_type == SplynxEntityType.router
+        mappings = (
+            db.execute(
+                select(SplynxIdMapping).where(
+                    SplynxIdMapping.entity_type == SplynxEntityType.router
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         created = 0
         for m in mappings:
@@ -180,7 +186,10 @@ def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
 
     # Get unique customer IDs with active services from Splynx
     # We need to query the API per-customer for their internet services
-    logger.info("Fetching service passwords for %d customers with active services", len(customer_mappings))
+    logger.info(
+        "Fetching service passwords for %d customers with active services",
+        len(customer_mappings),
+    )
 
     created = 0
     skipped = 0
@@ -230,7 +239,7 @@ def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
 
                 # IP address
                 ipv4 = svc.get("ipv4", "").strip()
-                if ipv4 and ipv4 != "0.0.0.0": # noqa: S104
+                if ipv4 and ipv4 != "0.0.0.0":  # noqa: S104
                     reply_attrs.append(("Framed-IP-Address", ":=", ipv4))
 
                 # Speed limits (MikroTik rate-limit format)
@@ -260,7 +269,11 @@ def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
             conn.commit()
             logger.info(
                 "Progress: %d/%d customers, %d credentials created, %d skipped, %d errors",
-                processed, len(customer_ids), created, skipped, errors,
+                processed,
+                len(customer_ids),
+                created,
+                skipped,
+                errors,
             )
             time.sleep(0.1)  # Gentle on the API
 
@@ -270,7 +283,9 @@ def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
     # Also update access_credentials in DotMac Sub with cleartext passwords
     logger.info(
         "RADIUS sync complete: %d credentials, %d skipped, %d errors",
-        created, skipped, errors,
+        created,
+        skipped,
+        errors,
     )
     return {"created": created, "skipped": skipped, "errors": errors}
 
@@ -295,18 +310,18 @@ def update_access_credentials(batch_size: int = 50) -> int:
 
         # Group by subscriber to batch API calls
         from collections import defaultdict
+
         sub_creds: dict[str, list] = defaultdict(list)
         for cred in creds:
             sub_creds[str(cred.subscriber_id)].append(cred)
 
         # Get subscriber → splynx_customer_id mapping
         from app.models.subscriber import Subscriber
+
         sub_to_splynx = {
             str(s.id): s.splynx_customer_id
             for s in db.scalars(
-                select(Subscriber).where(
-                    Subscriber.splynx_customer_id.isnot(None)
-                )
+                select(Subscriber).where(Subscriber.splynx_customer_id.isnot(None))
             ).all()
         }
 
@@ -332,13 +347,18 @@ def update_access_credentials(batch_size: int = 50) -> int:
                 if cleartext:
                     # Store as enc: format so the app knows it's reversible
                     from app.services.credential_crypto import encrypt_credential
+
                     cred.secret_hash = encrypt_credential(cleartext)
                     updated += 1
 
             processed += 1
             if processed % 500 == 0:
                 db.flush()
-                logger.info("Updated %d credentials (%d customers processed)", updated, processed)
+                logger.info(
+                    "Updated %d credentials (%d customers processed)",
+                    updated,
+                    processed,
+                )
                 time.sleep(0.1)
 
         db.commit()
@@ -355,8 +375,11 @@ def run_radius_sync(dry_run: bool = True) -> None:
         # Test API connectivity
         result = _splynx_get("customers/customer/5")
         if result:
-            logger.info("API connected. Customer 5: %s (password: %s)",
-                       result.get("name"), result.get("password", "")[:4] + "****")
+            logger.info(
+                "API connected. Customer 5: %s (password: %s)",
+                result.get("name"),
+                result.get("password", "")[:4] + "****",
+            )
         else:
             logger.error("API connection failed")
             return
@@ -368,9 +391,11 @@ def run_radius_sync(dry_run: bool = True) -> None:
 
             from app.models.catalog import AccessCredential
 
-            total = db.scalar(select(func.count(AccessCredential.id)).where(
-                AccessCredential.is_active.is_(True)
-            ))
+            total = db.scalar(
+                select(func.count(AccessCredential.id)).where(
+                    AccessCredential.is_active.is_(True)
+                )
+            )
             logger.info("  Active credentials: %d", total)
         logger.info("Run with --execute to sync")
         return
@@ -392,4 +417,6 @@ if __name__ == "__main__":
         run_radius_sync(dry_run=False)
     else:
         run_radius_sync(dry_run=True)
-        print("\nTo execute: poetry run python -m scripts.migration.radius_sync --execute")
+        print(
+            "\nTo execute: poetry run python -m scripts.migration.radius_sync --execute"
+        )

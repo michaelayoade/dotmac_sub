@@ -34,7 +34,9 @@ def _request_with_retry(fn, *, attempts: int = 3, delay_s: float = 1.0):
     raise RuntimeError("request retry exhausted")
 
 
-def _pick_pop_site_with_nas(api_context, admin_token: str | None = None) -> tuple[dict, dict]:
+def _pick_pop_site_with_nas(
+    api_context, admin_token: str | None = None
+) -> tuple[dict, dict]:
     headers = bearer_headers(admin_token) if admin_token else None
     pop_sites_response = _request_with_retry(
         lambda: api_get(
@@ -66,7 +68,9 @@ def _pick_pop_site_with_nas(api_context, admin_token: str | None = None) -> tupl
         if pop_id in nas_by_pop:
             return pop_site, nas_by_pop[pop_id]
 
-    pytest.skip("No active POP site with an active NAS device is available for Phase 1 E2E.")
+    pytest.skip(
+        "No active POP site with an active NAS device is available for Phase 1 E2E."
+    )
 
 
 def _create_phase1_offer(
@@ -143,7 +147,9 @@ def _create_phase1_offer(
     return offer, radius_profile
 
 
-def _configure_phase1_radius_settings(api_context, admin_token: str | None = None) -> None:
+def _configure_phase1_radius_settings(
+    api_context, admin_token: str | None = None
+) -> None:
     headers = {"Content-Type": "application/json"}
     if admin_token:
         headers.update(bearer_headers(admin_token))
@@ -222,7 +228,9 @@ class TestSubscriptionActivation:
     def test_service_order_creation_from_subscriber(self, admin_page: Page, settings):
         """Subscription creation should be reachable from customer context."""
         admin_page.goto(f"{settings.base_url}/admin/customers")
-        expect(admin_page.get_by_role("heading", name="Customers", exact=True)).to_be_visible()
+        expect(
+            admin_page.get_by_role("heading", name="Customers", exact=True)
+        ).to_be_visible()
 
     def test_phase1_customer_activation_shows_pppoe_and_radius_evidence(
         self,
@@ -252,8 +260,12 @@ class TestSubscriptionActivation:
             wait_until="domcontentloaded",
         )
 
-        page.goto(f"{settings.base_url}/admin/customers/new", wait_until="domcontentloaded")
-        expect(page.get_by_role("heading", name=re.compile(r"New Customer|New Person"))).to_be_visible()
+        page.goto(
+            f"{settings.base_url}/admin/customers/new", wait_until="domcontentloaded"
+        )
+        expect(
+            page.get_by_role("heading", name=re.compile(r"New Customer|New Person"))
+        ).to_be_visible()
 
         page.get_by_text("Individual", exact=True).click()
         page.locator("#first_name").fill("Phase1")
@@ -275,7 +287,9 @@ class TestSubscriptionActivation:
         page.get_by_role("link", name="Add Subscription").click()
 
         page.wait_for_url("**/admin/catalog/subscriptions/new**")
-        expect(page.get_by_role("heading", name="Add Subscription", exact=True)).to_be_visible()
+        expect(
+            page.get_by_role("heading", name="Add Subscription", exact=True)
+        ).to_be_visible()
 
         page.locator("#offer_id").select_option(str(offer["id"]))
         page.get_by_role("button", name="Continue").click()
@@ -285,7 +299,9 @@ class TestSubscriptionActivation:
         )
         expect(provisioning_nas_value).not_to_have_value("")
         expect(
-            page.locator("input[name='provisioning_nas_device_search'][data-typeahead-input]")
+            page.locator(
+                "input[name='provisioning_nas_device_search'][data-typeahead-input]"
+            )
         ).not_to_have_value("")
         page.locator("#ipv4_method").select_option("dynamic")
 
@@ -307,7 +323,9 @@ class TestSubscriptionActivation:
             if subscription_items:
                 break
             time.sleep(1)
-        assert subscription_items, "No subscription was created for the Phase 1 E2E offer."
+        assert subscription_items, (
+            "No subscription was created for the Phase 1 E2E offer."
+        )
         subscription_id = subscription_items[0]["id"]
 
         page.goto(
@@ -319,32 +337,52 @@ class TestSubscriptionActivation:
         expect(credential_card).to_contain_text(re.compile(r"1050\d+"))
         expect(credential_card).to_contain_text("PPPOE")
 
-        expect(page.get_by_text("Resolved RADIUS Reply Attributes", exact=True)).to_be_visible()
-        expect(page.locator("table").filter(has=page.get_by_text("Service-Type")).first).to_be_visible()
+        expect(
+            page.get_by_text("Resolved RADIUS Reply Attributes", exact=True)
+        ).to_be_visible()
+        expect(
+            page.locator("table").filter(has=page.get_by_text("Service-Type")).first
+        ).to_be_visible()
         expect(page.get_by_text("Framed-Protocol", exact=False)).to_be_visible()
         expect(page.get_by_text("Mikrotik-Rate-Limit", exact=False)).to_be_visible()
-        expect(page.get_by_text("Delegated-IPv6-Prefix-Pool", exact=False)).to_be_visible()
+        expect(
+            page.get_by_text("Delegated-IPv6-Prefix-Pool", exact=False)
+        ).to_be_visible()
         expect(page.get_by_text("External FreeRADIUS Rows", exact=True)).to_be_visible()
         expect(page.get_by_text("radcheck", exact=False)).to_be_visible()
         expect(page.get_by_text("radreply", exact=False)).to_be_visible()
         events_section = page.get_by_text("Domain Events", exact=True).locator("../..")
         for attempt in range(5):
-            created_event = events_section.get_by_text("subscription.created", exact=True)
-            activated_event = events_section.get_by_text("subscription.activated", exact=True)
+            created_event = events_section.get_by_text(
+                "subscription.created", exact=True
+            )
+            activated_event = events_section.get_by_text(
+                "subscription.activated", exact=True
+            )
             if created_event.count() and activated_event.count():
                 break
             page.reload(wait_until="domcontentloaded")
-            expect(page.get_by_text("Provisioning Evidence", exact=True)).to_be_visible()
-            events_section = page.get_by_text("Domain Events", exact=True).locator("../..")
+            expect(
+                page.get_by_text("Provisioning Evidence", exact=True)
+            ).to_be_visible()
+            events_section = page.get_by_text("Domain Events", exact=True).locator(
+                "../.."
+            )
             time.sleep(1)
-        expect(events_section.get_by_text("subscription.created", exact=True)).to_be_visible()
-        expect(events_section.get_by_text("subscription.activated", exact=True)).to_be_visible()
+        expect(
+            events_section.get_by_text("subscription.created", exact=True)
+        ).to_be_visible()
+        expect(
+            events_section.get_by_text("subscription.activated", exact=True)
+        ).to_be_visible()
 
         page.goto(
             f"{settings.base_url}/admin/catalog/subscriptions/{subscription_id}/edit",
             wait_until="domcontentloaded",
         )
-        expect(page.get_by_role("heading", name="Edit Subscription", exact=True)).to_be_visible()
+        expect(
+            page.get_by_role("heading", name="Edit Subscription", exact=True)
+        ).to_be_visible()
         expect(page.get_by_text("Current Service Login", exact=True)).to_be_visible()
         current_login = page.locator(
             "xpath=//label[contains(., 'Current Service Login')]/following-sibling::input[@readonly]"
@@ -356,7 +394,9 @@ class TestSubscriptionActivation:
         ).first
         expect(password_input).not_to_have_value("")
         expect(current_login).to_have_value(re.compile(r"1050\d+"))
-        expect(page.locator("#radius_profile_id")).to_have_value(str(radius_profile["id"]))
+        expect(page.locator("#radius_profile_id")).to_have_value(
+            str(radius_profile["id"])
+        )
         fresh_context.close()
 
 
@@ -384,9 +424,11 @@ class TestBillingCycle:
         payments.expect_loaded()
 
         # Payment recording should be accessible
-        expect(admin_page.get_by_role("link", name="Record Payment").or_(
-            admin_page.get_by_role("button", name="Record Payment")
-        ).first).to_be_visible()
+        expect(
+            admin_page.get_by_role("link", name="Record Payment")
+            .or_(admin_page.get_by_role("button", name="Record Payment"))
+            .first
+        ).to_be_visible()
 
 
 class TestSupportResolution:

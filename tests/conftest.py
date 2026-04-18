@@ -37,6 +37,7 @@ def _patch_jose_datetime(monkeypatch):
 
     monkeypatch.setattr(jose_jwt, "datetime", _JoseDateTimeProxy(), raising=False)
 
+
 # Register UUID adapter for SQLite - store as string
 sqlite3.register_adapter(uuid.UUID, lambda u: str(u))
 
@@ -72,24 +73,28 @@ _original_uuid_result_processor = sqltypes.Uuid.result_processor
 
 def _sqlite_uuid_bind_processor(self, dialect):
     if dialect.name == "sqlite":
+
         def process(value):
             if value is not None:
                 if isinstance(value, uuid.UUID):
                     return str(value)
                 return str(uuid.UUID(value)) if value else None
             return None
+
         return process
     return _original_uuid_bind_processor(self, dialect)
 
 
 def _sqlite_uuid_result_processor(self, dialect, coltype):
     if dialect.name == "sqlite":
+
         def process(value):
             if value is not None:
                 if isinstance(value, uuid.UUID):
                     return value
                 return uuid.UUID(value) if value else None
             return None
+
         return process
     return _original_uuid_result_processor(self, dialect, coltype)
 
@@ -111,9 +116,9 @@ def _patch_jsonb_for_sqlite():
     """Make JSONB compile as JSON for SQLite dialect."""
     from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 
-    if not hasattr(SQLiteTypeCompiler, '_original_visit_JSONB'):
+    if not hasattr(SQLiteTypeCompiler, "_original_visit_JSONB"):
         # Store original if it exists, otherwise create a fallback
-        if hasattr(SQLiteTypeCompiler, 'visit_JSONB'):
+        if hasattr(SQLiteTypeCompiler, "visit_JSONB"):
             SQLiteTypeCompiler._original_visit_JSONB = SQLiteTypeCompiler.visit_JSONB
 
         def visit_JSONB(self, type_, **kw):
@@ -165,6 +170,7 @@ def _enable_sqlite_spatial_admin() -> None:
     import importlib
 
     importlib.reload(geoalchemy_sqlite_admin)
+
 
 from app.models.catalog import AccessType, PriceBasis, RegionZone, ServiceType
 from app.models.subscriber import Subscriber
@@ -280,6 +286,7 @@ def subscriber_account(subscriber):
 def work_order():
     """Lightweight fixture for comms tests (legacy name for service order)."""
     from types import SimpleNamespace
+
     return SimpleNamespace(id=uuid.uuid4())
 
 
@@ -287,6 +294,7 @@ def work_order():
 def ticket():
     """Lightweight fixture for comms tests."""
     from types import SimpleNamespace
+
     return SimpleNamespace(id=uuid.uuid4())
 
 
@@ -310,6 +318,7 @@ def _reset_singletons():
     # Reset event dispatcher to clear any mocked handlers
     try:
         from app.services.events.dispatcher import reset_dispatcher
+
         reset_dispatcher()
     except ImportError:
         pass
@@ -443,6 +452,7 @@ def geo_layer(db_session):
 # ============================================================================
 # Network Fixtures
 # ============================================================================
+
 
 @pytest.fixture()
 def region(db_session):

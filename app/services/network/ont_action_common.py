@@ -233,9 +233,7 @@ def set_and_verify(
     if not readback_paths:
         return spv_result
     try:
-        client.get_parameter_values(
-            device_id, readback_paths, connection_request=True
-        )
+        client.get_parameter_values(device_id, readback_paths, connection_request=True)
     except GenieACSError as exc:
         raise GenieACSError(
             f"Readback getParameterValues failed after SPV: {exc}"

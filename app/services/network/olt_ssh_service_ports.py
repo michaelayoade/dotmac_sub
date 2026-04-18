@@ -53,7 +53,9 @@ def get_service_port_by_index(
                 return True, f"Found service-port {index}", entry
         return True, f"Service-port {index} was not found", None
     except Exception as exc:
-        logger.error("Error reading service-port %d on OLT %s: %s", index, olt.name, exc)
+        logger.error(
+            "Error reading service-port %d on OLT %s: %s", index, olt.name, exc
+        )
         return False, f"Error: {exc}", None
     finally:
         transport.close()

@@ -142,10 +142,7 @@ def localize_for_display(value: Any) -> Any:
     if callable(value):
         return value
     if isinstance(value, Mapping):
-        return {
-            key: localize_for_display(item)
-            for key, item in value.items()
-        }
+        return {key: localize_for_display(item) for key, item in value.items()}
     if isinstance(value, list):
         return [localize_for_display(item) for item in value]
     if isinstance(value, tuple):

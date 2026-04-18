@@ -100,7 +100,9 @@ def _rotate_value(
             logger.debug("Value already encrypted with new key, skipping")
             return value, False
         except ValueError:
-            raise ValueError("Cannot decrypt value with either old or new key") from None
+            raise ValueError(
+                "Cannot decrypt value with either old or new key"
+            ) from None
 
     # Re-encrypt with new key
     rotated = encrypt_credential_with_key(decrypted_plaintext, new_key)
@@ -285,9 +287,7 @@ def update_openbao_credential_encryption_key(new_key: str) -> bool:
         payload[_CREDENTIAL_KEY_SECRET_FIELD] = new_key
         success = write_secret(_CREDENTIAL_KEY_SECRET_PATH, payload)
 
-        legacy_existing = read_secret_fields(
-            _LEGACY_CREDENTIAL_KEY_SECRET_PATH
-        )
+        legacy_existing = read_secret_fields(_LEGACY_CREDENTIAL_KEY_SECRET_PATH)
         legacy_payload = dict(legacy_existing)
         legacy_payload[_CREDENTIAL_KEY_SECRET_FIELD] = new_key
         success = (

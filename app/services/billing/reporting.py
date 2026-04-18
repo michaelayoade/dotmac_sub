@@ -515,7 +515,9 @@ class BillingReporting:
         next_month_end = _next_month_start(next_month_start_dt)
 
         # Helper to create period CASE expression
-        def _period_case(date_col, last_start, last_end, curr_start, curr_end, next_start, next_end):
+        def _period_case(
+            date_col, last_start, last_end, curr_start, curr_end, next_start, next_end
+        ):
             return case(
                 (and_(date_col >= last_start, date_col < last_end), "last"),
                 (and_(date_col >= curr_start, date_col < curr_end), "current"),
@@ -527,9 +529,12 @@ class BillingReporting:
         payment_date = func.coalesce(Payment.paid_at, Payment.created_at)
         payment_period = _period_case(
             payment_date,
-            last_month_start, last_month_end,
-            current_month_start, current_month_end,
-            next_month_start_dt, next_month_end,
+            last_month_start,
+            last_month_end,
+            current_month_start,
+            current_month_end,
+            next_month_start_dt,
+            next_month_end,
         )
         pp_stmt = (
             select(
@@ -551,9 +556,12 @@ class BillingReporting:
         invoice_date = func.coalesce(Invoice.paid_at, Invoice.created_at)
         inv_period = _period_case(
             invoice_date,
-            last_month_start, last_month_end,
-            current_month_start, current_month_end,
-            next_month_start_dt, next_month_end,
+            last_month_start,
+            last_month_end,
+            current_month_start,
+            current_month_end,
+            next_month_start_dt,
+            next_month_end,
         )
         pi_stmt = (
             select(
@@ -573,9 +581,12 @@ class BillingReporting:
         # Combined unpaid invoices query for all periods
         unpaid_period = _period_case(
             Invoice.created_at,
-            last_month_start, last_month_end,
-            current_month_start, current_month_end,
-            next_month_start_dt, next_month_end,
+            last_month_start,
+            last_month_end,
+            current_month_start,
+            current_month_end,
+            next_month_start_dt,
+            next_month_end,
         )
         ui_stmt = (
             select(
@@ -595,9 +606,12 @@ class BillingReporting:
         # Combined credit notes query for all periods
         cn_period = _period_case(
             CreditNote.created_at,
-            last_month_start, last_month_end,
-            current_month_start, current_month_end,
-            next_month_start_dt, next_month_end,
+            last_month_start,
+            last_month_end,
+            current_month_start,
+            current_month_end,
+            next_month_start_dt,
+            next_month_end,
         )
         pcn_stmt = (
             select(

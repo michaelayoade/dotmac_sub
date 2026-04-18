@@ -8,7 +8,9 @@ from app.models.notification import (
 from app.tasks.notifications import _deliver_notification_queue
 
 
-def _queued_notification(*, channel: NotificationChannel, recipient: str, body: str) -> Notification:
+def _queued_notification(
+    *, channel: NotificationChannel, recipient: str, body: str
+) -> Notification:
     return Notification(
         channel=channel,
         recipient=recipient,
@@ -33,7 +35,9 @@ def test_deliver_notification_queue_handles_sms_and_whatsapp(db_session, monkeyp
     db_session.add_all([sms, wa])
     db_session.commit()
 
-    monkeypatch.setattr("app.tasks.notifications.sms_service.send_sms", lambda **_: True)
+    monkeypatch.setattr(
+        "app.tasks.notifications.sms_service.send_sms", lambda **_: True
+    )
     monkeypatch.setattr(
         "app.tasks.notifications.whatsapp_service.send_text_message",
         lambda **_: {"ok": True, "sent": True},
@@ -48,7 +52,9 @@ def test_deliver_notification_queue_handles_sms_and_whatsapp(db_session, monkeyp
     assert wa.status == NotificationStatus.delivered
 
 
-def test_deliver_notification_queue_marks_failed_on_whatsapp_error(db_session, monkeypatch):
+def test_deliver_notification_queue_marks_failed_on_whatsapp_error(
+    db_session, monkeypatch
+):
     wa = _queued_notification(
         channel=NotificationChannel.whatsapp,
         recipient="+2348000000002",

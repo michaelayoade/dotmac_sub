@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = '48d94c532a05'
-down_revision = '019_add_vlan_scope_to_ip_pools'
+revision = "48d94c532a05"
+down_revision = "019_add_vlan_scope_to_ip_pools"
 branch_labels = None
 depends_on = None
 

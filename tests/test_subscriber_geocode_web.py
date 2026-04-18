@@ -20,7 +20,9 @@ def _create_subscriber(db_session) -> Subscriber:
     return subscriber
 
 
-def test_subscriber_detail_snapshot_includes_geocode_target_without_coordinates(db_session):
+def test_subscriber_detail_snapshot_includes_geocode_target_without_coordinates(
+    db_session,
+):
     subscriber = _create_subscriber(db_session)
     address = Address(
         subscriber_id=subscriber.id,

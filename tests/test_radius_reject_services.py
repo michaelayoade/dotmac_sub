@@ -29,9 +29,14 @@ def test_firewall_commands_include_negative_captive_rules_when_enabled():
     assert "dotmac-reject-allow-oss-negative" in joined
     assert "dotmac-negative-redirect-http-negative" in joined
     assert "to-addresses=203.0.113.10" in joined
-    assert 'action=jump jump-target="dotmac-block-chain" comment="dotmac-reject-jump-negative"' not in joined
+    assert (
+        'action=jump jump-target="dotmac-block-chain" comment="dotmac-reject-jump-negative"'
+        not in joined
+    )
 
-    allow_idx = next(i for i, cmd in enumerate(commands) if "dotmac-reject-allow-oss-negative" in cmd)
+    allow_idx = next(
+        i for i, cmd in enumerate(commands) if "dotmac-reject-allow-oss-negative" in cmd
+    )
     redirect_idx = next(
         i
         for i, cmd in enumerate(commands)
@@ -51,10 +56,16 @@ def test_firewall_commands_skip_captive_rules_when_disabled():
     )
 
     joined = "\n".join(commands)
-    assert '/ip firewall nat add chain=dstnat src-address-list="dotmac-reject-negative"' not in joined
+    assert (
+        '/ip firewall nat add chain=dstnat src-address-list="dotmac-reject-negative"'
+        not in joined
+    )
     assert "dotmac-reject-allow-dns-negative" in joined
     assert "dotmac-reject-allow-oss-negative" in joined
-    assert 'action=jump jump-target="dotmac-block-chain" comment="dotmac-reject-jump-negative"' not in joined
+    assert (
+        'action=jump jump-target="dotmac-block-chain" comment="dotmac-reject-jump-negative"'
+        not in joined
+    )
 
 
 def test_firewall_commands_non_negative_reasons_jump_to_block_chain():
@@ -84,9 +95,21 @@ def test_block_chain_rejects_tcp_udp_then_drops_rest():
         captive_portal_ip="149.102.158.144",
     )
 
-    tcp_idx = next(i for i, cmd in enumerate(commands) if "dotmac-block-reject-non-oss-tcp" in cmd and " protocol=tcp " in cmd)
-    udp_idx = next(i for i, cmd in enumerate(commands) if "dotmac-block-reject-non-oss-udp" in cmd and " protocol=udp " in cmd)
-    drop_idx = next(i for i, cmd in enumerate(commands) if "dotmac-block-drop-non-oss" in cmd and " action=drop " in cmd)
+    tcp_idx = next(
+        i
+        for i, cmd in enumerate(commands)
+        if "dotmac-block-reject-non-oss-tcp" in cmd and " protocol=tcp " in cmd
+    )
+    udp_idx = next(
+        i
+        for i, cmd in enumerate(commands)
+        if "dotmac-block-reject-non-oss-udp" in cmd and " protocol=udp " in cmd
+    )
+    drop_idx = next(
+        i
+        for i, cmd in enumerate(commands)
+        if "dotmac-block-drop-non-oss" in cmd and " action=drop " in cmd
+    )
     assert tcp_idx < drop_idx
     assert udp_idx < drop_idx
 
@@ -116,7 +139,9 @@ def test_enforce_subscription_reject_ip_treats_blocked_subscription_as_captive_r
     )
     db_session.commit()
 
-    result = radius_reject.enforce_subscription_reject_ip(db_session, str(subscription.id))
+    result = radius_reject.enforce_subscription_reject_ip(
+        db_session, str(subscription.id)
+    )
 
     assert result["ok"] is True
     assert result["mode"] == "block"

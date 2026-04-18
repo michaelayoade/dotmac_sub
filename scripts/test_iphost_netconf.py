@@ -33,12 +33,16 @@ def main():
                 continue
 
             # Get ONTs with management IPs on this OLT
-            stmt = select(OntUnit).where(
-                OntUnit.olt_device_id == olt.id,
-                OntUnit.is_active == True,
-                OntUnit.mgmt_ip_address.isnot(None),
-                OntUnit.external_id.isnot(None),
-            ).limit(3)
+            stmt = (
+                select(OntUnit)
+                .where(
+                    OntUnit.olt_device_id == olt.id,
+                    OntUnit.is_active == True,
+                    OntUnit.mgmt_ip_address.isnot(None),
+                    OntUnit.external_id.isnot(None),
+                )
+                .limit(3)
+            )
 
             onts = db.scalars(stmt).all()
             if not onts:

@@ -147,9 +147,15 @@ def test_provision_vlan_full_orchestrates_all_steps(
     mock_pppoe: MagicMock,
 ) -> None:
     """provision_vlan_full should call all three ensure functions."""
-    mock_vlan.return_value = VlanProvisioningResult(success=True, message="ok", created=True)
-    mock_ip.return_value = VlanProvisioningResult(success=True, message="ok", created=True)
-    mock_pppoe.return_value = VlanProvisioningResult(success=True, message="ok", created=True)
+    mock_vlan.return_value = VlanProvisioningResult(
+        success=True, message="ok", created=True
+    )
+    mock_ip.return_value = VlanProvisioningResult(
+        success=True, message="ok", created=True
+    )
+    mock_pppoe.return_value = VlanProvisioningResult(
+        success=True, message="ok", created=True
+    )
 
     device = MagicMock()
     device.name = "Test-NAS"

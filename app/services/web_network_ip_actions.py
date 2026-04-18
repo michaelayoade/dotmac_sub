@@ -211,7 +211,9 @@ def create_ip_pool_from_form(request: Request, db, form) -> IpWebActionResult:
     )
 
 
-def update_ip_pool_from_form(request: Request, db, *, pool_id: str, form) -> IpWebActionResult:
+def update_ip_pool_from_form(
+    request: Request, db, *, pool_id: str, form
+) -> IpWebActionResult:
     pool = ip_service.get_ip_pool_for_edit(db, pool_id=pool_id)
     if pool is None:
         return IpWebActionResult(success=False, not_found_message="IP Pool not found")

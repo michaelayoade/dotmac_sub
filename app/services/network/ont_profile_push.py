@@ -248,7 +248,12 @@ def _generate_push_steps(
                 ont.serial_number,
             )
 
-        elif field_name in ("onu_mode", "ip_protocol", "mgmt_remote_access", "voip_enabled"):
+        elif field_name in (
+            "onu_mode",
+            "ip_protocol",
+            "mgmt_remote_access",
+            "voip_enabled",
+        ):
             # These fields require OMCI or TR-069 reconfiguration
             logger.debug(
                 "Field %s push not yet implemented for ONT %s",

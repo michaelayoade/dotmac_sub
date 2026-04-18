@@ -49,21 +49,25 @@ def fix_serials(db, *, dry_run: bool, stats: Stats) -> None:
     from app.services.network.olt_ssh import get_registered_ont_serials
 
     # Get all OLTs with HW- ONTs
-    olt_rows = db.execute(text("""
+    olt_rows = db.execute(
+        text("""
         SELECT DISTINCT d.id, d.name
         FROM olt_devices d
         JOIN ont_units o ON o.olt_device_id = d.id
         WHERE o.serial_number LIKE 'HW-%%' AND o.is_active = true AND d.is_active = true
         ORDER BY d.name
-    """)).fetchall()
+    """)
+    ).fetchall()
     logger.info("Found %d OLTs with HW- ONTs", len(olt_rows))
 
     # Build HW- ONT lookup: (olt_id, slot, port, onu_id) → ont row
-    hw_onts = db.execute(text("""
+    hw_onts = db.execute(
+        text("""
         SELECT id, serial_number, olt_device_id, board, port, external_id
         FROM ont_units
         WHERE serial_number LIKE 'HW-%%' AND is_active = true
-    """)).fetchall()
+    """)
+    ).fetchall()
 
     # Key by (olt_id, port, onu_id) — skip slot since SNMP packed index
     # may decode to a different slot number than the physical OLT slot
@@ -134,7 +138,11 @@ def fix_serials(db, *, dry_run: bool, stats: Stats) -> None:
             if dry_run:
                 logger.info(
                     "  [DRY RUN] %s → %s (fsp=%s onu=%d %s)",
-                    hw_serial, entry.real_serial, entry.fsp, entry.onu_id, entry.run_state,
+                    hw_serial,
+                    entry.real_serial,
+                    entry.fsp,
+                    entry.onu_id,
+                    entry.run_state,
                 )
             else:
                 db.execute(
@@ -168,7 +176,9 @@ def resync_genieacs(db, *, dry_run: bool, stats: Stats) -> None:
     stats.genieacs_relinked = result.get("auto_linked", 0)
     logger.info(
         "GenieACS re-sync: created=%d, updated=%d, auto-linked=%d",
-        result.get("created", 0), result.get("updated", 0), stats.genieacs_relinked,
+        result.get("created", 0),
+        result.get("updated", 0),
+        stats.genieacs_relinked,
     )
 
 
@@ -191,7 +201,9 @@ def print_summary(stats: Stats) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fix HW- synthetic serials via OLT SSH")
+    parser = argparse.ArgumentParser(
+        description="Fix HW- synthetic serials via OLT SSH"
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--execute", action="store_true")

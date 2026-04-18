@@ -47,30 +47,30 @@ def test_notifications_menu_returns_empty_state_without_recipients(
 def test_notifications_menu_scopes_to_actor_and_email(db_session, monkeypatch):
     db_session.add_all(
         [
-                Notification(
-                    channel=NotificationChannel.email,
-                    recipient="system-user-1",
-                    subject="Actor scoped",
-                    body="body",
-                    status=NotificationStatus.queued,
-                    is_active=True,
-                ),
-                Notification(
-                    channel=NotificationChannel.email,
-                    recipient="admin@example.com",
-                    subject="Email scoped",
-                    body="body",
-                    status=NotificationStatus.queued,
-                    is_active=True,
-                ),
-                Notification(
-                    channel=NotificationChannel.email,
-                    recipient="other-admin@example.com",
-                    subject="Other admin",
-                    body="body",
-                    status=NotificationStatus.queued,
-                    is_active=True,
-                ),
+            Notification(
+                channel=NotificationChannel.email,
+                recipient="system-user-1",
+                subject="Actor scoped",
+                body="body",
+                status=NotificationStatus.queued,
+                is_active=True,
+            ),
+            Notification(
+                channel=NotificationChannel.email,
+                recipient="admin@example.com",
+                subject="Email scoped",
+                body="body",
+                status=NotificationStatus.queued,
+                is_active=True,
+            ),
+            Notification(
+                channel=NotificationChannel.email,
+                recipient="other-admin@example.com",
+                subject="Other admin",
+                body="body",
+                status=NotificationStatus.queued,
+                is_active=True,
+            ),
         ]
     )
     db_session.commit()

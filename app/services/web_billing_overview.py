@@ -32,7 +32,9 @@ _BUCKET_LABELS = {
 }
 _OVERVIEW_CACHE_TTL_SECONDS = 15.0
 _overview_cache_lock = Lock()
-_overview_cache: dict[tuple[str | None, str | None, str], tuple[float, dict[str, object]]] = {}
+_overview_cache: dict[
+    tuple[str | None, str | None, str], tuple[float, dict[str, object]]
+] = {}
 
 
 def _add_months(value: date, months: int) -> date:

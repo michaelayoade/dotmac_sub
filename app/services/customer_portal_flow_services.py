@@ -14,6 +14,7 @@ class VacationHoldUsage(TypedDict):
     last_hold_date: datetime | None
     days_since_last: int | None
 
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 

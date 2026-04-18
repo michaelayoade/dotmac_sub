@@ -20,30 +20,38 @@ class CustomerDashboardPage(BasePage):
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
         expect(
-            self.page.get_by_role("heading", name="Welcome back", exact=False).or_(
-                self.page.get_by_text("Current Balance", exact=False)
-            ).first
+            self.page.get_by_role("heading", name="Welcome back", exact=False)
+            .or_(self.page.get_by_text("Current Balance", exact=False))
+            .first
         ).to_be_visible()
 
     def expect_account_summary_visible(self) -> None:
         """Assert account summary section is visible."""
-        expect(self.page.locator("[data-testid='account-summary']").or_(
-            self.page.get_by_text("Account", exact=False)
-        ).first).to_be_visible()
+        expect(
+            self.page.locator("[data-testid='account-summary']")
+            .or_(self.page.get_by_text("Account", exact=False))
+            .first
+        ).to_be_visible()
 
     def expect_service_status_visible(self) -> None:
         """Assert service status section is visible."""
-        expect(self.page.locator("[data-testid='service-status']").or_(
-            self.page.get_by_text("Service", exact=False)
-        ).first).to_be_visible()
+        expect(
+            self.page.locator("[data-testid='service-status']")
+            .or_(self.page.get_by_text("Service", exact=False))
+            .first
+        ).to_be_visible()
 
     def expect_billing_summary_visible(self) -> None:
         """Assert billing summary section is visible."""
-        expect(self.page.locator("[data-testid='billing-summary']").or_(
-            self.page.get_by_text("Balance", exact=False).or_(
-                self.page.get_by_text("Billing", exact=False)
+        expect(
+            self.page.locator("[data-testid='billing-summary']")
+            .or_(
+                self.page.get_by_text("Balance", exact=False).or_(
+                    self.page.get_by_text("Billing", exact=False)
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
     def navigate_to_billing(self) -> None:
         """Navigate to billing page."""

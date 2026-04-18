@@ -86,9 +86,7 @@ class CircuitBreakerState:
         # Check if enough time has passed to retry
         elapsed = time.monotonic() - self.last_failure_time
         if elapsed >= _CIRCUIT_OPEN_DURATION:
-            logger.info(
-                "Redis circuit breaker attempting retry after %.1fs", elapsed
-            )
+            logger.info("Redis circuit breaker attempting retry after %.1fs", elapsed)
             return True
         return False
 
@@ -204,8 +202,12 @@ def redis_health_check(force: bool = False) -> dict[str, Any]:
                 "uptime_seconds": int(info.get("uptime_in_seconds", 0)),
                 "connected_clients": int(info.get("connected_clients", 0)),
                 "used_memory_human": str(info.get("used_memory_human", "unknown")),
-                "used_memory_peak_human": str(info.get("used_memory_peak_human", "unknown")),
-                "total_commands_processed": int(info.get("total_commands_processed", 0)),
+                "used_memory_peak_human": str(
+                    info.get("used_memory_peak_human", "unknown")
+                ),
+                "total_commands_processed": int(
+                    info.get("total_commands_processed", 0)
+                ),
                 "keyspace_hits": int(info.get("keyspace_hits", 0)),
                 "keyspace_misses": int(info.get("keyspace_misses", 0)),
             }

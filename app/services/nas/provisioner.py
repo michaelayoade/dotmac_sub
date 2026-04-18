@@ -346,6 +346,7 @@ class DeviceProvisioner:
         client = paramiko.SSHClient()
         client.load_system_host_keys()
         if device.ssh_verify_host_key is False:
+
             class _AcceptUnknownHostKeyPolicy:
                 def missing_host_key(self, client, hostname, key) -> None:
                     logger.warning(

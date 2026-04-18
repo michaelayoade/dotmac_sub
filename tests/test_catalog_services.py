@@ -47,7 +47,9 @@ def test_catalog_offer_defaults_use_settings(db_session):
         db_session, "default_billing_cycle", DomainSettingUpdate(value_text="annual")
     )
     settings_api.upsert_catalog_setting(
-        db_session, "default_contract_term", DomainSettingUpdate(value_text="twelve_month")
+        db_session,
+        "default_contract_term",
+        DomainSettingUpdate(value_text="twelve_month"),
     )
     settings_api.upsert_catalog_setting(
         db_session, "default_offer_status", DomainSettingUpdate(value_text="inactive")
@@ -73,7 +75,9 @@ def test_offer_description_metadata_roundtrip():
         plan_kind="ip_address",
         ip_block_size="/29",
     )
-    meta, cleaned = web_catalog_offers_service.parse_offer_description_metadata(description)
+    meta, cleaned = web_catalog_offers_service.parse_offer_description_metadata(
+        description
+    )
     assert meta["plan_kind"] == "ip_address"
     assert meta["ip_block_size"] == "/29"
     assert cleaned == "Public IP block add-on"
@@ -154,7 +158,9 @@ def test_ensure_offer_radius_profile_creates_generated_profile_and_link(db_sessi
         ),
     )
 
-    profile_id = web_catalog_offers_service.ensure_offer_radius_profile(db_session, offer)
+    profile_id = web_catalog_offers_service.ensure_offer_radius_profile(
+        db_session, offer
+    )
 
     links = catalog_service.offer_radius_profiles.list(
         db_session,
@@ -172,7 +178,12 @@ def test_ensure_offer_radius_profile_creates_generated_profile_and_link(db_sessi
 
     profile = catalog_service.radius_profiles.get(db_session, profile_id)
     assert profile.name == "Unlimited Basic"
-    assert profile.code == web_catalog_offers_service.generated_radius_profile_code_for_offer(str(offer.id))
+    assert (
+        profile.code
+        == web_catalog_offers_service.generated_radius_profile_code_for_offer(
+            str(offer.id)
+        )
+    )
     assert profile.vendor == NasVendor.mikrotik
     assert profile.download_speed == 6000
     assert profile.upload_speed == 6000
@@ -193,7 +204,9 @@ def test_ensure_offer_radius_profile_updates_existing_generated_profile(db_sessi
         ),
     )
 
-    first_profile_id = web_catalog_offers_service.ensure_offer_radius_profile(db_session, offer)
+    first_profile_id = web_catalog_offers_service.ensure_offer_radius_profile(
+        db_session, offer
+    )
 
     updated_offer = catalog_service.offers.update(
         db_session,

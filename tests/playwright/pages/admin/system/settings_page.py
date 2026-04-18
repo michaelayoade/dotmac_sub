@@ -19,7 +19,9 @@ class SettingsPage(BasePage):
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                self.page.goto(f"{self.base_url}{path}", wait_until="commit", timeout=30000)
+                self.page.goto(
+                    f"{self.base_url}{path}", wait_until="commit", timeout=30000
+                )
                 return
             except PlaywrightError as exc:
                 last_error = exc
@@ -28,7 +30,9 @@ class SettingsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the settings page is loaded."""
-        expect(self.page.get_by_role("heading", name="System Settings", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="System Settings", exact=True)
+        ).to_be_visible()
 
     def select_domain(self, domain: str) -> None:
         """Select a settings domain."""
@@ -52,7 +56,9 @@ class SettingsPage(BasePage):
 
     def expect_error(self, message: str) -> None:
         """Assert an error is displayed."""
-        expect(self.page.locator(".text-red-500, .error").filter(has_text=message)).to_be_visible()
+        expect(
+            self.page.locator(".text-red-500, .error").filter(has_text=message)
+        ).to_be_visible()
 
     def reset_to_defaults(self) -> None:
         """Reset settings to defaults."""

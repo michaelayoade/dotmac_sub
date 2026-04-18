@@ -19,10 +19,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("network_devices", sa.Column("last_ping_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("network_devices", sa.Column("last_ping_ok", sa.Boolean(), nullable=True))
-    op.add_column("network_devices", sa.Column("last_snmp_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("network_devices", sa.Column("last_snmp_ok", sa.Boolean(), nullable=True))
+    op.add_column(
+        "network_devices",
+        sa.Column("last_ping_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
+        "network_devices", sa.Column("last_ping_ok", sa.Boolean(), nullable=True)
+    )
+    op.add_column(
+        "network_devices",
+        sa.Column("last_snmp_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
+        "network_devices", sa.Column("last_snmp_ok", sa.Boolean(), nullable=True)
+    )
 
 
 def downgrade() -> None:

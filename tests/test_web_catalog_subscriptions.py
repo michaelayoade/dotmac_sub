@@ -330,7 +330,9 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
         .one()
     )
 
-    nas_device = NasDevice(name="Karu", nas_ip="172.16.0.1", shared_secret="plain:secret")
+    nas_device = NasDevice(
+        name="Karu", nas_ip="172.16.0.1", shared_secret="plain:secret"
+    )
     radius_server = RadiusServer(name="Primary RADIUS", host="127.0.0.1")
     db_session.add_all([nas_device, radius_server])
     db_session.flush()
@@ -361,7 +363,11 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
         EventStore(
             event_id=uuid4(),
             event_type="subscription.suspended",
-            payload={"from_status": "active", "to_status": "suspended", "reason": "dunning"},
+            payload={
+                "from_status": "active",
+                "to_status": "suspended",
+                "reason": "dunning",
+            },
             status=EventStatus.failed,
             subscription_id=subscription.id,
             account_id=subscriber.id,
@@ -406,7 +412,10 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
 
     assert context["domain_events"][0]["event_type"] == "subscription.suspended"
     assert context["domain_events"][0]["failed_handler_text"] == "NotificationHandler"
-    assert context["notification_evidence"]["items"][0]["template_code"] == "subscription_suspended"
+    assert (
+        context["notification_evidence"]["items"][0]["template_code"]
+        == "subscription_suspended"
+    )
     assert context["radius_sync_evidence"]["internal_user"].username == "105000111"
     assert context["radius_sync_evidence"]["nas_client_count"] == 1
 
@@ -456,7 +465,10 @@ def test_subscription_detail_context_exposes_latest_external_radius_sync_run(
     )
 
     assert context["radius_sync_evidence"]["external_job_count"] == 1
-    assert context["radius_sync_evidence"]["external_run"].status == RadiusSyncStatus.success
+    assert (
+        context["radius_sync_evidence"]["external_run"].status
+        == RadiusSyncStatus.success
+    )
     assert context["radius_sync_evidence"]["external_users_synced"] == 12
     assert context["radius_sync_evidence"]["external_nas_synced"] == 4
 
@@ -477,9 +489,15 @@ def test_subscription_detail_context_reads_live_external_radius_rows(
 
     db_path = tmp_path / "radius_external.sqlite"
     conn = sqlite3.connect(db_path)
-    conn.execute("CREATE TABLE radcheck (username TEXT, attribute TEXT, op TEXT, value TEXT)")
-    conn.execute("CREATE TABLE radreply (username TEXT, attribute TEXT, op TEXT, value TEXT)")
-    conn.execute("CREATE TABLE radusergroup (username TEXT, groupname TEXT, priority INTEGER)")
+    conn.execute(
+        "CREATE TABLE radcheck (username TEXT, attribute TEXT, op TEXT, value TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE radreply (username TEXT, attribute TEXT, op TEXT, value TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE radusergroup (username TEXT, groupname TEXT, priority INTEGER)"
+    )
     conn.execute(
         "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, ?, ?, ?)",
         ("105000222", "Cleartext-Password", ":=", "SecretPass123"),
@@ -778,7 +796,9 @@ def test_edit_form_data_includes_active_ipv4_assignments(
     db_session.commit()
     db_session.refresh(subscription)
 
-    form_data = web_catalog_subscriptions_service.edit_form_data(db_session, subscription)
+    form_data = web_catalog_subscriptions_service.edit_form_data(
+        db_session, subscription
+    )
 
     assert form_data["ipv4_addresses"] == ["10.83.0.1", "10.83.0.5"]
     assert form_data["ipv4_block_ids"] == [str(first_block.id), str(second_block.id)]
@@ -966,7 +986,9 @@ def test_create_subscription_with_audit_prefers_generated_pppoe_credential_when_
 
     assert credential.username == "105000001"
     assert created.login == "105000001"
-    assert created.login != web_catalog_subscriptions_service._generated_service_login(subscriber)
+    assert created.login != web_catalog_subscriptions_service._generated_service_login(
+        subscriber
+    )
 
 
 def test_ensure_ipv4_blocks_allocatable_rejects_duplicate_manual_ipv4_selection(

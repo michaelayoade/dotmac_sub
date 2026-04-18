@@ -61,7 +61,9 @@ def set_customer_id(subscriber: Subscriber, value: int | str | None) -> None:
         try:
             normalized = int(value)
         except (TypeError, ValueError) as exc:
-            raise ValueError("Legacy external BSS customer id must be an integer") from exc
+            raise ValueError(
+                "Legacy external BSS customer id must be an integer"
+            ) from exc
     if getattr(subscriber, "id", None) is None:
         subscriber.id = uuid.uuid4()
     object.__setattr__(subscriber, "_legacy_bss_customer_id", normalized)
@@ -70,7 +72,9 @@ def set_customer_id(subscriber: Subscriber, value: int | str | None) -> None:
     if session is None or subscriber_id is None:
         return
     if normalized is None:
-        splynx_mapping.delete_by_dotmac(session, SplynxEntityType.customer, subscriber_id)
+        splynx_mapping.delete_by_dotmac(
+            session, SplynxEntityType.customer, subscriber_id
+        )
         return
     splynx_mapping.register_or_update(
         session,

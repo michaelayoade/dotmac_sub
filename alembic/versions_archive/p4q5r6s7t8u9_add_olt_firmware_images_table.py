@@ -32,9 +32,24 @@ def upgrade() -> None:
             sa.Column("upgrade_method", sa.String(60), nullable=True),
             sa.Column("notes", sa.Text, nullable=True),
             sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-            sa.UniqueConstraint("vendor", "model", "version", name="uq_olt_firmware_vendor_model_version"),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.UniqueConstraint(
+                "vendor",
+                "model",
+                "version",
+                name="uq_olt_firmware_vendor_model_version",
+            ),
         )
 
 

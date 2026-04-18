@@ -108,7 +108,9 @@ def _splynx_get(endpoint: str) -> dict | None:
             raise RuntimeError(
                 f"Splynx API authentication failed for {endpoint}: {resp.status_code}"
             )
-        logger.warning("API %s returned %d: %s", endpoint, resp.status_code, resp.text[:200])
+        logger.warning(
+            "API %s returned %d: %s", endpoint, resp.status_code, resp.text[:200]
+        )
     except requests.RequestException as e:
         logger.warning("API error for %s: %s", endpoint, e)
     return None
@@ -128,9 +130,9 @@ def backfill_metadata(dry_run: bool = True) -> None:
 
         # Get all subscribers with splynx_customer_id
         subscribers = db.scalars(
-            select(Subscriber).where(
-                Subscriber.splynx_customer_id.isnot(None)
-            ).order_by(Subscriber.splynx_customer_id)
+            select(Subscriber)
+            .where(Subscriber.splynx_customer_id.isnot(None))
+            .order_by(Subscriber.splynx_customer_id)
         ).all()
 
         logger.info("Found %d subscribers to backfill", len(subscribers))
@@ -149,7 +151,9 @@ def backfill_metadata(dry_run: bool = True) -> None:
                         data.get("location_id"),
                         data.get("gps"),
                     )
-            logger.info("Run with --execute to backfill all %d subscribers", len(subscribers))
+            logger.info(
+                "Run with --execute to backfill all %d subscribers", len(subscribers)
+            )
             return
 
         updated = 0
@@ -201,7 +205,9 @@ def backfill_metadata(dry_run: bool = True) -> None:
                 db.flush()
                 logger.info(
                     "Progress: %d/%d updated (%d errors) — ETA: %.0f min",
-                    updated, len(subscribers), errors,
+                    updated,
+                    len(subscribers),
+                    errors,
                     (len(subscribers) - i - 1) * delay / 60,
                 )
 
@@ -210,7 +216,9 @@ def backfill_metadata(dry_run: bool = True) -> None:
         db.commit()
         logger.info(
             "Backfill complete: %d updated, %d errors out of %d total",
-            updated, errors, len(subscribers),
+            updated,
+            errors,
+            len(subscribers),
         )
 
 
@@ -219,4 +227,6 @@ if __name__ == "__main__":
         backfill_metadata(dry_run=False)
     else:
         backfill_metadata(dry_run=True)
-        print("\nTo execute: poetry run python -m scripts.migration.backfill_metadata --execute")
+        print(
+            "\nTo execute: poetry run python -m scripts.migration.backfill_metadata --execute"
+        )

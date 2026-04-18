@@ -75,16 +75,12 @@ class TestSpeedProfileSchemas:
         assert req.speed_type == "internet"
 
     def test_create_zero_speed(self):
-        req = SpeedProfileCreate(
-            name="Unlimited", direction="download", speed_kbps=0
-        )
+        req = SpeedProfileCreate(name="Unlimited", direction="download", speed_kbps=0)
         assert req.speed_kbps == 0
 
     def test_create_negative_speed(self):
         with pytest.raises(Exception):
-            SpeedProfileCreate(
-                name="Bad", direction="download", speed_kbps=-1
-            )
+            SpeedProfileCreate(name="Bad", direction="download", speed_kbps=-1)
 
 
 class TestNetworkZoneSchemas:
@@ -96,9 +92,7 @@ class TestNetworkZoneSchemas:
         assert req.parent_id is None
 
     def test_create_with_coordinates(self):
-        req = NetworkZoneCreate(
-            name="Zone B", latitude=6.5244, longitude=3.3792
-        )
+        req = NetworkZoneCreate(name="Zone B", latitude=6.5244, longitude=3.3792)
         assert req.latitude == 6.5244
 
     def test_update_clear_parent(self):

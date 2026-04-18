@@ -25,7 +25,9 @@ def _columns(table_name: str) -> set[str]:
 
 def _constraints(table_name: str) -> set[str]:
     inspector = inspect(op.get_bind())
-    names = {constraint["name"] for constraint in inspector.get_check_constraints(table_name)}
+    names = {
+        constraint["name"] for constraint in inspector.get_check_constraints(table_name)
+    }
     names.update(
         constraint["name"]
         for constraint in inspector.get_unique_constraints(table_name)
@@ -41,7 +43,9 @@ def _indexes(table_name: str) -> set[str]:
 
 def upgrade() -> None:
     if "max_ont_capacity" not in _columns("pon_ports"):
-        op.add_column("pon_ports", sa.Column("max_ont_capacity", sa.Integer(), nullable=True))
+        op.add_column(
+            "pon_ports", sa.Column("max_ont_capacity", sa.Integer(), nullable=True)
+        )
 
     constraints = _constraints("pon_ports")
     if "ck_pon_ports_max_ont_capacity_positive" not in constraints:
@@ -94,9 +98,13 @@ def downgrade() -> None:
 
     constraints = _constraints("ont_units")
     if "ck_ont_units_tr069_snapshot_object" in constraints:
-        op.drop_constraint("ck_ont_units_tr069_snapshot_object", "ont_units", type_="check")
+        op.drop_constraint(
+            "ck_ont_units_tr069_snapshot_object", "ont_units", type_="check"
+        )
     if "ck_ont_units_mac_address_format" in constraints:
-        op.drop_constraint("ck_ont_units_mac_address_format", "ont_units", type_="check")
+        op.drop_constraint(
+            "ck_ont_units_mac_address_format", "ont_units", type_="check"
+        )
 
     constraints = _constraints("pon_ports")
     if "ck_pon_ports_max_ont_capacity_positive" in constraints:

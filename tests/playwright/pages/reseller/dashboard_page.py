@@ -19,15 +19,21 @@ class ResellerDashboardPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
-        expect(self.page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Dashboard", exact=True)
+        ).to_be_visible()
 
     def expect_summary_visible(self) -> None:
         """Assert dashboard summary is visible."""
-        expect(self.page.locator("[data-testid='summary']").or_(
-            self.page.get_by_text("Total", exact=False).or_(
-                self.page.get_by_text("Account", exact=False)
+        expect(
+            self.page.locator("[data-testid='summary']")
+            .or_(
+                self.page.get_by_text("Total", exact=False).or_(
+                    self.page.get_by_text("Account", exact=False)
+                )
             )
-        ).first).to_be_visible()
+            .first
+        ).to_be_visible()
 
     def expect_accounts_visible(self) -> None:
         """Assert accounts section is visible."""
@@ -39,16 +45,20 @@ class ResellerDashboardPage(BasePage):
 
     def get_total_accounts(self) -> str:
         """Get total accounts count."""
-        total_element = self.page.locator("[data-testid='total-accounts']").or_(
-            self.page.get_by_text("Account", exact=False)
-        ).first
+        total_element = (
+            self.page.locator("[data-testid='total-accounts']")
+            .or_(self.page.get_by_text("Account", exact=False))
+            .first
+        )
         return total_element.text_content() or ""
 
     def get_active_accounts(self) -> str:
         """Get active accounts count."""
-        active_element = self.page.locator("[data-testid='active-accounts']").or_(
-            self.page.get_by_text("Active", exact=False)
-        ).first
+        active_element = (
+            self.page.locator("[data-testid='active-accounts']")
+            .or_(self.page.get_by_text("Active", exact=False))
+            .first
+        )
         return active_element.text_content() or ""
 
     def logout(self) -> None:

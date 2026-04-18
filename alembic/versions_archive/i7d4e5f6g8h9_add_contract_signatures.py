@@ -38,16 +38,36 @@ def upgrade() -> None:
         sa.Column("ip_address", sa.String(45), nullable=False),
         sa.Column("user_agent", sa.String(500)),
         sa.Column("agreement_text", sa.Text(), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
     )
 
-    op.create_index("ix_contract_signatures_account_id", "contract_signatures", ["account_id"])
-    op.create_index("ix_contract_signatures_service_order_id", "contract_signatures", ["service_order_id"])
+    op.create_index(
+        "ix_contract_signatures_account_id", "contract_signatures", ["account_id"]
+    )
+    op.create_index(
+        "ix_contract_signatures_service_order_id",
+        "contract_signatures",
+        ["service_order_id"],
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_contract_signatures_service_order_id", table_name="contract_signatures")
+    op.drop_index(
+        "ix_contract_signatures_service_order_id", table_name="contract_signatures"
+    )
     op.drop_index("ix_contract_signatures_account_id", table_name="contract_signatures")
     op.drop_table("contract_signatures")
