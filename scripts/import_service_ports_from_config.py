@@ -110,11 +110,34 @@ def find_olt_by_name_pattern(db, pattern: str) -> OLTDevice | None:
     return db.scalars(stmt).first()
 
 
+def _extract_ont_id_from_external(external_id: str | None) -> str | None:
+    """Extract ONT ID from external_id.
+
+    Handles formats:
+        - Simple: "5" -> "5"
+        - SNMP-style: "huawei:4194304000.5" -> "5"
+    """
+    if not external_id:
+        return None
+    if "." in external_id:
+        # SNMP-style: extract suffix after last dot
+        return external_id.rsplit(".", 1)[-1]
+    return external_id
+
+
+def _normalize_board_port(board: str | None, port: str | None) -> str | None:
+    """Normalize board/port to FSP format."""
+    if not board or not port:
+        return None
+    # board is like "0/2", port is like "0" -> "0/2/0"
+    return f"{board}/{port}"
+
+
 def get_ont_by_fsp_and_id(
     db, olt_id, fsp: str, ont_id: int
 ) -> tuple[OntUnit | None, OntAssignment | None]:
     """Find ONT by FSP and ONT ID on the OLT."""
-    # First try to find by external_id (ONT ID on OLT)
+    # First try to find by simple external_id (ONT ID on OLT)
     stmt = select(OntUnit).where(
         OntUnit.olt_device_id == olt_id,
         OntUnit.external_id == str(ont_id),
@@ -130,23 +153,21 @@ def get_ont_by_fsp_and_id(
         assignment = db.scalars(stmt).first()
         return ont, assignment
 
-    # Fallback: Find PON port and look for assignment
-    stmt = select(PonPort).where(
-        PonPort.olt_id == olt_id,
-        PonPort.name.in_([fsp, f"pon-{fsp}", f"gpon-{fsp}"]),
+    # Try matching by board/port + extracted ONT ID from SNMP-style external_id
+    stmt = select(OntUnit).where(
+        OntUnit.olt_device_id == olt_id,
+        OntUnit.is_active.is_(True),
     )
-    pon_port = db.scalars(stmt).first()
-    if not pon_port:
-        return None, None
-
-    # Find assignments on this port and match by external_id
-    stmt = select(OntAssignment).where(
-        OntAssignment.pon_port_id == pon_port.id,
-        OntAssignment.active.is_(True),
-    )
-    for assignment in db.scalars(stmt).all():
-        ont = db.get(OntUnit, assignment.ont_unit_id)
-        if ont and ont.external_id == str(ont_id):
+    for ont in db.scalars(stmt).all():
+        ont_fsp = _normalize_board_port(ont.board, ont.port)
+        extracted_id = _extract_ont_id_from_external(ont.external_id)
+        if ont_fsp == fsp and extracted_id == str(ont_id):
+            # Found match by FSP + ONT ID
+            stmt = select(OntAssignment).where(
+                OntAssignment.ont_unit_id == ont.id,
+                OntAssignment.active.is_(True),
+            )
+            assignment = db.scalars(stmt).first()
             return ont, assignment
 
     return None, None
