@@ -160,21 +160,37 @@ def create_single_service_port(
     *,
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
-) -> tuple[bool, str]:
-    """Create a single service-port on an OLT."""
+    port_index: int | None = None,
+) -> tuple[bool, str, int | None]:
+    """Create a single service-port on an OLT.
+
+    Args:
+        olt: OLT device to connect to.
+        fsp: Frame/Slot/Port string.
+        ont_id: ONT ID on the PON port.
+        gem_index: GEM port index.
+        vlan_id: Service VLAN ID.
+        user_vlan: User VLAN (default: same as vlan_id).
+        tag_transform: VLAN tag transform mode.
+        port_index: Pre-allocated service-port index. If None, OLT auto-assigns.
+
+    Returns:
+        (success, message, assigned_index). assigned_index is the port_index used,
+        or None if not available.
+    """
     from app.services.network import olt_ssh as core
 
     ok, err = core._validate_fsp(fsp)
     if not ok:
-        return False, err
+        return False, err, None
 
     try:
         transport, channel, _policy = core._open_shell(olt)
     except (core.SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
+        return False, f"Connection failed: {exc}", None
     except Exception as exc:
         logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
+        return False, f"Unexpected error: {type(exc).__name__}", None
 
     try:
         channel.send("enable\n")
@@ -189,6 +205,7 @@ def create_single_service_port(
             vlan_id=vlan_id,
             user_vlan=user_vlan,
             tag_transform=tag_transform,
+            port_index=port_index,
         )
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
@@ -199,19 +216,20 @@ def create_single_service_port(
                 olt.name,
                 output.strip()[-150:],
             )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
+            return False, f"OLT rejected: {output.strip()[-150:]}", None
 
         logger.info(
-            "Created service-port VLAN %d GEM %d for ONT %d on OLT %s %s",
+            "Created service-port %s VLAN %d GEM %d for ONT %d on OLT %s %s",
+            port_index or "auto",
             vlan_id,
             gem_index,
             ont_id,
             olt.name,
             fsp,
         )
-        return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})"
+        return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})", port_index
     except Exception as exc:
         logger.error("Error creating service-port on OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}"
+        return False, f"Error: {exc}", None
     finally:
         transport.close()

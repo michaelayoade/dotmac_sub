@@ -221,7 +221,7 @@ def _execute_service_port(
     """Execute a queued service-port creation operation."""
     from app.services.network.olt_ssh_service_ports import create_single_service_port
 
-    ok, msg = create_single_service_port(
+    ok, msg, _port_index = create_single_service_port(
         olt=olt,
         fsp=payload["fsp"],
         ont_id=payload["ont_id"],

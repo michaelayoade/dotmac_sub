@@ -344,6 +344,41 @@ def get_allocations_for_ont(
     return list(db.scalars(stmt).all())
 
 
+def find_allocation_by_index(
+    db: Session,
+    olt_id: UUID | str,
+    port_index: int,
+) -> ServicePortAllocation | None:
+    """Find an active allocation by OLT and port index.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        port_index: Service-port index
+
+    Returns:
+        The allocation if found, None otherwise
+    """
+    olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
+
+    # Find pool for this OLT
+    pool_stmt = select(OltServicePortPool).where(
+        OltServicePortPool.olt_device_id == olt_uuid,
+        OltServicePortPool.is_active.is_(True),
+    )
+    pool = db.scalars(pool_stmt).first()
+    if not pool:
+        return None
+
+    # Find allocation in this pool
+    stmt = select(ServicePortAllocation).where(
+        ServicePortAllocation.pool_id == pool.id,
+        ServicePortAllocation.port_index == port_index,
+        ServicePortAllocation.is_active.is_(True),
+    )
+    return db.scalars(stmt).first()
+
+
 def mark_provisioned(db: Session, allocation_id: UUID | str) -> bool:
     """Mark an allocation as provisioned (written to OLT).
 

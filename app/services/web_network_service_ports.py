@@ -21,6 +21,13 @@ from app.services.network.olt_ssh_service_ports import (
     get_service_ports_for_ont,
 )
 from app.services.network.ont_olt_context import resolve_ont_olt_write_context
+from app.services.network.service_port_allocator import (
+    AllocationError,
+    allocate_service_port,
+    find_allocation_by_index,
+    mark_provisioned,
+    release_service_port,
+)
 from app.services.network.vlan_chain import validate_chain
 
 logger = logging.getLogger(__name__)
@@ -203,6 +210,9 @@ def handle_create(
 ) -> tuple[bool, str]:
     """Create a single service-port on the OLT for this ONT.
 
+    Uses the DB-based service port allocator to pre-allocate an index,
+    then creates the service-port on the OLT with that index.
+
     Args:
         db: Database session.
         ont_id: OntUnit ID.
@@ -220,7 +230,30 @@ def handle_create(
     if tag_transform not in allowed_transforms:
         return False, "Invalid tag-transform value"
 
-    return create_single_service_port(
+    # Pre-allocate service-port index from DB
+    allocation = None
+    try:
+        allocation = allocate_service_port(
+            db,
+            olt.id,
+            ont_id,
+            vlan_id=vlan_id,
+            gem_index=gem_index,
+            service_type="internet" if vlan_id in (203,) else "management",
+        )
+        port_index = allocation.port_index
+        logger.info(
+            "Pre-allocated service-port index %d for ONT %s VLAN %d",
+            port_index,
+            ont_id,
+            vlan_id,
+        )
+    except AllocationError as exc:
+        logger.error("Failed to allocate service-port index: %s", exc)
+        return False, f"Allocation failed: {exc}"
+
+    # Create on OLT with pre-allocated index
+    ok, msg, _assigned_idx = create_single_service_port(
         olt,
         fsp,
         olt_ont_id,
@@ -228,7 +261,19 @@ def handle_create(
         vlan_id,
         user_vlan=user_vlan,
         tag_transform=tag_transform,
+        port_index=port_index,
     )
+
+    if ok:
+        # Mark allocation as provisioned
+        mark_provisioned(db, allocation.id)
+        db.commit()
+        return True, f"Service-port {port_index} created (VLAN {vlan_id}, GEM {gem_index})"
+    else:
+        # OLT creation failed - release the allocation
+        release_service_port(db, allocation.id)
+        db.commit()
+        return False, msg
 
 
 def handle_delete(
@@ -237,6 +282,8 @@ def handle_delete(
     index: int,
 ) -> tuple[bool, str]:
     """Delete a service-port from the OLT by index.
+
+    Also releases the corresponding DB allocation if one exists.
 
     Args:
         db: Database session.
@@ -250,7 +297,22 @@ def handle_delete(
     if not olt:
         return False, "Cannot resolve OLT for this ONT"
 
-    return delete_service_port(olt, index)
+    # Delete from OLT
+    ok, msg = delete_service_port(olt, index)
+
+    if ok:
+        # Release DB allocation if exists
+        allocation = find_allocation_by_index(db, str(olt.id), index)
+        if allocation:
+            release_service_port(db, str(allocation.id))
+            db.commit()
+            logger.info(
+                "Released service-port allocation %d for ONT %s",
+                index,
+                ont_id,
+            )
+
+    return ok, msg
 
 
 def handle_clone(

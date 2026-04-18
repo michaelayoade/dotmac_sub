@@ -101,7 +101,7 @@ def create_service_port(
     )
 
     olt = load_olt(db, olt_id)
-    ok, message = create_single_service_port(
+    ok, message, _port_index = create_single_service_port(
         olt,
         fsp,
         ont_id,

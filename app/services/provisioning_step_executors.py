@@ -91,7 +91,7 @@ def execute_create_olt_service_port(
                 detail="Could not resolve ONT/OLT context for service-port creation.",
             )
 
-        success, message = create_single_service_port(
+        success, message, _port_index = create_single_service_port(
             olt=olt,
             fsp=fsp,
             ont_id=olt_ont_id,

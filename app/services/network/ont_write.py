@@ -319,7 +319,7 @@ class OntWriteService:
                 get_service_ports_for_ont,
             )
 
-            success, message = create_single_service_port(
+            success, message, _port_index = create_single_service_port(
                 ctx.olt,
                 ctx.fsp,
                 ctx.ont_id_on_olt,
