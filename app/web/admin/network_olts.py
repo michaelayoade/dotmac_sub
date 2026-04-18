@@ -42,22 +42,6 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _htmx_toast_response(success: bool, title: str, message: str) -> Response:
-    """Return an HTMX response that triggers a toast notification."""
-    trigger = {
-        "showToast": {
-            "type": "success" if success else "error",
-            "title": title,
-            "message": message,
-            "duration": 8000,
-        }
-    }
-    return Response(
-        status_code=200,
-        headers={"HX-Trigger": json.dumps(trigger)},
-    )
-
-
 def _base_context(
     request: Request, db: Session, active_page: str, active_menu: str = "network"
 ) -> dict:
