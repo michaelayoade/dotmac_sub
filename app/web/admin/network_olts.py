@@ -1,12 +1,13 @@
 """Admin network OLT web routes."""
 
+import json
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -39,6 +40,22 @@ from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
+
+
+def _htmx_toast_response(success: bool, title: str, message: str) -> Response:
+    """Return an HTMX response that triggers a toast notification."""
+    trigger = {
+        "showToast": {
+            "type": "success" if success else "error",
+            "title": title,
+            "message": message,
+            "duration": 8000,
+        }
+    }
+    return Response(
+        status_code=200,
+        headers={"HX-Trigger": json.dumps(trigger)},
+    )
 
 
 def _base_context(
@@ -746,25 +763,30 @@ def olt_authorize_ont(
     return_to: str = Form(""),
     force_reauthorize: str = Form(""),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Authorize a discovered ONT on the OLT via SSH.
 
     Args:
         force_reauthorize: If "true" or "1", delete any existing registration
             of this serial on the OLT before authorizing on the specified port.
     """
+    is_htmx = request.headers.get("HX-Request") == "true"
+
     if not fsp or not serial_number:
-        msg = quote_plus("Missing port or serial number")
+        msg = "Missing port or serial number"
+        if is_htmx:
+            return _htmx_toast_response(False, "Authorization Failed", msg)
+        msg_encoded = quote_plus(msg)
         if return_to in (
             "/admin/network/unconfigured-onts",
             "/admin/network/onts?view=unconfigured",
         ):
             return RedirectResponse(
-                f"/admin/network/onts?view=unconfigured&status=error&message={msg}",
+                f"/admin/network/onts?view=unconfigured&status=error&message={msg_encoded}",
                 status_code=303,
             )
         return RedirectResponse(
-            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
+            f"/admin/network/olts/{olt_id}?tab=autofind&sync_status=error&sync_message={msg_encoded}",
             status_code=303,
         )
 
@@ -804,6 +826,11 @@ def olt_authorize_ont(
     status = "success" if auth_result.success else "error"
     message = auth_result.message
 
+    # For HTMX requests, return toast trigger instead of redirect
+    if is_htmx:
+        title = "Authorization Queued" if auth_result.success else "Authorization Failed"
+        return _htmx_toast_response(auth_result.success, title, message)
+
     if return_to in (
         "/admin/network/unconfigured-onts",
         "/admin/network/onts?view=unconfigured",
@@ -814,7 +841,7 @@ def olt_authorize_ont(
         )
 
     return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        f"/admin/network/olts/{olt_id}?tab=autofind&sync_status={status}&sync_message={quote_plus(message)}",
         status_code=303,
     )
 
