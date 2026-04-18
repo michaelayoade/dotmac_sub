@@ -29,6 +29,28 @@ _SLOW_SEND_CHAR_DELAY = 0.1
 # Regex patterns for validation
 _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
+# Common PON port name prefixes to strip (case-insensitive)
+_FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNORECASE)
+
+
+def normalize_fsp(fsp: str) -> str:
+    """Normalize FSP by stripping common port name prefixes.
+
+    Converts formats like:
+        - "pon-0/2/3" -> "0/2/3"
+        - "gpon-0/1/0" -> "0/1/0"
+        - "xgpon-0/4/1" -> "0/4/1"
+        - "0/2/3" -> "0/2/3" (unchanged)
+
+    Args:
+        fsp: Frame/Slot/Port string, possibly with prefix
+
+    Returns:
+        Normalized FSP without prefix
+    """
+    if not fsp:
+        return fsp
+    return _FSP_PREFIX_RE.sub("", fsp.strip())
 
 
 @dataclass
@@ -91,7 +113,9 @@ class ServicePortDiagnostics:
     warnings: list[str]
 
 
-def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY) -> None:
+def _send_slow(
+    channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY
+) -> None:
     """Send command with delays to avoid terminal corruption.
 
     Some OLT terminals (particularly certain Huawei MA5608T units) have terminal
@@ -104,21 +128,30 @@ def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY)
         char_delay: Delay in seconds between each word.
     """
     # Split by spaces and send each part with space, adding delay after spaces
-    parts = command.split(' ')
+    parts = command.split(" ")
     for i, part in enumerate(parts):
         channel.send(part)
         if i < len(parts) - 1:
             # Send space and wait for terminal to process
-            channel.send(' ')
+            channel.send(" ")
             time.sleep(char_delay)
     # Small delay before newline
     time.sleep(char_delay)
     channel.send("\n")
 
 
-def _validate_fsp(fsp: str) -> tuple[bool, str]:
-    """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1')."""
-    if not _FSP_RE.match(fsp):
+def _validate_fsp(fsp: str, *, allow_normalize: bool = True) -> tuple[bool, str]:
+    """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1').
+
+    Args:
+        fsp: Frame/Slot/Port string to validate
+        allow_normalize: If True, strip common prefixes before validation
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    check_fsp = normalize_fsp(fsp) if allow_normalize else fsp
+    if not _FSP_RE.match(check_fsp):
         return False, f"Invalid F/S/P format: {fsp!r} (expected digits/digits/digits)"
     return True, ""
 

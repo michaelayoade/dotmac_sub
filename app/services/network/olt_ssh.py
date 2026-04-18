@@ -178,11 +178,20 @@ def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
 
 _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
+_FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNORECASE)
+
+
+def _normalize_fsp(fsp: str) -> str:
+    """Normalize FSP by stripping common port name prefixes like 'pon-'."""
+    if not fsp:
+        return fsp
+    return _FSP_PREFIX_RE.sub("", fsp.strip())
 
 
 def _validate_fsp(fsp: str) -> tuple[bool, str]:
     """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1')."""
-    if not _FSP_RE.match(fsp):
+    check_fsp = _normalize_fsp(fsp)
+    if not _FSP_RE.match(check_fsp):
         return False, f"Invalid F/S/P format: {fsp!r} (expected digits/digits/digits)"
     return True, ""
 
@@ -876,7 +885,9 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
 
         if is_error_output(output):
             logger.warning(
-                "Firmware rollback failed on OLT %s: %s", olt.name, output.strip()[-200:]
+                "Firmware rollback failed on OLT %s: %s",
+                olt.name,
+                output.strip()[-200:],
             )
             return False, f"Rollback command failed: {output.strip()[-200:]}"
 
@@ -1009,14 +1020,20 @@ def _validate_readonly_command(command: str) -> tuple[bool, str]:
     # Check for dangerous commands first
     for prefix in _DANGEROUS_COMMAND_PREFIXES:
         if normalized.startswith(prefix):
-            return False, f"Command '{prefix}' is not allowed — only read-only commands permitted"
+            return (
+                False,
+                f"Command '{prefix}' is not allowed — only read-only commands permitted",
+            )
 
     # Check for allowed read-only prefixes
     for prefix in _READONLY_COMMAND_PREFIXES:
         if normalized.startswith(prefix):
             return True, ""
 
-    return False, f"Command not recognized as read-only — must start with: {', '.join(_READONLY_COMMAND_PREFIXES)}"
+    return (
+        False,
+        f"Command not recognized as read-only — must start with: {', '.join(_READONLY_COMMAND_PREFIXES)}",
+    )
 
 
 def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:

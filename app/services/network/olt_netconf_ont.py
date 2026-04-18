@@ -373,7 +373,10 @@ def _handle_rpc_error(exc: RPCError, context: str) -> tuple[bool, str]:
             return False, message
 
     # Check for common error patterns in message
-    if "already exists" in error_message.lower() or "sn already" in error_message.lower():
+    if (
+        "already exists" in error_message.lower()
+        or "sn already" in error_message.lower()
+    ):
         return False, f"ONT serial number {context} already registered on this OLT"
 
     # Generic error
@@ -389,11 +392,20 @@ def _handle_rpc_error(exc: RPCError, context: str) -> tuple[bool, str]:
 
 _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
+_FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNORECASE)
+
+
+def _normalize_fsp(fsp: str) -> str:
+    """Normalize FSP by stripping common port name prefixes like 'pon-'."""
+    if not fsp:
+        return fsp
+    return _FSP_PREFIX_RE.sub("", fsp.strip())
 
 
 def _validate_fsp(fsp: str) -> tuple[bool, str]:
     """Validate Frame/Slot/Port format."""
-    if not _FSP_RE.match(fsp):
+    check_fsp = _normalize_fsp(fsp)
+    if not _FSP_RE.match(check_fsp):
         return False, f"Invalid F/S/P format: {fsp!r} (expected digits/digits/digits)"
     return True, ""
 
@@ -489,14 +501,20 @@ def configure_ont_iphost(
             return False, f"NETCONF edit-config failed: {message}"
     except RPCError as exc:
         error_message = str(exc)
-        if "already exists" in error_message.lower() or "repeatedly" in error_message.lower():
+        if (
+            "already exists" in error_message.lower()
+            or "repeatedly" in error_message.lower()
+        ):
             logger.info(
                 "IPHOST config already exists for ONT %d on OLT %s (VLAN %d)",
                 ont_id,
                 olt.name,
                 vlan_id,
             )
-            return True, f"Management IP already configured ({ip_mode} on VLAN {vlan_id})"
+            return (
+                True,
+                f"Management IP already configured ({ip_mode} on VLAN {vlan_id})",
+            )
         logger.warning(
             "NETCONF RPC error during IPHOST config: %s",
             error_message,
@@ -541,7 +559,9 @@ def _build_iphost_xml(
     slot_id = parts[1]
     port_id = parts[2]
 
-    priority_element = f"<priority>{priority}</priority>" if priority is not None else ""
+    priority_element = (
+        f"<priority>{priority}</priority>" if priority is not None else ""
+    )
 
     if ip_mode == "dhcp":
         ip_config = "<config-type>dhcp</config-type>"
