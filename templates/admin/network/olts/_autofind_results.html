@@ -99,124 +99,81 @@
 </div>
 
 <script>
+/**
+ * Autofind Operations - Uses global OperationTracker for WebSocket updates
+ */
 function autofindOperations() {
     return {
-        operations: {},  // serial_number -> { status, operation_id, message }
-        ws: null,
-        subscriptions: new Set(),
+        // Track operations by serial number: { status, operation_id, view_url }
+        operations: {},
 
         init() {
-            // Connect to WebSocket
-            this.connectWebSocket();
+            // Listen for operation status updates from the global tracker
+            window.addEventListener('operation-status', (e) => this.handleOperationStatus(e.detail));
         },
 
-        connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws/inbox`;
-
-            try {
-                this.ws = new WebSocket(wsUrl);
-                this.ws.onopen = () => {
-                    console.log('[autofind] WebSocket connected');
-                    // Re-subscribe to any pending operations
-                    this.subscriptions.forEach(opId => this.subscribeToOperation(opId));
-                };
-                this.ws.onmessage = (event) => this.handleWebSocketMessage(event);
-                this.ws.onclose = () => {
-                    console.log('[autofind] WebSocket closed, reconnecting in 3s...');
-                    setTimeout(() => this.connectWebSocket(), 3000);
-                };
-                this.ws.onerror = (err) => console.error('[autofind] WebSocket error:', err);
-            } catch (e) {
-                console.error('[autofind] WebSocket connection failed:', e);
-            }
-        },
-
-        subscribeToOperation(operationId) {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({
-                    type: 'subscribe',
-                    conversation_id: operationId
-                }));
-                console.log('[autofind] Subscribed to operation:', operationId);
-            }
-            this.subscriptions.add(operationId);
-        },
-
+        /**
+         * Handle operation queued event from HTMX response
+         */
         handleOperationQueued(detail) {
             if (!detail || !detail.operation_id || !detail.serial_number) return;
 
-            console.log('[autofind] Operation queued:', detail);
+            const { operation_id, serial_number } = detail;
 
-            // Track the operation
-            this.operations[detail.serial_number] = {
+            // Track the operation locally
+            this.operations[serial_number] = {
                 status: 'running',
-                operation_id: detail.operation_id,
-                message: 'Authorization queued...'
+                operation_id: operation_id,
+                view_url: null
             };
 
-            // Subscribe to WebSocket updates
-            this.subscribeToOperation(detail.operation_id);
+            // Use global tracker for WebSocket subscription
+            if (window.operationTracker) {
+                window.operationTracker.track(operation_id, {
+                    showToasts: true,
+                    onSuccess: (data) => this.updateOperation(serial_number, 'succeeded', data),
+                    onWarning: (data) => this.updateOperation(serial_number, 'succeeded', data),
+                    onError: (data) => this.updateOperation(serial_number, 'failed', data)
+                });
+            }
         },
 
-        handleWebSocketMessage(event) {
-            try {
-                const data = JSON.parse(event.data);
-                console.log('[autofind] WebSocket message:', data);
+        /**
+         * Handle operation status event from global tracker
+         */
+        handleOperationStatus(detail) {
+            if (!detail || !detail.operation_id) return;
 
-                // Handle operation status updates
-                if (data.event === 'operation_status' && data.data) {
-                    const { operation_id, status, message, serial_number } = data.data;
-
-                    // Find the operation by ID or serial_number
-                    let targetSerial = serial_number;
-                    if (!targetSerial) {
-                        for (const [sn, op] of Object.entries(this.operations)) {
-                            if (op.operation_id === operation_id) {
-                                targetSerial = sn;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (targetSerial && this.operations[targetSerial]) {
-                        this.operations[targetSerial].status = status;
-                        this.operations[targetSerial].message = message;
-                        // Store view URL if provided
-                        if (data.data.view_url) {
-                            this.operations[targetSerial].view_url = data.data.view_url;
-                        }
-
-                        // Show toast notification on completion
-                        if (status === 'succeeded' || status === 'failed') {
-                            const viewUrl = data.data.view_url;
-                            // For success, include a link to view the ONT
-                            const toastMessage = status === 'succeeded' && viewUrl
-                                ? `${message} <a href="${viewUrl}" class="underline font-medium ml-1">View ONT →</a>`
-                                : message;
-
-                            window.dispatchEvent(new CustomEvent('showToast', {
-                                detail: {
-                                    message: toastMessage,
-                                    type: status === 'succeeded' ? 'success' : 'error',
-                                    html: status === 'succeeded' && viewUrl
-                                }
-                            }));
-
-                            // Unsubscribe from completed operation
-                            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                                this.ws.send(JSON.stringify({
-                                    type: 'unsubscribe',
-                                    conversation_id: operation_id
-                                }));
-                            }
-                            this.subscriptions.delete(operation_id);
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error('[autofind] Failed to parse WebSocket message:', e);
+            // Find matching operation by ID
+            const serial = detail.serial_number || this.findSerialByOperationId(detail.operation_id);
+            if (serial && this.operations[serial]) {
+                this.updateOperation(serial, detail.status, detail);
             }
+        },
+
+        /**
+         * Update local operation state
+         */
+        updateOperation(serial, status, data) {
+            if (!this.operations[serial]) {
+                this.operations[serial] = {};
+            }
+            this.operations[serial].status = status;
+            if (data && data.view_url) {
+                this.operations[serial].view_url = data.view_url;
+            }
+        },
+
+        /**
+         * Find serial number by operation ID
+         */
+        findSerialByOperationId(operationId) {
+            for (const [serial, op] of Object.entries(this.operations)) {
+                if (op.operation_id === operationId) {
+                    return serial;
+                }
+            }
+            return null;
         },
 
         getRowStatus(serialNumber) {
@@ -227,12 +184,6 @@ function autofindOperations() {
         getRowViewUrl(serialNumber) {
             const op = this.operations[serialNumber];
             return op ? op.view_url : null;
-        },
-
-        destroy() {
-            if (this.ws) {
-                this.ws.close();
-            }
         }
     };
 }

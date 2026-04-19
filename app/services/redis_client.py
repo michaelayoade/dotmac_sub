@@ -5,6 +5,7 @@ Provides a resilient Redis connection layer that:
 - Implements circuit breaker to prevent retry storms
 - Provides health check capabilities
 - Gracefully degrades when Redis is unavailable
+- Falls back to in-memory cache when Redis is down
 
 Usage:
     from app.services.redis_client import get_redis, redis_health_check
@@ -18,6 +19,11 @@ Usage:
     status = redis_health_check()
     if status["available"]:
         print(f"Redis {status['version']} is up")
+
+    # Safe operations with automatic fallback to in-memory cache
+    from app.services.redis_client import safe_get, safe_set
+    value = safe_get("key", default="fallback")  # Uses memory cache if Redis down
+    safe_set("key", "value", ttl=60)  # Writes to both Redis and memory cache
 """
 
 from __future__ import annotations
@@ -26,7 +32,8 @@ import logging
 import os
 import threading
 import time
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +49,111 @@ logger = logging.getLogger(__name__)
 _CIRCUIT_OPEN_DURATION = 30  # seconds to wait before retrying after failure
 _MAX_FAILURES_BEFORE_OPEN = 3  # failures before circuit opens
 _HEALTH_CHECK_INTERVAL = 5  # minimum seconds between health checks
+
+# In-memory fallback cache configuration
+_FALLBACK_CACHE_MAX_SIZE = 1000  # Maximum entries in fallback cache
+_FALLBACK_CACHE_DEFAULT_TTL = 300  # Default TTL for fallback cache entries (5 min)
+
+
+@dataclass
+class CacheEntry:
+    """An entry in the fallback cache with expiration."""
+
+    value: Any
+    expires_at: float  # monotonic timestamp
+
+    def is_expired(self) -> bool:
+        return time.monotonic() > self.expires_at
+
+
+class FallbackCache:
+    """Thread-safe in-memory LRU cache with TTL for Redis fallback.
+
+    Used when Redis is unavailable to provide degraded but functional caching.
+    """
+
+    def __init__(self, max_size: int = _FALLBACK_CACHE_MAX_SIZE) -> None:
+        self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, key: str) -> tuple[Any, bool]:
+        """Get a value from the cache.
+
+        Returns:
+            Tuple of (value, found). If found is False, value is None.
+        """
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                self._misses += 1
+                return None, False
+            if entry.is_expired():
+                del self._cache[key]
+                self._misses += 1
+                return None, False
+            # Move to end (most recently used)
+            self._cache.move_to_end(key)
+            self._hits += 1
+            return entry.value, True
+
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
+        """Set a value in the cache with optional TTL."""
+        ttl = ttl or _FALLBACK_CACHE_DEFAULT_TTL
+        expires_at = time.monotonic() + ttl
+        with self._lock:
+            # Remove if exists to update position
+            if key in self._cache:
+                del self._cache[key]
+            # Evict oldest entries if at capacity
+            while len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+            self._cache[key] = CacheEntry(value=value, expires_at=expires_at)
+
+    def delete(self, key: str) -> bool:
+        """Delete a key from the cache."""
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+                return True
+            return False
+
+    def clear(self) -> None:
+        """Clear all entries from the cache."""
+        with self._lock:
+            self._cache.clear()
+            self._hits = 0
+            self._misses = 0
+
+    def cleanup_expired(self) -> int:
+        """Remove expired entries. Returns count of removed entries."""
+        removed = 0
+        with self._lock:
+            expired_keys = [
+                k for k, v in self._cache.items() if v.is_expired()
+            ]
+            for key in expired_keys:
+                del self._cache[key]
+                removed += 1
+        return removed
+
+    def stats(self) -> dict[str, Any]:
+        """Get cache statistics."""
+        with self._lock:
+            total = self._hits + self._misses
+            return {
+                "size": len(self._cache),
+                "max_size": self._max_size,
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate": round(self._hits / total * 100, 2) if total > 0 else 0.0,
+            }
+
+
+# Global fallback cache instance
+_fallback_cache = FallbackCache()
 
 
 @dataclass
@@ -228,7 +340,7 @@ def redis_health_check(force: bool = False) -> dict[str, Any]:
 
 
 def get_circuit_state() -> dict[str, Any]:
-    """Get the current circuit breaker state."""
+    """Get the current circuit breaker state including fallback cache stats."""
     return {
         "circuit_open": _circuit_state.circuit_open,
         "failure_count": _circuit_state.failures,
@@ -251,35 +363,71 @@ def get_circuit_state() -> dict[str, Any]:
             if _circuit_state.circuit_open
             else 0
         ),
+        "fallback_cache": _fallback_cache.stats(),
     }
 
 
 # Convenience functions for common operations with graceful degradation
 
 
-def safe_get(key: str, default: Any = None) -> Any:
+def safe_get(key: str, default: Any = None, *, use_fallback: bool = True) -> Any:
     """Get a value from Redis with graceful degradation.
 
-    Returns default if Redis is unavailable.
+    Args:
+        key: The key to retrieve.
+        default: Value to return if key not found.
+        use_fallback: If True, use in-memory fallback cache when Redis unavailable.
+
+    Returns:
+        The value from Redis, fallback cache, or default.
     """
     client = get_redis()
     if client is None:
+        if use_fallback:
+            value, found = _fallback_cache.get(key)
+            if found:
+                logger.debug("Fallback cache HIT for %s (Redis unavailable)", key)
+                return value
         return default
     try:
         value = client.get(key)
-        return value if value is not None else default
+        if value is not None:
+            # Update fallback cache with fresh data from Redis
+            if use_fallback:
+                _fallback_cache.set(key, value)
+            return value
+        return default
     except RedisError as exc:
         logger.debug("Redis GET failed for %s: %s", key, exc)
+        if use_fallback:
+            value, found = _fallback_cache.get(key)
+            if found:
+                logger.debug("Fallback cache HIT for %s (Redis error)", key)
+                return value
         return default
 
 
-def safe_set(key: str, value: str, ttl: int | None = None) -> bool:
+def safe_set(
+    key: str, value: str, ttl: int | None = None, *, use_fallback: bool = True
+) -> bool:
     """Set a value in Redis with graceful degradation.
 
-    Returns False if Redis is unavailable.
+    Args:
+        key: The key to set.
+        value: The value to store.
+        ttl: Time-to-live in seconds.
+        use_fallback: If True, also write to in-memory fallback cache.
+
+    Returns:
+        True if written to Redis, False if only fallback or failed.
     """
+    # Always update fallback cache for resilience
+    if use_fallback:
+        _fallback_cache.set(key, value, ttl)
+
     client = get_redis()
     if client is None:
+        logger.debug("Redis unavailable, wrote %s to fallback cache only", key)
         return False
     try:
         if ttl:
@@ -288,15 +436,24 @@ def safe_set(key: str, value: str, ttl: int | None = None) -> bool:
             client.set(key, value)
         return True
     except RedisError as exc:
-        logger.debug("Redis SET failed for %s: %s", key, exc)
+        logger.debug("Redis SET failed for %s: %s (fallback cache updated)", key, exc)
         return False
 
 
-def safe_delete(key: str) -> bool:
+def safe_delete(key: str, *, use_fallback: bool = True) -> bool:
     """Delete a key from Redis with graceful degradation.
 
-    Returns False if Redis is unavailable.
+    Args:
+        key: The key to delete.
+        use_fallback: If True, also delete from in-memory fallback cache.
+
+    Returns:
+        True if deleted from Redis, False otherwise.
     """
+    # Always remove from fallback cache
+    if use_fallback:
+        _fallback_cache.delete(key)
+
     client = get_redis()
     if client is None:
         return False
@@ -306,3 +463,14 @@ def safe_delete(key: str) -> bool:
     except RedisError as exc:
         logger.debug("Redis DELETE failed for %s: %s", key, exc)
         return False
+
+
+def get_fallback_cache_stats() -> dict[str, Any]:
+    """Get statistics about the fallback cache."""
+    return _fallback_cache.stats()
+
+
+def clear_fallback_cache() -> None:
+    """Clear the fallback cache (for testing or manual recovery)."""
+    _fallback_cache.clear()
+    logger.info("Fallback cache cleared")
