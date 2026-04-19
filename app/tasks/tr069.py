@@ -230,6 +230,47 @@ def wait_for_ont_bootstrap(
         db.close()
 
 
+@celery_app.task(name="app.tasks.tr069.apply_acs_config")
+def apply_acs_config(
+    action: str,
+    ont_id: str,
+    args: list[object] | None = None,
+    kwargs: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Execute a queued ACS configuration action through the ACS adapter."""
+    from app.services.acs_config_adapter import acs_config_adapter
+
+    if action not in acs_config_adapter._QUEUEABLE_ACTIONS:
+        raise ValueError(f"Unsupported ACS configuration action: {action}")
+
+    method = getattr(acs_config_adapter, action, None)
+    if method is None:
+        raise ValueError(f"ACS configuration action is not implemented: {action}")
+
+    db = SessionLocal()
+    try:
+        result = method(db, ont_id, *(args or []), **dict(kwargs or {}))
+        db.commit()
+        return {
+            "action": action,
+            "ont_id": ont_id,
+            "success": result.success,
+            "message": result.message,
+            "waiting": result.waiting,
+            "data": result.data or {},
+        }
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Queued ACS configuration failed: action=%s ont_id=%s",
+            action,
+            ont_id,
+        )
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.tr069.execute_pending_jobs")
 def execute_pending_jobs() -> dict[str, int]:
     """Execute queued TR-069 jobs and retry failed jobs with backoff.

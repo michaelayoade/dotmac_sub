@@ -79,6 +79,9 @@ from app.tasks.splynx_sync import (
     run_incremental_sync,
 )
 from app.tasks.tr069 import (
+    apply_acs_config as tr069_apply_acs_config,
+)
+from app.tasks.tr069 import (
     check_device_health as tr069_check_device_health,
 )
 from app.tasks.tr069 import (
@@ -172,6 +175,7 @@ __all__ = [
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
     "tr069_execute_bulk_action",
+    "tr069_apply_acs_config",
     "tr069_check_device_health",
     "tr069_refresh_ont_runtime",
     "cleanup_tr069_records",

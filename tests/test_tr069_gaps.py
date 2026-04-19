@@ -714,6 +714,11 @@ class TestCeleryTaskRegistration:
 
         assert execute_pending_jobs.name == "app.tasks.tr069.execute_pending_jobs"
 
+    def test_apply_acs_config_task_importable(self) -> None:
+        from app.tasks.tr069 import apply_acs_config
+
+        assert apply_acs_config.name == "app.tasks.tr069.apply_acs_config"
+
     def test_health_check_task_importable(self) -> None:
         from app.tasks.tr069 import check_device_health
 
@@ -729,6 +734,7 @@ class TestCeleryTaskRegistration:
 
         assert "tr069_sync_all_acs_devices" in all_tasks
         assert "tr069_execute_pending_jobs" in all_tasks
+        assert "tr069_apply_acs_config" in all_tasks
         assert "tr069_check_device_health" in all_tasks
         assert "cleanup_tr069_records" in all_tasks
 
