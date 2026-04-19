@@ -137,10 +137,12 @@ _WIFI_PSK_PATHS = {
         "WiFi.AccessPoint.1.Security.KeyPassphrase",
         "WiFi.AccessPoint.1.Security.PreSharedKey.1.PreSharedKey",
     ],
+    # For InternetGatewayDevice (TR-098), try PreSharedKey.1.PreSharedKey first
+    # as Huawei devices reject KeyPassphrase with fault 9007 "Invalid parameter value"
     "InternetGatewayDevice": [
-        "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
-        "LANDevice.1.WLANConfiguration.1.KeyPassphrase",
         "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey",
+        "LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+        "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
     ],
 }
 
@@ -171,6 +173,8 @@ def _set_first_supported_path(
     root: str,
     candidate_paths: list[str],
     value: str,
+    *,
+    allow_empty_readback: bool = False,
 ) -> dict[str, object]:
     """Try a list of candidate parameter paths until one is verified applied.
 
@@ -179,6 +183,10 @@ def _set_first_supported_path(
     live read shows the device did not apply the value), try the next
     candidate. If none verify, re-raise the last error so the caller surfaces
     an actionable failure instead of a misleading success.
+
+    When ``allow_empty_readback`` is True (for password fields), if verification
+    fails because readback returned empty (devices mask passwords), fall back to
+    an unverified write and consider it successful.
     """
     last_error: Exception | None = None
     for candidate in candidate_paths:
@@ -187,6 +195,32 @@ def _set_first_supported_path(
         try:
             result = set_and_verify(client, device_id, params)
         except GenieACSError as exc:
+            error_str = str(exc)
+            # Check if the error is due to empty readback (password masking)
+            if allow_empty_readback and "got=''" in error_str:
+                # Password fields often return empty on readback for security.
+                # Try an unverified write instead.
+                logger.info(
+                    "TR-069 path %s returned empty on readback (password masking); "
+                    "attempting unverified write on %s",
+                    full_path,
+                    device_id,
+                )
+                try:
+                    result = client.set_parameter_values(
+                        device_id, params, connection_request=True
+                    )
+                    _request_runtime_refresh(client, device_id, root)
+                    return result
+                except GenieACSError as inner_exc:
+                    last_error = inner_exc
+                    logger.debug(
+                        "Unverified write to %s failed on %s: %s",
+                        full_path,
+                        device_id,
+                        inner_exc,
+                    )
+                    continue
             last_error = exc
             logger.debug(
                 "TR-069 path %s rejected or not applied on device %s: %s",
@@ -319,6 +353,7 @@ def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
             root,
             _WIFI_PSK_PATHS[root],
             password,
+            allow_empty_readback=True,  # Password fields often return empty on readback
         )
         logger.info("WiFi password set on ONT %s", ont.serial_number)
         return ActionResult(
@@ -432,6 +467,7 @@ def set_wifi_config(
                 root,
                 _WIFI_PSK_PATHS[root],
                 password,
+                allow_empty_readback=True,  # Password fields often return empty on readback
             )
             changed.append("password")
         logger.info("WiFi config set on ONT %s: %s", ont.serial_number, changed)
