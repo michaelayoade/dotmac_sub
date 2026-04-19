@@ -70,6 +70,25 @@ from app.services.network.ont_provisioning.vlan_validator import (
     validate_vlan_exists,
 )
 
+# Saga pattern exports
+from app.services.network.ont_provisioning.saga import (
+    ACS_CONFIG_SAGA,
+    FULL_PROVISIONING_SAGA,
+    SAGA_REGISTRY,
+    WIFI_SETUP_SAGA,
+    SagaContext,
+    SagaDefinition,
+    SagaExecutionStatus,
+    SagaExecutor,
+    SagaResult,
+    SagaStep,
+    build_internet_provisioning_saga,
+    execute_saga,
+    get_saga_by_name,
+    list_available_sagas,
+    saga_executions,
+)
+
 __all__ = [
     # Context
     "OltContext",
@@ -113,4 +132,20 @@ __all__ = [
     "validate_vlan_exists",
     "validate_management_vlan_trunked",
     "validate_service_port_vlans",
+    # Saga pattern
+    "SagaStep",
+    "SagaDefinition",
+    "SagaContext",
+    "SagaResult",
+    "SagaExecutionStatus",
+    "SagaExecutor",
+    "execute_saga",
+    "saga_executions",
+    "FULL_PROVISIONING_SAGA",
+    "WIFI_SETUP_SAGA",
+    "ACS_CONFIG_SAGA",
+    "SAGA_REGISTRY",
+    "build_internet_provisioning_saga",
+    "get_saga_by_name",
+    "list_available_sagas",
 ]

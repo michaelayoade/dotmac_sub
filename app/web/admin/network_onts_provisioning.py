@@ -713,3 +713,197 @@ def step_deprovision(
     result = steps.deprovision(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
+
+
+# ---------------------------------------------------------------------------
+# Saga-based provisioning
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/onts/{ont_id}/provision-saga",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def provision_with_saga(
+    request: Request,
+    ont_id: str,
+    saga_name: str = Form(default="full_provisioning"),
+    internet_vlan_id: int | None = Form(default=None),
+    mgmt_vlan_id: int | None = Form(default=None),
+    tr069_olt_profile_id: int | None = Form(default=None),
+    profile_id: str | None = Form(default=None),
+    dry_run: bool = Form(default=False),
+    async_execution: bool = Form(default=True),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Execute saga-based provisioning with automatic rollback on failure.
+
+    This endpoint triggers a saga workflow that executes multiple provisioning
+    steps in sequence. If a critical step fails, all completed steps with
+    compensation functions are automatically rolled back.
+
+    Available sagas:
+    - full_provisioning: Complete OLT + ACS provisioning
+    - wifi_setup: WiFi-only configuration
+    - acs_config: PPPoE, WiFi, LAN via TR-069
+
+    Args:
+        saga_name: Name of the saga to execute (default: full_provisioning)
+        internet_vlan_id: VLAN for internet service
+        mgmt_vlan_id: Management VLAN for TR-069
+        tr069_olt_profile_id: OLT TR-069 profile ID
+        profile_id: Provisioning profile ID
+        dry_run: Preview only, don't execute
+        async_execution: Run in background via Celery (default: True)
+    """
+    from app.services.network.action_logging import actor_label
+    from app.services.network.ont_provisioning.saga import (
+        execute_saga,
+        get_saga_by_name,
+    )
+
+    # Look up saga
+    saga = get_saga_by_name(saga_name)
+    if saga is None:
+        return JSONResponse(
+            content={
+                "success": False,
+                "message": f"Unknown saga: {saga_name}",
+                "available_sagas": ["full_provisioning", "wifi_setup", "acs_config"],
+            },
+            status_code=400,
+            headers=_toast_headers(f"Unknown saga: {saga_name}", "error"),
+        )
+
+    # Build step_data from form inputs
+    step_data: dict[str, object] = {}
+    if internet_vlan_id is not None:
+        step_data["internet_vlan_id"] = internet_vlan_id
+    if mgmt_vlan_id is not None:
+        step_data["mgmt_vlan_id"] = mgmt_vlan_id
+    if tr069_olt_profile_id is not None:
+        step_data["tr069_olt_profile_id"] = tr069_olt_profile_id
+    if profile_id is not None:
+        step_data["profile_id"] = profile_id
+
+    initiated_by = actor_label(request)
+
+    if async_execution:
+        # Queue for background execution
+        from app.tasks.saga import queue_saga_execution
+
+        queue_result = queue_saga_execution(
+            saga_name=saga_name,
+            ont_id=ont_id,
+            step_data=step_data,
+            initiated_by=initiated_by,
+        )
+
+        log_network_action_result(
+            request=request,
+            resource_type="ont",
+            resource_id=ont_id,
+            action=f"Queue Saga: {saga_name}",
+            success=queue_result.get("queued", False),
+            message=f"Saga {saga_name} queued for background execution",
+            metadata={"task_id": queue_result.get("task_id")},
+        )
+
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": f"Saga '{saga_name}' queued for execution",
+                "queued": True,
+                "saga_name": saga_name,
+                "task_id": queue_result.get("task_id"),
+                "correlation_key": queue_result.get("correlation_key"),
+            },
+            status_code=202,
+            headers=_toast_headers(
+                f"Provisioning saga '{saga_name}' started", "info"
+            ),
+        )
+
+    # Synchronous execution
+    result = execute_saga(
+        db,
+        saga,
+        ont_id,
+        step_data=step_data,
+        dry_run=dry_run,
+        initiated_by=initiated_by,
+    )
+
+    log_network_action_result(
+        request=request,
+        resource_type="ont",
+        resource_id=ont_id,
+        action=f"Saga: {saga_name}",
+        success=result.success,
+        message=result.message,
+        metadata={
+            "saga_execution_id": result.saga_execution_id,
+            "duration_ms": result.duration_ms,
+            "steps_executed": [s.step_name for s in result.steps_executed],
+            "failed_step": result.failed_step,
+            "compensation_failures": result.steps_needing_manual_cleanup,
+        },
+    )
+
+    toast_type = "success" if result.success else "error"
+    status_code = 200 if result.success else 400
+
+    return JSONResponse(
+        content=result.to_dict(),
+        status_code=status_code,
+        headers=_toast_headers(result.message, toast_type),
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/saga-history",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def get_saga_history(
+    request: Request,
+    ont_id: str,
+    limit: int = Query(default=10, le=50),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Get saga execution history for an ONT."""
+    from app.services.network.ont_provisioning.saga import saga_executions
+
+    executions = saga_executions.list_for_ont(db, ont_id, limit=limit)
+
+    return JSONResponse(
+        content={
+            "ont_id": ont_id,
+            "count": len(executions),
+            "executions": [
+                {
+                    "id": str(e.id),
+                    "saga_name": e.saga_name,
+                    "status": e.status.value,
+                    "started_at": e.started_at.isoformat() if e.started_at else None,
+                    "completed_at": e.completed_at.isoformat()
+                    if e.completed_at
+                    else None,
+                    "duration_ms": e.duration_ms,
+                    "failed_step": e.failed_step,
+                    "initiated_by": e.initiated_by,
+                }
+                for e in executions
+            ],
+        }
+    )
+
+
+@router.get(
+    "/sagas",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def list_sagas(request: Request) -> JSONResponse:
+    """List all available saga definitions."""
+    from app.services.network.ont_provisioning.saga import list_available_sagas
+
+    return JSONResponse(content={"sagas": list_available_sagas()})
