@@ -77,7 +77,7 @@ def run_post_authorization_follow_up_task(
 
 @celery_app.task(name="app.tasks.ont_authorization.run_authorize_autofind_ont")
 @idempotent_task(
-    key_func=lambda operation_id, olt_id, fsp, serial_number, **kw: (
+    key_func=lambda operation_id, olt_id, fsp, serial_number, force_reauthorize=False, **kw: (
         f"{olt_id}:{fsp}:{serial_number}"
     )
 )
