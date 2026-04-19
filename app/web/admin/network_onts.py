@@ -134,16 +134,21 @@ def ont_detail_preview(
 
     allowed_tabs = {
         "overview",
-        "network",
+        "service",
+        "device-config",
+        "diagnostics",
         "history",
-        "tr069",
-        "charts",
-        "service-ports",
-        "configure",
-        "device-status",
     }
-    if tab == "configuration":
-        tab = "configure"
+    tab_aliases = {
+        "network": "service",
+        "service-ports": "service",
+        "configuration": "device-config",
+        "configure": "device-config",
+        "device-status": "device-config",
+        "tr069": "diagnostics",
+        "charts": "diagnostics",
+    }
+    tab = tab_aliases.get(tab, tab)
     active_tab = tab if tab in allowed_tabs else "overview"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
@@ -590,25 +595,6 @@ def ont_unified_config(
 
 
 @router.get(
-    "/onts/{ont_id}/config/service-ports",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_config_service_ports(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: Service ports section for unified config."""
-    data = web_network_service_ports_service.list_context(db, ont_id)
-    context = _base_context(request, db, active_page="onts")
-    context.update(data)
-    return templates.TemplateResponse(
-        "admin/network/onts/_config_service_ports.html", context
-    )
-
-
-@router.get(
     "/onts/{ont_id}/config/wan",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
@@ -674,26 +660,6 @@ def ont_config_lan(
     context = _base_context(request, db, active_page="onts")
     context.update(web_network_ont_actions_service.lan_config_context(db, ont_id))
     return templates.TemplateResponse("admin/network/onts/_config_lan.html", context)
-
-
-@router.get(
-    "/onts/{ont_id}/config/diagnostics",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_config_diagnostics(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: Diagnostics section for unified config."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(
-        web_network_ont_actions_service.diagnostics_config_context(db, ont_id)
-    )
-    return templates.TemplateResponse(
-        "admin/network/onts/_config_diagnostics.html", context
-    )
 
 
 # -- Configure Tab Routes (Database-backed ONT configuration) ------------------

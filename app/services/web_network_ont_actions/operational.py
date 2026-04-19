@@ -230,7 +230,7 @@ def _build_ont_operations_runbook(
                 else f"{missing_count} intent fields are unset."
             ),
             action_label="Edit intent",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
         _runbook_step(
             order=3,
@@ -245,7 +245,7 @@ def _build_ont_operations_runbook(
                 else "Set internet VLAN/service-port intent and confirm OLT placement."
             ),
             action_label="Service ports",
-            action_url=f"/admin/network/onts/{ont_id}?tab=service-ports",
+            action_url=f"/admin/network/onts/{ont_id}?tab=service",
         ),
         _runbook_step(
             order=4,
@@ -258,7 +258,7 @@ def _build_ont_operations_runbook(
                 else "Set management VLAN and IP method first."
             ),
             action_label="Management intent",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
         _runbook_step(
             order=5,
@@ -313,7 +313,7 @@ def _build_ont_operations_runbook(
                 else "Set WAN method/VLAN intent and wait for ACS reachability."
             ),
             action_label="WAN intent",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
         _runbook_step(
             order=8,
@@ -328,7 +328,7 @@ def _build_ont_operations_runbook(
             ),
             message=internet_credentials_message,
             action_label="Internet credentials",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
         _runbook_step(
             order=9,
@@ -341,7 +341,7 @@ def _build_ont_operations_runbook(
                 else "Set LAN gateway/DHCP intent and wait for ACS reachability."
             ),
             action_label="LAN intent",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
         _runbook_step(
             order=10,
@@ -354,7 +354,7 @@ def _build_ont_operations_runbook(
                 else "Set WiFi intent and wait for ACS reachability."
             ),
             action_label="WiFi intent",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
         _runbook_step(
             order=11,
@@ -388,7 +388,7 @@ def _build_ont_operations_runbook(
                 else "Complete service intent and capture running config first."
             ),
             action_label="Review config",
-            action_url=f"/admin/network/onts/{ont_id}?tab=configure",
+            action_url=f"/admin/network/onts/{ont_id}?tab=device-config",
         ),
     ]
 

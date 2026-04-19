@@ -2149,8 +2149,26 @@ def _acs_observed_runtime_summary(
     lan_hosts = observed.get("lan_hosts", [])
     lan_hosts = lan_hosts if isinstance(lan_hosts, list) else []
 
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
     wifi_clients = _safe_int(wifi.get("connected_clients"))
-    customer_devices = len(lan_hosts) if lan_hosts else _safe_int(lan.get("connected_hosts"))
+    if wifi_clients is None:
+        wifi_clients = _wifi_client_count(
+            snapshot,
+            getattr(ont, "observed_wifi_clients", None),
+        )
+
+    customer_devices = None
+    if lan_hosts:
+        customer_devices = _lan_host_connected_count({"lan_hosts": lan_hosts})
+    if customer_devices is None:
+        customer_devices = _safe_int(lan.get("connected_hosts"))
+    if customer_devices is None:
+        customer_devices = _lan_host_connected_count(
+            snapshot,
+            getattr(ont, "observed_lan_hosts", None),
+        )
+    if customer_devices is None:
+        customer_devices = wifi_clients
     fetched_at = acs_observed_intent.get("fetched_at")
     updated_at_display = "-"
     if isinstance(fetched_at, datetime):
@@ -2301,8 +2319,8 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
         "active_ports": None,
         "metrics": [],
         "details": [],
-        "configure_url": f"/admin/network/onts/{ont_id}?tab=configure",
-        "query_url": f"/admin/network/onts/{ont_id}?tab=tr069",
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
+        "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
     }
     snapshot = getattr(ont, "tr069_last_snapshot", None)
     if not isinstance(snapshot, dict) or not snapshot:
@@ -2316,9 +2334,7 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
     lan_hosts = snapshot.get("lan_hosts")
 
     wifi_clients = _snapshot_count(wireless, "Connected Clients")
-    lan_host_count = len(lan_hosts) if isinstance(lan_hosts, list) else None
-    if lan_host_count is None:
-        lan_host_count = _snapshot_count(lan, "Connected Hosts")
+    lan_host_count = _lan_host_connected_count(snapshot)
 
     port_count = len(ethernet_ports) if isinstance(ethernet_ports, list) else None
     active_ports = None
@@ -2420,8 +2436,8 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
         "active_ports": active_ports,
         "metrics": metrics,
         "details": details,
-        "configure_url": f"/admin/network/onts/{ont_id}?tab=configure",
-        "query_url": f"/admin/network/onts/{ont_id}?tab=tr069",
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
+        "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
     }
 
 

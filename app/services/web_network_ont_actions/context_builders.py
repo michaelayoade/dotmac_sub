@@ -46,7 +46,6 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
 def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build context for the unified ONT configuration partial."""
     from app.services import web_network_onts as web_network_onts_service
-    from app.services import web_network_service_ports as web_service_ports_service
     from app.services.network import ont_web_forms as ont_web_forms_service
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -67,12 +66,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
     )
     initial_form = ont_web_forms_service.initial_iphost_form(ont, iphost_config)
-    service_ports_count = 0
-    try:
-        service_ports_data = web_service_ports_service.list_context(db, ont_id)
-        service_ports_count = len(service_ports_data.get("service_ports", []))
-    except Exception:
-        logger.exception("Failed to load service-port count for ONT %s", ont_id)
 
     assignment = db.scalars(
         select(OntAssignment)
@@ -142,7 +135,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
             if initial_form.get("ip_mode") == "static"
             else None,
         },
-        "service_ports_count": service_ports_count,
         "wan_summary": {
             "pppoe_user": observed_wan.get("pppoe_username")
             if isinstance(observed_wan, dict)
@@ -233,17 +225,6 @@ def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "lan_info": observed.get("lan", {}),
         "ethernet_ports": observed.get("ethernet_ports", []),
         "lan_hosts": observed.get("lan_hosts", []),
-    }
-
-
-def diagnostics_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-        db, ont_id=ont_id
-    )
-    return {
-        "ont_id": ont_id,
-        "tr069_available": bool(observed_intent.get("available")),
-        "acs_observed_intent": observed_intent,
     }
 
 

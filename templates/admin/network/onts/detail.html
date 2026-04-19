@@ -7,22 +7,10 @@
 <div class="space-y-4"
      x-data="{ activeTab: '{{ ont_active_tab | default('overview') }}' }"
      x-init="
-        if (activeTab === 'tr069') {
-            const trigger = document.querySelector('[data-tab=\"tr069\"]');
+        if (activeTab === 'device-config') {
+            const trigger = document.querySelector('[data-tab=\"device-config\"]');
             if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'});
-        } else if (activeTab === 'charts') {
-            const trigger = document.querySelector('[data-tab=\"charts\"]');
-            if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'});
-        } else if (activeTab === 'service-ports') {
-            const trigger = document.querySelector('[data-tab=\"service-ports\"]');
-            if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'});
-        } else if (activeTab === 'device-status') {
-            const trigger = document.querySelector('[data-tab=\"device-status\"]');
-            if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#device-status-content', swap: 'innerHTML'});
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#device-config-content', swap: 'innerHTML'});
         }
      ">
     {# Header — Clean Professional Layout for NOC Technicians #}
@@ -401,7 +389,7 @@
 
     {# Tab Navigation #}
     <div x-data="{
-            tabs: ['overview', 'network', 'history', 'tr069', 'charts', 'service-ports', 'configure', 'device-status'],
+            tabs: ['overview', 'service', 'device-config', 'diagnostics', 'history'],
             showTabTooltip: false,
             tabTooltipLabel: '',
             tabTooltipTop: 0,
@@ -453,21 +441,55 @@
                 <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 <span class="whitespace-nowrap">Overview</span>
             </button>
-            <button @click="activeTab = 'network'"
-                    @mouseenter="openTabTooltip($el, 'Runtime')"
+            <button @click="activeTab = 'service'"
+                    @mouseenter="openTabTooltip($el, 'Service')"
                     @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Runtime')"
+                    @focus="openTabTooltip($el, 'Service')"
                     @blur="closeTabTooltip()"
                     role="tab"
-                    :aria-selected="activeTab === 'network'"
-                    :tabindex="activeTab === 'network' ? 0 : -1"
-                    aria-label="Runtime"
-                    id="tab-network"
-                    aria-controls="panel-network"
-                    :class="activeTab === 'network' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    :aria-selected="activeTab === 'service'"
+                    :tabindex="activeTab === 'service' ? 0 : -1"
+                    aria-label="Service"
+                    id="tab-service"
+                    aria-controls="panel-service"
+                    :class="activeTab === 'service' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-                <span class="whitespace-nowrap">Runtime</span>
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                <span class="whitespace-nowrap">Service</span>
+            </button>
+            <button type="button"
+                    data-tab="device-config"
+                    @click="activeTab = 'device-config'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#device-config-content', swap: 'innerHTML'}) }"
+                    @mouseenter="openTabTooltip($el, 'Device Config')"
+                    @mouseleave="closeTabTooltip()"
+                    @focus="openTabTooltip($el, 'Device Config')"
+                    @blur="closeTabTooltip()"
+                    role="tab"
+                    :aria-selected="activeTab === 'device-config'"
+                    :tabindex="activeTab === 'device-config' ? 0 : -1"
+                    aria-label="Device Config"
+                    id="tab-device-config"
+                    aria-controls="panel-device-config"
+                    :class="activeTab === 'device-config' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                <span class="whitespace-nowrap">Device Config</span>
+            </button>
+            <button @click="activeTab = 'diagnostics'"
+                    @mouseenter="openTabTooltip($el, 'Diagnostics')"
+                    @mouseleave="closeTabTooltip()"
+                    @focus="openTabTooltip($el, 'Diagnostics')"
+                    @blur="closeTabTooltip()"
+                    role="tab"
+                    :aria-selected="activeTab === 'diagnostics'"
+                    :tabindex="activeTab === 'diagnostics' ? 0 : -1"
+                    aria-label="Diagnostics"
+                    id="tab-diagnostics"
+                    aria-controls="panel-diagnostics"
+                    :class="activeTab === 'diagnostics' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                <span class="whitespace-nowrap">Diagnostics</span>
             </button>
             <button @click="activeTab = 'history'"
                     @mouseenter="openTabTooltip($el, 'History')"
@@ -484,92 +506,6 @@
                     class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
                 <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 <span class="whitespace-nowrap">History</span>
-            </button>
-            <button data-tab="tr069" @click="activeTab = 'tr069'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'}) }"
-                    @mouseenter="openTabTooltip($el, 'TR-069')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'TR-069')"
-                    @blur="closeTabTooltip()"
-                    role="tab"
-                    :aria-selected="activeTab === 'tr069'"
-                    :tabindex="activeTab === 'tr069' ? 0 : -1"
-                    aria-label="TR-069"
-                    id="tab-tr069"
-                    aria-controls="panel-tr069"
-                    :class="activeTab === 'tr069' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
-                <span class="whitespace-nowrap">TR-069</span>
-            </button>
-            <button data-tab="charts" @click="activeTab = 'charts'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'}) }"
-                    @mouseenter="openTabTooltip($el, 'Signal Charts')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Signal Charts')"
-                    @blur="closeTabTooltip()"
-                    role="tab"
-                    :aria-selected="activeTab === 'charts'"
-                    :tabindex="activeTab === 'charts' ? 0 : -1"
-                    aria-label="Signal Charts"
-                    id="tab-charts"
-                    aria-controls="panel-charts"
-                    :class="activeTab === 'charts' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                <span class="whitespace-nowrap">Charts</span>
-            </button>
-            <button data-tab="service-ports" @click="activeTab = 'service-ports'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'}) }"
-                    @mouseenter="openTabTooltip($el, 'Service Ports')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Service Ports')"
-                    @blur="closeTabTooltip()"
-                    role="tab"
-                    :aria-selected="activeTab === 'service-ports'"
-                    :tabindex="activeTab === 'service-ports' ? 0 : -1"
-                    aria-label="Service Ports"
-                    id="tab-service-ports"
-                    aria-controls="panel-service-ports"
-                    :class="activeTab === 'service-ports' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-                <span class="whitespace-nowrap">Ports</span>
-            </button>
-            <button type="button"
-                    @click="activeTab = 'configure'"
-                    @mouseenter="openTabTooltip($el, 'Configure ONT')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Configure ONT')"
-                    @blur="closeTabTooltip()"
-                    role="tab"
-                    :aria-selected="activeTab === 'configure'"
-                    :tabindex="activeTab === 'configure' ? 0 : -1"
-                    aria-label="Configure ONT"
-                    id="tab-configure"
-                    aria-controls="panel-configure"
-                    :class="activeTab === 'configure' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                <span class="whitespace-nowrap">Configure</span>
-            </button>
-            <button type="button"
-                    data-tab="device-status"
-                    hx-get="/admin/network/onts/{{ ont.id }}/unified-config"
-                    hx-target="#device-status-content"
-                    hx-swap="innerHTML"
-                    @click="activeTab = 'device-status'; $el.dataset.loaded = '1'"
-                    @mouseenter="openTabTooltip($el, 'Service Intent')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Service Intent')"
-                    @blur="closeTabTooltip()"
-                    role="tab"
-                    :aria-selected="activeTab === 'device-status'"
-                    :tabindex="activeTab === 'device-status' ? 0 : -1"
-                    aria-label="Service Intent"
-                    id="tab-device-status"
-                    aria-controls="panel-device-status"
-                    :class="activeTab === 'device-status' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                <span class="whitespace-nowrap">Service Intent</span>
             </button>
         </nav>
         <div x-show="showTabTooltip"
@@ -1117,35 +1053,9 @@
         </div>
     </div>
 
-    {# ===================== NETWORK TAB ===================== #}
-    <div x-show="activeTab === 'network'" x-transition x-cloak role="tabpanel" id="panel-network" aria-labelledby="tab-network">
+    {# ===================== SERVICE TAB ===================== #}
+    <div x-show="activeTab === 'service'" x-transition x-cloak role="tabpanel" id="panel-service" aria-labelledby="tab-service">
         <div class="space-y-4">
-            {# Observed Runtime Snapshot #}
-            {% call card("Full Runtime Information", color="indigo") %}
-            {% set runtime = observed_runtime_summary if observed_runtime_summary is defined else {} %}
-            {% if runtime.get('has_runtime') %}
-            <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('mac_address') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('wan_ip') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('pppoe_user') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ runtime.get('pppoe_status') or '—' }}</dd></div>
-                <div>
-                    <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</dt>
-                    {% set wan_mode_value = runtime.get('wan_mode') %}
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</dd>
-                </div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('lan_ip') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('wifi_clients') if runtime.get('wifi_clients') is not none else '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('customer_devices') if runtime.get('customer_devices') is not none else '—' }}</dd></div>
-            </dl>
-            <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                Runtime updated from ACS: {{ runtime.get('updated_at_display') or '—' }}
-            </div>
-            {% else %}
-            <p class="text-sm text-slate-500 dark:text-slate-400">No runtime snapshot yet. Open TR-069 tab or click Get Status to refresh.</p>
-            {% endif %}
-            {% endcall %}
-
             {# Current Assignment #}
             {% if assignment %}
             {% call card("Current Assignment", color="blue") %}
@@ -1240,25 +1150,14 @@
             {% endcall %}
             {% endif %}
 
-            {# LAN Hosts (lazy-loaded via HTMX) #}
-            <div id="lan-hosts-content"
-                 hx-get="/admin/network/onts/{{ ont.id }}/lan-hosts"
+            {# Service path / OLT service ports #}
+            <div id="service-ports-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/service-ports"
                  hx-trigger="intersect once"
                  hx-swap="innerHTML">
                 <div class="flex items-center justify-center py-8">
                     <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-400">Loading LAN hosts...</span>
-                </div>
-            </div>
-
-            {# Ethernet Ports (lazy-loaded via HTMX) #}
-            <div id="ethernet-ports-content"
-                 hx-get="/admin/network/onts/{{ ont.id }}/ethernet-ports"
-                 hx-trigger="intersect once"
-                 hx-swap="innerHTML">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-400">Loading Ethernet ports...</span>
+                    <span class="ml-2 text-sm text-slate-400">Loading service path...</span>
                 </div>
             </div>
         </div>
@@ -1325,51 +1224,86 @@
         </div>
     </div>
 
-    {# ===================== TR-069 TAB ===================== #}
-    <div x-show="activeTab === 'tr069'" x-transition x-cloak role="tabpanel" id="panel-tr069" aria-labelledby="tab-tr069">
-        <div id="tr069-content" aria-live="polite" aria-atomic="false">
+    {# ===================== DEVICE CONFIG TAB ===================== #}
+    <div x-show="activeTab === 'device-config'" x-transition x-cloak role="tabpanel" id="panel-device-config" aria-labelledby="tab-device-config">
+        <div id="device-config-content" aria-live="polite" aria-atomic="false">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading TR-069 data...</span>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device configuration...</span>
             </div>
         </div>
     </div>
 
-    {# ===================== CHARTS TAB ===================== #}
-    <div x-show="activeTab === 'charts'" x-transition x-cloak role="tabpanel" id="panel-charts" aria-labelledby="tab-charts">
-        <div id="charts-content" aria-live="polite" aria-atomic="false">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
+    {# ===================== DIAGNOSTICS TAB ===================== #}
+    <div x-show="activeTab === 'diagnostics'" x-transition x-cloak role="tabpanel" id="panel-diagnostics" aria-labelledby="tab-diagnostics">
+        <div class="space-y-4">
+            {% call card("Live State", color="indigo") %}
+            {% set runtime = observed_runtime_summary if observed_runtime_summary is defined else {} %}
+            {% if runtime.get('has_runtime') %}
+            <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('mac_address') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('wan_ip') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('pppoe_user') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ runtime.get('pppoe_status') or '—' }}</dd></div>
+                <div>
+                    <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</dt>
+                    {% set wan_mode_value = runtime.get('wan_mode') %}
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</dd>
+                </div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('lan_ip') or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('wifi_clients') if runtime.get('wifi_clients') is not none else '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('customer_devices') if runtime.get('customer_devices') is not none else '—' }}</dd></div>
+            </dl>
+            <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                Runtime updated from ACS: {{ runtime.get('updated_at_display') or '—' }}
             </div>
-        </div>
-    </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No runtime snapshot yet. Refresh TR-069 data to collect live state.</p>
+            {% endif %}
+            {% endcall %}
 
-    {# ===================== SERVICE PORTS TAB ===================== #}
-    <div x-show="activeTab === 'service-ports'" x-transition x-cloak role="tabpanel" id="panel-service-ports" aria-labelledby="tab-service-ports">
-        <div id="service-ports-content" aria-live="polite" aria-atomic="false">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading service-port data...</span>
+            <div id="charts-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/charts"
+                 hx-trigger="intersect once"
+                 hx-swap="innerHTML"
+                 aria-live="polite"
+                 aria-atomic="false">
+                <div class="flex items-center justify-center py-12">
+                    <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
+                </div>
             </div>
-        </div>
-    </div>
 
-    {# ===================== CONFIGURE TAB ===================== #}
-    <div x-show="activeTab === 'configure'" x-transition x-cloak role="tabpanel" id="panel-configure" aria-labelledby="tab-configure">
-        <div id="configure-content" aria-live="polite" aria-atomic="false">
-            {% with vlans=configure_vlans, ont_id=ont.id|string %}
-            {% include "admin/network/onts/_configure_form.html" %}
-            {% endwith %}
-        </div>
-    </div>
+            <div id="tr069-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/tr069"
+                 hx-trigger="intersect once"
+                 hx-swap="innerHTML"
+                 aria-live="polite"
+                 aria-atomic="false">
+                <div class="flex items-center justify-center py-12">
+                    <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading TR-069 data...</span>
+                </div>
+            </div>
 
-    {# ===================== DEVICE STATUS TAB ===================== #}
-    <div x-show="activeTab === 'device-status'" x-transition x-cloak role="tabpanel" id="panel-device-status" aria-labelledby="tab-device-status">
-        <div id="device-status-content" aria-live="polite" aria-atomic="false">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device status...</span>
+            <div id="lan-hosts-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/lan-hosts"
+                 hx-trigger="intersect once"
+                 hx-swap="innerHTML">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-400">Loading LAN hosts...</span>
+                </div>
+            </div>
+
+            <div id="ethernet-ports-content"
+                 hx-get="/admin/network/onts/{{ ont.id }}/ethernet-ports"
+                 hx-trigger="intersect once"
+                 hx-swap="innerHTML">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-400">Loading Ethernet ports...</span>
+                </div>
             </div>
         </div>
     </div>

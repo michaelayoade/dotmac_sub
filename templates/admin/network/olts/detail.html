@@ -5,7 +5,52 @@
 
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
-<div class="space-y-6" x-data="{ activeTab: new URLSearchParams(window.location.search).get('tab') || 'overview', ontSearch: '' }">
+<div class="space-y-6" x-data="{
+    activeTab: 'overview',
+    ontSearch: '',
+    profilesLoaded: false,
+    eventsLoaded: false,
+    normalizeTab(tab) {
+        const aliases = {
+            ports: 'subscribers',
+            onts: 'subscribers',
+            autofind: 'provisioning',
+            tr069: 'provisioning',
+            profiles: 'provisioning',
+            terminal: 'operations',
+            activity: 'operations',
+            events: 'operations',
+            config: 'settings'
+        };
+        const normalized = aliases[tab] || tab || 'overview';
+        return ['overview', 'subscribers', 'provisioning', 'operations', 'settings'].includes(normalized) ? normalized : 'overview';
+    },
+    init() {
+        this.activeTab = this.normalizeTab(new URLSearchParams(window.location.search).get('tab'));
+        this.$nextTick(() => {
+            if (this.activeTab === 'provisioning') this.loadProfiles();
+            if (this.activeTab === 'operations') this.loadEvents();
+        });
+    },
+    setTab(tab) {
+        this.activeTab = this.normalizeTab(tab);
+        const url = new URL(window.location);
+        url.searchParams.set('tab', this.activeTab);
+        history.replaceState(null, '', url);
+        if (this.activeTab === 'provisioning') this.loadProfiles();
+        if (this.activeTab === 'operations') this.loadEvents();
+    },
+    loadProfiles() {
+        if (this.profilesLoaded || typeof htmx === 'undefined') return;
+        this.profilesLoaded = true;
+        htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/profiles/line', {target: '#profiles-content', swap: 'innerHTML'});
+    },
+    loadEvents() {
+        if (this.eventsLoaded || typeof htmx === 'undefined') return;
+        this.eventsLoaded = true;
+        htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/events', {target: '#olt-events-content', swap: 'innerHTML'});
+    }
+}">
     {% if ssh_test_message %}
     <div class="rounded-lg border px-4 py-3 text-sm {% if ssh_test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
         {{ ssh_test_message }}
@@ -59,7 +104,7 @@
             Circuit Testing
         </span>
         {% endif %}
-        <button @click="activeTab = 'autofind'; setTimeout(() => { document.querySelector('[data-autofind-scan]')?.click(); }, 100)"
+        <button @click="setTab('provisioning'); setTimeout(() => { document.querySelector('[data-autofind-scan]')?.click(); }, 100)"
                 class="inline-flex items-center gap-2 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300"
                 title="Discover unauthorized ONTs on all ports">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
@@ -87,95 +132,39 @@
     </div>
     {% endif %}
 
-    <div class="grid gap-4 lg:grid-cols-4">
-        <button @click="activeTab = 'overview'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Health</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Runtime and hardware state</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Device identity, telemetry checks, and board inventory.</p>
-        </button>
-        <button @click="activeTab = 'onts'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Subscriber Impact</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Connected ONTs and optical risk</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Move directly into subscriber-facing faults and low-signal devices.</p>
-        </button>
-        <button @click="activeTab = 'tr069'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Provisioning</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Profiles, TR-069, and service paths</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Use this area for activation, profile control, and ONT discovery.</p>
-        </button>
-        <button @click="activeTab = 'activity'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Maintenance</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Backups, events, and CLI work</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Stay in one maintenance lane instead of scanning the whole tab strip.</p>
-        </button>
-    </div>
-
     {# Tab Navigation #}
     <div class="border-b border-slate-200 dark:border-slate-700">
         <nav class="flex gap-6 -mb-px">
-            <button @click="activeTab = 'overview'"
+            <button @click="setTab('overview')"
                     :class="activeTab === 'overview' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                 Overview
             </button>
-            <button @click="activeTab = 'ports'"
-                    :class="activeTab === 'ports' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+            <button @click="setTab('subscribers')"
+                    :class="activeTab === 'subscribers' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-                Ports &amp; Cards
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ resolved_pon_ports_count }}</span>
-            </button>
-            <button @click="activeTab = 'onts'"
-                    :class="activeTab === 'onts' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                ONTs
+                Subscribers
                 <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont_summary.total }}</span>
             </button>
-            <button @click="activeTab = 'autofind'"
-                    :class="activeTab === 'autofind' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                Autofind
-            </button>
-            {% if olt.vendor and 'huawei' in olt.vendor|lower %}
-            <button @click="activeTab = 'tr069'"
-                    :class="activeTab === 'tr069' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+            <button @click="setTab('provisioning')"
+                    :class="activeTab === 'provisioning' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
-                TR-069
+                Provisioning
             </button>
-            {% endif %}
-            <button @click="activeTab = 'config'"
-                    :class="activeTab === 'config' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                Configuration
-            </button>
-            <button @click="activeTab = 'terminal'"
-                    :class="activeTab === 'terminal' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+            <button @click="setTab('operations')"
+                    :class="activeTab === 'operations' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                Terminal
+                Operations
             </button>
-            <button @click="activeTab = 'activity'"
-                    :class="activeTab === 'activity' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+            <button @click="setTab('settings')"
+                    :class="activeTab === 'settings' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                Activity
-            </button>
-            <button data-tab="events" @click="activeTab = 'events'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/events', {target: '#olt-events-content', swap: 'innerHTML'}) }"
-                    :class="activeTab === 'events' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                Events
-            </button>
-            <button data-tab="profiles" @click="activeTab = 'profiles'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/profiles/line', {target: '#profiles-content', swap: 'innerHTML'}) }"
-                    :class="activeTab === 'profiles' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
-                Profiles
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Settings
             </button>
         </nav>
     </div>
@@ -326,7 +315,7 @@
                     {% elif avg is not none %}
                         {% set avg_class = 'text-emerald-700 bg-emerald-100 dark:text-emerald-300 dark:bg-emerald-900/30' %}
                     {% endif %}
-                    <button @click="activeTab = 'ports'" class="rounded-xl border p-3 text-left transition-all hover:shadow-sm hover:-translate-y-0.5 dark:hover:bg-slate-700/30 {% if ps.get('offline', 0) > 0 %}border-rose-200 bg-rose-50/40 dark:border-rose-800/50 dark:bg-rose-900/10{% elif ps.get('low_signal', 0) > 0 %}border-amber-200 bg-amber-50/40 dark:border-amber-800/50 dark:bg-amber-900/10{% elif port.is_active %}border-emerald-200 bg-emerald-50/40 dark:border-emerald-800/50 dark:bg-emerald-900/10{% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800{% endif %}">
+                    <button @click="setTab('subscribers')" class="rounded-xl border p-3 text-left transition-all hover:shadow-sm hover:-translate-y-0.5 dark:hover:bg-slate-700/30 {% if ps.get('offline', 0) > 0 %}border-rose-200 bg-rose-50/40 dark:border-rose-800/50 dark:bg-rose-900/10{% elif ps.get('low_signal', 0) > 0 %}border-amber-200 bg-amber-50/40 dark:border-amber-800/50 dark:bg-amber-900/10{% elif port.is_active %}border-emerald-200 bg-emerald-50/40 dark:border-emerald-800/50 dark:bg-emerald-900/10{% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800{% endif %}">
                         <div class="flex items-center justify-between">
                             <p class="text-xs font-semibold text-slate-900 dark:text-white">{{ port.name }}</p>
                             <span class="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium {% if ps.get('offline', 0) > 0 %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% elif ps.get('online', 0) > 0 %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
@@ -633,8 +622,8 @@
         </div>
     </div>
 
-    {# ===================== PORTS & CARDS TAB ===================== #}
-    <div x-show="activeTab === 'ports'" x-transition x-cloak>
+    {# ===================== SUBSCRIBERS TAB ===================== #}
+    <div x-show="activeTab === 'subscribers'" x-transition x-cloak>
         <div class="space-y-6">
             {# Shelf/Card Visualization #}
             {% if shelves %}
@@ -742,10 +731,7 @@
             {% endif %}
             {% endcall %}
         </div>
-    </div>
 
-    {# ===================== ONTs TAB ===================== #}
-    <div x-show="activeTab === 'onts'" x-transition x-cloak>
         {% call card("Connected ONTs", color="blue") %}
         {% if ont_relationship_context.rows %}
         <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -839,8 +825,8 @@
         {% endcall %}
     </div>
 
-    {# ===================== AUTOFIND TAB ===================== #}
-    <div x-show="activeTab === 'autofind'" x-transition x-cloak>
+    {# ===================== PROVISIONING TAB ===================== #}
+    <div x-show="activeTab === 'provisioning'" x-transition x-cloak>
         {% call card("ONT Autofind", color="blue") %}
         <div class="space-y-4">
             <p class="text-sm text-slate-600 dark:text-slate-400">
@@ -868,12 +854,10 @@
             </div>
         </div>
         {% endcall %}
-    </div>
 
-    {# ===================== TR-069 TAB ===================== #}
+    {# TR-069 profile and ACS controls #}
     {% if olt.vendor and 'huawei' in olt.vendor|lower %}
-    <div x-show="activeTab === 'tr069'" x-transition x-cloak
-         x-data="{ showCreateModal: false, createLoading: false, rebindLoading: false }">
+    <div x-data="{ showCreateModal: false, createLoading: false, rebindLoading: false }">
         {% call card("TR-069 ACS Profile Management", color="blue") %}
         <div class="space-y-4">
             <p class="text-sm text-slate-600 dark:text-slate-400">
@@ -987,8 +971,30 @@
     </div>
     {% endif %}
 
-    {# ===================== CONFIGURATION TAB ===================== #}
-    <div x-show="activeTab === 'config'" x-transition x-cloak>
+        <div id="profiles-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading OLT profiles...</span>
+            </div>
+        </div>
+        <div class="mt-4 flex gap-3">
+            <button hx-get="/admin/network/olts/{{ olt.id }}/profiles/line"
+                    hx-target="#profiles-content"
+                    hx-swap="innerHTML"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Line &amp; Service Profiles
+            </button>
+            <button hx-get="/admin/network/olts/{{ olt.id }}/profiles/tr069"
+                    hx-target="#profiles-content"
+                    hx-swap="innerHTML"
+                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                TR-069 Profiles
+            </button>
+        </div>
+    </div>
+
+    {# ===================== SETTINGS TAB ===================== #}
+    <div x-show="activeTab === 'settings'" x-transition x-cloak>
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {# VLANs on this OLT #}
             {% set vlan_actions %}
@@ -1160,8 +1166,8 @@
         </div>
     </div>
 
-    {# ===================== TERMINAL TAB ===================== #}
-    <div x-show="activeTab === 'terminal'" x-transition x-cloak>
+    {# ===================== OPERATIONS TAB ===================== #}
+    <div x-show="activeTab === 'operations'" x-transition x-cloak>
         {% call card("CLI Terminal", color="blue") %}
         <div class="space-y-4">
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
@@ -1280,10 +1286,7 @@
             {% endif %}
         </div>
         {% endcall %}
-    </div>
 
-    {# ===================== ACTIVITY TAB ===================== #}
-    <div x-show="activeTab === 'activity'" x-transition x-cloak>
         {% call card("Network Operations", color="blue") %}
         {% include "admin/network/_operations_history.html" %}
         {% endcall %}
@@ -1349,39 +1352,12 @@
         <p class="text-sm text-slate-500 dark:text-slate-400">No config backups yet. Backups run automatically on a schedule.</p>
         {% endif %}
         {% endcall %}
-    </div>
 
-    {# ===================== EVENTS TAB ===================== #}
-    <div x-show="activeTab === 'events'" x-transition x-cloak>
         <div id="olt-events-content">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                 <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device events...</span>
             </div>
-        </div>
-    </div>
-
-    {# ===================== PROFILES TAB ===================== #}
-    <div x-show="activeTab === 'profiles'" x-transition x-cloak>
-        <div id="profiles-content">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading OLT profiles...</span>
-            </div>
-        </div>
-        <div class="mt-4 flex gap-3">
-            <button hx-get="/admin/network/olts/{{ olt.id }}/profiles/line"
-                    hx-target="#profiles-content"
-                    hx-swap="innerHTML"
-                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                Line &amp; Service Profiles
-            </button>
-            <button hx-get="/admin/network/olts/{{ olt.id }}/profiles/tr069"
-                    hx-target="#profiles-content"
-                    hx-swap="innerHTML"
-                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                TR-069 Profiles
-            </button>
         </div>
     </div>
 </div>

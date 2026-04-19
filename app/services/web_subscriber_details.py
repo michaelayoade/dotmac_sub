@@ -234,7 +234,7 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
                     "serial": ont.serial_number or "-",
                     "online": status_value == "online",
                     "detail_url": f"/admin/network/onts/{ont.id}",
-                    "tr069_url": f"/admin/network/onts/{ont.id}?tab=tr069",
+                    "tr069_url": f"/admin/network/onts/{ont.id}?tab=diagnostics",
                 }
             )
     except Exception:

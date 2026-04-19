@@ -329,6 +329,37 @@ def test_olt_detail_template_defaults_missing_acs_prefill() -> None:
     assert "acs_prefill.cwmp_url" not in template
 
 
+def test_olt_detail_template_uses_operator_focused_tabs() -> None:
+    template = Path("templates/admin/network/olts/detail.html").read_text()
+
+    for tab in ("overview", "subscribers", "provisioning", "operations", "settings"):
+        assert f"activeTab === '{tab}'" in template
+        assert template.count(f"x-show=\"activeTab === '{tab}'\"") == 1
+
+    for legacy_tab in (
+        "ports",
+        "onts",
+        "autofind",
+        "tr069",
+        "config",
+        "terminal",
+        "activity",
+        "events",
+        "profiles",
+    ):
+        assert f"activeTab === '{legacy_tab}'" not in template
+
+    assert "normalizeTab(tab)" in template
+    assert "Subscriber Impact" not in template
+    assert "Runtime and hardware state" not in template
+    nav_section = template[
+        template.index("{# Tab Navigation #}") : template.index(
+            "{# ===================== OVERVIEW TAB"
+        )
+    ]
+    assert "Profiles" not in nav_section
+
+
 def test_snmp_v1_bulk_walk_uses_plain_walk(monkeypatch) -> None:
     calls: list[list[str]] = []
 

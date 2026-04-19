@@ -56,45 +56,6 @@
         </div>
     </div>
 
-    {# ==================== SERVICE PORTS SECTION ==================== #}
-    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
-        <button type="button"
-                @click="openSection = openSection === 'service-ports' ? '' : 'service-ports'; loadSection('service-ports', '/admin/network/onts/{{ ont.id }}/config/service-ports', '#service-ports-section-content')"
-                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-            <div class="flex items-center gap-3">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
-                    <svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-                </div>
-                <div>
-                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Service Ports</h3>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">
-                        {% if service_ports_count is defined and service_ports_count > 0 %}
-                        {{ service_ports_count }} service port{{ 's' if service_ports_count != 1 else '' }} configured
-                        {% else %}
-                        Manage VLAN service ports on OLT
-                        {% endif %}
-                    </p>
-                </div>
-            </div>
-            <div class="flex items-center gap-2">
-                {% if service_ports_count is defined and service_ports_count > 0 %}
-                <span class="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">
-                    {{ service_ports_count }}
-                </span>
-                {% endif %}
-                <svg :class="openSection === 'service-ports' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-            </div>
-        </button>
-        <div x-show="openSection === 'service-ports'" x-collapse x-cloak>
-            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="service-ports-section-content">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-500">Loading service ports...</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
     {# ==================== WAN / PPPoE SECTION ==================== #}
     <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         <button type="button"
@@ -233,33 +194,4 @@
         </div>
     </div>
 
-    {# ==================== DIAGNOSTICS SECTION ==================== #}
-    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
-        <button type="button"
-                @click="openSection = openSection === 'diagnostics' ? '' : 'diagnostics'; loadSection('diagnostics', '/admin/network/onts/{{ ont.id }}/config/diagnostics', '#diagnostics-section-content')"
-                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-            <div class="flex items-center gap-3">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/30">
-                    <svg class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                </div>
-                <div>
-                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Diagnostics</h3>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">
-                        Run ping, traceroute and other network tests
-                    </p>
-                </div>
-            </div>
-            <div class="flex items-center gap-2">
-                <svg :class="openSection === 'diagnostics' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-            </div>
-        </button>
-        <div x-show="openSection === 'diagnostics'" x-collapse x-cloak>
-            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="diagnostics-section-content">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-500">Loading diagnostics...</span>
-                </div>
-            </div>
-        </div>
-    </div>
 </div>

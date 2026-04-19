@@ -43,7 +43,6 @@ from app.services.web_network_ont_actions.config_setters import (
 # Context builders
 from app.services.web_network_ont_actions.context_builders import (
     configure_form_context,
-    diagnostics_config_context,
     iphost_config_context,
     lan_config_context,
     olt_side_config_context,
@@ -160,7 +159,6 @@ __all__ = [
     "toggle_lan_port",
     # Context builders
     "configure_form_context",
-    "diagnostics_config_context",
     "iphost_config_context",
     "lan_config_context",
     "olt_side_config_context",
