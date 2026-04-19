@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.network_ont_ops import (
+    BulkProvisioningRunRead,
     OntActionResponse,
     OntBulkActionRequest,
     OntBulkActionResponse,
@@ -580,11 +581,47 @@ ALLOWED_BULK_ACTIONS = {
     response_model=OntBulkActionResponse,
     dependencies=[Depends(require_permission("network:write"))],
 )
-def submit_bulk_action(payload: OntBulkActionRequest) -> OntBulkActionResponse:
+def submit_bulk_action(
+    payload: OntBulkActionRequest,
+    db: Session = Depends(get_db),
+) -> OntBulkActionResponse:
     if payload.action not in ALLOWED_BULK_ACTIONS:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid action '{payload.action}'. Allowed: {sorted(ALLOWED_BULK_ACTIONS)}",
+        )
+    if payload.action == "provision_saga":
+        from app.services.network.bulk_provisioning import bulk_provision_onts
+
+        params = dict(payload.params or {})
+        try:
+            result = bulk_provision_onts(
+                db,
+                payload.ont_ids,
+                profile_id=params.get("profile_id"),
+                saga_name=str(params.get("saga_name") or "full_provisioning"),
+                tr069_olt_profile_id=params.get("tr069_olt_profile_id"),
+                max_workers=int(params.get("max_parallel") or 10),
+                chunk_delay_seconds=int(params.get("chunk_delay_seconds") or 15),
+                initiated_by=params.get("initiated_by"),
+                correlation_key=params.get("correlation_key"),
+                dry_run=bool(params.get("dry_run", False)),
+                allow_low_optical_margin=bool(
+                    params.get("allow_low_optical_margin", False)
+                ),
+                step_data=dict(params.get("step_data") or {}),
+                metadata={"source": "api_network_ont_bulk"},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return OntBulkActionResponse(
+            task_id=result.orchestrator_task_id or "",
+            bulk_run_id=str(result.run_id),
+            correlation_key=result.correlation_key,
+            message=(
+                f"Bulk provisioning queued for {result.queued} ONT(s); "
+                f"{result.skipped} skipped"
+            ),
         )
     from app.celery_app import enqueue_celery_task
 
@@ -614,3 +651,27 @@ def get_bulk_action_status(task_id: str) -> OntBulkActionStatus:
         if result.ready() and isinstance(result.result, dict)
         else None,
     )
+
+
+@router.get(
+    "/ont-units/bulk-provisioning/{run_id}",
+    response_model=BulkProvisioningRunRead,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def get_bulk_provisioning_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> BulkProvisioningRunRead:
+    from app.services.network.bulk_provisioning import (
+        get_bulk_provisioning_run as load_bulk_run,
+    )
+    from app.services.network.bulk_provisioning import (
+        list_bulk_provisioning_events,
+    )
+
+    run = load_bulk_run(db, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Bulk provisioning run not found")
+    payload = BulkProvisioningRunRead.model_validate(run)
+    payload.event_count = len(list_bulk_provisioning_events(db, run_id))
+    return payload

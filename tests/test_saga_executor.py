@@ -9,6 +9,7 @@ Tests the saga pattern implementation including:
 
 from __future__ import annotations
 
+import time
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -208,6 +209,39 @@ class TestSagaExecutorFailure:
         assert len(result.steps_executed) == 2  # step1 and step2
         # step3 should not have executed
         assert "step3" not in [s.step_name for s in result.steps_executed]
+
+    def test_saga_timeout_fails_stuck_step(
+        self, mock_db, sample_ont_id, sample_execution_id
+    ):
+        """A saga deadline should fail a step that blocks past the limit."""
+
+        def stuck_step(ctx):
+            time.sleep(1)
+            return StepResult(
+                step_name="stuck",
+                success=True,
+                message="should not complete",
+            )
+
+        saga = SagaDefinition(
+            name="timeout_test",
+            description="Test saga timeout",
+            steps=[SagaStep(name="stuck", action=stuck_step, critical=True)],
+            timeout_seconds=0.01,
+        )
+
+        context = SagaContext(
+            db=mock_db,
+            ont_id=sample_ont_id,
+            saga_execution_id=sample_execution_id,
+        )
+
+        with patch.object(SagaExecutor, "_load_context_models", return_value=True):
+            result = SagaExecutor(saga, context).execute()
+
+        assert result.success is False
+        assert result.failed_step == "stuck"
+        assert "timed out" in result.message
 
     def test_noncritical_failure_continues(
         self, mock_db, sample_ont_id, sample_execution_id

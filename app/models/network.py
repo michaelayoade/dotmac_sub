@@ -216,6 +216,29 @@ class OntStatusSource(enum.Enum):
     derived = "derived"
 
 
+class OntProvisioningEventStatus(enum.Enum):
+    succeeded = "succeeded"
+    failed = "failed"
+    skipped = "skipped"
+    waiting = "waiting"
+
+
+class BulkProvisioningRunStatus(enum.Enum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    partial = "partial"
+    failed = "failed"
+
+
+class BulkProvisioningItemStatus(enum.Enum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    skipped = "skipped"
+
+
 class VlanPurpose(enum.Enum):
     internet = "internet"
     management = "management"
@@ -1268,6 +1291,149 @@ class OntUnit(Base):
         cascade="all, delete-orphan",
         order_by="OntWanServiceInstance.priority",
     )
+    provisioning_events = relationship(
+        "OntProvisioningEvent",
+        back_populates="ont",
+        order_by="OntProvisioningEvent.created_at",
+    )
+
+
+class OntProvisioningEvent(Base):
+    """Append-only audit trail for ONT provisioning step outcomes."""
+
+    __tablename__ = "ont_provisioning_events"
+    __table_args__ = (
+        Index("ix_ont_provisioning_events_ont_unit", "ont_unit_id"),
+        Index("ix_ont_provisioning_events_step_name", "step_name"),
+        Index("ix_ont_provisioning_events_action", "action"),
+        Index("ix_ont_provisioning_events_status", "status"),
+        Index("ix_ont_provisioning_events_correlation_key", "correlation_key"),
+        Index("ix_ont_provisioning_events_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_units.id"), nullable=False
+    )
+    step_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[OntProvisioningEventStatus] = mapped_column(
+        Enum(
+            OntProvisioningEventStatus,
+            name="ontprovisioningeventstatus",
+            create_constraint=False,
+        ),
+        nullable=False,
+    )
+    message: Mapped[str | None] = mapped_column(Text)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    event_data: Mapped[dict | None] = mapped_column(JSON)
+    compensation_applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    correlation_key: Mapped[str | None] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    ont = relationship("OntUnit", back_populates="provisioning_events")
+
+
+class BulkProvisioningRun(Base):
+    """Audit record for one bulk ONT provisioning operation."""
+
+    __tablename__ = "bulk_provisioning_runs"
+    __table_args__ = (
+        Index("ix_bulk_provisioning_runs_status", "status"),
+        Index("ix_bulk_provisioning_runs_correlation_key", "correlation_key"),
+        Index("ix_bulk_provisioning_runs_started_at", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id"), nullable=True
+    )
+    status: Mapped[BulkProvisioningRunStatus] = mapped_column(
+        Enum(
+            BulkProvisioningRunStatus,
+            name="bulkprovisioningrunstatus",
+            create_constraint=False,
+        ),
+        nullable=False,
+        default=BulkProvisioningRunStatus.pending,
+    )
+    correlation_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    initiated_by: Mapped[str | None] = mapped_column(String(128))
+    max_workers: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    run_metadata: Mapped[dict | None] = mapped_column(JSON)
+
+    profile = relationship("OntProvisioningProfile")
+    items = relationship(
+        "BulkProvisioningItem",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="BulkProvisioningItem.created_at",
+    )
+
+
+class BulkProvisioningItem(Base):
+    """Per-ONT audit record inside a bulk provisioning run."""
+
+    __tablename__ = "bulk_provisioning_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "requested_ont_id",
+            name="uq_bulk_provisioning_items_run_requested_ont",
+        ),
+        Index("ix_bulk_provisioning_items_run", "run_id"),
+        Index("ix_bulk_provisioning_items_ont_unit", "ont_unit_id"),
+        Index("ix_bulk_provisioning_items_status", "status"),
+        Index("ix_bulk_provisioning_items_correlation_key", "correlation_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("bulk_provisioning_runs.id"), nullable=False
+    )
+    requested_ont_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_units.id"), nullable=True
+    )
+    status: Mapped[BulkProvisioningItemStatus] = mapped_column(
+        Enum(
+            BulkProvisioningItemStatus,
+            name="bulkprovisioningitemstatus",
+            create_constraint=False,
+        ),
+        nullable=False,
+        default=BulkProvisioningItemStatus.pending,
+    )
+    correlation_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    result_data: Mapped[dict | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    run = relationship("BulkProvisioningRun", back_populates="items")
+    ont = relationship("OntUnit")
 
 
 class OntAssignment(Base):

@@ -113,8 +113,15 @@ class TestBulkActionResponse:
     """Bulk action response schema tests."""
 
     def test_bulk_response(self):
-        resp = OntBulkActionResponse(task_id="abc-123", message="Queued 5 ONTs")
+        resp = OntBulkActionResponse(
+            task_id="abc-123",
+            message="Queued 5 ONTs",
+            bulk_run_id="00000000-0000-0000-0000-000000000001",
+            correlation_key="bulk-test",
+        )
         assert resp.task_id == "abc-123"
+        assert resp.bulk_run_id == "00000000-0000-0000-0000-000000000001"
+        assert resp.correlation_key == "bulk-test"
 
 
 class TestActionResultConversion:
@@ -144,6 +151,7 @@ class TestRouterRegistration:
         assert not any("/ont-units/{ont_id}/provision" in p for p in paths)
         assert any("/ont-units/{ont_id}/enriched" in p for p in paths)
         assert any("/ont-units/bulk-action" in p for p in paths)
+        assert any("/ont-units/bulk-provisioning/{run_id}" in p for p in paths)
         assert any("/ont-units/{ont_id}/connection-request" in p for p in paths)
         assert any(
             "/ont-units/{ont_id}/connection-request-credentials" in p for p in paths

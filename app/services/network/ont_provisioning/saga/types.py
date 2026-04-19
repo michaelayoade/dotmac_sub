@@ -53,6 +53,8 @@ class SagaContext:
         step_data: Dictionary for steps to share data.
         dry_run: If True, steps should not make real changes.
         initiated_by: User or system that started the saga.
+        correlation_key: Optional key linking saga records and provisioning events.
+        timeout_seconds: Optional total deadline for the saga execution.
     """
 
     db: Session
@@ -63,6 +65,8 @@ class SagaContext:
     step_data: dict[str, Any] = field(default_factory=dict)
     dry_run: bool = False
     initiated_by: str | None = None
+    correlation_key: str | None = None
+    timeout_seconds: float | None = None
 
 
 @dataclass
@@ -162,6 +166,7 @@ class SagaDefinition:
         version: Version string for tracking saga definition changes.
         on_success: Optional callback on successful completion.
         on_failure: Optional callback on failure (after compensation).
+        timeout_seconds: Total saga execution deadline in seconds.
     """
 
     name: str
@@ -170,6 +175,7 @@ class SagaDefinition:
     version: str = "1.0"
     on_success: Callable[[SagaContext, SagaResult], None] | None = None
     on_failure: Callable[[SagaContext, SagaResult], None] | None = None
+    timeout_seconds: float | None = 1800.0
 
 
 @dataclass

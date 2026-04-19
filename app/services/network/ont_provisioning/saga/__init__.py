@@ -38,6 +38,7 @@ Usage:
 
 from app.services.network.ont_provisioning.saga.executor import (
     SagaExecutor,
+    SagaTimeoutError,
     execute_saga,
 )
 from app.services.network.ont_provisioning.saga.persistence import (
@@ -76,6 +77,7 @@ __all__ = [
     "generate_saga_execution_id",
     # Executor
     "SagaExecutor",
+    "SagaTimeoutError",
     "execute_saga",
     # Persistence
     "SagaExecutionRepository",

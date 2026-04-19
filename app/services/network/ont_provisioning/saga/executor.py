@@ -10,6 +10,8 @@ This module provides the SagaExecutor class that orchestrates saga execution:
 from __future__ import annotations
 
 import logging
+import signal
+import threading
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -30,6 +32,10 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+class SagaTimeoutError(TimeoutError):
+    """Raised when a saga exceeds its configured deadline."""
 
 
 class SagaExecutor:
@@ -62,6 +68,13 @@ class SagaExecutor:
         self._completed_steps: list[tuple[SagaStep, StepResult]] = []
         self._step_records: list[StepExecutionRecord] = []
         self._start_time: datetime | None = None
+        self._deadline_monotonic: float | None = None
+
+    @property
+    def timeout_seconds(self) -> float | None:
+        if self.context.timeout_seconds is not None:
+            return self.context.timeout_seconds
+        return self.saga.timeout_seconds
 
     def execute(self) -> SagaResult:
         """Execute the saga with compensation on failure.
@@ -70,6 +83,10 @@ class SagaExecutor:
             SagaResult with execution outcome and compensation history.
         """
         self._start_time = datetime.now(UTC)
+        if self.timeout_seconds is not None:
+            self._deadline_monotonic = time.monotonic() + max(
+                0.0, float(self.timeout_seconds)
+            )
         result = SagaResult(
             saga_name=self.saga.name,
             saga_execution_id=self.context.saga_execution_id,
@@ -104,7 +121,15 @@ class SagaExecutor:
 
             # Execute each step in order
             for step in self.saga.steps:
+                timeout_result = self._timeout_result_if_expired(step.name)
+                if timeout_result is not None:
+                    self._step_records.append(
+                        StepExecutionRecord.from_step_result(timeout_result)
+                    )
+                    return self._rollback_and_fail(result, step, timeout_result)
+
                 step_result = self._execute_step(step)
+                self._record_step_event(step.name, step_result)
                 record = StepExecutionRecord.from_step_result(step_result)
                 self._step_records.append(record)
 
@@ -221,7 +246,7 @@ class SagaExecutor:
         )
 
         try:
-            result = step.action(self.context)
+            result = self._run_step_with_timeout(step)
             # Ensure duration is set
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             if result.duration_ms == 0:
@@ -243,6 +268,25 @@ class SagaExecutor:
 
             return result
 
+        except SagaTimeoutError as exc:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            logger.error(
+                "Saga step timed out: %s - %s",
+                step.name,
+                exc,
+                extra={
+                    "event": "saga_step_timeout",
+                    "saga_name": self.saga.name,
+                    "step": step.name,
+                },
+            )
+            return StepResult(
+                step_name=step.name,
+                success=False,
+                message=str(exc),
+                duration_ms=elapsed_ms,
+                critical=True,
+            )
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             logger.error(
@@ -263,6 +307,81 @@ class SagaExecutor:
                 duration_ms=elapsed_ms,
                 critical=step.critical,
             )
+
+    def _record_step_event(self, step_name: str, result: StepResult) -> None:
+        """Best-effort append-only audit event for saga step completion."""
+        if self.context.ont is None:
+            return
+        try:
+            from app.services.network.provisioning_events import (
+                record_ont_provisioning_event,
+            )
+
+            record_ont_provisioning_event(
+                self.context.db,
+                self.context.ont,
+                step_name,
+                result,
+                event_data={
+                    "saga_name": self.saga.name,
+                    "saga_execution_id": self.context.saga_execution_id,
+                },
+                correlation_key=self.context.correlation_key,
+            )
+            self.context.db.flush()
+        except Exception:
+            logger.warning(
+                "Failed to record saga step provisioning event: %s",
+                step_name,
+                exc_info=True,
+            )
+
+    def _remaining_timeout_seconds(self) -> float | None:
+        if self._deadline_monotonic is None:
+            return None
+        return self._deadline_monotonic - time.monotonic()
+
+    def _timeout_result_if_expired(self, step_name: str) -> StepResult | None:
+        remaining = self._remaining_timeout_seconds()
+        if remaining is None or remaining > 0:
+            return None
+        return StepResult(
+            step_name=step_name,
+            success=False,
+            message=(
+                f"Saga '{self.saga.name}' timed out after "
+                f"{self.timeout_seconds:g} seconds"
+            ),
+            critical=True,
+        )
+
+    def _run_step_with_timeout(self, step: SagaStep) -> StepResult:
+        remaining = self._remaining_timeout_seconds()
+        if remaining is None:
+            return step.action(self.context)
+        if remaining <= 0:
+            raise SagaTimeoutError(
+                f"Saga '{self.saga.name}' timed out before step '{step.name}'"
+            )
+        if threading.current_thread() is not threading.main_thread():
+            return step.action(self.context)
+
+        def _handle_timeout(_signum: int, _frame: object) -> None:
+            raise SagaTimeoutError(
+                f"Saga '{self.saga.name}' timed out while executing step '{step.name}'"
+            )
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, _handle_timeout)
+        signal.setitimer(signal.ITIMER_REAL, max(0.001, remaining))
+        try:
+            return step.action(self.context)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+            if previous_timer[0] > 0:
+                signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
 
     def _rollback_and_fail(
         self,
@@ -533,6 +652,7 @@ def execute_saga(
     step_data: dict[str, Any] | None = None,
     dry_run: bool = False,
     initiated_by: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> SagaResult:
     """Execute a saga for the given ONT.
 
@@ -546,6 +666,7 @@ def execute_saga(
         step_data: Optional initial data for steps.
         dry_run: If True, steps should not make real changes.
         initiated_by: User or system identifier.
+        timeout_seconds: Optional total deadline for this saga execution.
 
     Returns:
         SagaResult with execution outcome.
@@ -557,6 +678,7 @@ def execute_saga(
         step_data=step_data or {},
         dry_run=dry_run,
         initiated_by=initiated_by,
+        timeout_seconds=timeout_seconds,
     )
 
     executor = SagaExecutor(saga, context)

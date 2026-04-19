@@ -183,6 +183,10 @@ from app.models.lifecycle import (  # noqa: F401
 )
 from app.models.mrr_snapshot import MrrSnapshot  # noqa: F401
 from app.models.network import (  # noqa: F401
+    BulkProvisioningItem,
+    BulkProvisioningItemStatus,
+    BulkProvisioningRun,
+    BulkProvisioningRunStatus,
     ConfigMethod,
     CPEDevice,
     DeviceStatus,
@@ -223,6 +227,8 @@ from app.models.network import (  # noqa: F401
     OntAssignment,
     OntProfileType,
     OntProfileWanService,
+    OntProvisioningEvent,
+    OntProvisioningEventStatus,
     OntProvisioningProfile,
     OntProvisioningStatus,
     OntStatusSource,

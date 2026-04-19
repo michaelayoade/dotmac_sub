@@ -180,9 +180,48 @@ class OntBulkActionRequest(BaseModel):
 class OntBulkActionResponse(BaseModel):
     task_id: str
     message: str
+    bulk_run_id: str | None = None
+    correlation_key: str | None = None
 
 
 class OntBulkActionStatus(BaseModel):
     task_id: str
     status: str  # PENDING, STARTED, SUCCESS, FAILURE
-    result: dict[str, int] | None = None
+    result: dict[str, Any] | None = None
+
+
+class BulkProvisioningItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    requested_ont_id: str
+    ont_unit_id: UUID | None = None
+    status: str
+    correlation_key: str
+    message: str | None = None
+    error_message: str | None = None
+    result_data: dict[str, Any] | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+
+
+class BulkProvisioningRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    profile_id: UUID | None = None
+    status: str
+    correlation_key: str
+    initiated_by: str | None = None
+    max_workers: int
+    total_count: int
+    succeeded_count: int
+    failed_count: int
+    skipped_count: int
+    started_at: datetime
+    completed_at: datetime | None = None
+    error_message: str | None = None
+    run_metadata: dict[str, Any] | None = None
+    items: list[BulkProvisioningItemRead] = []
+    event_count: int = 0

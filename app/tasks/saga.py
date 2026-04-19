@@ -29,6 +29,9 @@ def execute_saga_task(
     dry_run: bool = False,
     initiated_by: str | None = None,
     persist_execution: bool = True,
+    correlation_key: str | None = None,
+    bulk_run_id: str | None = None,
+    bulk_item_id: str | None = None,
 ) -> dict:
     """Execute a saga in background with full compensation support.
 
@@ -42,6 +45,9 @@ def execute_saga_task(
         dry_run: If True, steps should not make real changes.
         initiated_by: User or system identifier.
         persist_execution: If True, persist execution to database.
+        correlation_key: Optional correlation key for events and saga persistence.
+        bulk_run_id: Optional bulk provisioning run ID.
+        bulk_item_id: Optional bulk provisioning item ID.
 
     Returns:
         Dictionary with saga execution result.
@@ -58,9 +64,28 @@ def execute_saga_task(
     execution_id = generate_saga_execution_id()
 
     try:
+        if bulk_item_id:
+            from app.services.network.bulk_provisioning import mark_bulk_item_running
+
+            mark_bulk_item_running(
+                session,
+                bulk_item_id,
+                saga_execution_id=execution_id,
+            )
+            session.commit()
+
         # Look up saga by name
         saga = get_saga_by_name(saga_name)
         if saga is None:
+            if bulk_item_id:
+                from app.services.network.bulk_provisioning import mark_bulk_item_failed
+
+                mark_bulk_item_failed(
+                    session,
+                    bulk_item_id,
+                    f"Saga not found: {saga_name}",
+                )
+                session.commit()
             logger.error(
                 "Saga not found: %s",
                 saga_name,
@@ -71,7 +96,17 @@ def execute_saga_task(
                 "message": f"Saga not found: {saga_name}",
                 "saga_name": saga_name,
                 "saga_execution_id": execution_id,
+                "bulk_run_id": bulk_run_id,
+                "bulk_item_id": bulk_item_id,
             }
+
+        effective_correlation_key = correlation_key
+        if effective_correlation_key is None and bulk_item_id:
+            from app.models.network import BulkProvisioningItem
+
+            item = session.get(BulkProvisioningItem, bulk_item_id)
+            if item is not None:
+                effective_correlation_key = item.correlation_key
 
         # Build context
         context = SagaContext(
@@ -81,6 +116,7 @@ def execute_saga_task(
             step_data=step_data or {},
             dry_run=dry_run,
             initiated_by=initiated_by,
+            correlation_key=effective_correlation_key,
         )
 
         # Persist execution record
@@ -103,13 +139,28 @@ def execute_saga_task(
             },
         )
 
+        if effective_correlation_key:
+            from app.services.network.provisioning_events import (
+                provisioning_correlation,
+            )
+
         # Execute saga
         executor = SagaExecutor(saga, context)
-        result = executor.execute()
+        if effective_correlation_key:
+            with provisioning_correlation(effective_correlation_key):
+                result = executor.execute()
+        else:
+            result = executor.execute()
 
         # Persist result
         if persist_execution:
             saga_executions.mark_completed(session, execution_id, result)
+            session.commit()
+
+        if bulk_item_id:
+            from app.services.network.bulk_provisioning import mark_bulk_item_completed
+
+            mark_bulk_item_completed(session, bulk_item_id, result.to_dict())
             session.commit()
 
         # Send WebSocket notification
@@ -129,7 +180,15 @@ def execute_saga_task(
             },
         )
 
-        return result.to_dict()
+        payload = result.to_dict()
+        payload.update(
+            {
+                "bulk_run_id": bulk_run_id,
+                "bulk_item_id": bulk_item_id,
+                "correlation_key": effective_correlation_key,
+            }
+        )
+        return payload
 
     except Exception as exc:
         session.rollback()
@@ -161,11 +220,27 @@ def execute_saga_task(
             except Exception:
                 pass
 
+        if bulk_item_id:
+            try:
+                from app.services.network.bulk_provisioning import mark_bulk_item_failed
+
+                mark_bulk_item_failed(session, bulk_item_id, str(exc))
+                session.commit()
+            except Exception:
+                logger.warning(
+                    "Failed to mark bulk provisioning item %s as failed",
+                    bulk_item_id,
+                    exc_info=True,
+                )
+
         return {
             "success": False,
             "message": f"Saga task error: {exc}",
             "saga_name": saga_name,
             "saga_execution_id": execution_id,
+            "bulk_run_id": bulk_run_id,
+            "bulk_item_id": bulk_item_id,
+            "correlation_key": correlation_key,
         }
 
     finally:
@@ -284,6 +359,7 @@ def queue_bulk_saga_executions(
     initiated_by: str | None = None,
     max_parallel: int = 10,
     chunk_delay_seconds: int = 15,
+    bulk_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Queue saga executions for many ONTs with bounded fan-out.
 
@@ -305,7 +381,24 @@ def queue_bulk_saga_executions(
             "tasks": [],
         }
 
+    bulk_items_by_ont_id: dict[str, Any] = {}
+    if bulk_run_id:
+        session = SessionLocal()
+        try:
+            from app.services.network.bulk_provisioning import list_pending_bulk_items
+
+            pending_items = list_pending_bulk_items(session, bulk_run_id)
+            bulk_items_by_ont_id = {
+                str(item.ont_unit_id): item for item in pending_items if item.ont_unit_id
+            }
+        finally:
+            session.close()
+
     unique_ont_ids = list(dict.fromkeys(str(ont_id) for ont_id in ont_ids if ont_id))
+    if bulk_items_by_ont_id:
+        unique_ont_ids = [
+            ont_id for ont_id in unique_ont_ids if ont_id in bulk_items_by_ont_id
+        ]
     if not unique_ont_ids:
         return {
             "queued": 0,
@@ -323,6 +416,12 @@ def queue_bulk_saga_executions(
     for index, ont_id in enumerate(unique_ont_ids):
         chunk_index = index // max_parallel
         countdown = chunk_index * chunk_delay_seconds
+        bulk_item = bulk_items_by_ont_id.get(ont_id)
+        item_correlation_key = (
+            getattr(bulk_item, "correlation_key", None)
+            if bulk_item is not None
+            else f"bulk_saga:{saga_name}:{ont_id}"
+        )
         dispatch = enqueue_celery_task(
             execute_saga_task,
             kwargs={
@@ -331,8 +430,11 @@ def queue_bulk_saga_executions(
                 "step_data": dict(step_data or {}),
                 "dry_run": dry_run,
                 "initiated_by": initiated_by,
+                "correlation_key": item_correlation_key,
+                "bulk_run_id": bulk_run_id,
+                "bulk_item_id": str(bulk_item.id) if bulk_item is not None else None,
             },
-            correlation_id=f"bulk_saga:{saga_name}:{ont_id}",
+            correlation_id=item_correlation_key,
             source="bulk_saga_orchestrator",
             countdown=countdown,
         )
@@ -342,6 +444,8 @@ def queue_bulk_saga_executions(
                 "task_id": str(dispatch.id),
                 "chunk": chunk_index + 1,
                 "countdown": countdown,
+                "bulk_item_id": str(bulk_item.id) if bulk_item is not None else "",
+                "correlation_key": item_correlation_key,
             }
         )
 
@@ -352,6 +456,7 @@ def queue_bulk_saga_executions(
         "saga_name": saga_name,
         "max_parallel": max_parallel,
         "chunks": total_chunks,
+        "bulk_run_id": bulk_run_id,
         "tasks": tasks,
     }
     logger.info("Bulk saga queued: %s", stats)

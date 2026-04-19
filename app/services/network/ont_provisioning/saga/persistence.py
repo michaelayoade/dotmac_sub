@@ -77,6 +77,7 @@ class SagaExecutionRepository:
                 "dry_run": context.dry_run,
             },
             initiated_by=context.initiated_by,
+            correlation_key=context.correlation_key,
         )
 
         db.add(execution)
