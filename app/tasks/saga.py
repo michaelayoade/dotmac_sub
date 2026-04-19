@@ -6,6 +6,7 @@ Provides background task support for saga-based provisioning workflows.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from app.celery_app import celery_app
@@ -271,3 +272,87 @@ def queue_saga_execution(
         "task_id": str(result.id),
         "correlation_key": correlation_key,
     }
+
+
+@celery_app.task(name="app.tasks.saga.queue_bulk_saga_executions")
+def queue_bulk_saga_executions(
+    saga_name: str,
+    ont_ids: list[str],
+    *,
+    step_data: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    initiated_by: str | None = None,
+    max_parallel: int = 10,
+    chunk_delay_seconds: int = 15,
+) -> dict[str, Any]:
+    """Queue saga executions for many ONTs with bounded fan-out.
+
+    This orchestrator deliberately does not execute sagas in-process.  Each ONT
+    gets its own Celery task, DB session, saga execution record, and
+    compensation lifecycle.  ``max_parallel`` controls how many child tasks are
+    released immediately per chunk; later chunks receive a small countdown to
+    avoid stampeding OLT/ACS dependencies.
+    """
+    from app.celery_app import enqueue_celery_task
+    from app.services.network.ont_provisioning.saga import get_saga_by_name
+
+    if get_saga_by_name(saga_name) is None:
+        return {
+            "queued": 0,
+            "errors": 1,
+            "skipped": len(ont_ids),
+            "message": f"Saga not found: {saga_name}",
+            "tasks": [],
+        }
+
+    unique_ont_ids = list(dict.fromkeys(str(ont_id) for ont_id in ont_ids if ont_id))
+    if not unique_ont_ids:
+        return {
+            "queued": 0,
+            "errors": 0,
+            "skipped": 0,
+            "message": "No ONTs supplied.",
+            "tasks": [],
+        }
+
+    max_parallel = max(1, min(int(max_parallel or 10), 50))
+    chunk_delay_seconds = max(0, int(chunk_delay_seconds or 0))
+    total_chunks = math.ceil(len(unique_ont_ids) / max_parallel)
+    tasks: list[dict[str, str | int]] = []
+
+    for index, ont_id in enumerate(unique_ont_ids):
+        chunk_index = index // max_parallel
+        countdown = chunk_index * chunk_delay_seconds
+        dispatch = enqueue_celery_task(
+            execute_saga_task,
+            kwargs={
+                "saga_name": saga_name,
+                "ont_id": ont_id,
+                "step_data": dict(step_data or {}),
+                "dry_run": dry_run,
+                "initiated_by": initiated_by,
+            },
+            correlation_id=f"bulk_saga:{saga_name}:{ont_id}",
+            source="bulk_saga_orchestrator",
+            countdown=countdown,
+        )
+        tasks.append(
+            {
+                "ont_id": ont_id,
+                "task_id": str(dispatch.id),
+                "chunk": chunk_index + 1,
+                "countdown": countdown,
+            }
+        )
+
+    stats = {
+        "queued": len(tasks),
+        "errors": 0,
+        "skipped": len(ont_ids) - len(unique_ont_ids),
+        "saga_name": saga_name,
+        "max_parallel": max_parallel,
+        "chunks": total_chunks,
+        "tasks": tasks,
+    }
+    logger.info("Bulk saga queued: %s", stats)
+    return stats

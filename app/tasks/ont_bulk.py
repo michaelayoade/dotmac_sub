@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @celery_app.task(name="app.tasks.ont_bulk.execute_bulk_action")
 def execute_bulk_action(
     ont_ids: list[str], action: str, params: dict[str, Any]
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Execute an action on multiple ONTs.
 
     Args:
@@ -25,6 +25,9 @@ def execute_bulk_action(
     Returns:
         Statistics dict with processed/errors/skipped counts.
     """
+    if action == "provision_saga":
+        return _queue_bulk_provision_saga(ont_ids, params)
+
     logger.info("Starting bulk %s for %d ONT(s)", action, len(ont_ids))
     db = SessionLocal()
     processed = 0
@@ -115,3 +118,44 @@ def _dispatch_action(db, ont_id: str, action: str, params: dict):  # type: ignor
 
     logger.warning("Unknown bulk action: %s", action)
     return ActionResult(success=False, message=f"Unknown action: {action}")
+
+
+def _queue_bulk_provision_saga(
+    ont_ids: list[str],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Queue many per-ONT provisioning sagas with bounded fan-out."""
+    from app.celery_app import enqueue_celery_task
+
+    params = dict(params or {})
+    saga_name = str(params.get("saga_name") or "full_provisioning")
+    step_data = dict(params.get("step_data") or {})
+    profile_id = params.get("profile_id")
+    if profile_id and "profile_id" not in step_data:
+        step_data["profile_id"] = str(profile_id)
+    tr069_olt_profile_id = params.get("tr069_olt_profile_id")
+    if tr069_olt_profile_id is not None and "tr069_olt_profile_id" not in step_data:
+        step_data["tr069_olt_profile_id"] = tr069_olt_profile_id
+
+    task = enqueue_celery_task(
+        "app.tasks.saga.queue_bulk_saga_executions",
+        kwargs={
+            "saga_name": saga_name,
+            "ont_ids": ont_ids,
+            "step_data": step_data,
+            "dry_run": bool(params.get("dry_run", False)),
+            "initiated_by": params.get("initiated_by"),
+            "max_parallel": int(params.get("max_parallel") or 10),
+            "chunk_delay_seconds": int(params.get("chunk_delay_seconds") or 15),
+        },
+        correlation_id=f"ont_bulk_saga:{saga_name}:{len(ont_ids)}",
+        source="ont_bulk_action",
+    )
+    return {
+        "processed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "queued": len(ont_ids),
+        "orchestrator_task_id": str(task.id),
+        "saga_name": saga_name,
+    }

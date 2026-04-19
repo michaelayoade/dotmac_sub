@@ -571,6 +571,7 @@ ALLOWED_BULK_ACTIONS = {
     "catv_toggle",
     "wifi_update",
     "voip_toggle",
+    "provision_saga",
 }
 
 

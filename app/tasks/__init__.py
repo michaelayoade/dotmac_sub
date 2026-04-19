@@ -72,6 +72,11 @@ from app.tasks.ont_verification import (
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 from app.tasks.provisioning_enforcement import run_enforcement
 from app.tasks.radius import run_radius_sync_job
+from app.tasks.saga import (
+    execute_saga_task,
+    queue_bulk_saga_executions,
+    queue_saga_execution,
+)
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
 from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
 from app.tasks.splynx_sync import (
@@ -130,6 +135,9 @@ __all__ = [
     "run_integration_job",
     "generate_invoice_pdf_export",
     "run_radius_sync_job",
+    "execute_saga_task",
+    "queue_saga_execution",
+    "queue_bulk_saga_executions",
     "run_invoice_cycle",
     "run_dunning",
     "run_prepaid_enforcement",
