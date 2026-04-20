@@ -10,7 +10,8 @@ import math
 from typing import Any
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
+from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def execute_saga_task(
         saga_executions,
     )
 
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
     execution_id = generate_saga_execution_id()
 
     try:
@@ -310,14 +311,13 @@ def queue_saga_execution(
     Returns:
         Dictionary with queued task info.
     """
-    from app.celery_app import enqueue_celery_task
     from app.services.network.ont_provisioning.saga import generate_saga_execution_id
 
     execution_id = generate_saga_execution_id()
     correlation_key = f"saga:{saga_name}:{ont_id}:{execution_id}"
 
-    result = enqueue_celery_task(
-        execute_saga_task,
+    result = enqueue_task(
+        "app.tasks.saga.execute_saga",
         kwargs={
             "saga_name": saga_name,
             "ont_id": ont_id,
@@ -331,21 +331,22 @@ def queue_saga_execution(
     logger.info(
         "Queued saga execution: %s (task_id=%s)",
         saga_name,
-        result.id,
+        result.task_id,
         extra={
             "event": "saga_queued",
             "saga_name": saga_name,
             "ont_id": ont_id,
-            "celery_task_id": str(result.id),
+            "celery_task_id": result.task_id,
         },
     )
 
     return {
-        "queued": True,
+        "queued": result.queued,
         "saga_name": saga_name,
         "ont_id": ont_id,
-        "task_id": str(result.id),
+        "task_id": result.task_id,
         "correlation_key": correlation_key,
+        "error": result.error,
     }
 
 
@@ -369,7 +370,6 @@ def queue_bulk_saga_executions(
     released immediately per chunk; later chunks receive a small countdown to
     avoid stampeding OLT/ACS dependencies.
     """
-    from app.celery_app import enqueue_celery_task
     from app.services.network.ont_provisioning.saga import get_saga_by_name
 
     if get_saga_by_name(saga_name) is None:
@@ -383,16 +383,13 @@ def queue_bulk_saga_executions(
 
     bulk_items_by_ont_id: dict[str, Any] = {}
     if bulk_run_id:
-        session = SessionLocal()
-        try:
+        with db_session_adapter.read_session() as session:
             from app.services.network.bulk_provisioning import list_pending_bulk_items
 
             pending_items = list_pending_bulk_items(session, bulk_run_id)
             bulk_items_by_ont_id = {
                 str(item.ont_unit_id): item for item in pending_items if item.ont_unit_id
             }
-        finally:
-            session.close()
 
     unique_ont_ids = list(dict.fromkeys(str(ont_id) for ont_id in ont_ids if ont_id))
     if bulk_items_by_ont_id:
@@ -412,6 +409,7 @@ def queue_bulk_saga_executions(
     chunk_delay_seconds = max(0, int(chunk_delay_seconds or 0))
     total_chunks = math.ceil(len(unique_ont_ids) / max_parallel)
     tasks: list[dict[str, str | int]] = []
+    dispatch_errors = 0
 
     for index, ont_id in enumerate(unique_ont_ids):
         chunk_index = index // max_parallel
@@ -422,8 +420,8 @@ def queue_bulk_saga_executions(
             if bulk_item is not None
             else f"bulk_saga:{saga_name}:{ont_id}"
         )
-        dispatch = enqueue_celery_task(
-            execute_saga_task,
+        dispatch = enqueue_task(
+            "app.tasks.saga.execute_saga",
             kwargs={
                 "saga_name": saga_name,
                 "ont_id": ont_id,
@@ -438,10 +436,24 @@ def queue_bulk_saga_executions(
             source="bulk_saga_orchestrator",
             countdown=countdown,
         )
+        if not dispatch.queued:
+            dispatch_errors += 1
+            tasks.append(
+                {
+                    "ont_id": ont_id,
+                    "task_id": "",
+                    "chunk": chunk_index + 1,
+                    "countdown": countdown,
+                    "bulk_item_id": str(bulk_item.id) if bulk_item is not None else "",
+                    "correlation_key": item_correlation_key,
+                    "error": dispatch.error or "queue_dispatch_failed",
+                }
+            )
+            continue
         tasks.append(
             {
                 "ont_id": ont_id,
-                "task_id": str(dispatch.id),
+                "task_id": dispatch.task_id or "",
                 "chunk": chunk_index + 1,
                 "countdown": countdown,
                 "bulk_item_id": str(bulk_item.id) if bulk_item is not None else "",
@@ -450,8 +462,8 @@ def queue_bulk_saga_executions(
         )
 
     stats = {
-        "queued": len(tasks),
-        "errors": 0,
+        "queued": len(tasks) - dispatch_errors,
+        "errors": dispatch_errors,
         "skipped": len(ont_ids) - len(unique_ont_ids),
         "saga_name": saga_name,
         "max_parallel": max_parallel,

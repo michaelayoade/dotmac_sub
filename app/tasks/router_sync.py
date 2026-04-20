@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.router_management import (
     Router,
     RouterConfigPush,
@@ -15,6 +14,7 @@ from app.models.router_management import (
     RouterSnapshotSource,
     RouterStatus,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.router_management.config import RouterConfigService
 from app.services.router_management.connection import RouterConnectionService
 from app.services.router_management.inventory import RouterInventory
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="router_sync.sync_all_system_info")
 def sync_all_system_info() -> dict:
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         routers = list(
             db.execute(select(Router).where(Router.is_active.is_(True))).scalars().all()
@@ -49,7 +49,7 @@ def sync_all_system_info() -> dict:
 
 @celery_app.task(name="router_sync.sync_all_interfaces")
 def sync_all_interfaces() -> dict:
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         routers = list(
             db.execute(
@@ -79,7 +79,7 @@ def sync_all_interfaces() -> dict:
 
 @celery_app.task(name="router_sync.capture_scheduled_snapshots")
 def capture_scheduled_snapshots() -> dict:
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         routers = list(
             db.execute(
@@ -124,7 +124,7 @@ def cleanup_idle_tunnels() -> dict:
 
 @celery_app.task(name="router_sync.execute_config_push")
 def execute_config_push(push_id: str) -> dict:
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         push = db.get(RouterConfigPush, push_id)
         if not push:

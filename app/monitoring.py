@@ -8,6 +8,7 @@ Usage:
 Environment variables:
     LOKI_URL: Loki push endpoint (default: http://160.119.127.195:3100/loki/api/v1/push)
     GLITCHTIP_DSN: Sentry-compatible DSN for GlitchTip (optional)
+    GLITCHTIP_ENABLED: Set to "true" to enable GlitchTip when a DSN is configured
     ENVIRONMENT: Environment name (default: production)
     MONITORING_ENABLED: Set to "false" to disable external monitoring (default: true)
 """
@@ -164,19 +165,34 @@ def setup_monitoring(
 
     # Resolve configuration from environment
     resolved_env = environment or os.getenv("ENVIRONMENT") or "production"
-    resolved_loki_url = loki_url or os.getenv("LOKI_URL") or DEFAULT_LOKI_URL
+    resolved_loki_url = loki_url or os.getenv("LOKI_URL")
     resolved_dsn = glitchtip_dsn or os.getenv("GLITCHTIP_DSN") or ""
 
     result = {"loki": False, "sentry": False}
 
-    # Setup Loki logging
-    result["loki"] = _setup_loki(app_name, server, resolved_env, resolved_loki_url)
+    # Setup Loki logging only when explicitly configured. The Loki handler is
+    # synchronous; falling back to a remote default can block app startup when
+    # that endpoint is slow or unreachable.
+    if resolved_loki_url:
+        result["loki"] = _setup_loki(app_name, server, resolved_env, resolved_loki_url)
+    else:
+        logger.info("LOKI_URL not configured, Loki logging disabled")
 
-    # Setup GlitchTip/Sentry error tracking (only if DSN is configured)
-    if resolved_dsn:
+    glitchtip_enabled = os.getenv("GLITCHTIP_ENABLED", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+    # Setup GlitchTip/Sentry error tracking only when explicitly enabled. The
+    # DSN endpoint is external, and connection timeouts can add latency during
+    # request/error handling when that endpoint is unreachable.
+    if resolved_dsn and glitchtip_enabled:
         result["sentry"] = _setup_sentry(
             app_name, server, resolved_env, resolved_dsn, traces_sample_rate
         )
+    elif resolved_dsn:
+        logger.info("GLITCHTIP_ENABLED not true, error tracking disabled")
     else:
         logger.info(
             "GLITCHTIP_DSN not configured, error tracking disabled. "

@@ -98,7 +98,7 @@ class WebhookEndpoint(Base):
     connector_config_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("connector_configs.id")
     )
-    secret: Mapped[str | None] = mapped_column(String(255))
+    secret: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(

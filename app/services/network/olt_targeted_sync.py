@@ -89,7 +89,7 @@ def sync_authorized_ont_from_olt_snmp(
     try:
         walk(linked, ".1.3.6.1.2.1.1.5.0", timeout=20, bulk=False)
         status_rows = bulk_sync._parse_walk_composite(
-            walk(linked, oids["status"], timeout=90, bulk=False)
+            walk(linked, oids["status"], timeout=90, bulk=True)
         )
     except Exception as exc:
         return False, f"SNMP walk failed: {exc!s}", {}
@@ -99,19 +99,19 @@ def sync_authorized_ont_from_olt_snmp(
     distance_rows: dict[str, str] = {}
     try:
         olt_rx_rows = bulk_sync._parse_walk_composite(
-            walk(linked, oids["olt_rx"], timeout=90, bulk=False)
+            walk(linked, oids["olt_rx"], timeout=90, bulk=True)
         )
     except Exception:
         olt_rx_rows = {}
     try:
         onu_rx_rows = bulk_sync._parse_walk_composite(
-            walk(linked, oids["onu_rx"], timeout=90, bulk=False)
+            walk(linked, oids["onu_rx"], timeout=90, bulk=True)
         )
     except Exception:
         onu_rx_rows = {}
     try:
         distance_rows = bulk_sync._parse_walk_composite(
-            walk(linked, oids["distance"], timeout=90, bulk=False)
+            walk(linked, oids["distance"], timeout=90, bulk=True)
         )
     except Exception:
         distance_rows = {}

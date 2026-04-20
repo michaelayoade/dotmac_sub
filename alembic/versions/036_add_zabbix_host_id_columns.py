@@ -1,7 +1,7 @@
 """Add zabbix_host_id columns to OLT and NAS devices
 
 Revision ID: 036_add_zabbix_host_id_columns
-Revises: 035_add_provisioning_architecture
+Revises: 035_merge_decoupling_heads
 Create Date: 2026-04-18
 
 Adds columns to track Zabbix monitoring host mapping:
@@ -11,11 +11,12 @@ Adds columns to track Zabbix monitoring host mapping:
 - nas_devices.zabbix_last_sync_at: Last sync timestamp
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
+
 revision = "036_add_zabbix_host_id_columns"
-down_revision = "035_add_provisioning_architecture"
+down_revision = "035_merge_decoupling_heads"
 branch_labels = None
 depends_on = None
 

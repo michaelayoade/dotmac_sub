@@ -284,6 +284,7 @@ class PppoePasswordMode(enum.Enum):
 
 class OntProvisioningStatus(enum.Enum):
     unprovisioned = "unprovisioned"
+    partial = "partial"
     provisioned = "provisioned"
     drift_detected = "drift_detected"
     failed = "failed"
@@ -680,13 +681,19 @@ class OLTDevice(Base):
     firmware_version: Mapped[str | None] = mapped_column(String(120))
     software_version: Mapped[str | None] = mapped_column(String(120))
     ssh_username: Mapped[str | None] = mapped_column(String(120))
-    ssh_password: Mapped[str | None] = mapped_column(String(255))
+    ssh_password: Mapped[str | None] = mapped_column(String(512))
     ssh_port: Mapped[int | None] = mapped_column(Integer, default=22)
     snmp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     snmp_port: Mapped[int | None] = mapped_column(Integer, default=161)
     snmp_version: Mapped[str | None] = mapped_column(String(10), default="v2c")
-    snmp_ro_community: Mapped[str | None] = mapped_column(String(255))
-    snmp_rw_community: Mapped[str | None] = mapped_column(String(255))
+    snmp_ro_community: Mapped[str | None] = mapped_column(String(512))
+    snmp_rw_community: Mapped[str | None] = mapped_column(String(512))
+    # Configurable SNMP performance settings
+    snmp_timeout_seconds: Mapped[int | None] = mapped_column(Integer, default=None)
+    snmp_bulk_enabled: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    snmp_bulk_max_repetitions: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Tiered polling state (persists across restarts)
+    poll_cycle_number: Mapped[int | None] = mapped_column(Integer, default=0)
     netconf_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     netconf_port: Mapped[int | None] = mapped_column(Integer, default=830)
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -1175,10 +1182,10 @@ class OntUnit(Base):
         Enum(IpProtocol, name="ipprotocol", create_constraint=False),
     )
     pppoe_username: Mapped[str | None] = mapped_column(String(120))
-    pppoe_password: Mapped[str | None] = mapped_column(String(120))
+    pppoe_password: Mapped[str | None] = mapped_column(String(512))
     # Desired WiFi configuration (pushed via TR-069 when ONT connects)
     wifi_ssid: Mapped[str | None] = mapped_column(String(64))
-    wifi_password: Mapped[str | None] = mapped_column(String(120))
+    wifi_password: Mapped[str | None] = mapped_column(String(512))
     # Observed/runtime identity and access metrics (SNMP/TR-069 sourced)
     mac_address: Mapped[str | None] = mapped_column(String(64))
     observed_wan_ip: Mapped[str | None] = mapped_column(String(64))
@@ -2180,7 +2187,7 @@ class OntProvisioningProfile(Base):
         String(120), doc="Connection request username for on-demand ACS management"
     )
     cr_password: Mapped[str | None] = mapped_column(
-        String(120), doc="Connection request password (encrypted at rest)"
+        String(512), doc="Connection request password (encrypted at rest)"
     )
 
     # VoIP
@@ -2276,7 +2283,7 @@ class OntProfileWanService(Base):
     pppoe_password_mode: Mapped[PppoePasswordMode | None] = mapped_column(
         Enum(PppoePasswordMode, name="pppoepasswordmode", create_constraint=False),
     )
-    pppoe_static_password: Mapped[str | None] = mapped_column(String(500))
+    pppoe_static_password: Mapped[str | None] = mapped_column(String(512))
 
     # Static IP (when connection_type = static)
     static_ip_source: Mapped[str | None] = mapped_column(String(200))
@@ -2380,7 +2387,7 @@ class OntWanServiceInstance(Base):
     # PPPoE credentials (resolved from template, actual values)
     pppoe_username: Mapped[str | None] = mapped_column(String(200))
     pppoe_password: Mapped[str | None] = mapped_column(
-        String(500), doc="Encrypted PPPoE password"
+        String(512), doc="Encrypted PPPoE password"
     )
 
     # Static IP (when connection_type = static)

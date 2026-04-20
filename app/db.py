@@ -16,6 +16,15 @@ class Base(DeclarativeBase):
 
 
 def get_engine():
+    connect_args = {}
+    if settings.database_url.startswith(("postgresql://", "postgresql+")):
+        server_options = (
+            f"-c statement_timeout={settings.db_statement_timeout_ms} "
+            f"-c lock_timeout={settings.db_lock_timeout_ms} "
+            "-c idle_in_transaction_session_timeout="
+            f"{settings.db_idle_in_transaction_session_timeout_ms}"
+        )
+        connect_args["options"] = server_options
     return create_engine(
         settings.database_url,
         pool_pre_ping=True,
@@ -23,6 +32,7 @@ def get_engine():
         max_overflow=settings.db_max_overflow,
         pool_timeout=settings.db_pool_timeout,
         pool_recycle=settings.db_pool_recycle,
+        connect_args=connect_args,
     )
 
 

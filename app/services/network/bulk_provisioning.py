@@ -154,8 +154,8 @@ def bulk_provision_onts(
     metadata: dict[str, Any] | None = None,
 ) -> BulkProvisioningDispatchResult:
     """Create a durable bulk run and queue its Celery saga orchestrator."""
-    from app.celery_app import enqueue_celery_task
     from app.services.network.ont_provisioning.saga import get_saga_by_name
+    from app.services.queue_adapter import enqueue_task
 
     if get_saga_by_name(saga_name) is None:
         raise ValueError(f"Saga not found: {saga_name}")
@@ -197,7 +197,7 @@ def bulk_provision_onts(
             task_step_data["tr069_olt_profile_id"] = tr069_olt_profile_id
         task_step_data.setdefault("allow_low_optical_margin", allow_low_optical_margin)
 
-        dispatch = enqueue_celery_task(
+        dispatch = enqueue_task(
             "app.tasks.saga.queue_bulk_saga_executions",
             kwargs={
                 "saga_name": saga_name,
@@ -212,7 +212,7 @@ def bulk_provision_onts(
             correlation_id=run_correlation,
             source="bulk_provisioning_service",
         )
-        orchestrator_task_id = str(dispatch.id)
+        orchestrator_task_id = str(dispatch.task_id or "")
         run.status = BulkProvisioningRunStatus.running
         run.run_metadata = {
             **(run.run_metadata or {}),

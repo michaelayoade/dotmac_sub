@@ -34,6 +34,7 @@ class Tr069Event(enum.Enum):
 class Tr069JobStatus(enum.Enum):
     queued = "queued"
     running = "running"
+    pending = "pending"
     succeeded = "succeeded"
     failed = "failed"
     canceled = "canceled"
@@ -48,9 +49,9 @@ class Tr069AcsServer(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     cwmp_url: Mapped[str | None] = mapped_column(String(255))
     cwmp_username: Mapped[str | None] = mapped_column(String(120))
-    cwmp_password: Mapped[str | None] = mapped_column(String(255))
+    cwmp_password: Mapped[str | None] = mapped_column(String(512))
     connection_request_username: Mapped[str | None] = mapped_column(String(120))
-    connection_request_password: Mapped[str | None] = mapped_column(String(255))
+    connection_request_password: Mapped[str | None] = mapped_column(String(512))
     base_url: Mapped[str] = mapped_column(String(255), nullable=False)
     periodic_inform_interval: Mapped[int] = mapped_column(
         Integer, default=3600, nullable=False, server_default="3600"

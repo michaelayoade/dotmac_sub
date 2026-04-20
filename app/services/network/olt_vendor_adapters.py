@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -743,7 +743,7 @@ _VENDOR_ADAPTERS: dict[str, type[BaseOltAdapter]] = {
 
 
 def get_olt_adapter(
-    olt: "OLTDevice | None" = None,
+    olt: OLTDevice | None = None,
     *,
     vendor: str | None = None,
     model: str | None = None,

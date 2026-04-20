@@ -131,9 +131,10 @@ class OntReadFacade:
         # Live TR-069 query (optional, slower)
         if live_query:
             try:
-                from app.services.network.ont_tr069 import OntTR069
+                from app.services.acs_client import create_acs_state_reader
 
-                summary = OntTR069.get_device_summary(
+                reader = create_acs_state_reader()
+                summary = reader.get_device_summary(
                     db, ont_id, persist_observed_runtime=True
                 )
                 if summary and summary.available:
@@ -188,27 +189,27 @@ class OntReadFacade:
 
     @staticmethod
     def get_tr069_summary(db: Session, ont_id: str) -> dict[str, Any]:
-        """Delegate to OntTR069.get_device_summary()."""
-        from app.services.network.ont_tr069 import OntTR069
+        """Read the ACS/TR-069 summary through the ACS state adapter."""
+        from app.services.acs_client import create_acs_state_reader
 
-        summary = OntTR069.get_device_summary(db, ont_id)
+        summary = create_acs_state_reader().get_device_summary(db, ont_id)
         if not summary or not summary.available:
             return {"available": False, "error": summary.error if summary else None}
         return asdict(summary)
 
     @staticmethod
     def get_lan_hosts(db: Session, ont_id: str) -> list[dict[str, Any]]:
-        """Delegate to OntTR069.get_lan_hosts()."""
-        from app.services.network.ont_tr069 import OntTR069
+        """Read LAN hosts through the ACS state adapter."""
+        from app.services.acs_client import create_acs_state_reader
 
-        return OntTR069.get_lan_hosts(db, ont_id)
+        return create_acs_state_reader().get_lan_hosts(db, ont_id)
 
     @staticmethod
     def get_ethernet_ports(db: Session, ont_id: str) -> list[dict[str, Any]]:
-        """Delegate to OntTR069.get_ethernet_ports()."""
-        from app.services.network.ont_tr069 import OntTR069
+        """Read Ethernet ports through the ACS state adapter."""
+        from app.services.acs_client import create_acs_state_reader
 
-        return OntTR069.get_ethernet_ports(db, ont_id)
+        return create_acs_state_reader().get_ethernet_ports(db, ont_id)
 
     @staticmethod
     def get_vlan_chain_status(db: Session, ont_id: str) -> dict[str, Any]:

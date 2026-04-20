@@ -4,8 +4,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.services.catalog import subscriptions as subscriptions_service
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +14,10 @@ logger = logging.getLogger(__name__)
 def expire_subscriptions() -> dict:
     """Expire subscriptions that have passed their end_at date."""
     logger.info("Starting expire_subscriptions")
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         result = subscriptions_service.Subscriptions.expire_subscriptions(session)
         logger.info("Completed expire_subscriptions: %s", result)
         return result
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.catalog.send_expiry_reminders")
@@ -39,8 +33,7 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
     from app.services.events import emit_event
     from app.services.events.types import EventType
 
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         # Resolve configurable reminder days from settings
         if days_before is None:
             from app.models.domain_settings import SettingDomain
@@ -94,8 +87,3 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
         session.commit()
         logger.info("Sent %d expiry reminders", reminded)
         return {"reminded": reminded, "total_expiring": len(expiring)}
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

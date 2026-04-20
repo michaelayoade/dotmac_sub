@@ -9,13 +9,13 @@ from celery.exceptions import MaxRetriesExceededError, Retry
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.subscriber import (
     NINVerificationStatus,
     Subscriber,
     SubscriberNINVerification,
 )
 from app.services import nin_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.nin_matching import (
     mask_nin,
     match_subscriber_nin_response,
@@ -107,7 +107,7 @@ def _mark_failed(
 )
 def verify_nin_task(self, subscriber_id: str, nin: str) -> dict[str, Any]:
     normalized_nin = normalize_nin(nin)
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         subscriber_uuid = uuid.UUID(str(subscriber_id))
         subscriber = db.get(Subscriber, subscriber_uuid)

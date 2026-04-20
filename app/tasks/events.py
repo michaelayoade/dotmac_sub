@@ -6,10 +6,8 @@ Handles retry of failed events and cleanup of old event records.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import text
-
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -34,21 +32,15 @@ def retry_failed_events():
     from app.models.event_store import EventStatus, EventStore
     from app.services.events.dispatcher import get_dispatcher
 
-    session = SessionLocal()
-    lock_acquired = False
-    try:
-        lock_acquired = bool(
-            session.execute(
-                text("SELECT pg_try_advisory_lock(:key)"),
-                {"key": _EVENT_RETRY_LOCK_KEY},
-            ).scalar()
-        )
+    with db_session_adapter.advisory_lock(_EVENT_RETRY_LOCK_KEY) as (
+        session,
+        lock_acquired,
+    ):
         if not lock_acquired:
             logger.debug("Skipping event retry: previous run still in progress")
             return {"skipped_due_to_lock": 1}
         cutoff = datetime.now(UTC) - timedelta(hours=MAX_EVENT_AGE_HOURS)
 
-        # Find failed events eligible for retry
         failed_events = (
             session.query(EventStore)
             .filter(EventStore.status == EventStatus.failed)
@@ -95,20 +87,6 @@ def retry_failed_events():
         logger.info("Event retry task completed: %s", result)
         return result
 
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        if lock_acquired:
-            try:
-                session.execute(
-                    text("SELECT pg_advisory_unlock(:key)"),
-                    {"key": _EVENT_RETRY_LOCK_KEY},
-                )
-            except Exception:
-                logger.exception("Failed to release event retry lock")
-        session.close()
-
 
 @celery_app.task(name="app.tasks.events.cleanup_old_events")
 def cleanup_old_events(retention_days: int = 30):
@@ -122,8 +100,7 @@ def cleanup_old_events(retention_days: int = 30):
     """
     from app.models.event_store import EventStatus, EventStore
 
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
 
         # Delete old completed events
@@ -134,16 +111,8 @@ def cleanup_old_events(retention_days: int = 30):
             .delete(synchronize_session=False)
         )
 
-        session.commit()
-
         logger.info("Cleaned up %s old completed events", deleted_count)
         return {"deleted": deleted_count}
-
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.events.mark_stale_processing_events")
@@ -159,15 +128,10 @@ def mark_stale_processing_events(stale_minutes: int = 30):
     """
     from app.models.event_store import EventStatus, EventStore
 
-    session = SessionLocal()
-    lock_acquired = False
-    try:
-        lock_acquired = bool(
-            session.execute(
-                text("SELECT pg_try_advisory_lock(:key)"),
-                {"key": _EVENT_STALE_LOCK_KEY},
-            ).scalar()
-        )
+    with db_session_adapter.advisory_lock(_EVENT_STALE_LOCK_KEY) as (
+        session,
+        lock_acquired,
+    ):
         if not lock_acquired:
             logger.debug("Skipping stale event marking: previous run still in progress")
             return {"skipped_due_to_lock": 1}
@@ -189,21 +153,5 @@ def mark_stale_processing_events(stale_minutes: int = 30):
                 f"Marked stale processing event as failed: {event_record.event_id}"
             )
 
-        session.commit()
-
         logger.info("Marked %s stale processing events as failed", len(stuck_events))
         return {"marked_failed": len(stuck_events)}
-
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        if lock_acquired:
-            try:
-                session.execute(
-                    text("SELECT pg_advisory_unlock(:key)"),
-                    {"key": _EVENT_STALE_LOCK_KEY},
-                )
-            except Exception:
-                logger.exception("Failed to release stale event marking lock")
-        session.close()

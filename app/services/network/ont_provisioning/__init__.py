@@ -51,25 +51,6 @@ from app.services.network.ont_provisioning.reconciler import (
 )
 from app.services.network.ont_provisioning.result import StepResult
 
-# State reconciliation exports
-from app.services.network.ont_provisioning.state import (
-    ActualOntState,
-    ActualServicePort,
-    DesiredOntState,
-    DesiredServicePort,
-    ProvisioningAction,
-    ProvisioningDelta,
-    ServicePortDelta,
-    build_desired_state_from_profile,
-    read_actual_state,
-)
-from app.services.network.ont_provisioning.vlan_validator import (
-    VlanValidationResult,
-    validate_management_vlan_trunked,
-    validate_service_port_vlans,
-    validate_vlan_exists,
-)
-
 # Saga pattern exports
 from app.services.network.ont_provisioning.saga import (
     ACS_CONFIG_SAGA,
@@ -87,6 +68,25 @@ from app.services.network.ont_provisioning.saga import (
     get_saga_by_name,
     list_available_sagas,
     saga_executions,
+)
+
+# State reconciliation exports
+from app.services.network.ont_provisioning.state import (
+    ActualOntState,
+    ActualServicePort,
+    DesiredOntState,
+    DesiredServicePort,
+    ProvisioningAction,
+    ProvisioningDelta,
+    ServicePortDelta,
+    build_desired_state_from_profile,
+    read_actual_state,
+)
+from app.services.network.ont_provisioning.vlan_validator import (
+    VlanValidationResult,
+    validate_management_vlan_trunked,
+    validate_service_port_vlans,
+    validate_vlan_exists,
 )
 
 __all__ = [

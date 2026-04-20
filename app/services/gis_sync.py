@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from fastapi import BackgroundTasks
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.models.gis import GeoLocation, GeoLocationType
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Address
+from app.services.db_session_adapter import db_session_adapter
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ class GeoSync(ListResponseMixin):
         deactivate_missing: bool,
     ) -> dict[str, object]:
         def _run_sync() -> None:
-            session = SessionLocal()
+            session = db_session_adapter.create_session()
             try:
                 GeoSync.run_sync(
                     session,

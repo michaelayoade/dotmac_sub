@@ -14,7 +14,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.acs_client import AcsClient
+from app.services.genieacs import GenieACSError
 from app.services.network._common import normalize_mac_address
 from app.services.network._resolve import resolve_genieacs
 
@@ -211,6 +212,8 @@ class TR069Summary:
     """Structured TR-069 data grouped by section."""
 
     ont_id: str | None = None
+    display_cards: list[dict[str, Any]] = field(default_factory=list)
+    display_sections: list[dict[str, Any]] = field(default_factory=list)
     system: dict[str, Any] = field(default_factory=dict)
     wan: dict[str, Any] = field(default_factory=dict)
     lan: dict[str, Any] = field(default_factory=dict)
@@ -278,9 +281,7 @@ def _extract_wildcard_value(
     def search(current: Any, remaining_parts: list[str]) -> Any:
         if not remaining_parts:
             # Reached end of path - extract value
-            if isinstance(current, dict) and "_value" in current:
-                return current["_value"]
-            return None
+            return _unwrap_tr069_value(current)
 
         if not isinstance(current, dict):
             return None
@@ -306,7 +307,7 @@ def _extract_wildcard_value(
 
 
 def _extract_first(
-    client: GenieACSClient,
+    client: AcsClient,
     device: dict[str, Any],
     param_paths: list[str],
 ) -> Any:
@@ -320,13 +321,14 @@ def _extract_first(
             val = _extract_wildcard_value(device, path)
         else:
             val = client.extract_parameter_value(device, path)
+        val = _unwrap_tr069_value(val)
         if val is not None:
             return val
     return None
 
 
 def _extract_group(
-    client: GenieACSClient,
+    client: AcsClient,
     device: dict[str, Any],
     group_name: str,
     *,
@@ -492,7 +494,7 @@ def _extract_igd_wan_group(device: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_wan_group(
-    client: GenieACSClient,
+    client: AcsClient,
     device: dict[str, Any],
     *,
     db: Session | None = None,
@@ -545,7 +547,7 @@ def _extract_object_instances(
             if isinstance(node, dict) and "_value" in node:
                 row[f] = node["_value"]
             else:
-                row[f] = node
+                row[f] = _unwrap_tr069_value(node)
         results.append(row)
     return results
 
@@ -564,9 +566,19 @@ def _value_to_bool(value: Any) -> bool | None:
 
 def _unwrap_tr069_value(value: Any) -> Any:
     """Return the scalar value from GenieACS parameter nodes."""
-    if isinstance(value, dict) and "_value" in value:
-        return value.get("_value")
+    if isinstance(value, dict):
+        if "_value" in value:
+            return value.get("_value")
+        if value and all(str(key).startswith("_") for key in value):
+            return None
     return value
+
+
+def _normalize_summary_group(group: Any) -> dict[str, Any]:
+    """Return display-safe summary values from a cached TR-069 section."""
+    if not isinstance(group, dict):
+        return {}
+    return {key: _unwrap_tr069_value(value) for key, value in group.items()}
 
 
 def _first_present(item: dict[str, Any], *keys: str) -> Any:
@@ -636,6 +648,95 @@ def _normalize_lan_hosts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item["active_display"] = "Active" if item["active"] is True else "Inactive"
         normalized.append(item)
     return normalized
+
+
+def _display_value(value: Any, fallback: str = "-") -> str:
+    value = _unwrap_tr069_value(value)
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text if text else fallback
+
+
+def _lan_mode_label(value: Any) -> str:
+    enabled = _value_to_bool(value)
+    if enabled is True:
+        return "Router"
+    if enabled is False:
+        return "Bridge"
+    return "-"
+
+
+def _summary_card(label: str, value: Any, *, monospace: bool = True) -> dict[str, Any]:
+    return {
+        "label": label,
+        "value": _display_value(value, "—"),
+        "monospace": monospace,
+    }
+
+
+def _section_fields(values: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {"label": str(key), "value": _display_value(value, "—")}
+        for key, value in values.items()
+    ]
+
+
+def _apply_display_model(summary: TR069Summary) -> None:
+    """Populate UI-facing view-model fields from normalized ACS state."""
+    summary.display_cards = [
+        _summary_card(
+            "MAC Address",
+            summary.system.get("MAC Address") or summary.system.get("Serial"),
+        ),
+        _summary_card("WAN IP", summary.wan.get("WAN IP")),
+        _summary_card("PPPoE User", summary.wan.get("Username")),
+        _summary_card("PPPoE Status", summary.wan.get("Status"), monospace=False),
+        _summary_card(
+            "WAN Mode",
+            summary.wan.get("Connection Type"),
+            monospace=False,
+        ),
+        _summary_card(
+            "LAN Mode",
+            _lan_mode_label(summary.lan.get("DHCP Enabled")),
+            monospace=False,
+        ),
+        _summary_card(
+            "WiFi Clients",
+            summary.wireless.get("Connected Clients"),
+            monospace=False,
+        ),
+        _summary_card(
+            "LAN Hosts",
+            len(summary.lan_hosts)
+            if summary.lan_hosts
+            else summary.lan.get("Connected Hosts"),
+            monospace=False,
+        ),
+    ]
+    summary.display_sections = [
+        {
+            "key": "system",
+            "title": "System",
+            "fields": _section_fields(summary.system),
+        },
+        {
+            "key": "wan",
+            "title": "WAN / Internet",
+            "fields": _section_fields(summary.wan),
+        },
+        {
+            "key": "lan",
+            "title": "LAN",
+            "fields": _section_fields(summary.lan),
+        },
+        {
+            "key": "wireless",
+            "title": "Wireless",
+            "fields": _section_fields(summary.wireless),
+        },
+    ]
 
 
 class OntTR069:
@@ -772,6 +873,7 @@ class OntTR069:
 
         OntTR069._attach_recent_informs(db, ont, summary)
         OntTR069._attach_cached_parameters(db, ont, summary)
+        _apply_display_model(summary)
         return summary
 
     @staticmethod
@@ -793,6 +895,7 @@ class OntTR069:
         OntTR069._attach_recent_informs(db, ont, summary)
         OntTR069._attach_cached_parameters(db, ont, summary)
         if summary.recent_informs or summary.cached_parameters:
+            _apply_display_model(summary)
             return summary
         return None
 
@@ -899,6 +1002,8 @@ class OntTR069:
         fetched_at = summary.fetched_at or datetime.now(UTC)
         return {
             "ont_id": summary.ont_id,
+            "display_cards": summary.display_cards,
+            "display_sections": summary.display_sections,
             "system": summary.system,
             "wan": summary.wan,
             "lan": summary.lan,
@@ -923,12 +1028,14 @@ class OntTR069:
             except ValueError:
                 fetched_at = None
 
-        return TR069Summary(
+        summary = TR069Summary(
             ont_id=str(ont.id),
-            system=dict(snapshot.get("system") or {}),
-            wan=dict(snapshot.get("wan") or {}),
-            lan=dict(snapshot.get("lan") or {}),
-            wireless=dict(snapshot.get("wireless") or {}),
+            display_cards=list(snapshot.get("display_cards") or []),
+            display_sections=list(snapshot.get("display_sections") or []),
+            system=_normalize_summary_group(snapshot.get("system")),
+            wan=_normalize_summary_group(snapshot.get("wan")),
+            lan=_normalize_summary_group(snapshot.get("lan")),
+            wireless=_normalize_summary_group(snapshot.get("wireless")),
             ethernet_ports=_normalize_ethernet_ports(
                 list(snapshot.get("ethernet_ports") or [])
             ),
@@ -942,6 +1049,9 @@ class OntTR069:
             if isinstance(snapshot.get("raw_device"), dict)
             else None,
         )
+        if not summary.display_cards or not summary.display_sections:
+            _apply_display_model(summary)
+        return summary
 
     @staticmethod
     def _to_int(value: Any) -> int | None:

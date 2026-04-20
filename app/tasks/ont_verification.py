@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice, OntUnit
@@ -48,7 +48,7 @@ def verify_ont_provisioning_state(
         Dict with counts: verified, drifted, failed, skipped
     """
     logger.info("Starting ONT provisioning state verification")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         from sqlalchemy import or_, select
@@ -196,7 +196,7 @@ def _verify_single_ont(db, olt, ont) -> bool:
     Returns:
         True if drift detected, False if verified
     """
-    from app.services.network.olt_ssh_service_ports import get_service_ports_for_ont
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.service_port_allocator import get_allocations_for_ont
 
     # Get expected allocations from DB
@@ -234,16 +234,20 @@ def _verify_single_ont(db, olt, ont) -> bool:
         return False
 
     # Get actual service ports from OLT
-    ok, msg, actual_ports = get_service_ports_for_ont(olt, fsp, ont_id)
+    ports_result = get_protocol_adapter(olt).get_service_ports_for_ont(fsp, ont_id)
+    actual_ports_data = (
+        ports_result.data.get("service_ports", []) if ports_result.success else []
+    )
+    actual_ports = actual_ports_data if isinstance(actual_ports_data, list) else []
 
-    if not ok:
+    if not ports_result.success:
         logger.warning(
             "Failed to read service ports for ONT %s: %s",
             ont.serial_number,
-            msg,
+            ports_result.message,
         )
         # Can't determine drift, treat as failure
-        raise RuntimeError(f"Failed to read service ports: {msg}")
+        raise RuntimeError(f"Failed to read service ports: {ports_result.message}")
 
     # Compare expected vs actual
     actual_vlan_gems = {(p.vlan_id, p.gem_index) for p in actual_ports}
@@ -301,7 +305,7 @@ def verify_single_ont(*, ont_id: str) -> dict[str, Any]:
     Use this for manual verification or after critical operations.
     """
     logger.info("Verifying single ONT: %s", ont_id)
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         from app.models.network import OLTDevice, OntUnit
@@ -351,7 +355,7 @@ def mark_pending_verification(*, ont_ids: list[str]) -> dict[str, Any]:
     Called after service-port creation/modification to queue verification.
     """
     logger.info("Marking %d ONTs as pending verification", len(ont_ids))
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         from app.models.network import OntUnit

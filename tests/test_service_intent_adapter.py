@@ -359,6 +359,76 @@ def test_acs_service_intent_adapter_maps_observed_summary_without_secrets() -> N
     assert "super-secret-password" not in repr(intent)
 
 
+def test_acs_service_intent_adapter_hides_metadata_only_wan_nodes() -> None:
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    metadata_node = {"_object": False, "_writable": False}
+    intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+        SimpleNamespace(
+            available=True,
+            source="cache",
+            fetched_at=None,
+            error=None,
+            system={},
+            wan={
+                "Connection Type": "IP_Routed",
+                "WAN IP": metadata_node,
+                "Username": "100025520",
+                "Status": metadata_node,
+                "Uptime": metadata_node,
+                "DNS Servers": {"_object": False, "_writable": True},
+                "Gateway": metadata_node,
+            },
+            lan={},
+            wireless={},
+            ethernet_ports=[],
+            lan_hosts=[],
+        )
+    )
+
+    wan = intent["observed"]["wan"]
+    assert wan["connection_type"] == "IP_Routed"
+    assert wan["pppoe_username"] == "100025520"
+    assert wan["wan_ip"] is None
+    assert wan["status"] is None
+    assert wan["gateway"] is None
+    assert wan["dns_servers"] is None
+    assert "{'_object'" not in repr(intent)
+
+
+def test_cached_tr069_snapshot_hides_metadata_only_parameter_nodes() -> None:
+    from app.services.network.ont_tr069 import OntTR069
+
+    summary = OntTR069._summary_from_snapshot(
+        SimpleNamespace(
+            id="ont-1",
+            tr069_last_snapshot={
+                "wan": {
+                    "Connection Type": "IP_Routed",
+                    "WAN IP": {"_object": False, "_writable": False},
+                    "Username": {"_value": "100025520"},
+                    "Status": {"_object": False, "_writable": False},
+                    "DNS Servers": {"_object": False, "_writable": True},
+                },
+                "system": {},
+                "lan": {},
+                "wireless": {},
+                "ethernet_ports": [],
+                "lan_hosts": [],
+            },
+            tr069_last_snapshot_at=None,
+            observed_runtime_updated_at=None,
+        )
+    )
+
+    assert summary is not None
+    assert summary.wan["Connection Type"] == "IP_Routed"
+    assert summary.wan["Username"] == "100025520"
+    assert summary.wan["WAN IP"] is None
+    assert summary.wan["Status"] is None
+    assert summary.wan["DNS Servers"] is None
+
+
 def test_service_intent_ui_adapter_delegates_ont_capabilities(monkeypatch) -> None:
     from app.services.network.ont_read import OntReadFacade
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter

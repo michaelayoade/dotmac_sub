@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def process_deferred_olt_operations(
     4. Mark completed or reschedule on failure
     """
     logger.debug("Processing deferred OLT operations")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         from app.models.network import OLTDevice
@@ -154,8 +154,8 @@ def _execute_authorize(
         BatchedAuthorizationSpec,
         MgmtIpConfig,
         ServicePortSpec,
-        execute_batched_authorization,
     )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     # Reconstruct spec from payload
     service_ports = [ServicePortSpec(**sp) for sp in payload.get("service_ports", [])]
@@ -175,11 +175,12 @@ def _execute_authorize(
         description=payload.get("description"),
     )
 
-    result = execute_batched_authorization(olt, spec)
+    adapter = get_protocol_adapter(olt)
+    result = adapter.execute_authorization_batch(spec)
 
     if result.success:
         # Update DB with ONT-ID if needed
-        if result.ont_id and payload.get("ont_unit_id"):
+        if result.ont_id is not None and payload.get("ont_unit_id"):
             from app.models.network import OntUnit
 
             ont = db.get(OntUnit, payload["ont_unit_id"])
@@ -188,7 +189,7 @@ def _execute_authorize(
                 ont.authorization_status = "authorized"
         return True, None
     else:
-        return False, result.error_message
+        return False, result.message
 
 
 def _execute_deprovision(
@@ -197,15 +198,16 @@ def _execute_deprovision(
     payload: dict,
 ) -> tuple[bool, str | None]:
     """Execute a queued deprovision operation."""
-    from app.services.network.olt_ssh_service_ports import delete_service_port
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
+    adapter = get_protocol_adapter(olt)
     service_port_indices = payload.get("service_port_indices", [])
     errors = []
 
     for idx in service_port_indices:
-        ok, msg = delete_service_port(olt, idx)
-        if not ok:
-            errors.append(f"Port {idx}: {msg}")
+        result = adapter.delete_service_port(idx)
+        if not result.success:
+            errors.append(f"Port {idx}: {result.message}")
 
     if errors:
         return False, "; ".join(errors)
@@ -219,22 +221,21 @@ def _execute_service_port(
     payload: dict,
 ) -> tuple[bool, str | None]:
     """Execute a queued service-port creation operation."""
-    from app.services.network.olt_ssh_service_ports import create_single_service_port
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-    ok, msg, _port_index = create_single_service_port(
-        olt=olt,
-        fsp=payload["fsp"],
-        ont_id=payload["ont_id"],
+    result = get_protocol_adapter(olt).create_service_port(
+        payload["fsp"],
+        payload["ont_id"],
         gem_index=payload["gem_index"],
         vlan_id=payload["vlan_id"],
         user_vlan=payload.get("user_vlan"),
         tag_transform=payload.get("tag_transform", "translate"),
+        port_index=payload.get("port_index"),
     )
 
-    if ok:
+    if result.success:
         return True, None
-    else:
-        return False, msg
+    return False, result.message
 
 
 @celery_app.task(name="app.tasks.olt_queue.retry_failed_operations")
@@ -247,7 +248,7 @@ def retry_failed_operations(
     Runs hourly to attempt recovery of recently failed operations.
     """
     logger.info("Retrying failed OLT operations")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         from datetime import UTC, datetime, timedelta

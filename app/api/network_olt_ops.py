@@ -2,37 +2,22 @@
 
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.network import OLTDevice
 from app.schemas.network_olt_ops import (
     OltAuthorizeOntRequest,
     OltCliCommandRequest,
-    OltDiscoveredOntRead,
     OltOntStatusBySerialRequest,
     OltOperationResponse,
-    OltProfileRead,
     OltServicePortCreateRequest,
-    OltServicePortRead,
     OltTr069ProfileCreateRequest,
-    OltTr069ProfileRead,
 )
 from app.services.auth_dependencies import require_permission
 from app.services.network import olt_api_operations
-from app.services.network.olt import OLTDevices
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["network-olt-operations"])
-
-
-def _load_olt(db: Session, olt_id: str) -> OLTDevice:
-    """Load OLTDevice or raise 404."""
-    return OLTDevices.get(db, olt_id)  # type: ignore[return-value]
 
 
 # ── ONT Discovery & Authorization ─────────────────────────────────────
@@ -44,25 +29,14 @@ def _load_olt(db: Session, olt_id: str) -> OLTDevice:
     dependencies=[Depends(require_permission("network:read"))],
 )
 def discover_onts(olt_id: str, db: Session = Depends(get_db)) -> OltOperationResponse:
-    from app.services.network.olt_ssh import get_autofind_onts
-
-    olt = _load_olt(db, olt_id)
-    success, message, entries = get_autofind_onts(olt)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    data = [
-        OltDiscoveredOntRead(
-            fsp=e.fsp,
-            serial_number=e.serial_number,
-            serial_hex=e.serial_hex,
-            vendor_id=e.vendor_id,
-            model=e.model,
-            software_version=e.software_version,
-            mac=e.mac,
-        ).model_dump()
-        for e in entries
-    ]
-    return OltOperationResponse(success=True, message=message, data=data)
+    result = olt_api_operations.discover_onts(db, olt_id)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(
+        success=True,
+        message=result.message,
+        data=(result.data or {}).get("entries", []),
+    )
 
 
 @router.post(
@@ -127,24 +101,14 @@ def list_service_ports(
     fsp: str = Query(description="Frame/Slot/Port e.g. 0/1/0"),
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh import get_service_ports
-
-    olt = _load_olt(db, olt_id)
-    success, message, entries = get_service_ports(olt, fsp)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    data = [
-        OltServicePortRead(
-            index=e.index,
-            vlan_id=e.vlan_id,
-            ont_id=e.ont_id,
-            gem_index=e.gem_index,
-            flow_type=e.flow_type,
-            state=e.state,
-        ).model_dump()
-        for e in entries
-    ]
-    return OltOperationResponse(success=True, message=message, data=data)
+    result = olt_api_operations.list_service_ports(db, olt_id, fsp=fsp)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(
+        success=True,
+        message=result.message,
+        data=(result.data or {}).get("entries", []),
+    )
 
 
 @router.post(
@@ -197,26 +161,16 @@ def get_service_ports_for_ont(
     fsp: str = Query(description="Frame/Slot/Port e.g. 0/1/0"),
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh_service_ports import (
-        get_service_ports_for_ont as ssh_get_for_ont,
+    result = olt_api_operations.list_service_ports_for_ont(
+        db, olt_id, fsp=fsp, ont_id=ont_id
     )
-
-    olt = _load_olt(db, olt_id)
-    success, message, entries = ssh_get_for_ont(olt, fsp, ont_id)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    data = [
-        OltServicePortRead(
-            index=e.index,  # type: ignore[attr-defined]
-            vlan_id=e.vlan_id,  # type: ignore[attr-defined]
-            ont_id=e.ont_id,  # type: ignore[attr-defined]
-            gem_index=e.gem_index,  # type: ignore[attr-defined]
-            flow_type=e.flow_type,  # type: ignore[attr-defined]
-            state=e.state,  # type: ignore[attr-defined]
-        ).model_dump()
-        for e in entries
-    ]
-    return OltOperationResponse(success=True, message=message, data=data)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(
+        success=True,
+        message=result.message,
+        data=(result.data or {}).get("entries", []),
+    )
 
 
 # ── Profiles ───────────────────────────────────────────────────────────
@@ -230,17 +184,14 @@ def get_service_ports_for_ont(
 def get_line_profiles(
     olt_id: str, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh_profiles import get_line_profiles as ssh_get
-
-    olt = _load_olt(db, olt_id)
-    success, message, entries = ssh_get(olt)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    data = [
-        OltProfileRead(profile_id=e.profile_id, name=e.name).model_dump()  # type: ignore[attr-defined]
-        for e in entries
-    ]
-    return OltOperationResponse(success=True, message=message, data=data)
+    result = olt_api_operations.get_line_profiles(db, olt_id)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(
+        success=True,
+        message=result.message,
+        data=(result.data or {}).get("entries", []),
+    )
 
 
 @router.get(
@@ -251,17 +202,14 @@ def get_line_profiles(
 def get_service_profiles(
     olt_id: str, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh_profiles import get_service_profiles as ssh_get
-
-    olt = _load_olt(db, olt_id)
-    success, message, entries = ssh_get(olt)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    data = [
-        OltProfileRead(profile_id=e.profile_id, name=e.name).model_dump()  # type: ignore[attr-defined]
-        for e in entries
-    ]
-    return OltOperationResponse(success=True, message=message, data=data)
+    result = olt_api_operations.get_service_profiles(db, olt_id)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(
+        success=True,
+        message=result.message,
+        data=(result.data or {}).get("entries", []),
+    )
 
 
 @router.get(
@@ -272,24 +220,14 @@ def get_service_profiles(
 def get_tr069_profiles(
     olt_id: str, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh_profiles import (
-        get_tr069_server_profiles as ssh_get,
+    result = olt_api_operations.get_tr069_profiles(db, olt_id)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(
+        success=True,
+        message=result.message,
+        data=(result.data or {}).get("entries", []),
     )
-
-    olt = _load_olt(db, olt_id)
-    success, message, entries = ssh_get(olt)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    data = [
-        OltTr069ProfileRead(
-            profile_id=e.profile_id,
-            name=e.name,
-            acs_url=getattr(e, "acs_url", None),
-            username=getattr(e, "acs_username", None),
-        ).model_dump()
-        for e in entries
-    ]
-    return OltOperationResponse(success=True, message=message, data=data)
 
 
 @router.post(
@@ -364,11 +302,9 @@ def run_cli_command(
     payload: OltCliCommandRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_operations import execute_cli_command
-
-    success, message, output = execute_cli_command(
-        db, olt_id, payload.command, request=request
+    result = olt_api_operations.run_cli_command(
+        db, olt_id, command=payload.command, request=request
     )
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    return OltOperationResponse(success=True, message=message, data={"output": output})
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(success=True, message=result.message, data=result.data)

@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.services.account_lifecycle import restore_subscription
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,7 @@ def resume_expired_holds() -> dict:
     Should be scheduled to run periodically (e.g., every hour or daily).
     """
     logger.info("Starting resume_expired_holds")
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         now = datetime.now(UTC)
 
         # Find expired vacation holds
@@ -84,8 +83,3 @@ def resume_expired_holds() -> dict:
             "resumed": resumed,
             "failed": failed,
         }
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

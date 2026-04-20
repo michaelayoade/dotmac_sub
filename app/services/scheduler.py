@@ -99,16 +99,16 @@ def refresh_schedule() -> dict:
 
 
 def enqueue_task(task_name: str, args: list | None, kwargs: dict | None) -> dict:
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task as enqueue_background_task
 
-    async_result = enqueue_celery_task(
+    async_result = enqueue_background_task(
         task_name,
         args=args or [],
         kwargs=kwargs or {},
         correlation_id=f"scheduled_task:{task_name}",
         source="scheduler_service",
     )
-    return {"queued": True, "task_id": str(async_result.id)}
+    return {"queued": True, "task_id": str(async_result.task_id or "")}
 
 
 def enqueue_by_id(db: Session, task_id: str) -> dict:

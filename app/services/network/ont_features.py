@@ -17,6 +17,12 @@ from app.services.network.ont_action_common import (
 logger = logging.getLogger(__name__)
 
 
+def _acs_config_writer():
+    from app.services.acs_client import create_acs_config_writer
+
+    return create_acs_config_writer()
+
+
 def _check_capability(db: Session, ont: OntUnit, feature: str) -> ActionResult | None:
     """Check whether the ONT's vendor model supports a given feature.
 
@@ -100,16 +106,12 @@ class OntFeatureService:
             return cap_err
 
         if ssid is not None:
-            from app.services.acs_config_adapter import acs_config_adapter
-
-            result = acs_config_adapter.set_wifi_ssid(db, ont_id, ssid)
+            result = _acs_config_writer().set_wifi_ssid(db, ont_id, ssid)
             if not result.success:
                 return result
 
         if password is not None:
-            from app.services.acs_config_adapter import acs_config_adapter
-
-            result = acs_config_adapter.set_wifi_password(db, ont_id, password)
+            result = _acs_config_writer().set_wifi_password(db, ont_id, password)
             if not result.success:
                 return result
 
@@ -217,9 +219,7 @@ class OntFeatureService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        from app.services.acs_config_adapter import acs_config_adapter
-
-        result = acs_config_adapter.toggle_lan_port(db, ont_id, port_number, enabled)
+        result = _acs_config_writer().toggle_lan_port(db, ont_id, port_number, enabled)
         if result.success:
             _set_sync_meta(ont, "tr069")
             db.commit()

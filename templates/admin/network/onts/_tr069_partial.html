@@ -22,21 +22,12 @@
         </div>
     </div>
 
+    {% set summary_cards = tr069.display_cards if tr069.display_cards is defined and tr069.display_cards else [] %}
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {% set summary_cards = [
-            ('MAC Address', tr069.system.get('MAC Address') or tr069.system.get('Serial')),
-            ('WAN IP', tr069.wan.get('WAN IP')),
-            ('PPPoE User', tr069.wan.get('Username')),
-            ('PPPoE Status', tr069.wan.get('Status')),
-            ('WAN Mode', tr069.wan.get('Connection Type')),
-            ('LAN Mode', 'Router' if tr069.lan.get('DHCP Enabled') in [true, '1', 'true', 'True', 'yes'] else 'Bridge' if tr069.lan.get('DHCP Enabled') in [false, '0', 'false', 'False', 'no'] else none),
-            ('WiFi Clients', tr069.wireless.get('Connected Clients')),
-            ('LAN Hosts', (tr069.lan_hosts | length) if tr069.lan_hosts else tr069.lan.get('Connected Hosts'))
-        ] %}
-        {% for label, value in summary_cards %}
+        {% for card in summary_cards %}
         <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{{ label }}</div>
-            <div class="mt-2 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value not in [none, ''] else '—' }}</div>
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{{ card.label }}</div>
+            <div class="mt-2 text-sm {% if card.monospace %}font-mono{% endif %} text-slate-900 dark:text-white break-all">{{ card.value }}</div>
         </div>
         {% endfor %}
     </div>
@@ -77,10 +68,12 @@
         </button>
         <div x-show="sysOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
             <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {% for key, value in tr069.system.items() %}
+                {% set system_section = (tr069.display_sections | selectattr('key', 'equalto', 'system') | list | first) if tr069.display_sections is defined else none %}
+                {% set system_fields = system_section.fields if system_section else [] %}
+                {% for field in system_fields %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ field.label }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ field.value }}</dd>
                 </div>
                 {% endfor %}
             </dl>
@@ -101,10 +94,12 @@
         </div>
         <div x-show="wanOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
             <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {% for key, value in tr069.wan.items() %}
+                {% set wan_section = (tr069.display_sections | selectattr('key', 'equalto', 'wan') | list | first) if tr069.display_sections is defined else none %}
+                {% set wan_fields = wan_section.fields if wan_section else [] %}
+                {% for field in wan_fields %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ field.label }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ field.value }}</dd>
                 </div>
                 {% endfor %}
             </dl>
@@ -122,10 +117,12 @@
         </button>
         <div x-show="lanOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
             <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {% for key, value in tr069.lan.items() %}
+                {% set lan_section = (tr069.display_sections | selectattr('key', 'equalto', 'lan') | list | first) if tr069.display_sections is defined else none %}
+                {% set lan_fields = lan_section.fields if lan_section else [] %}
+                {% for field in lan_fields %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ field.label }}</dt>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ field.value }}</dd>
                 </div>
                 {% endfor %}
             </dl>
@@ -151,21 +148,23 @@
         </div>
         <div x-show="wifiOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
             <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {% for key, value in tr069.wireless.items() %}
+                {% set wireless_section = (tr069.display_sections | selectattr('key', 'equalto', 'wireless') | list | first) if tr069.display_sections is defined else none %}
+                {% set wireless_fields = wireless_section.fields if wireless_section else [] %}
+                {% for field in wireless_fields %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    {% if key == 'Password' and value %}
+                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ field.label }}</dt>
+                    {% if field.label == 'Password' and field.value not in ['—', '-'] %}
                     <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white"
                         x-data="{ revealed: false }">
                         <span x-show="!revealed">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;
                             <button type="button" @click="revealed = true" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">show</button>
                         </span>
-                        <span x-show="revealed" x-cloak>{{ value }}
+                        <span x-show="revealed" x-cloak>{{ field.value }}
                             <button type="button" @click="revealed = false" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">hide</button>
                         </span>
                     </dd>
                     {% else %}
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ field.value }}</dd>
                     {% endif %}
                 </div>
                 {% endfor %}

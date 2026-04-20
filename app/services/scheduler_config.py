@@ -2,10 +2,10 @@ import logging
 import os
 from datetime import timedelta
 
-from app.db import SessionLocal
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.services import integration as integration_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
 from app.timezone import APP_TIMEZONE_NAME
 
@@ -21,6 +21,8 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.scrape_genieacs_metrics",
     "app.tasks.tr069.execute_bulk_action",
     "app.tasks.tr069.wait_for_ont_bootstrap",
+    "app.tasks.tr069.apply_saved_ont_service_config",
+    "app.tasks.tr069.apply_acs_config",
 }
 
 
@@ -176,7 +178,14 @@ def get_celery_config() -> dict:
     timezone = None
     beat_max_loop_interval = 5
     beat_refresh_seconds = 30
-    session = SessionLocal()
+    task_soft_time_limit = 840
+    task_time_limit = 900
+    acs_soft_time_limit = 240
+    acs_time_limit = 300
+    long_soft_time_limit = 1740
+    long_time_limit = 1800
+    worker_prefetch_multiplier = 1
+    session = db_session_adapter.create_session()
     try:
         broker = _effective_str(
             session, SettingDomain.scheduler, "broker_url", "CELERY_BROKER_URL", None
@@ -205,6 +214,55 @@ def get_celery_config() -> dict:
             "CELERY_BEAT_REFRESH_SECONDS",
             30,
         )
+        task_soft_time_limit = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "task_soft_time_limit_seconds",
+            "CELERY_TASK_SOFT_TIME_LIMIT",
+            task_soft_time_limit,
+        )
+        task_time_limit = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "task_time_limit_seconds",
+            "CELERY_TASK_TIME_LIMIT",
+            task_time_limit,
+        )
+        acs_soft_time_limit = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "acs_task_soft_time_limit_seconds",
+            "CELERY_ACS_TASK_SOFT_TIME_LIMIT",
+            acs_soft_time_limit,
+        )
+        acs_time_limit = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "acs_task_time_limit_seconds",
+            "CELERY_ACS_TASK_TIME_LIMIT",
+            acs_time_limit,
+        )
+        long_soft_time_limit = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "long_task_soft_time_limit_seconds",
+            "CELERY_LONG_TASK_SOFT_TIME_LIMIT",
+            long_soft_time_limit,
+        )
+        long_time_limit = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "long_task_time_limit_seconds",
+            "CELERY_LONG_TASK_TIME_LIMIT",
+            long_time_limit,
+        )
+        worker_prefetch_multiplier = _effective_int(
+            session,
+            SettingDomain.scheduler,
+            "worker_prefetch_multiplier",
+            "CELERY_WORKER_PREFETCH_MULTIPLIER",
+            worker_prefetch_multiplier,
+        )
     except Exception:
         logger.exception("Failed to load scheduler settings from database.")
     finally:
@@ -220,12 +278,43 @@ def get_celery_config() -> dict:
     }
     config["beat_max_loop_interval"] = beat_max_loop_interval
     config["beat_refresh_seconds"] = beat_refresh_seconds
+    config["task_soft_time_limit"] = max(30, task_soft_time_limit)
+    config["task_time_limit"] = max(config["task_soft_time_limit"] + 1, task_time_limit)
+    config["worker_prefetch_multiplier"] = max(1, worker_prefetch_multiplier)
+    config["task_acks_late"] = True
+    config["task_reject_on_worker_lost"] = True
+    config["task_track_started"] = True
+    config["broker_connection_retry_on_startup"] = True
+    config["worker_cancel_long_running_tasks_on_connection_loss"] = True
+    config["result_expires"] = _env_int("CELERY_RESULT_EXPIRES") or 86400
+
+    acs_limits = {
+        "soft_time_limit": max(30, acs_soft_time_limit),
+        "time_limit": max(acs_soft_time_limit + 1, acs_time_limit),
+    }
+    long_limits = {
+        "soft_time_limit": max(60, long_soft_time_limit),
+        "time_limit": max(long_soft_time_limit + 1, long_time_limit),
+    }
+    annotations: dict[str, dict[str, int]] = dict.fromkeys(TR069_TASK_QUEUE_NAMES, acs_limits)
+    annotations.update(
+        {
+            "app.tasks.saga.execute_saga": long_limits,
+            "app.tasks.saga.queue_bulk_saga_executions": long_limits,
+            "app.tasks.olt_firmware.upgrade_with_verification": long_limits,
+            "app.tasks.olt_firmware.rollback": long_limits,
+            "app.tasks.provisioning.run_bulk_activation_job": long_limits,
+            "app.tasks.provisioning.run_service_migration_job": long_limits,
+            "app.tasks.provisioning.run_coordinated_provisioning_task": long_limits,
+        }
+    )
+    config["task_annotations"] = annotations
     return config
 
 
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
     try:
         enabled = _effective_bool(
             session, SettingDomain.gis, "sync_enabled", "GIS_SYNC_ENABLED", True
@@ -612,7 +701,8 @@ def build_beat_schedule() -> dict:
                 interval_seconds=max(trim_interval, 60),
             )
 
-        # SNMP interface polling and discovery
+        # Direct SNMP interface polling/discovery is disabled. Zabbix is the
+        # monitoring source; keep these rows disabled if they already exist.
         snmp_walk_interval = _resolve_int(
             session, SettingDomain.snmp, "interface_walk_interval_seconds", 300
         )
@@ -623,18 +713,20 @@ def build_beat_schedule() -> dict:
             session,
             name="snmp_interface_walk",
             task_name="app.tasks.snmp.walk_interfaces",
-            enabled=True,
+            enabled=False,
             interval_seconds=max(snmp_walk_interval, 30),
         )
         _sync_scheduled_task(
             session,
             name="snmp_interface_discovery",
             task_name="app.tasks.snmp.discover_interfaces",
-            enabled=True,
+            enabled=False,
             interval_seconds=max(snmp_discovery_interval, 60),
         )
 
-        # Core-device health refresh (ping + SNMP) for near-real-time status.
+        # App-side core-device ping/SNMP refresh is disabled. Zabbix owns
+        # monitoring state, and Zabbix ingestion tasks below keep local data in
+        # sync.
         core_ping_interval = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -651,19 +743,21 @@ def build_beat_schedule() -> dict:
             session,
             name="core_device_ping_refresh",
             task_name="app.tasks.network_monitoring.refresh_core_device_ping",
-            enabled=True,
+            enabled=False,
             interval_seconds=max(core_ping_interval, 10),
         )
         _sync_scheduled_task(
             session,
             name="core_device_snmp_refresh",
             task_name="app.tasks.network_monitoring.refresh_core_device_snmp",
-            enabled=True,
+            enabled=False,
             interval_seconds=max(core_snmp_interval, 30),
         )
 
-        # OLT polling (RX/TX levels + ONU online status)
-        # DISABLED: Replaced by Zabbix OLT SNMP monitoring (Phase 5 cleanup)
+        # Legacy bulk OLT signal polling.
+        # Disabled because continuous monitoring is handled by Zabbix/vmagent.
+        # ONT discovery below still performs inventory/topology reconciliation
+        # and may refresh per-ONT telemetry from authoritative OLT observations.
         olt_poll_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -686,7 +780,8 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_poll_minutes * 60, 60),
         )
 
-        # ONT discovery (SNMP walk → upsert OntUnit rows)
+        # ONT discovery/reconciliation (SNMP walk → match existing OntUnit rows,
+        # repair topology, and skip unlinked observations).
         ont_discovery_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -880,11 +975,11 @@ def build_beat_schedule() -> dict:
             session,
             SettingDomain.network,
             "tr069_genieacs_stale_cleanup_interval_seconds",
-            21600,  # 6 hours
+            900,  # 15 minutes
         )
         tr069_genieacs_cleanup_interval = max(
-            tr069_genieacs_cleanup_interval, 3600
-        )  # Min: 1 hour
+            tr069_genieacs_cleanup_interval, 300
+        )  # Min: 5 minutes
         _sync_scheduled_task(
             session,
             name="tr069_genieacs_stale_cleanup",
@@ -982,6 +1077,28 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.events.mark_stale_processing_events",
             enabled=event_stale_cleanup_enabled,
             interval_seconds=event_stale_cleanup_interval,
+        )
+
+        stale_infra_check_enabled = _effective_bool(
+            session,
+            SettingDomain.scheduler,
+            "stale_infrastructure_check_enabled",
+            "STALE_INFRASTRUCTURE_CHECK_ENABLED",
+            True,
+        )
+        stale_infra_check_interval = _resolve_int(
+            session,
+            SettingDomain.scheduler,
+            "stale_infrastructure_check_interval_seconds",
+            300,
+        )
+        stale_infra_check_interval = max(stale_infra_check_interval, 60)
+        _sync_scheduled_task(
+            session,
+            name="stale_infrastructure_check",
+            task_name="app.tasks.monitoring_cleanup.check_stale_infrastructure",
+            enabled=stale_infra_check_enabled,
+            interval_seconds=stale_infra_check_interval,
         )
 
         # Event old cleanup - removes old completed events

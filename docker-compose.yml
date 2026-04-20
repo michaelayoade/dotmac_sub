@@ -10,9 +10,9 @@ services:
     build: .
     container_name: dotmac_sub_app
     restart: unless-stopped
-    mem_limit: 1g
+    mem_limit: 1536m
     mem_reservation: 512m
-    cpus: 1.5
+    cpus: 2.0
     pids_limit: 256
     logging: *default-logging
     ports:
@@ -71,7 +71,7 @@ services:
     command:
     - /bin/sh
     - -c
-    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
+    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log --workers ${WEB_CONCURRENCY:-1}
   celery-worker:
     build: .
     container_name: dotmac_sub_celery_worker
@@ -127,6 +127,47 @@ services:
     - --max-tasks-per-child=50
     - -Q
     - celery
+  celery-worker-nin:
+    build: .
+    container_name: dotmac_sub_celery_worker_nin
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *default-logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
+      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: dotmac-sub-dev-token
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=1
+    - --max-tasks-per-child=50
+    - -Q
+    - nin
   celery-worker-tr069:
     build: .
     container_name: dotmac_sub_celery_worker_tr069
@@ -235,6 +276,104 @@ services:
     - --max-tasks-per-child=50
     - -Q
     - acs
+  celery-worker-bandwidth:
+    build: .
+    container_name: dotmac_sub_celery_worker_bandwidth
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *default-logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: dotmac-sub-dev-token
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_started
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=2
+    - --max-tasks-per-child=100
+    - -Q
+    - bandwidth
+  celery-worker-ingestion:
+    build: .
+    container_name: dotmac_sub_celery_worker_ingestion
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *default-logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      VICTORIAMETRICS_URL: http://victoriametrics:8428
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: dotmac-sub-dev-token
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_started
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - --concurrency=2
+    - --max-tasks-per-child=100
+    - -Q
+    - ingestion
   celery-beat:
     build: .
     container_name: dotmac_sub_celery_beat
@@ -622,10 +761,10 @@ services:
     image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
     container_name: dotmac_zabbix_server
     restart: unless-stopped
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.5
-    pids_limit: 256
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2
+    pids_limit: 512
     logging: *default-logging
     depends_on:
       zabbix-db:
@@ -636,10 +775,10 @@ services:
       POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
       ZBX_STARTPOLLERS: 10
       ZBX_STARTPINGERS: 5
-      ZBX_CACHESIZE: 128M
-      ZBX_HISTORYCACHESIZE: 64M
-      ZBX_TRENDCACHESIZE: 32M
-      ZBX_VALUECACHESIZE: 64M
+      ZBX_CACHESIZE: 512M
+      ZBX_HISTORYCACHESIZE: 256M
+      ZBX_TRENDCACHESIZE: 64M
+      ZBX_VALUECACHESIZE: 128M
     ports:
     - 10051:10051
     volumes:

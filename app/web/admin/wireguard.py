@@ -75,9 +75,9 @@ def vpn_index(
 ) -> HTMLResponse:
     """Unified VPN dashboard for WireGuard and OpenVPN management."""
     if web_vpn_management_service.should_schedule_health_scan(db):
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
+        enqueue_task(
             run_vpn_health_scan,
             correlation_id="vpn_health_scan:auto",
             source="admin_wireguard_dashboard",
@@ -616,9 +616,9 @@ def vpn_control_action(
         server_id=server_id,
         actor_id=_get_actor_id(request),
     )
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task
 
-    enqueue_celery_task(
+    enqueue_task(
         run_vpn_control_job,
         kwargs={"job_id": job["job_id"]},
         correlation_id=f"vpn_control:{protocol}:{action}:{job['job_id']}",

@@ -21,7 +21,6 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.models.billing import Invoice, InvoicePdfExport, InvoicePdfExportStatus
 from app.models.domain_settings import SettingDomain
 from app.models.stored_file import StoredFile
@@ -32,6 +31,7 @@ from app.services import branding_storage as branding_storage_service
 from app.services import domain_settings as domain_settings_service
 from app.services import settings_spec
 from app.services import web_system_company_info as company_info_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.file_storage import file_uploads
 from app.services.object_storage import (
     ObjectNotFoundError,
@@ -1179,7 +1179,7 @@ def stream_export(db: Session, export: InvoicePdfExport) -> StreamResult:
 
 
 def process_export(export_id: str) -> dict[str, Any]:
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     export: InvoicePdfExport | None = None
     started_at = datetime.now(UTC)
     try:

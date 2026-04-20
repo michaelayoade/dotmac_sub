@@ -27,6 +27,7 @@ from app.models.network import (
     OltConfigBackupType,
     OLTDevice,
     OntAssignment,
+    OntAuthorizationStatus,
     OntUnit,
     OnuOnlineStatus,
     PonPort,
@@ -2334,7 +2335,18 @@ def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session
     assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
 
 
-def test_olts_list_page_data_includes_network_devices_ending_in_olt(db_session):
+def test_olts_list_page_data_includes_network_devices_ending_in_olt(
+    db_session, monkeypatch
+):
+    from app.services import web_network_core_runtime as core_runtime_service
+
+    def fail_live_refresh(*_args, **_kwargs):
+        raise AssertionError("OLT list must not run live SNMP refreshes")
+
+    monkeypatch.setattr(
+        core_runtime_service, "refresh_stale_devices_health", fail_live_refresh
+    )
+
     promoted = NetworkDevice(
         name="Metro OLT",
         hostname="metro-olt.local",
@@ -2343,6 +2355,8 @@ def test_olts_list_page_data_includes_network_devices_ending_in_olt(db_session):
         model="C320",
         role=DeviceRole.access,
         status=DeviceStatus.online,
+        snmp_enabled=True,
+        last_snmp_ok=True,
         is_active=True,
     )
     db_session.add(promoted)
@@ -3167,6 +3181,7 @@ def test_onts_list_page_data_filters_by_pon_hint_for_snmp_rows(db_session):
         olt_device_id=olt.id,
         board="0/2",
         port="7",
+        authorization_status=OntAuthorizationStatus.authorized,
     )
     ont_b = OntUnit(
         serial_number="ONT-HINT-B",
@@ -3174,6 +3189,7 @@ def test_onts_list_page_data_filters_by_pon_hint_for_snmp_rows(db_session):
         olt_device_id=olt.id,
         board="0/2",
         port="8",
+        authorization_status=OntAuthorizationStatus.authorized,
     )
     db_session.add_all([ont_a, ont_b])
     db_session.commit()

@@ -19,7 +19,6 @@ from uuid import UUID
 import redis.asyncio as redis
 from routeros_api import RouterOsApiPool
 
-from app.db import SessionLocal
 from app.models.catalog import (
     NasDevice,
     NasDeviceStatus,
@@ -28,6 +27,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.services.credential_crypto import decrypt_credential
+from app.services.db_session_adapter import db_session_adapter
 from app.services.queue_mapping import queue_mapping
 
 logger = logging.getLogger(__name__)
@@ -302,7 +302,7 @@ class DevicePool:
 
     async def refresh_devices(self):
         """Refresh the list of devices from the database."""
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             devices = (
                 db.query(NasDevice)

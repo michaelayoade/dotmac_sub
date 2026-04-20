@@ -1,6 +1,6 @@
 """Tests for TR-069 service."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 from uuid import uuid4
@@ -575,7 +575,7 @@ def test_execute_tr069_job_logs_structured_lifecycle(
         def create_task(self, _device_id, _task):
             return {"_id": "task-1"}
 
-    monkeypatch.setattr(tr069_service, "GenieACSClient", _FakeClient)
+    monkeypatch.setattr(tr069_service, "create_acs_client", _FakeClient)
     caplog.set_level("INFO")
 
     updated = tr069_service.jobs.execute(db_session, str(job.id))
@@ -595,6 +595,56 @@ def test_execute_tr069_job_logs_structured_lifecycle(
     assert start_record.event == "tr069_job"
     assert start_record.serial_number == "JOB-LOG-CPE"
     assert complete_record.job_status == Tr069JobStatus.succeeded.value
+
+
+def test_execute_tr069_job_with_connection_request_error_is_pending(
+    db_session, acs_server, monkeypatch, caplog
+):
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="JOB-PENDING-CPE",
+            oui="HWTC",
+            product_class="HG8546M",
+        ),
+    )
+    device.genieacs_device_id = "HWTC-HG8546M-JOB-PENDING-CPE"
+    db_session.commit()
+    job = tr069_service.jobs.create(
+        db_session,
+        Tr069JobCreate(
+            device_id=device.id,
+            name="Reboot",
+            command="reboot",
+            status=Tr069JobStatus.queued,
+        ),
+    )
+
+    class _FakeClient:
+        def __init__(self, _base_url):
+            return None
+
+        def create_task(self, _device_id, _task):
+            return {
+                "_id": "task-pending",
+                "connectionRequestError": "Device is offline",
+            }
+
+    monkeypatch.setattr(tr069_service, "create_acs_client", _FakeClient)
+    caplog.set_level("WARNING")
+
+    updated = tr069_service.jobs.execute(db_session, str(job.id))
+
+    assert updated.status == Tr069JobStatus.pending
+    assert updated.error == (
+        "Task accepted by ACS, but immediate device confirmation failed: "
+        "Device is offline"
+    )
+    assert any(
+        record.getMessage() == "tr069_job_connection_request_pending"
+        for record in caplog.records
+    )
 
 
 def test_execute_tr069_job_fails_until_device_has_informed(
@@ -626,7 +676,7 @@ def test_execute_tr069_job_fails_until_device_has_informed(
         def create_task(self, _device_id, _task):
             raise AssertionError("placeholder device should not receive ACS tasks")
 
-    monkeypatch.setattr(tr069_service, "GenieACSClient", _FakeClient)
+    monkeypatch.setattr(tr069_service, "create_acs_client", _FakeClient)
 
     updated = tr069_service.jobs.execute(db_session, str(job.id))
 
@@ -813,6 +863,94 @@ def test_receive_inform_stores_full_payload_and_parameters(db_session, acs_serve
     assert params["InternetGatewayDevice.DeviceInfo.SerialNumber"] == "INFORM-FULL-001"
 
 
+def test_receive_inform_queues_saved_config_apply_for_stale_ont(
+    db_session, acs_server, monkeypatch
+):
+    ont = OntUnit(
+        name="Stale reconnect ONT",
+        serial_number="STALE-INFORM-001",
+        is_active=True,
+        tr069_last_snapshot={"source": "olt_running_config_import"},
+    )
+    db_session.add(ont)
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=acs_server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        genieacs_device_id="00D09E-Test-STALE-INFORM-001",
+        last_inform_at=datetime.now(UTC) - timedelta(days=6),
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+    queued: list[dict[str, object]] = []
+
+    def _fake_enqueue(task_name, *, args=None, **kwargs):
+        queued.append({"task_name": task_name, "args": args, **kwargs})
+        return None
+
+    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
+
+    result = tr069_service.receive_inform(
+        db_session,
+        serial_number=ont.serial_number,
+        device_id_raw=device.genieacs_device_id,
+        event="2 PERIODIC",
+        raw_payload={"serial_number": ont.serial_number},
+    )
+
+    assert result["service_apply_queued"] is True
+    assert queued == [
+        {
+            "task_name": "app.tasks.tr069.apply_saved_ont_service_config",
+            "args": [str(ont.id), "stale_inform_reconnect"],
+            "correlation_id": f"ont_service_reconnect:{ont.id}",
+            "source": "tr069_inform",
+            "countdown": 30,
+        }
+    ]
+
+
+def test_receive_inform_does_not_queue_saved_config_apply_for_recent_ont(
+    db_session, acs_server, monkeypatch
+):
+    ont = OntUnit(
+        name="Recent inform ONT",
+        serial_number="RECENT-INFORM-001",
+        is_active=True,
+        tr069_last_snapshot={"source": "olt_running_config_import"},
+    )
+    db_session.add(ont)
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=acs_server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        genieacs_device_id="00D09E-Test-RECENT-INFORM-001",
+        last_inform_at=datetime.now(UTC) - timedelta(days=1),
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+    queued: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.celery_app.enqueue_celery_task",
+        lambda *args, **kwargs: queued.append({"args": args, **kwargs}),
+    )
+
+    result = tr069_service.receive_inform(
+        db_session,
+        serial_number=ont.serial_number,
+        device_id_raw=device.genieacs_device_id,
+        event="2 PERIODIC",
+        raw_payload={"serial_number": ont.serial_number},
+    )
+
+    assert result["service_apply_queued"] is False
+    assert queued == []
+
+
 def test_receive_inform_resolves_normalized_serial_variant(db_session, acs_server):
     device = tr069_service.cpe_devices.create(
         db_session,
@@ -909,7 +1047,7 @@ def test_sync_from_genieacs_truncates_long_oui(db_session, acs_server):
         }
     ]
 
-    with patch("app.services.tr069.GenieACSClient") as mock_client_cls:
+    with patch("app.services.tr069.create_acs_client") as mock_client_cls:
         client = mock_client_cls.return_value
         client.list_devices.return_value = fake_devices
         # Keep parser behavior that returns long segments.
@@ -947,7 +1085,7 @@ def test_sync_from_genieacs_skips_discoveryservice(db_session, acs_server):
         }
     ]
 
-    with patch("app.services.tr069.GenieACSClient") as mock_client_cls:
+    with patch("app.services.tr069.create_acs_client") as mock_client_cls:
         client = mock_client_cls.return_value
         client.list_devices.return_value = fake_devices
         client.parse_device_id.return_value = (
@@ -973,7 +1111,7 @@ def test_create_acs_server_requires_reachable_genieacs(db_session):
         "notes": None,
     }
 
-    with patch("app.services.web_network_tr069.GenieACSClient") as mock_client_cls:
+    with patch("app.services.web_network_tr069.create_acs_client") as mock_client_cls:
         mock_client_cls.return_value.count_devices.side_effect = GenieACSError(
             "Request error: Connection refused"
         )

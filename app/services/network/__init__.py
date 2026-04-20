@@ -84,6 +84,7 @@ from app.services.network.ont_read import (
 )
 from app.services.network.ont_status import (
     apply_status_snapshot,
+    reconcile_device_state,
     resolve_acs_status,
     resolve_ont_status_for_model,
     resolve_ont_status_snapshot,
@@ -209,6 +210,7 @@ __all__ = [
     "resolve_acs_status",
     "resolve_ont_status_snapshot",
     "resolve_ont_status_for_model",
+    "reconcile_device_state",
     "apply_status_snapshot",
     # ONT write service
     "OntWriteService",

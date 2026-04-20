@@ -148,7 +148,6 @@ def parse_form_values(form) -> dict[str, object]:
     return {
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
-        "subscription_id": form.get("subscription_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
     }
@@ -262,7 +261,6 @@ def form_payload(
         "pon_port_id": values.get("pon_port_id"),
         "account_id": values.get("account_id"),
         "account_label": "",
-        "subscription_id": values.get("subscription_id"),
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
     }
@@ -297,9 +295,6 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
         "pon_port_id": str(assignment.pon_port_id) if assignment.pon_port_id else "",
         "account_id": str(assignment.subscriber_id) if assignment.subscriber_id else "",
         "account_label": account_label,
-        "subscription_id": (
-            str(assignment.subscription_id) if assignment.subscription_id else ""
-        ),
         "service_address_id": (
             str(assignment.service_address_id) if assignment.service_address_id else ""
         ),
@@ -411,11 +406,6 @@ def update_assignment_from_form(
         pon_port_id=resolved_pon_port_id,
         subscriber_id=(
             coerce_uuid(str(values["account_id"])) if values.get("account_id") else None
-        ),
-        subscription_id=(
-            coerce_uuid(str(values["subscription_id"]))
-            if values.get("subscription_id")
-            else None
         ),
         service_address_id=(
             coerce_uuid(str(values["service_address_id"]))

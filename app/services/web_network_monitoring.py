@@ -86,19 +86,13 @@ def monitoring_page_data(
 
 
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """Queue non-blocking monitoring refresh tasks."""
+    """Queue non-blocking Zabbix monitoring ingestion."""
     try:
         from app.services.queue_adapter import enqueue_task
 
         enqueue_task(
-            "app.tasks.network_monitoring.refresh_core_device_ping",
-            correlation_id="monitoring_refresh:ping",
-            source="admin_network_monitoring",
-            request_id=request_id,
-        )
-        enqueue_task(
-            "app.tasks.network_monitoring.refresh_core_device_snmp",
-            correlation_id="monitoring_refresh:snmp",
+            "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
+            correlation_id="monitoring_refresh:zabbix_signals",
             source="admin_network_monitoring",
             request_id=request_id,
         )

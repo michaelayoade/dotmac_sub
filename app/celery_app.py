@@ -34,6 +34,7 @@ celery_app.conf.task_routes = {
     "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "acs"},
     "app.tasks.tr069.execute_bulk_action": {"queue": "acs"},
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
+    "app.tasks.tr069.apply_saved_ont_service_config": {"queue": "acs"},
     "app.tasks.tr069.apply_acs_config": {"queue": "acs"},
     "app.tasks.saga.execute_saga": {"queue": "tr069"},
     "app.tasks.saga.queue_saga_execution": {"queue": "tr069"},
@@ -41,16 +42,31 @@ celery_app.conf.task_routes = {
     # OLT queue processing (circuit breaker recovery) - route to tr069 queue
     "app.tasks.olt_queue.process_deferred_olt_operations": {"queue": "tr069"},
     "app.tasks.olt_queue.retry_failed_operations": {"queue": "tr069"},
+    # High-volume bandwidth tasks - dedicated queue to prevent starvation
+    "app.tasks.bandwidth.process_bandwidth_stream": {"queue": "bandwidth"},
+    "app.tasks.bandwidth.aggregate_to_metrics": {"queue": "bandwidth"},
+    "app.tasks.bandwidth.flush_bandwidth_buffer": {"queue": "bandwidth"},
+    # High-volume ingestion tasks - dedicated queue
+    "app.tasks.zabbix_ingestion.ingest_portal_usage_chunk": {"queue": "ingestion"},
+    "app.tasks.zabbix_ingestion.ingest_portal_usage_batch": {"queue": "ingestion"},
+    "app.tasks.usage.import_radius_accounting": {"queue": "ingestion"},
+    "app.tasks.usage.process_usage_record": {"queue": "ingestion"},
+    # Operator-triggered identity checks should not wait behind bulk jobs.
+    "app.tasks.nin_tasks.verify_nin_task": {"queue": "nin"},
 }
 
 celery_app.conf.task_queues = (
     Queue("celery"),  # Default queue
+    Queue("nin"),  # Dedicated identity verification queue
     Queue("tr069"),  # Dedicated OLT authorization follow-up queue
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
+    Queue("bandwidth"),  # High-volume bandwidth processing
+    Queue("ingestion"),  # High-volume data ingestion (Zabbix, usage)
 )
 
 # Ensure all tasks are registered by importing the tasks package
 import app.tasks  # noqa: E402, F401
+import app.tasks.nin_tasks  # noqa: E402, F401
 
 
 @worker_process_init.connect

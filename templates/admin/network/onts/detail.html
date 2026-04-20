@@ -386,6 +386,7 @@
 
     {# ===================== OVERVIEW TAB ===================== #}
     <div x-show="activeTab === 'overview'" x-transition role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" class="space-y-4">
+        {# Status — single ONT state section #}
         {% include "admin/network/onts/_optical_link_summary.html" %}
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-3"
              {% if preview_mode %}

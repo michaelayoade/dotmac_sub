@@ -104,14 +104,11 @@ def devices_filter(
     dependencies=[Depends(require_permission("network:device:write"))],
 )
 def devices_discover(request: Request, db: Session = Depends(get_db)):
-    """Queue SNMP interface discovery for all SNMP-enabled devices."""
-    from app.tasks.snmp import discover_interfaces
-
-    discover_interfaces.delay()
+    """Direct SNMP interface discovery is disabled in favor of Zabbix."""
     return HTMLResponse(
-        '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-sm dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">'
-        '<span class="font-medium">Discovery queued.</span> '
-        "SNMP interface discovery is running for all enabled devices."
+        '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">'
+        '<span class="font-medium">Discovery skipped.</span> '
+        "Direct SNMP discovery is disabled because Zabbix is the monitoring source."
         "</div>"
     )
 

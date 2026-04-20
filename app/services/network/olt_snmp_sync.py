@@ -45,11 +45,13 @@ from app.services.network.olt_web_audit import (
 from app.services.network.olt_web_topology import ensure_canonical_pon_port
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
+    sync_ont_topology_to_authoritative_fsp,
 )
 from app.services.network.ont_serials import (
     is_plausible_vendor_serial,
     looks_synthetic_ont_serial,
     normalize_ont_serial,
+    normalized_serial_candidates,
     prefer_ont_candidate,
 )
 from app.services.network.ont_status import (
@@ -330,7 +332,7 @@ def _sync_onts_from_olt_snmp_impl(
     try:
         walk(linked, ".1.3.6.1.2.1.1.5.0", timeout=20, bulk=False)
         status_rows = _parse_walk_composite(
-            walk(linked, oids["status"], timeout=90, bulk=False)
+            walk(linked, oids["status"], timeout=90, bulk=True)
         )
     except Exception as exc:
         return (
@@ -346,25 +348,25 @@ def _sync_onts_from_olt_snmp_impl(
     if "serial" in oids:
         try:
             serial_rows = _parse_walk_composite(
-                walk(linked, oids["serial"], timeout=90, bulk=False)
+                walk(linked, oids["serial"], timeout=90, bulk=True)
             )
         except Exception:
             serial_rows = {}
     try:
         olt_rx_rows = _parse_walk_composite(
-            walk(linked, oids["olt_rx"], timeout=90, bulk=False)
+            walk(linked, oids["olt_rx"], timeout=90, bulk=True)
         )
     except Exception:
         olt_rx_rows = {}
     try:
         onu_rx_rows = _parse_walk_composite(
-            walk(linked, oids["onu_rx"], timeout=90, bulk=False)
+            walk(linked, oids["onu_rx"], timeout=90, bulk=True)
         )
     except Exception:
         onu_rx_rows = {}
     try:
         distance_rows = _parse_walk_composite(
-            walk(linked, oids["distance"], timeout=90, bulk=False)
+            walk(linked, oids["distance"], timeout=90, bulk=True)
         )
     except Exception:
         distance_rows = {}
@@ -402,6 +404,35 @@ def _sync_onts_from_olt_snmp_impl(
     by_serial: dict[str, OntUnit] = {}
     by_normalized_serial: dict[str, OntUnit] = {}
     by_vendor_serial: dict[str, OntUnit] = {}
+    global_by_normalized_serial: dict[str, OntUnit] = {}
+    global_duplicate_serials: set[str] = set()
+    global_active_onts = list(
+        db.scalars(select(OntUnit).where(OntUnit.is_active.is_(True))).all()
+    )
+    for global_ont in global_active_onts:
+        for serial_source in (
+            getattr(global_ont, "serial_number", None),
+            getattr(global_ont, "vendor_serial_number", None),
+        ):
+            serial_text = str(serial_source or "").strip()
+            if not serial_text or looks_synthetic_ont_serial(serial_text):
+                continue
+            for candidate_key in normalized_serial_candidates(serial_text):
+                if not candidate_key:
+                    continue
+                if candidate_key in global_duplicate_serials:
+                    continue
+                if candidate_key in global_by_normalized_serial:
+                    if global_by_normalized_serial[candidate_key].id == global_ont.id:
+                        continue
+                    global_duplicate_serials.add(candidate_key)
+                    global_by_normalized_serial.pop(candidate_key, None)
+                else:
+                    global_by_normalized_serial[candidate_key] = global_ont
+
+    for duplicate_key in global_duplicate_serials:
+        global_by_normalized_serial.pop(duplicate_key, None)
+
     for ont in existing_onts:
         external_id_val = str(getattr(ont, "external_id", "") or "").strip()
         if external_id_val:
@@ -540,6 +571,7 @@ def _sync_onts_from_olt_snmp_impl(
                 or by_external_id.get(external_id)
                 or (vs_key and by_vendor_serial.get(vs_key))
                 or by_normalized_serial.get(vs_key)
+                or (vs_key and global_by_normalized_serial.get(vs_key))
                 or by_serial.get(synthetic_serial)
             ) or None
         else:
@@ -548,6 +580,7 @@ def _sync_onts_from_olt_snmp_impl(
                 or (by_fsp_onu.get(fsp_onu_key) if fsp_onu_key else None)
                 or (vs_key and by_vendor_serial.get(vs_key))
                 or by_normalized_serial.get(vs_key)
+                or (vs_key and global_by_normalized_serial.get(vs_key))
                 or by_serial.get(synthetic_serial)
             ) or None
         if matched_ont is None:
@@ -652,12 +685,22 @@ def _sync_onts_from_olt_snmp_impl(
             pon_name = f"{ont_board}/{ont_port}" if ont_board and ont_port else None
             if not pon_name:
                 continue
+            topology = sync_ont_topology_to_authoritative_fsp(
+                db,
+                ont=ont_item,
+                olt_id=olt.id,
+                fsp=pon_name,
+            )
+            if topology is None:
+                continue
             alignment = align_ont_assignment_to_authoritative_fsp(
                 db,
                 ont=ont_item,
                 olt_id=olt.id,
                 fsp=pon_name,
                 assigned_at=now,
+                create_missing_assignment=False,
+                reactivate_existing_assignment=False,
             )
             if alignment is None:
                 continue
@@ -710,8 +753,9 @@ def _sync_onts_from_olt_snmp_impl(
     tr069_runtime_errors = 0
     if olt.tr069_acs_server_id:
         try:
-            from app.services.network.ont_tr069 import OntTR069
+            from app.services.acs_client import create_acs_state_reader
 
+            acs_state_reader = create_acs_state_reader()
             onts_for_olt = list(
                 db.scalars(
                     select(OntUnit)
@@ -721,13 +765,13 @@ def _sync_onts_from_olt_snmp_impl(
             )
             for ont in onts_for_olt:
                 try:
-                    summary = OntTR069.get_device_summary(
+                    summary = acs_state_reader.get_device_summary(
                         db,
                         str(ont.id),
                         persist_observed_runtime=False,
                     )
                     if summary.available:
-                        OntTR069._persist_observed_runtime(
+                        acs_state_reader.persist_observed_runtime(
                             db,
                             ont,
                             summary,

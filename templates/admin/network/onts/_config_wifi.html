@@ -81,7 +81,7 @@
 {% endif %}
 
 {# Full WiFi Configuration Form #}
-{% set wifi_intent = ont_plan.get('configure_wifi_tr069') if ont_plan is defined and ont_plan else {} %}
+{% set wifi_intent = desired_wifi_config if desired_wifi_config is defined else (ont_plan.get('configure_wifi_tr069') if ont_plan is defined and ont_plan else {}) %}
 {% set wifi_enabled = wifi_intent.get('enabled') if wifi_intent.get('enabled') is not none else (wireless_info.get('enabled') if wireless_info else '') %}
 {% set wifi_channel = wifi_intent.get('channel') or (wireless_info.get('channel') if wireless_info else '') %}
 {% set wifi_security = wifi_intent.get('security_mode') or (wireless_info.get('security_mode') if wireless_info else '') %}

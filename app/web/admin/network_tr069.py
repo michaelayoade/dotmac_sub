@@ -203,6 +203,87 @@ def tr069_sync_acs_get_fallback(acs_id: str) -> RedirectResponse:
     )
 
 
+@router.get("/tr069/tasks", response_class=HTMLResponse)
+def tr069_acs_tasks(
+    request: Request,
+    acs_server_id: str | None = None,
+    status: str | None = None,
+    message: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    context = _base_context(request, db, active_page="tr069")
+    context.update(
+        web_network_tr069_service.acs_task_console_data(
+            db,
+            acs_server_id=acs_server_id,
+        )
+    )
+    context["status"] = status
+    context["message"] = message
+    return templates.TemplateResponse("admin/network/tr069/tasks.html", context)
+
+
+@router.post("/tr069/tasks/{task_id}/delete")
+def tr069_delete_acs_task(
+    task_id: str,
+    request: Request,
+    acs_server_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        web_network_tr069_service.delete_acs_task(
+            db,
+            acs_server_id=acs_server_id,
+            task_id=task_id,
+            request=request,
+        )
+        message = quote_plus("Pending ACS task deleted")
+        return RedirectResponse(
+            f"/admin/network/tr069/tasks?acs_server_id={acs_server_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069/tasks?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
+@router.post("/tr069/tasks/clear")
+def tr069_clear_acs_tasks(
+    request: Request,
+    acs_server_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        result = web_network_tr069_service.clear_acs_tasks(
+            db,
+            acs_server_id=acs_server_id,
+            request=request,
+        )
+        deleted = int(result.get("deleted") or 0)
+        errors = result.get("errors") or []
+        if errors:
+            message = quote_plus(
+                f"Deleted {deleted} pending task(s); {len(errors)} task(s) failed"
+            )
+            status = "error"
+        else:
+            message = quote_plus(f"Deleted {deleted} pending ACS task(s)")
+            status = "success"
+        return RedirectResponse(
+            f"/admin/network/tr069/tasks?acs_server_id={acs_server_id}&status={status}&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069/tasks?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
 # -----------------------------------------------------------------------------
 # ACS Enforcement Preset Management
 # -----------------------------------------------------------------------------

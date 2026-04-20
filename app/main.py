@@ -76,13 +76,13 @@ from app.csrf import (
     generate_csrf_token,
     set_csrf_cookie,
 )
-from app.db import SessionLocal
 from app.errors import register_error_handlers
 from app.logging import configure_logging
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.object_storage import (
     ObjectStorageConnectionError,
     ObjectStorageError,
@@ -134,7 +134,7 @@ _AUDIT_SETTINGS_LOCK = Lock()
 
 def _assert_required_schema() -> None:
     """Fail fast when required DB schema changes are missing."""
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         inspector = sqlalchemy_inspect(db.get_bind())
         if not inspector.has_table("ont_units"):
@@ -213,7 +213,7 @@ def _seed_startup_settings() -> None:
             "Failed to ensure storage bucket during startup",
             extra={"event": "storage_bucket_init_failed"},
         )
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         seed_auth_settings(db)
         seed_auth_policy_settings(db)
@@ -324,7 +324,7 @@ async def audit_middleware(request: Request, call_next):
     # Check cache first to avoid unnecessary session creation
     audit_settings = _get_cached_audit_settings()
     if audit_settings is None:
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             audit_settings = _load_audit_settings(db)
         finally:
@@ -342,7 +342,7 @@ async def audit_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception:
         if should_log:
-            db = SessionLocal()
+            db = db_session_adapter.create_session()
             try:
                 audit_service.audit_events.log_request(
                     db, request, Response(status_code=500)
@@ -351,7 +351,7 @@ async def audit_middleware(request: Request, call_next):
                 db.close()
         raise
     if should_log:
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             audit_service.audit_events.log_request(db, request, response)
         finally:
@@ -428,7 +428,7 @@ async def domain_routing_middleware(request: Request, call_next):
     # Check cache first to avoid unnecessary session creation
     routing = _get_cached_domain_routing()
     if routing is None:
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             routing = _load_domain_routing(db)
         except SQLAlchemyError:

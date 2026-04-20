@@ -6,8 +6,8 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.services import reseller_portal
+from app.services.db_session_adapter import db_session_adapter
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ templates = get_reseller_templates()
 
 
 def reseller_login_page(request: Request, error: str | None = None):
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         context = reseller_portal.get_context(
             db, request.cookies.get(reseller_portal.SESSION_COOKIE_NAME)
@@ -171,7 +171,7 @@ def reseller_refresh(request: Request):
     if not session_token:
         return Response(status_code=401)
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         session = reseller_portal.refresh_session(session_token, db)
         if not session:

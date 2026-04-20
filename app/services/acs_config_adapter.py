@@ -29,8 +29,8 @@ class AcsConfigQueueResult:
         return self.error or "ACS configuration could not be queued."
 
 
-class AcsConfigAdapter:
-    """Keep callers from reaching into low-level ONT TR-069 action modules."""
+class GenieAcsConfigWriter:
+    """Write ONT configuration through the current GenieACS/TR-069 backend."""
 
     _QUEUE_TASK = "app.tasks.tr069.apply_acs_config"
     _QUEUE_NAME = "acs"
@@ -45,9 +45,35 @@ class AcsConfigAdapter:
             "set_pppoe_credentials",
             "set_connection_request_credentials",
             "send_connection_request",
+            "push_config_urgent",
+            "download",
+            "firmware_upgrade",
             "enable_ipv6_on_wan",
         }
     )
+
+    @property
+    def queueable_actions(self) -> frozenset[str]:
+        return self._QUEUEABLE_ACTIONS
+
+    def supports_config_action(self, action: str) -> bool:
+        return action in self.queueable_actions
+
+    def execute_config_action(
+        self,
+        db: Session,
+        action: str,
+        ont_id: str,
+        *,
+        args: list[object] | tuple[object, ...] | None = None,
+        kwargs: dict[str, object] | None = None,
+    ) -> ActionResult:
+        if not self.supports_config_action(action):
+            raise ValueError(f"Unsupported ACS configuration action: {action}")
+        method = getattr(self, action, None)
+        if method is None:
+            raise ValueError(f"ACS configuration action is not implemented: {action}")
+        return method(db, ont_id, *(args or ()), **dict(kwargs or {}))
 
     def queue_config_action(
         self,
@@ -63,7 +89,7 @@ class AcsConfigAdapter:
     ) -> AcsConfigQueueResult:
         """Queue an ACS configuration action for background execution."""
         _ = db
-        if action not in self._QUEUEABLE_ACTIONS:
+        if not self.supports_config_action(action):
             return AcsConfigQueueResult(
                 queued=False,
                 action=action,
@@ -418,6 +444,218 @@ class AcsConfigAdapter:
 
         return send_connection_request(db, ont_id)
 
+    def queue_push_config_urgent(
+        self,
+        db: Session,
+        ont_id: str,
+        parameters: dict[str, Any],
+        *,
+        expected: dict[str, Any] | None = None,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        kwargs: dict[str, object] = {"parameters": parameters}
+        if expected is not None:
+            kwargs["expected"] = expected
+        return self.queue_config_action(
+            db,
+            "push_config_urgent",
+            ont_id,
+            kwargs=kwargs,
+            **metadata,
+        )
+
+    def push_config_urgent(
+        self,
+        db: Session,
+        ont_id: str,
+        parameters: dict[str, Any],
+        *,
+        expected: dict[str, Any] | None = None,
+        connection_request_attempts: int = 3,
+        connection_request_backoff_sec: float = 1.0,
+    ) -> ActionResult:
+        """Push raw ACS parameters and force immediate device processing."""
+        from app.services.genieacs import GenieACSError
+        from app.services.network.ont_action_common import (
+            get_ont_client_or_error,
+            set_and_verify,
+        )
+
+        if not parameters:
+            return ActionResult(success=False, message="No parameters supplied.")
+
+        resolved, error = get_ont_client_or_error(db, ont_id)
+        if error:
+            return error
+        if resolved is None:
+            return ActionResult(
+                success=False,
+                message="No ACS device resolved for this ONT.",
+            )
+        _ont, client, device_id = resolved
+
+        normalized_parameters = {
+            str(path): value for path, value in parameters.items()
+        }
+        normalized_expected = (
+            {str(path): value for path, value in expected.items()}
+            if expected is not None
+            else None
+        )
+        try:
+            task = set_and_verify(
+                client,
+                device_id,
+                normalized_parameters,
+                expected=normalized_expected,
+                connection_request_attempts=connection_request_attempts,
+                connection_request_backoff_sec=connection_request_backoff_sec,
+            )
+        except GenieACSError as exc:
+            return ActionResult(
+                success=False,
+                message=f"Urgent ACS config push failed: {exc}",
+            )
+        return ActionResult(
+            success=True,
+            message="Urgent ACS config pushed and verified.",
+            data={
+                "device_id": device_id,
+                "parameters": list(normalized_parameters),
+                "task": task,
+                "connection_request": True,
+                "connection_request_attempts": max(1, int(connection_request_attempts)),
+            },
+        )
+
+    def queue_download(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        file_type: str,
+        file_url: str,
+        filename: str | None = None,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "download",
+            ont_id,
+            kwargs={
+                "file_type": file_type,
+                "file_url": file_url,
+                "filename": filename,
+            },
+            **metadata,
+        )
+
+    def download(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        file_type: str,
+        file_url: str,
+        filename: str | None = None,
+    ) -> ActionResult:
+        """Trigger an ACS Download RPC for an ONT."""
+        from app.services.genieacs import GenieACSError
+        from app.services.network.ont_action_common import get_ont_client_or_error
+
+        if not file_type.strip():
+            return ActionResult(success=False, message="Download file type is required.")
+        if not file_url.strip():
+            return ActionResult(success=False, message="Download file URL is required.")
+
+        resolved, error = get_ont_client_or_error(db, ont_id)
+        if error:
+            return error
+        if resolved is None:
+            return ActionResult(success=False, message="No ACS device resolved.")
+        ont, client, device_id = resolved
+
+        try:
+            task = client.download(
+                device_id,
+                file_type=file_type.strip(),
+                file_url=file_url.strip(),
+                filename=filename.strip() if filename else None,
+                connection_request=True,
+            )
+        except GenieACSError as exc:
+            return ActionResult(success=False, message=f"ACS download failed: {exc}")
+
+        return ActionResult(
+            success=True,
+            message=f"ACS download queued for {ont.serial_number}.",
+            data={
+                "device_id": device_id,
+                "file_type": file_type.strip(),
+                "file_url": file_url.strip(),
+                "filename": filename.strip() if filename else None,
+                "task": task,
+                "connection_request": True,
+            },
+        )
+
+    def queue_firmware_upgrade(
+        self,
+        db: Session,
+        ont_id: str,
+        firmware_image_id: str,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "firmware_upgrade",
+            ont_id,
+            args=(firmware_image_id,),
+            **metadata,
+        )
+
+    def firmware_upgrade(
+        self, db: Session, ont_id: str, firmware_image_id: str
+    ) -> ActionResult:
+        """Trigger ONT firmware download through the configured ACS backend."""
+        from app.models.network import OntFirmwareImage
+
+        firmware = db.get(OntFirmwareImage, firmware_image_id)
+        if firmware is None:
+            return ActionResult(success=False, message="Firmware image not found.")
+        if not firmware.is_active:
+            return ActionResult(success=False, message="Firmware image is not active.")
+
+        result = self.download(
+            db,
+            ont_id,
+            file_type="1 Firmware Upgrade Image",
+            file_url=firmware.file_url,
+            filename=firmware.filename,
+        )
+        if not result.success:
+            return result
+
+        data = dict(result.data or {})
+        data.update(
+            {
+                "firmware_image_id": str(firmware.id),
+                "firmware_vendor": firmware.vendor,
+                "firmware_model": firmware.model,
+                "firmware_version": firmware.version,
+                "checksum": firmware.checksum,
+                "file_size_bytes": firmware.file_size_bytes,
+            }
+        )
+        return ActionResult(
+            success=True,
+            message=(
+                f"Firmware upgrade to v{firmware.version} initiated. "
+                "The ONT will download the image and reboot if the device accepts it."
+            ),
+            data=data,
+        )
+
     def queue_enable_ipv6_on_wan(
         self,
         db: Session,
@@ -446,4 +684,5 @@ class AcsConfigAdapter:
         return enable_ipv6_on_wan(db, ont_id, wan_instance=wan_instance)
 
 
-acs_config_adapter = AcsConfigAdapter()
+AcsConfigAdapter = GenieAcsConfigWriter
+acs_config_adapter = GenieAcsConfigWriter()

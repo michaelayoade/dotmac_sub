@@ -9,87 +9,28 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OLTDevice, OntProvisioningProfile
+from app.models.network import OntProvisioningProfile
 from app.services.network import olt as olt_service
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
     OntProvisioningContext,
     build_spec_from_profile,
 )
-from app.services.network.olt_ssh_profiles import (
-    get_line_profiles,
-    get_service_profiles,
-    get_tr069_server_profiles,
-)
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.olt_profile_adapter import olt_profile_adapter
 from app.services.web_network_service_ports import _resolve_ont_olt_context
 
 logger = logging.getLogger(__name__)
 
 
 def line_profiles_context(db: Session, olt_id: str) -> dict[str, Any]:
-    """Fetch OLT line and service profiles via SSH.
-
-    Args:
-        db: Database session.
-        olt_id: OLTDevice ID.
-
-    Returns:
-        Context dict with line_profiles, service_profiles, error.
-    """
-    olt = db.get(OLTDevice, olt_id)
-    if not olt:
-        return {"error": "OLT not found", "line_profiles": [], "service_profiles": []}
-
-    context: dict[str, Any] = {
-        "olt": olt,
-        "line_profiles": [],
-        "service_profiles": [],
-        "error": None,
-    }
-
-    ok, msg, profiles = get_line_profiles(olt)
-    if ok:
-        context["line_profiles"] = profiles
-    else:
-        context["error"] = msg
-
-    ok2, msg2, svc_profiles = get_service_profiles(olt)
-    if ok2:
-        context["service_profiles"] = svc_profiles
-    elif not context["error"]:
-        context["error"] = msg2
-
-    return context
+    """Fetch OLT line and service profiles through the profile adapter."""
+    return olt_profile_adapter.line_profiles_context(db, olt_id)
 
 
 def tr069_profiles_context(db: Session, olt_id: str) -> dict[str, Any]:
-    """Fetch OLT TR-069 server profiles via SSH.
-
-    Args:
-        db: Database session.
-        olt_id: OLTDevice ID.
-
-    Returns:
-        Context dict with tr069_profiles, error.
-    """
-    olt = db.get(OLTDevice, olt_id)
-    if not olt:
-        return {"error": "OLT not found", "tr069_profiles": []}
-
-    context: dict[str, Any] = {
-        "olt": olt,
-        "tr069_profiles": [],
-        "error": None,
-    }
-
-    ok, msg, profiles = get_tr069_server_profiles(olt)
-    if ok:
-        context["tr069_profiles"] = profiles
-    else:
-        context["error"] = msg
-
-    return context
+    """Fetch OLT TR-069 server profiles through the profile adapter."""
+    return olt_profile_adapter.tr069_profiles_context(db, olt_id)
 
 
 def propagate_acs_to_onts(

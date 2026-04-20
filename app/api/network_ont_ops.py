@@ -623,16 +623,16 @@ def submit_bulk_action(
                 f"{result.skipped} skipped"
             ),
         )
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task
 
-    task = enqueue_celery_task(
+    task = enqueue_task(
         "app.tasks.ont_bulk.execute_bulk_action",
         args=[payload.ont_ids, payload.action, payload.params],
         correlation_id=f"ont_bulk:{payload.action}:{len(payload.ont_ids)}",
         source="api_network_ont_bulk",
     )
     return OntBulkActionResponse(
-        task_id=task.id,
+        task_id=task.task_id or "",
         message=f"Bulk {payload.action} queued for {len(payload.ont_ids)} ONT(s)",
     )
 

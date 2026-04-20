@@ -9,7 +9,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.domain_settings import SettingDomain
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services.audit_helpers import (
@@ -19,7 +18,6 @@ from app.services.audit_helpers import (
     model_to_dict,
 )
 from app.services.auth_dependencies import has_permission, require_permission
-from app.services.settings_spec import resolve_value
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -31,6 +29,16 @@ _format_bps = web_network_core_runtime_service.format_bps
 
 def _render_template_fragment(template_name: str, context: dict) -> str:
     return templates.env.get_template(template_name).render(context)
+
+
+def _zabbix_monitoring_skip_response(action: str) -> HTMLResponse:
+    return HTMLResponse(
+        '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 '
+        'dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">'
+        f'<span class="font-medium">{action} skipped.</span> '
+        "Direct device polling is disabled because Zabbix is the monitoring source."
+        "</div>"
+    )
 
 
 def _coerce_uuid_or_none(value: str | None) -> UUID | None:
@@ -156,51 +164,8 @@ def core_devices_list(
     refresh_param = (request.query_params.get("refresh") or "").strip().lower()
     force_refresh = refresh_param in {"1", "true", "yes", "on"}
     refresh_summary: dict[str, int] | None = None
-    try:
-        ping_interval_seconds = int(
-            str(
-                resolve_value(
-                    db,
-                    SettingDomain.network_monitoring,
-                    "core_device_ping_interval_seconds",
-                )
-                or 120
-            )
-        )
-    except (TypeError, ValueError):
-        ping_interval_seconds = 120
-    try:
-        snmp_interval_seconds = int(
-            str(
-                resolve_value(
-                    db,
-                    SettingDomain.network_monitoring,
-                    "core_device_snmp_walk_interval_seconds",
-                )
-                or 300
-            )
-        )
-    except (TypeError, ValueError):
-        snmp_interval_seconds = 300
-    devices = page_data.get("devices")
-    if isinstance(devices, list) and devices:
-        refresh_summary = web_network_core_runtime_service.refresh_stale_devices_health(
-            db,
-            devices,
-            ping_interval_seconds=ping_interval_seconds,
-            snmp_interval_seconds=snmp_interval_seconds,
-            include_snmp=True,
-            force=force_refresh,
-        )
-        if refresh_summary.get("checked", 0) > 0:
-            page_data = web_network_core_devices_service.list_page_data(
-                db,
-                role,
-                status,
-                device_type=device_type,
-                pop_site_id=pop_site_id,
-                search=search,
-            )
+    if force_refresh:
+        refresh_summary = {"skipped": 1}
     context = _base_context(
         request, db, active_page="core-devices", active_menu="core-network"
     )
@@ -1020,42 +985,7 @@ def core_device_backup_compare(
 def core_device_ping(
     request: Request, device_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    device, error, ping_success = web_network_core_runtime_service.ping_device(
-        db, device_id
-    )
-    if not device:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
-            'dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">Device not found.</div>',
-            status_code=404,
-        )
-
-    if error:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 '
-            f'dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">{error}</div>'
-        )
-
-    status_label = "reachable" if ping_success else "unreachable"
-    message = (
-        '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 '
-        'dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">'
-        f"Ping successful: device is {status_label}.</div>"
-        if ping_success
-        else '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
-        'dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">'
-        f"Ping failed: device is {status_label}.</div>"
-    )
-
-    badge = web_network_core_runtime_service.render_device_status_badge(
-        device.status.value
-    )
-    ping_badge = web_network_core_runtime_service.render_ping_badge(device)
-    return HTMLResponse(
-        message
-        + f'<div id="device-status-badge" hx-swap-oob="true">{badge}</div>'
-        + f'<span id="device-ping-badge" hx-swap-oob="true">{ping_badge}</span>'
-    )
+    return _zabbix_monitoring_skip_response("Ping")
 
 
 @router.post(
@@ -1066,18 +996,7 @@ def core_device_ping(
 def core_device_snmp_check(
     request: Request, device_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    device, error = web_network_core_runtime_service.snmp_check_device(db, device_id)
-    if not device:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
-            'dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">Device not found.</div>',
-            status_code=404,
-        )
-
-    snmp_badge = web_network_core_runtime_service.render_snmp_badge(device)
-    return HTMLResponse(
-        f'<span id="device-snmp-badge" hx-swap-oob="true">{snmp_badge}</span>'
-    )
+    return _zabbix_monitoring_skip_response("SNMP check")
 
 
 @router.post(
@@ -1088,24 +1007,7 @@ def core_device_snmp_check(
 def core_device_snmp_debug(
     request: Request, device_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    result = web_network_core_runtime_service.snmp_debug_device(db, device_id)
-    if result.error:
-        css = (
-            "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400"
-            if "not found" in result.error or "failed" in result.error.lower()
-            else "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-        )
-        return HTMLResponse(
-            f'<div class="rounded-lg border {css} px-4 py-3 text-sm">{result.error}</div>',
-            status_code=404 if "not found" in result.error else 200,
-        )
-
-    return HTMLResponse(
-        '<div class="rounded-lg border border-slate-200 bg-white p-4 text-xs text-slate-700 '
-        'dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">'
-        f'<pre class="whitespace-pre-wrap">{result.output}</pre>'
-        "</div>"
-    )
+    return _zabbix_monitoring_skip_response("SNMP debug")
 
 
 @router.get(
@@ -1145,72 +1047,7 @@ def core_device_health_partial(
 def core_device_discover_interfaces(
     request: Request, device_id: str, db: Session = Depends(get_db)
 ):
-    device = web_network_core_runtime_service.get_device(db, device_id)
-    if not device:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
-            'dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">Device not found.</div>',
-            status_code=404,
-        )
-
-    if not device.snmp_enabled:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 '
-            'dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">'
-            "SNMP is disabled for this device."
-            "</div>"
-        )
-
-    if not device.mgmt_ip and not device.hostname:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 '
-            'dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">'
-            "Management IP or hostname is required for SNMP discovery."
-            "</div>"
-        )
-
-    try:
-        created, updated = (
-            web_network_core_runtime_service.discover_interfaces_and_health(db, device)
-        )
-    except Exception as exc:
-        web_network_core_runtime_service.mark_discovery_failure(db, device)
-        return HTMLResponse(
-            '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
-            'dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">'
-            f"SNMP discovery failed: {exc!s}"
-            "</div>"
-        )
-
-    refresh = request.query_params.get("refresh", "true").lower() != "false"
-    message_html = (
-        '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 '
-        'dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">'
-        f"Discovery complete: {created} new, {updated} updated interfaces."
-        "</div>"
-    )
-    if refresh:
-        return HTMLResponse(message_html, headers={"HX-Refresh": "true"})
-
-    page_data = web_network_core_devices_service.detail_page_data(
-        db,
-        device_id,
-        interface_id=request.query_params.get("interface_id"),
-        format_duration=_format_duration,
-        format_bps=_format_bps,
-    )
-    if not page_data:
-        return HTMLResponse(message_html)
-    context = _base_context(
-        request, db, active_page="core-devices", active_menu="core-network"
-    )
-    context.update(page_data)
-    context["oob_swap"] = True
-    interfaces_card_html = _render_template_fragment(
-        "admin/network/core-devices/_interfaces_card.html",
-        context,
-    )
-    return HTMLResponse(message_html + interfaces_card_html)
+    return _zabbix_monitoring_skip_response("Interface discovery")
 
 
 @router.post(

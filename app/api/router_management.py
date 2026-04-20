@@ -337,10 +337,10 @@ def create_push(
         raise HTTPException(status_code=422, detail=str(exc))
 
     try:
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
         from app.tasks.router_sync import execute_config_push
 
-        enqueue_celery_task(
+        enqueue_task(
             execute_config_push,
             args=[str(push.id)],
             correlation_id=f"router_config_push:{push.id}",

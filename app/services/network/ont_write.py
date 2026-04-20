@@ -148,9 +148,9 @@ class OntWriteService:
         # Try setting PPPoE via TR-069 if applicable
         if wan_mode == "pppoe" and pppoe_username and pppoe_password:
             try:
-                from app.services.acs_config_adapter import acs_config_adapter
+                from app.services.acs_client import create_acs_config_writer
 
-                result = acs_config_adapter.set_pppoe_credentials(
+                result = create_acs_config_writer().set_pppoe_credentials(
                     db, ont_id, pppoe_username, pppoe_password
                 )
                 if not result.success:
@@ -469,7 +469,9 @@ class OntWriteService:
         # Capture current service ports for replay
         sp_result = adapter.get_service_ports_for_ont(ctx.fsp, ctx.ont_id_on_olt)
         sp_data = sp_result.data.get("service_ports", []) if sp_result.success else []
-        current_ports: list[ServicePortEntry] = sp_data if isinstance(sp_data, list) else []
+        current_ports: list[ServicePortEntry] = (
+            sp_data if isinstance(sp_data, list) else []
+        )
 
         # Resolve authorization profiles from current assignment
         line_profile_id = getattr(ctx, "line_profile_id", None)
@@ -566,12 +568,27 @@ class OntWriteService:
             def apply_service_ports() -> tuple[bool, str]:
                 if new_ont_id_on_olt is None:
                     return False, "No ONT-ID for service port creation"
-                from app.services.network import olt_ssh as core
-
-                success, message = core.create_service_ports(
-                    ctx.olt, target_fsp, new_ont_id_on_olt, current_ports
-                )
-                return success, message
+                created = 0
+                for port in current_ports:
+                    user_vlan: int | str | None = None
+                    flow_para = str(getattr(port, "flow_para", "") or "")
+                    if flow_para.isdigit():
+                        user_vlan = int(flow_para)
+                    elif flow_para in {"untagged", "transparent"}:
+                        user_vlan = flow_para
+                    tag_transform = getattr(port, "tag_transform", None) or "translate"
+                    create_result = adapter.create_service_port(
+                        target_fsp,
+                        new_ont_id_on_olt,
+                        gem_index=port.gem_index,
+                        vlan_id=port.vlan_id,
+                        user_vlan=user_vlan,
+                        tag_transform=tag_transform,
+                    )
+                    if not create_result.success:
+                        return False, create_result.message
+                    created += 1
+                return True, f"Created {created} service-port(s)"
 
             def verify_service_ports() -> tuple[bool, str]:
                 if new_ont_id_on_olt is None:
@@ -580,7 +597,10 @@ class OntWriteService:
                     target_fsp, new_ont_id_on_olt
                 )
                 if not verify_result.success:
-                    return False, f"Failed to verify service ports: {verify_result.message}"
+                    return (
+                        False,
+                        f"Failed to verify service ports: {verify_result.message}",
+                    )
                 new_ports_data = verify_result.data.get("service_ports", [])
                 new_ports: list[ServicePortEntry] = (
                     new_ports_data if isinstance(new_ports_data, list) else []

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import ceil
+
+from sqlalchemy.orm import Session
 
 from app.models.network import OntAcsStatus, OntStatusSource, OntUnit, OnuOnlineStatus
 
@@ -20,6 +23,18 @@ class OntStatusSnapshot:
     effective_status: OnuOnlineStatus
     effective_status_source: OntStatusSource
     status_resolved_at: datetime
+
+
+@dataclass(frozen=True)
+class OntStateReconciliationResult:
+    """Outcome of reconciling OLT and ACS status observations."""
+
+    ont_id: uuid.UUID
+    snapshot: OntStatusSnapshot
+    conflict: bool
+    reason: str
+    authoritative_source: OntStatusSource
+    recommended_action: str | None = None
 
 
 def _normalize_timestamp(value: datetime | None) -> datetime | None:
@@ -203,3 +218,89 @@ def apply_resolved_status_for_model(
     )
     apply_status_snapshot(ont, snapshot)
     return snapshot
+
+
+def explain_status_reconciliation(
+    snapshot: OntStatusSnapshot,
+) -> tuple[bool, str, OntStatusSource, str | None]:
+    """Explain the priority rule used for OLT/ACS status reconciliation."""
+    if (
+        snapshot.acs_status == OntAcsStatus.online
+        and snapshot.olt_status == OnuOnlineStatus.offline
+    ):
+        return (
+            True,
+            "acs_recent_inform_overrides_olt_offline",
+            OntStatusSource.acs,
+            "refresh_olt_status",
+        )
+    if (
+        snapshot.acs_status == OntAcsStatus.online
+        and snapshot.olt_status == OnuOnlineStatus.unknown
+    ):
+        return (
+            True,
+            "acs_recent_inform_overrides_unknown_olt",
+            OntStatusSource.acs,
+            "refresh_olt_status",
+        )
+    if (
+        snapshot.olt_status == OnuOnlineStatus.online
+        and snapshot.acs_status == OntAcsStatus.stale
+    ):
+        return (
+            True,
+            "olt_online_overrides_stale_acs",
+            OntStatusSource.olt,
+            "send_connection_request",
+        )
+    if (
+        snapshot.olt_status == OnuOnlineStatus.online
+        and snapshot.acs_status == OntAcsStatus.unknown
+    ):
+        return (
+            False,
+            "olt_online_no_recent_acs",
+            OntStatusSource.olt,
+            "send_connection_request",
+        )
+    if snapshot.olt_status == OnuOnlineStatus.offline:
+        return False, "olt_offline_authoritative", OntStatusSource.olt, None
+    if snapshot.acs_status == OntAcsStatus.online:
+        return False, "acs_recent_inform_authoritative", OntStatusSource.acs, None
+    return False, "no_authoritative_observation", OntStatusSource.derived, None
+
+
+def reconcile_device_state(
+    db: Session,
+    ont_id: str | uuid.UUID,
+    *,
+    acs_last_inform_at: datetime | None = None,
+    now: datetime | None = None,
+    online_window_minutes: int | None = None,
+    commit: bool = False,
+) -> OntStateReconciliationResult:
+    """Persist effective ONT status using explicit OLT-vs-ACS priority rules."""
+    ont_uuid = ont_id if isinstance(ont_id, uuid.UUID) else uuid.UUID(str(ont_id))
+    ont = db.get(OntUnit, ont_uuid)
+    if ont is None:
+        raise ValueError(f"ONT not found: {ont_id}")
+
+    snapshot = resolve_ont_status_for_model(
+        ont,
+        acs_last_inform_at=acs_last_inform_at,
+        now=now,
+        online_window_minutes=online_window_minutes,
+    )
+    apply_status_snapshot(ont, snapshot)
+    conflict, reason, source, action = explain_status_reconciliation(snapshot)
+    if commit:
+        db.commit()
+    return OntStateReconciliationResult(
+        ont_id=ont.id,
+        snapshot=snapshot,
+        conflict=conflict,
+        reason=reason,
+        authoritative_source=source,
+        recommended_action=action,
+    )

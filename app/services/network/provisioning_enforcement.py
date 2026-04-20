@@ -35,6 +35,12 @@ from app.services.network.provisioning_settings import get_stale_runtime_hours
 logger = logging.getLogger(__name__)
 
 
+def _acs_config_writer():
+    from app.services.acs_client import create_acs_config_writer
+
+    return create_acs_config_writer()
+
+
 @dataclass
 class VlanDriftEntry:
     """Describes a VLAN mismatch for a single ONT."""
@@ -311,10 +317,9 @@ class ProvisioningEnforcement:
         ont_ids: list[str],
     ) -> dict[str, int]:
         """Send connection requests to force TR-069 bootstrap."""
-        from app.services.acs_config_adapter import acs_config_adapter
-
         sent = 0
         failed = 0
+        acs_config_adapter = _acs_config_writer()
         for ont_id in ont_ids:
             try:
                 result = acs_config_adapter.send_connection_request(db, ont_id)
@@ -354,12 +359,12 @@ class ProvisioningEnforcement:
             wire the default AccessCredential-backed adapter lazily. If
             that bridge is unavailable, standalone mode skips the fallback.
         """
-        from app.services.acs_config_adapter import acs_config_adapter
         from app.services.credential_crypto import decrypt_credential
 
         if credentials is None:
             credentials = _default_credential_provider(db)
 
+        acs_config_adapter = _acs_config_writer()
         pushed = 0
         failed = 0
         skipped = 0
@@ -444,9 +449,9 @@ class ProvisioningEnforcement:
         them to the device using GenieACS. This is idempotent - pushing the
         same config multiple times has no adverse effects.
         """
-        from app.services.acs_config_adapter import acs_config_adapter
         from app.services.credential_crypto import decrypt_credential
 
+        acs_config_adapter = _acs_config_writer()
         pushed = 0
         failed = 0
         skipped = 0
@@ -733,7 +738,9 @@ class ProvisioningEnforcement:
                 continue
 
             sp_data = result.data.get("service_ports", [])
-            service_ports: list[ServicePortEntry] = sp_data if isinstance(sp_data, list) else []
+            service_ports: list[ServicePortEntry] = (
+                sp_data if isinstance(sp_data, list) else []
+            )
 
             # Build lookup: olt_ont_id -> list of observed VLANs
             observed_vlans_by_ont: dict[int, list[int]] = {}

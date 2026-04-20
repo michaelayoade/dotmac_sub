@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import WebSocket
 
-from app.db import SessionLocal
 from app.services.auth_flow import decode_access_token
+from app.services.db_session_adapter import db_session_adapter
 
 
 async def authenticate_websocket(websocket: WebSocket) -> dict | None:
@@ -22,7 +22,7 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
         await websocket.close(code=4001, reason="Authentication required")
         return None
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         payload = decode_access_token(db, token)
         subscriber_id = payload.get("sub")

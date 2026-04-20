@@ -20,6 +20,138 @@ from app.services.web_network_ont_actions.diagnostics import fetch_iphost_config
 logger = logging.getLogger(__name__)
 
 
+def _enum_value(value: object) -> str | None:
+    raw = getattr(value, "value", value)
+    return str(raw) if raw not in (None, "") else None
+
+
+def _first_present(*values: object) -> object | None:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _plan_section(ont_plan: dict[str, object], step_name: str) -> dict[str, object]:
+    value = ont_plan.get(step_name)
+    return value if isinstance(value, dict) else {}
+
+
+def _vlan_tag(vlan: object | None) -> str:
+    tag = getattr(vlan, "tag", None)
+    return str(tag) if tag not in (None, "") else ""
+
+
+def _desired_config_context(
+    ont: object,
+    *,
+    ont_plan: dict[str, object],
+    initial_iphost_form: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Return durable desired config values for ONT config partials."""
+    mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
+    wan_plan = _plan_section(ont_plan, "configure_wan_tr069")
+    pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069") or _plan_section(
+        ont_plan, "push_pppoe_omci"
+    )
+    lan_plan = _plan_section(ont_plan, "configure_lan_tr069")
+    wifi_plan = _plan_section(ont_plan, "configure_wifi_tr069")
+    initial_iphost_form = initial_iphost_form or {}
+
+    wan_mode = _first_present(
+        _enum_value(getattr(ont, "wan_mode", None)),
+        wan_plan.get("wan_mode"),
+    )
+    wan_vlan = _first_present(
+        _vlan_tag(getattr(ont, "wan_vlan", None)),
+        wan_plan.get("wan_vlan"),
+        pppoe_plan.get("vlan_id"),
+    )
+
+    mgmt_mode = _first_present(
+        _enum_value(getattr(ont, "mgmt_ip_mode", None)),
+        mgmt_plan.get("ip_mode"),
+        initial_iphost_form.get("ip_mode"),
+    )
+    if mgmt_mode == "static_ip":
+        mgmt_mode = "static"
+    mgmt_vlan = _first_present(
+        _vlan_tag(getattr(ont, "mgmt_vlan", None)),
+        mgmt_plan.get("vlan_id"),
+        initial_iphost_form.get("vlan_id"),
+    )
+    mgmt_ip = _first_present(
+        getattr(ont, "mgmt_ip_address", None),
+        mgmt_plan.get("ip_address"),
+        initial_iphost_form.get("ip_address"),
+    )
+
+    return {
+        "desired_mgmt_config": {
+            "ip_mode": mgmt_mode or "",
+            "vlan_id": str(mgmt_vlan or ""),
+            "ip_address": str(mgmt_ip or ""),
+            "subnet": str(
+                mgmt_plan.get("subnet") or initial_iphost_form.get("subnet") or ""
+            ),
+            "gateway": str(
+                mgmt_plan.get("gateway") or initial_iphost_form.get("gateway") or ""
+            ),
+        },
+        "desired_wan_config": {
+            "wan_mode": wan_mode or "",
+            "wan_vlan": str(wan_vlan or ""),
+            "ip_address": str(wan_plan.get("ip_address") or ""),
+            "subnet_mask": str(wan_plan.get("subnet_mask") or ""),
+            "gateway": str(wan_plan.get("gateway") or ""),
+            "dns_servers": str(wan_plan.get("dns_servers") or ""),
+            "instance_index": wan_plan.get("instance_index") or 1,
+            "pppoe_username": str(
+                getattr(ont, "pppoe_username", None)
+                or pppoe_plan.get("username")
+                or ""
+            ),
+        },
+        "desired_lan_config": {
+            "lan_ip": str(
+                getattr(ont, "lan_gateway_ip", None) or lan_plan.get("lan_ip") or ""
+            ),
+            "lan_subnet": str(
+                getattr(ont, "lan_subnet_mask", None)
+                or lan_plan.get("lan_subnet")
+                or ""
+            ),
+            "dhcp_enabled": _first_present(
+                getattr(ont, "lan_dhcp_enabled", None),
+                lan_plan.get("dhcp_enabled"),
+            ),
+            "dhcp_start": str(
+                getattr(ont, "lan_dhcp_start", None)
+                or lan_plan.get("dhcp_start")
+                or ""
+            ),
+            "dhcp_end": str(
+                getattr(ont, "lan_dhcp_end", None) or lan_plan.get("dhcp_end") or ""
+            ),
+        },
+        "desired_wifi_config": {
+            "enabled": _first_present(
+                getattr(ont, "wifi_enabled", None),
+                wifi_plan.get("enabled"),
+            ),
+            "ssid": str(getattr(ont, "wifi_ssid", None) or wifi_plan.get("ssid") or ""),
+            "channel": str(
+                getattr(ont, "wifi_channel", None) or wifi_plan.get("channel") or ""
+            ),
+            "security_mode": str(
+                getattr(ont, "wifi_security_mode", None)
+                or wifi_plan.get("security_mode")
+                or ""
+            ),
+        },
+    }
+
+
 def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build management IP config context for the ONT detail partial."""
     from app.services import web_network_onts as web_network_onts_service
@@ -31,7 +163,7 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     tr069_profiles, tr069_profiles_error = (
         web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
     )
-    return {
+    context = {
         "ont": ont,
         "iphost_config": config,
         "iphost_ok": ok,
@@ -41,6 +173,14 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "tr069_profiles": tr069_profiles,
         "tr069_profiles_error": tr069_profiles_error,
     }
+    context.update(
+        _desired_config_context(
+            ont,
+            ont_plan={},
+            initial_iphost_form=context["initial_iphost_form"],
+        )
+    )
+    return context
 
 
 def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
@@ -116,7 +256,7 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         else ""
     )
 
-    return {
+    context = {
         "ont": ont,
         "service_intent": service_intent,
         "acs_observed_intent": acs_observed_intent,
@@ -128,27 +268,50 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "vlans": vlans,
         "tr069_profiles": tr069_profiles,
         "tr069_profiles_error": tr069_profiles_error,
-        "mgmt_ip_summary": {
-            "mode": initial_form.get("ip_mode"),
-            "vlan": initial_form.get("vlan_id"),
-            "ip": initial_form.get("ip_address")
-            if initial_form.get("ip_mode") == "static"
-            else None,
-        },
-        "wan_summary": {
-            "pppoe_user": observed_wan.get("pppoe_username")
-            if isinstance(observed_wan, dict)
-            else None,
-            "wan_ip": observed_wan.get("wan_ip") if isinstance(observed_wan, dict) else None,
-            "status": wan_status or None,
-        },
-        "wifi_summary": {
-            "ssid": observed_wifi.get("ssid") if isinstance(observed_wifi, dict) else None
-        },
         "has_tr069": bool(
             linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
         ),
     }
+    context.update(
+        _desired_config_context(
+            ont,
+            ont_plan=ont_plan,
+            initial_iphost_form=initial_form,
+        )
+    )
+    desired_mgmt = context["desired_mgmt_config"]
+    desired_wan = context["desired_wan_config"]
+    desired_wifi = context["desired_wifi_config"]
+    context.update(
+        {
+            "mgmt_ip_summary": {
+                "mode": desired_mgmt.get("ip_mode"),
+                "vlan": desired_mgmt.get("vlan_id"),
+                "ip": desired_mgmt.get("ip_address")
+                if desired_mgmt.get("ip_mode") == "static"
+                else None,
+            },
+            "wan_summary": {
+                "pppoe_user": (
+                    observed_wan.get("pppoe_username")
+                    if isinstance(observed_wan, dict)
+                    else None
+                )
+                or desired_wan.get("pppoe_username"),
+                "wan_ip": observed_wan.get("wan_ip")
+                if isinstance(observed_wan, dict)
+                else None,
+                "status": wan_status or None,
+            },
+            "wifi_summary": {
+                "ssid": (
+                    observed_wifi.get("ssid") if isinstance(observed_wifi, dict) else None
+                )
+                or desired_wifi.get("ssid")
+            },
+        }
+    )
+    return context
 
 
 def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
@@ -161,7 +324,7 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
     )
     observed = observed_intent.get("observed", {})
     wan = observed.get("wan", {}) if isinstance(observed, dict) else {}
-    return {
+    context = {
         "ont_id": ont_id,
         "tr069_available": bool(observed_intent.get("available")),
         "ont": ont,
@@ -171,16 +334,23 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "current_pppoe_user": (wan or {}).get("pppoe_username"),
         "vlans": web_network_onts_service.get_vlans_for_ont(db, ont),
     }
+    context.update(_desired_config_context(ont, ont_plan=ont_plan))
+    desired_wan = context["desired_wan_config"]
+    context["current_pppoe_user"] = (
+        context["current_pppoe_user"] or desired_wan.get("pppoe_username")
+    )
+    return context
 
 
 def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
     observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
         db, ont_id=ont_id
     )
     observed = observed_intent.get("observed", {})
     wireless = observed.get("wifi", {}) if isinstance(observed, dict) else {}
-    return {
+    context = {
         "ont_id": ont_id,
         "tr069_available": bool(observed_intent.get("available")),
         "acs_observed_intent": observed_intent,
@@ -188,6 +358,10 @@ def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "wireless_info": wireless,
         "current_ssid": (wireless or {}).get("ssid"),
     }
+    context.update(_desired_config_context(ont, ont_plan=ont_plan))
+    desired_wifi = context["desired_wifi_config"]
+    context["current_ssid"] = context["current_ssid"] or desired_wifi.get("ssid")
+    return context
 
 
 def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
@@ -211,13 +385,14 @@ def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
     observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
         db, ont_id=ont_id
     )
     observed = observed_intent.get("observed", {})
     observed = observed if isinstance(observed, dict) else {}
-    return {
+    context = {
         "ont_id": ont_id,
         "tr069_available": bool(observed_intent.get("available")),
         "acs_observed_intent": observed_intent,
@@ -226,6 +401,8 @@ def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "ethernet_ports": observed.get("ethernet_ports", []),
         "lan_hosts": observed.get("lan_hosts", []),
     }
+    context.update(_desired_config_context(ont, ont_plan=ont_plan))
+    return context
 
 
 def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:

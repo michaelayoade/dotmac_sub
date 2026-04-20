@@ -13,7 +13,7 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
-from app.services.acs_config_adapter import acs_config_adapter
+from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
 from app.services.network_operations import run_tracked_action
@@ -28,11 +28,15 @@ from app.services.web_network_ont_actions._common import (
 logger = logging.getLogger(__name__)
 
 
+def _acs_config_writer():
+    return create_acs_config_writer()
+
+
 def set_wifi_ssid(
     db: Session, ont_id: str, ssid: str, *, request: Request | None = None
 ) -> ActionResult:
     """Set WiFi SSID and return result."""
-    result = acs_config_adapter.set_wifi_ssid(db, ont_id, ssid)
+    result = _acs_config_writer().set_wifi_ssid(db, ont_id, ssid)
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
@@ -52,7 +56,7 @@ def set_wifi_password(
     db: Session, ont_id: str, password: str, *, request: Request | None = None
 ) -> ActionResult:
     """Set WiFi password and return result."""
-    result = acs_config_adapter.set_wifi_password(db, ont_id, password)
+    result = _acs_config_writer().set_wifi_password(db, ont_id, password)
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
@@ -96,7 +100,7 @@ def set_wifi_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WiFi radio, SSID, security, and password fields."""
-    result = acs_config_adapter.set_wifi_config(
+    result = _acs_config_writer().set_wifi_config(
         db,
         ont_id,
         enabled=enabled,
@@ -177,7 +181,7 @@ def toggle_lan_port(
     request: Request | None = None,
 ) -> ActionResult:
     """Toggle a LAN port and return result."""
-    result = acs_config_adapter.toggle_lan_port(db, ont_id, port, enabled)
+    result = _acs_config_writer().toggle_lan_port(db, ont_id, port, enabled)
     _log_action_audit(
         db,
         request=request,
@@ -204,7 +208,7 @@ def set_lan_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set LAN gateway and DHCP server config on ONT via GenieACS TR-069."""
-    result = acs_config_adapter.set_lan_config(
+    result = _acs_config_writer().set_lan_config(
         db,
         ont_id,
         lan_ip=lan_ip,
@@ -258,7 +262,7 @@ def configure_wan_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WAN mode, VLAN, and static IP fields via GenieACS TR-069."""
-    result = acs_config_adapter.configure_wan_config(
+    result = _acs_config_writer().configure_wan_config(
         db,
         ont_id,
         wan_mode=wan_mode,
@@ -416,7 +420,7 @@ def set_pppoe_credentials(
         NetworkOperationType.ont_set_pppoe,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: acs_config_adapter.set_pppoe_credentials(
+        lambda: _acs_config_writer().set_pppoe_credentials(
             db,
             ont_id,
             username,
@@ -499,7 +503,7 @@ def configure_management_ip(
     gateway: str | None = None,
 ) -> tuple[bool, str]:
     """Configure ONT management IP via OLT IPHOST command."""
-    from app.services.network.olt_ssh_ont import configure_ont_iphost
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -507,22 +511,22 @@ def configure_management_ip(
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
-    return configure_ont_iphost(
-        olt,
+    result = get_protocol_adapter(olt).configure_iphost(
         fsp,
         olt_ont_id,
-        vlan_id=vlan_id,
-        ip_mode=ip_mode,
+        vlan=vlan_id,
+        mode=ip_mode,
         priority=priority,
         ip_address=ip_address,
-        subnet=subnet,
+        subnet_mask=subnet,
         gateway=gateway,
     )
+    return result.success, result.message
 
 
 def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool, str]:
     """Bind TR-069 server profile to ONT via OLT."""
-    from app.services.network.olt_ssh_ont import bind_tr069_server_profile
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.ont_provision_steps import queue_wait_tr069_bootstrap
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
@@ -531,7 +535,13 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
-    ok, message = bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
+    bind_result = get_protocol_adapter(olt).bind_tr069_profile(
+        fsp,
+        olt_ont_id,
+        profile_id=profile_id,
+    )
+    ok = bind_result.success
+    message = bind_result.message
     if ok:
         try:
             ont.tr069_olt_profile_id = profile_id

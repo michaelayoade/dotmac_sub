@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
@@ -22,6 +21,7 @@ from app.models.network_monitoring import (
     NetworkDeviceSnmpOid,
 )
 from app.services import ping as ping_service
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ def refresh_stale_devices_health(
 
 def _refresh_device_health_worker(device_id: str, do_ping: bool, do_snmp: bool) -> None:
     """Refresh health for a single device in an isolated DB session."""
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         device = get_device(db, device_id)
         if not device:

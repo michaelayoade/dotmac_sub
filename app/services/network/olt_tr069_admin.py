@@ -501,9 +501,15 @@ def handle_rebind_tr069_profiles(
             continue
 
         fsp = f"{board}/{port}"
-        ok, msg = olt_ssh_service.bind_tr069_server_profile(
-            olt, fsp, onu_index, target_profile_id
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+        bind_result = get_protocol_adapter(olt).bind_tr069_profile(
+            fsp,
+            onu_index,
+            profile_id=target_profile_id,
         )
+        ok = bind_result.success
+        msg = bind_result.message
         if ok:
             rebound += 1
             try:

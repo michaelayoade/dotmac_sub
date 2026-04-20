@@ -13,7 +13,6 @@ from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
-from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.serial_utils import (
@@ -77,12 +76,15 @@ def sync_olt_autofind_candidates(
     if not olt:
         return False, "OLT not found", {}
 
-    ok, message, entries = olt_ssh_service.get_autofind_onts(olt)
-    if not ok:
-        return False, message, {}
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
+    result = get_protocol_adapter(olt).get_autofind_onts()
+    if not result.success:
+        return False, result.message, {}
+
+    entries = result.data.get("autofind_entries", [])
     stats = sync_olt_autofind_entries(db, olt_id=olt_id, entries=entries)
-    return True, message, stats
+    return True, result.message, stats
 
 
 def refresh_returned_ont_autofind(

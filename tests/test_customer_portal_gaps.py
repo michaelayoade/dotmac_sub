@@ -116,6 +116,18 @@ class TestCustomerRouteRegistration:
                 break
         assert found, "POST /portal/support/{ticket}/comment route not found"
 
+    def test_contacts_routes_exist(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/contacts", "GET") in routes
+        assert ("/portal/contacts", "POST") in routes
+        assert ("/portal/contacts/{contact_id}", "POST") in routes
+
 
 # ---------------------------------------------------------------------------
 # 3. Ticket creation schema

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.models.catalog import (
     AccessType,
@@ -13,6 +14,7 @@ from app.models.network import (
     OLTDevice,
     OntAcsStatus,
     OntAssignment,
+    OntAuthorizationStatus,
     OntStatusSource,
     OntUnit,
     OnuOnlineStatus,
@@ -121,6 +123,23 @@ def test_ont_detail_page_data_exposes_display_serial_number(db_session):
     assert payload is not None
     assert payload["display_serial_number"] == "HWTC08D90492"
     assert payload["display_serial_label"] == "HWTC08D90492"
+    assert payload["identity_label"] == "Huawei"
+
+
+def test_ont_detail_page_data_infers_identity_from_huawei_serial(db_session):
+    ont = OntUnit(
+        serial_number="4857544328201B9A",
+        model="HG8546M",
+        is_active=True,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["display_serial_label"] == "HWTC28201B9A"
+    assert payload["identity_label"] == "Huawei HG8546M"
 
 
 def test_ont_detail_page_data_hides_synthetic_serial(db_session):
@@ -152,7 +171,17 @@ def test_ont_detail_page_data_exposes_connected_customer_device_count_from_snaps
         observed_lan_hosts=9,
         observed_wifi_clients=8,
         tr069_last_snapshot={
+            "wan": {
+                "WAN IP": "100.64.20.10",
+                "Status": "Connected",
+                "Username": "ada@example",
+            },
+            "lan": {"LAN IP": "192.168.88.1", "DHCP Enabled": "true"},
             "wireless": {"Connected Clients": "2"},
+            "ethernet_ports": [
+                {"Status": "Up"},
+                {"Status": "Down"},
+            ],
             "lan_hosts": [
                 {
                     "HostName": "phone",
@@ -183,6 +212,13 @@ def test_ont_detail_page_data_exposes_connected_customer_device_count_from_snaps
     assert payload is not None
     assert payload["connected_customer_devices"] == 2
     assert payload["connected_wifi_clients"] == 2
+    assert payload["last_config_summary"]["wan_ip"] == "100.64.20.10"
+    assert payload["last_config_summary"]["wan_status"] == "Connected"
+    assert payload["last_config_summary"]["pppoe_user"] == "ada@example"
+    assert payload["last_config_summary"]["lan_ip"] == "192.168.88.1"
+    assert payload["last_config_summary"]["dhcp_enabled"] == "Enabled"
+    assert payload["last_config_summary"]["active_ports"] == 1
+    assert payload["last_config_summary"]["ethernet_ports"] == 2
 
 
 def test_ont_detail_page_data_falls_back_to_observed_lan_hosts(db_session):
@@ -293,6 +329,7 @@ def test_onts_list_page_data_online_filter_includes_recent_acs_devices(db_sessio
         acs_last_inform_at=datetime.now(UTC),
         effective_status=OnuOnlineStatus.online,
         effective_status_source=OntStatusSource.acs,
+        authorization_status=OntAuthorizationStatus.authorized,
     )
     db_session.add(ont)
     db_session.flush()
@@ -328,6 +365,7 @@ def test_onts_list_page_data_blanks_unknown_online_status(db_session):
         serial_number="ONT-LIST-UNKNOWN-BLANK",
         is_active=True,
         online_status=OnuOnlineStatus.unknown,
+        authorization_status=OntAuthorizationStatus.authorized,
     )
     db_session.add(ont)
     db_session.commit()
@@ -338,6 +376,261 @@ def test_onts_list_page_data_blanks_unknown_online_status(db_session):
     assert signal["status_display"] == ""
     assert signal["olt_status"] is None
     assert signal["olt_status_display"] == ""
+
+
+def test_onts_list_page_data_defaults_to_authorized_inventory(db_session):
+    authorized = OntUnit(
+        serial_number="ONT-AUTHORIZED-LIST",
+        is_active=True,
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    pending = OntUnit(
+        serial_number="ONT-PENDING-LIST",
+        is_active=True,
+        authorization_status=OntAuthorizationStatus.pending,
+    )
+    unknown = OntUnit(
+        serial_number="ONT-UNKNOWN-AUTH-LIST",
+        is_active=True,
+        authorization_status=None,
+    )
+    db_session.add_all([authorized, pending, unknown])
+    db_session.commit()
+
+    default_payload = core_devices_views.onts_list_page_data(db_session, per_page=50)
+    unauthorized_payload = core_devices_views.onts_list_page_data(
+        db_session,
+        authorization="unauthorized",
+        per_page=50,
+    )
+    all_payload = core_devices_views.onts_list_page_data(
+        db_session,
+        authorization="all",
+        per_page=50,
+    )
+
+    assert [ont.serial_number for ont in default_payload["onts"]] == [
+        "ONT-AUTHORIZED-LIST"
+    ]
+    assert [ont.serial_number for ont in unauthorized_payload["onts"]] == [
+        "ONT-PENDING-LIST",
+        "ONT-UNKNOWN-AUTH-LIST",
+    ]
+    assert [ont.serial_number for ont in all_payload["onts"]] == [
+        "ONT-AUTHORIZED-LIST",
+        "ONT-PENDING-LIST",
+        "ONT-UNKNOWN-AUTH-LIST",
+    ]
+    assert default_payload["filters"]["authorization"] == "authorized"
+    assert unauthorized_payload["filters"]["authorization"] == "unauthorized"
+    assert all_payload["filters"]["authorization"] == "all"
+
+
+def test_onts_list_page_data_uses_direct_olt_pon_topology_without_assignment(
+    db_session,
+):
+    olt = OLTDevice(name="OLT-DIRECT-TABLE", mgmt_ip="198.51.100.222")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(
+        olt_id=olt.id,
+        name="0/2/9",
+        port_number=9,
+        notes="Feeder 9",
+        is_active=True,
+    )
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="ONT-DIRECT-PON",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="9",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(db_session, per_page=50)
+
+    info = payload["assignment_info"][str(ont.id)]
+    assert info["olt_name"] == "OLT-DIRECT-TABLE"
+    assert info["olt_id"] == str(olt.id)
+    assert info["pon_port_name"] == "0/2/9"
+    assert info["pon_port_display"] == "9 - Feeder 9"
+    assert info["subscriber_name"] == ""
+
+
+def test_onts_list_page_data_merges_normalized_serial_assignment_and_direct_topology(
+    db_session,
+):
+    subscriber = Subscriber(
+        first_name="TechSquad",
+        last_name="Africa Asokoro",
+        email="techsquad.asokoro@example.com",
+        display_name="TechSquad Africa Asokoro",
+        status=SubscriberStatus.active,
+    )
+    olt = OLTDevice(name="BOI Huawei OLT", mgmt_ip="198.51.100.224")
+    db_session.add_all([subscriber, olt])
+    db_session.flush()
+
+    pon = PonPort(
+        olt_id=olt.id,
+        name="0/1/6",
+        port_number=6,
+        is_active=True,
+    )
+    db_session.add(pon)
+    db_session.flush()
+
+    hex_ont = OntUnit(
+        serial_number="4857544328201B9A",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/1",
+        port="6",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    display_ont = OntUnit(
+        serial_number="HWTC28201B9A",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/1",
+        port="6",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    db_session.add_all([hex_ont, display_ont])
+    db_session.flush()
+
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=hex_ont.id,
+            subscriber_id=subscriber.id,
+            pon_port_id=None,
+            active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        search="HWTC28201B9A",
+        per_page=50,
+    )
+
+    info = payload["assignment_info"][str(display_ont.id)]
+    assert info["subscriber_name"] == "TechSquad Africa Asokoro"
+    assert info["olt_name"] == "BOI Huawei OLT"
+    assert info["pon_port_name"] == "0/1/6"
+    assert info["pon_port_display"] == "6"
+
+
+def test_onts_list_page_data_filters_by_direct_pon_topology_without_assignment(
+    db_session,
+):
+    olt = OLTDevice(name="OLT-DIRECT-FILTER", mgmt_ip="198.51.100.223")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon_a = PonPort(olt_id=olt.id, name="0/3/1", is_active=True)
+    pon_b = PonPort(olt_id=olt.id, name="0/3/2", is_active=True)
+    db_session.add_all([pon_a, pon_b])
+    db_session.flush()
+
+    ont_a = OntUnit(
+        serial_number="ONT-DIRECT-A",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/3",
+        port="1",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    ont_b = OntUnit(
+        serial_number="ONT-DIRECT-B",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/3",
+        port="2",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    db_session.add_all([ont_a, ont_b])
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(
+        db_session,
+        pon_port_id=str(pon_a.id),
+        per_page=50,
+    )
+
+    assert [ont.serial_number for ont in payload["onts"]] == ["ONT-DIRECT-A"]
+    assert payload["filters"]["pon_port_id"] == str(pon_a.id)
+
+
+def test_onts_list_page_data_searches_direct_olt_pon_topology_without_assignment(
+    db_session,
+):
+    olt = OLTDevice(name="OLT-DIRECT-SEARCH", hostname="direct-search-olt")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(
+        olt_id=olt.id,
+        name="0/4/8",
+        notes="Direct Search PON",
+        is_active=True,
+    )
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="ONT-DIRECT-SEARCH",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/4",
+        port="8",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    by_olt = core_devices_views.onts_list_page_data(
+        db_session,
+        search="direct-search-olt",
+        per_page=50,
+    )
+    by_pon = core_devices_views.onts_list_page_data(
+        db_session,
+        search="0/4/8",
+        per_page=50,
+    )
+    by_pon_notes = core_devices_views.onts_list_page_data(
+        db_session,
+        search="Direct Search PON",
+        per_page=50,
+    )
+
+    assert [item.serial_number for item in by_olt["onts"]] == ["ONT-DIRECT-SEARCH"]
+    assert [item.serial_number for item in by_pon["onts"]] == ["ONT-DIRECT-SEARCH"]
+    assert [item.serial_number for item in by_pon_notes["onts"]] == [
+        "ONT-DIRECT-SEARCH"
+    ]
+
+
+def test_ont_index_view_toggles_are_navigation_links() -> None:
+    template = Path("templates/admin/network/onts/index.html").read_text()
+
+    assert 'href="/admin/network/onts?view=list"' in template
+    assert (
+        'href="/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc"'
+        in template
+    )
+    assert 'href="/admin/network/onts?view=unconfigured"' in template
+    assert 'id="ont-filter-form" autocomplete="off"' in template
+    assert 'autocomplete="off" autocapitalize="off" autocorrect="off"' in template
 
 
 def test_ont_detail_page_data_includes_recent_provisioning_runs(db_session):

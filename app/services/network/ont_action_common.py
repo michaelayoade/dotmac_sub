@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -90,9 +91,9 @@ def persist_data_model_root(
     model_cls = type(device)
 
     try:
-        from app.db import SessionLocal
+        from app.services.db_session_adapter import db_session_adapter
 
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             record = db.get(model_cls, str(device_id))
             if record is None:
@@ -193,12 +194,38 @@ def values_equal(cache_value: Any, requested: str) -> bool:
     return got == want
 
 
+def _connection_request_error(task_result: dict[str, object] | None) -> str | None:
+    if not isinstance(task_result, dict):
+        return None
+    error = task_result.get("connectionRequestError")
+    if error:
+        return str(error)
+    return None
+
+
+def _delete_task_quietly(client: Any, task_result: dict[str, object] | None) -> None:
+    if not isinstance(task_result, dict):
+        return
+    task_id = str(task_result.get("_id") or "").strip()
+    if not task_id:
+        return
+    delete_task = getattr(client, "delete_task", None)
+    if not callable(delete_task):
+        return
+    try:
+        delete_task(task_id)
+    except Exception:
+        logger.debug("Failed to delete ACS task %s", task_id, exc_info=True)
+
+
 def set_and_verify(
     client: Any,
     device_id: str,
     params: dict[str, str],
     *,
     expected: dict[str, str] | None = None,
+    connection_request_attempts: int = 3,
+    connection_request_backoff_sec: float = 1.0,
 ) -> dict[str, object]:
     """Apply params via setParameterValues and verify against a live device read.
 
@@ -232,9 +259,39 @@ def set_and_verify(
     readback_paths = list(expected_values.keys())
     if not readback_paths:
         return spv_result
+
+    attempts = max(1, int(connection_request_attempts))
+    readback_tasks: list[dict[str, object]] = []
+    last_connection_error: str | None = None
     try:
-        client.get_parameter_values(device_id, readback_paths, connection_request=True)
+        for attempt in range(1, attempts + 1):
+            task_result = client.get_parameter_values(
+                device_id, readback_paths, connection_request=True
+            )
+            last_connection_error = _connection_request_error(task_result)
+            if last_connection_error is None:
+                readback_tasks.append(task_result)
+                break
+            _delete_task_quietly(client, task_result)
+            logger.warning(
+                "ACS connection request failed for %s during verified write "
+                "(attempt %d/%d): %s",
+                device_id,
+                attempt,
+                attempts,
+                last_connection_error,
+            )
+            if attempt < attempts:
+                time.sleep(connection_request_backoff_sec * (2 ** (attempt - 1)))
+        else:
+            raise GenieACSError(
+                "Connection request failed after "
+                f"{attempts} attempts: {last_connection_error or 'unknown error'}"
+            )
     except GenieACSError as exc:
+        _delete_task_quietly(client, spv_result)
+        for task_result in readback_tasks:
+            _delete_task_quietly(client, task_result)
         raise GenieACSError(
             f"Readback getParameterValues failed after SPV: {exc}"
         ) from exc
@@ -247,6 +304,7 @@ def set_and_verify(
         mismatches.append(f"{path}: expected={want!r} got={got!r}")
 
     if mismatches:
+        _delete_task_quietly(client, spv_result)
         raise GenieACSError(
             "Device did not apply setParameterValues: " + "; ".join(mismatches)
         )

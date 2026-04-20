@@ -10,10 +10,10 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.domain_settings import SettingDomain
 from app.models.wireguard import WireGuardConnectionLog, WireGuardPeer
 from app.services import wireguard as wg_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,7 @@ def cleanup_connection_logs(retention_days: int | None = None) -> dict[str, int]
     Returns:
         Dict with count of deleted records
     """
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         # Use configurable setting if retention_days not explicitly provided
         if retention_days is None:
             retention_days = _get_wireguard_log_retention_days(session)
@@ -55,12 +54,6 @@ def cleanup_connection_logs(retention_days: int | None = None) -> dict[str, int]
             session, days=retention_days
         )
         return {"deleted_logs": deleted_count}
-    except Exception as e:
-        logger.error("Error in cleanup_connection_logs: %s", e)
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.wireguard.cleanup_expired_tokens")
@@ -73,8 +66,7 @@ def cleanup_expired_tokens() -> dict[str, int]:
     Returns:
         Dict with count of cleaned tokens
     """
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         now = datetime.now(UTC)
 
         # Find all peers with expired tokens
@@ -91,13 +83,7 @@ def cleanup_expired_tokens() -> dict[str, int]:
             peer.provision_token_expires_at = None
             cleaned_count += 1
 
-        session.commit()
         return {"cleaned_tokens": cleaned_count}
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.wireguard.generate_connection_log_report")
@@ -114,8 +100,7 @@ def generate_connection_log_report(
     Returns:
         Dict with connection statistics
     """
-    session = SessionLocal()
-    try:
+    with db_session_adapter.read_session() as session:
         cutoff = datetime.now(UTC) - timedelta(days=days)
 
         query = session.query(WireGuardConnectionLog).filter(
@@ -158,9 +143,3 @@ def generate_connection_log_report(
             "total_tx_bytes": total_tx,
             "avg_session_duration_seconds": round(avg_duration, 2),
         }
-    except Exception as e:
-        logger.error("Error in generate_connection_log_report: %s", e)
-        session.rollback()
-        raise
-    finally:
-        session.close()

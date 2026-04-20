@@ -13,10 +13,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
 from app.services import backup_alerts
 from app.services.credential_crypto import decrypt_credential
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,15 @@ def _resolve_snmp_community(db, olt: OLTDevice) -> str | None:
     if raw_olt_community:
         raw_olt_community = raw_olt_community.strip()
     if raw_olt_community:
-        return decrypt_credential(raw_olt_community)
+        try:
+            return decrypt_credential(raw_olt_community)
+        except ValueError as exc:
+            logger.warning(
+                "Skipping OLT-level SNMP community for %s: %s",
+                olt.name,
+                exc,
+            )
+            return None
 
     # 2. Fallback: linked NetworkDevice
     linked = None
@@ -53,7 +61,15 @@ def _resolve_snmp_community(db, olt: OLTDevice) -> str | None:
     if linked and linked.snmp_enabled:
         raw_community = (linked.snmp_community or "").strip() or None
         if raw_community:
-            return decrypt_credential(raw_community)
+            try:
+                return decrypt_credential(raw_community)
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping linked SNMP community for OLT %s: %s",
+                    olt.name,
+                    exc,
+                )
+                return None
     return None
 
 
@@ -66,10 +82,15 @@ def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
     Returns the config text or None if SSH is unavailable.
     """
     try:
-        from app.services.network.olt_ssh import fetch_running_config_ssh
+        from app.services.network.olt_protocol_adapters import (
+            OltProtocol,
+            get_protocol_adapter,
+        )
 
-        ok, message, config_text = fetch_running_config_ssh(olt)
-        if ok and config_text:
+        result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+        raw_config_text = result.data.get("config_text") if result.success else ""
+        config_text = raw_config_text if isinstance(raw_config_text, str) else ""
+        if result.success and config_text:
             # Add metadata header
             header = (
                 f"# OLT Full Running Config: {olt.name}\n"
@@ -82,7 +103,7 @@ def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
                 f"#\n"
             )
             return header + config_text + "\n"
-        logger.warning("SSH config fetch for OLT %s: %s", olt.name, message)
+        logger.warning("SSH config fetch for OLT %s: %s", olt.name, result.message)
         return None
     except Exception as e:
         logger.warning("SSH config backup failed for OLT %s: %s", olt.name, e)
@@ -225,10 +246,11 @@ def _cleanup_old_backups(db, max_age_days: int = 90, max_per_olt: int = 50) -> i
 def backup_all_olts() -> dict[str, int]:
     """Backup running config for all active OLTs."""
     logger.info("Starting OLT config backup run")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     backed_up = 0
     errors = 0
     skipped = 0
+    error_details: list[dict[str, str | None]] = []
 
     try:
         from sqlalchemy import select
@@ -238,19 +260,44 @@ def backup_all_olts() -> dict[str, int]:
         )
 
         for olt in olts:
-            # Try SSH first (full running-config), fall back to SNMP metadata
-            config_text = _fetch_running_config_via_ssh(olt)
-            if config_text is None:
-                community_str = _resolve_snmp_community(db, olt)
-                config_text = _fetch_running_config(olt, community_str=community_str)
-            if config_text is None:
-                skipped += 1
+            try:
+                # Try SSH first (full running-config), fall back to SNMP metadata
+                config_text = _fetch_running_config_via_ssh(olt)
+                if config_text is None:
+                    community_str = _resolve_snmp_community(db, olt)
+                    config_text = _fetch_running_config(
+                        olt, community_str=community_str
+                    )
+                if config_text is None:
+                    skipped += 1
+                    error_details.append(
+                        {
+                            "olt": olt.name,
+                            "mgmt_ip": olt.mgmt_ip,
+                            "error": "Could not fetch running configuration",
+                        }
+                    )
+                    backup_alerts.queue_backup_failure_notification(
+                        db,
+                        device_kind="olt",
+                        device_name=olt.name,
+                        device_ip=olt.mgmt_ip,
+                        error_message="Could not fetch running configuration",
+                        run_type="scheduled",
+                    )
+                    continue
+            except Exception as e:
+                logger.error("Failed to fetch backup for OLT %s: %s", olt.name, e)
+                errors += 1
+                error_details.append(
+                    {"olt": olt.name, "mgmt_ip": olt.mgmt_ip, "error": str(e)}
+                )
                 backup_alerts.queue_backup_failure_notification(
                     db,
                     device_kind="olt",
                     device_name=olt.name,
                     device_ip=olt.mgmt_ip,
-                    error_message="Could not fetch running configuration",
+                    error_message=str(e),
                     run_type="scheduled",
                 )
                 continue
@@ -314,4 +361,5 @@ def backup_all_olts() -> dict[str, int]:
         "errors": errors,
         "skipped": skipped,
         "cleaned": cleaned,
+        "error_details": error_details,
     }

@@ -84,10 +84,14 @@ def get_or_create_pool(
 
 
 def _get_allocated_indices(db: Session, pool_id: UUID) -> set[int]:
-    """Get all currently allocated indices for a pool."""
+    """Get indices that cannot be reused for a pool.
+
+    The database enforces uniqueness on ``(pool_id, port_index)`` across all
+    allocation rows, not only active rows, so released rows still reserve their
+    historical index.
+    """
     stmt = select(ServicePortAllocation.port_index).where(
         ServicePortAllocation.pool_id == pool_id,
-        ServicePortAllocation.is_active.is_(True),
     )
     return set(db.scalars(stmt).all())
 

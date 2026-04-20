@@ -1,35 +1,23 @@
 import logging
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.schemas.usage import UsageRatingRunRequest
 from app.services import usage as usage_service
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.usage.run_usage_rating")
 def run_usage_rating():
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         usage_service.usage_rating_runs.run(session, UsageRatingRunRequest())
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.usage.import_radius_accounting")
 def import_radius_accounting():
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         return usage_service.import_radius_accounting(session)
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.usage.evaluate_fup_rules")
@@ -49,8 +37,7 @@ def evaluate_fup_rules() -> dict[str, int]:
     from app.services.fup import evaluate_rules
     from app.services.fup_state import fup_state
 
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         now = datetime.now(UTC)
         processed = 0
         enforced = 0
@@ -138,8 +125,3 @@ def evaluate_fup_rules() -> dict[str, int]:
             reset,
         )
         return {"processed": processed, "enforced": enforced, "reset": reset}
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

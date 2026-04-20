@@ -6,9 +6,39 @@ import logging
 from typing import SupportsInt, cast
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name="app.tasks.monitoring_cleanup.check_stale_infrastructure")
+def check_stale_infrastructure() -> dict[str, object]:
+    """Check for stale DB transactions and Celery backlog indicators."""
+    logger.info("Starting stale infrastructure check")
+    with db_session_adapter.read_session() as db:
+        from app.services.infrastructure_health import check_all_services
+
+        services = check_all_services(db)
+
+    degraded = [
+        {
+            "name": service.name,
+            "status": service.status,
+            "details": service.details,
+        }
+        for service in services
+        if service.status != "up"
+    ]
+    if degraded:
+        logger.warning(
+            "Infrastructure stale-health check found degraded services: %s",
+            degraded,
+        )
+    return {
+        "status": "degraded" if degraded else "up",
+        "degraded": degraded,
+        "checked": len(services),
+    }
 
 
 @celery_app.task(name="app.tasks.monitoring_cleanup.sync_nas_to_monitoring")
@@ -19,18 +49,11 @@ def sync_nas_to_monitoring() -> dict[str, int]:
     links them via network_device_id FK, and copies SNMP/IP config.
     """
     logger.info("Starting NAS → monitoring sync")
-    db = SessionLocal()
-    try:
+    with db_session_adapter.session() as db:
         from app.services.monitoring_metrics import sync_all_nas_to_monitoring
 
         result = sync_all_nas_to_monitoring(db)
         return result
-    except Exception:
-        db.rollback()
-        logger.exception("NAS monitoring sync failed")
-        raise
-    finally:
-        db.close()
 
 
 @celery_app.task(name="app.tasks.monitoring_cleanup.cleanup_old_device_metrics")
@@ -43,8 +66,7 @@ def cleanup_old_device_metrics() -> dict[str, int]:
         {deleted: N}
     """
     logger.info("Starting device metrics cleanup")
-    db = SessionLocal()
-    try:
+    with db_session_adapter.session() as db:
         from app.models.domain_settings import SettingDomain
         from app.services.settings_spec import resolve_value
 
@@ -64,9 +86,3 @@ def cleanup_old_device_metrics() -> dict[str, int]:
 
         deleted = do_cleanup(db, retention_days=retention_days)
         return {"deleted": deleted, "retention_days": retention_days}
-    except Exception:
-        db.rollback()
-        logger.exception("Device metrics cleanup failed")
-        raise
-    finally:
-        db.close()

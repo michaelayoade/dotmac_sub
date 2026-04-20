@@ -1126,6 +1126,30 @@ class TestOntAssignmentsCRUD:
         assert result is not None
         assert ont.olt_device_id == pon.olt_id
 
+    def test_alignment_can_update_topology_without_creating_assignment(self, db_session):
+        """Telemetry reconciliation may create PON topology without customer assignment."""
+        from app.models.network import OntAssignment
+        from app.services.network.ont_assignment_alignment import (
+            align_ont_assignment_to_authoritative_fsp,
+        )
+
+        ont, pon = self._make_ont_and_pon(db_session)
+        ont.olt_device_id = None
+        db_session.commit()
+
+        result = align_ont_assignment_to_authoritative_fsp(
+            db_session,
+            ont=ont,
+            olt_id=pon.olt_id,
+            fsp="0/1/1",
+            create_missing_assignment=False,
+            reactivate_existing_assignment=False,
+        )
+
+        assert result is None
+        assert ont.olt_device_id == pon.olt_id
+        assert db_session.query(OntAssignment).filter_by(ont_unit_id=ont.id).count() == 0
+
     def test_create_ont_assignment_auto_creates_matching_cpe(
         self, db_session, subscriber
     ):

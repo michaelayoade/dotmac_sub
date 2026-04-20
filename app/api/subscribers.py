@@ -3,9 +3,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.celery_app import enqueue_celery_task
 from app.db import get_db
-from app.models.subscriber import Subscriber
+from app.models.subscriber import (
+    NINVerificationStatus,
+    Subscriber,
+    SubscriberNINVerification,
+)
 from app.schemas.common import ListResponse
 from app.schemas.subscriber import (
     AddressCreate,
@@ -24,9 +27,76 @@ from app.schemas.subscriber import (
 from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
 from app.services.nin_matching import normalize_nin, validate_nin
+from app.services.queue_adapter import enqueue_task
 from app.tasks.nin_tasks import verify_nin_task
 
 router = APIRouter()
+
+
+def _nin_verification_payload(
+    verification: SubscriberNINVerification | None,
+) -> dict[str, object | None]:
+    if verification is None:
+        return {
+            "status": "not_found",
+            "is_match": None,
+            "match_score": None,
+            "failure_reason": None,
+            "verified_at": None,
+            "created_at": None,
+        }
+    return {
+        "status": verification.status.value if verification.status else None,
+        "is_match": verification.is_match,
+        "match_score": verification.match_score,
+        "failure_reason": verification.failure_reason,
+        "verified_at": (
+            verification.verified_at.isoformat() if verification.verified_at else None
+        ),
+        "created_at": verification.created_at.isoformat()
+        if verification.created_at
+        else None,
+    }
+
+
+def _latest_nin_verification(
+    db: Session,
+    subscriber_id: uuid.UUID,
+) -> SubscriberNINVerification | None:
+    return (
+        db.query(SubscriberNINVerification)
+        .filter(SubscriberNINVerification.subscriber_id == subscriber_id)
+        .order_by(SubscriberNINVerification.created_at.desc())
+        .first()
+    )
+
+
+def _get_or_create_pending_nin_verification(
+    db: Session,
+    subscriber_id: uuid.UUID,
+    nin: str,
+) -> SubscriberNINVerification:
+    verification = (
+        db.query(SubscriberNINVerification)
+        .filter(
+            SubscriberNINVerification.subscriber_id == subscriber_id,
+            SubscriberNINVerification.nin == nin,
+            SubscriberNINVerification.status == NINVerificationStatus.pending,
+        )
+        .order_by(SubscriberNINVerification.created_at.desc())
+        .first()
+    )
+    if verification is not None:
+        return verification
+
+    verification = SubscriberNINVerification(
+        subscriber_id=subscriber_id,
+        nin=nin,
+        status=NINVerificationStatus.pending,
+    )
+    db.add(verification)
+    db.flush()
+    return verification
 
 
 @router.post(
@@ -197,12 +267,51 @@ async def verify_subscriber_nin(
     if subscriber is None:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
-    enqueue_celery_task(
+    verification = _get_or_create_pending_nin_verification(
+        db,
+        subscriber_uuid,
+        normalized_nin,
+    )
+    db.commit()
+
+    dispatch = enqueue_task(
         verify_nin_task,
         args=[str(subscriber.id), normalized_nin],
+        queue="nin",
         source="subscriber_nin_verification",
     )
-    return {"status": "queued"}
+    if not dispatch.queued:
+        verification.status = NINVerificationStatus.failed
+        verification.is_match = False
+        verification.match_score = 0
+        verification.failure_reason = dispatch.error or "NIN verification could not be queued"
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail=dispatch.error or "NIN verification could not be queued",
+        )
+    return {"status": "queued", "task_id": dispatch.task_id or ""}
+
+
+@router.get(
+    "/subscribers/{subscriber_id}/nin-verification",
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("subscriber:read"))],
+)
+def get_subscriber_nin_verification(
+    subscriber_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, object | None]:
+    try:
+        subscriber_uuid = uuid.UUID(str(subscriber_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Subscriber not found") from exc
+
+    subscriber = db.get(Subscriber, subscriber_uuid)
+    if subscriber is None:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
+
+    return _nin_verification_payload(_latest_nin_verification(db, subscriber_uuid))
 
 
 @router.post(

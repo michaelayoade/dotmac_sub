@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def upgrade_firmware_task(
     """
     from app.services.network.olt_firmware import upgrade_with_verification_audited
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         # Mark operation as running if tracked
         if operation_id:
@@ -149,7 +149,7 @@ def rollback_firmware_task(
     from app.services.network.olt_inventory import get_olt_or_none
     from app.services.network.olt_web_audit import log_olt_audit_event
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         olt = get_olt_or_none(db, olt_id)
         if not olt:

@@ -243,7 +243,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": datetime.now(UTC).isoformat(),
         }
-        with patch("app.services.tr069.GenieACSClient") as MockClient:
+        with patch("app.services.tr069.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -300,7 +300,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": datetime.now(UTC).isoformat(),
         }
-        with patch("app.services.tr069.GenieACSClient") as MockClient:
+        with patch("app.services.tr069.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -356,7 +356,7 @@ class TestAutoLinkOnts:
         db_session.add(device)
         db_session.commit()
 
-        with patch("app.services.tr069.GenieACSClient") as MockClient:
+        with patch("app.services.tr069.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -402,7 +402,7 @@ class TestAutoLinkOnts:
         db_session.add(ont)
         db_session.commit()
 
-        with patch("app.services.tr069.GenieACSClient") as MockClient:
+        with patch("app.services.tr069.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -462,7 +462,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": datetime.now(UTC).isoformat(),
         }
-        with patch("app.services.tr069.GenieACSClient") as MockClient:
+        with patch("app.services.tr069.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -801,7 +801,7 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "HWTC7D4733C3"},
         }
 
-        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+        with patch("app.services.network._resolve.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [mock_device]]
             instance.extract_parameter_value.side_effect = lambda device, path: None
@@ -845,7 +845,7 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "485754437D4733C3"},
         }
 
-        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+        with patch("app.services.network._resolve.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [], [mock_device]]
 
@@ -890,7 +890,7 @@ class TestDeviceResolution:
             },
         }
 
-        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+        with patch("app.services.network._resolve.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
 
@@ -938,7 +938,7 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+        with patch("app.services.network._resolve.create_acs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -982,7 +982,7 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+        with patch("app.services.network._resolve.create_acs_client") as MockClient:
             result, reason = resolve_genieacs_with_reason(db_session, ont)
 
         assert result is not None
@@ -990,6 +990,64 @@ class TestDeviceResolution:
         assert device_id == "48575443-EG8145V5-HWTC7D4806C3"
         assert reason == "resolved_via_linked_tr069_device"
         MockClient.return_value.list_devices.assert_not_called()
+
+    def test_resolve_moves_ont_link_when_genieacs_id_already_owned(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Linked Resolve ACS Conflict",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HWTCA31A3673",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.flush()
+
+        placeholder = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number="HWTCA31A3673",
+            is_active=True,
+        )
+        discovered = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number="48575443A31A3673",
+            genieacs_device_id="00259E-EG8145V5-48575443A31A3673",
+            oui="00259E",
+            product_class="EG8145V5",
+            is_active=True,
+        )
+        db_session.add_all([placeholder, discovered])
+        db_session.commit()
+
+        mock_device = {
+            "_id": "00259E-EG8145V5-48575443A31A3673",
+            "_deviceId": {"_SerialNumber": "48575443A31A3673"},
+        }
+
+        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.side_effect = [[], [], [mock_device]]
+
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is not None
+        _client, device_id = result
+        assert device_id == "00259E-EG8145V5-48575443A31A3673"
+        assert reason == "resolved_via_ont_acs"
+        assert discovered.ont_unit_id == ont.id
+        assert placeholder.ont_unit_id is None
+        assert placeholder.is_active is False
 
 
 class TestAcsPropagation:

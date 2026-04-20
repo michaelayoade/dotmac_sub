@@ -372,9 +372,9 @@ def execute_push_tr069_pppoe_credentials(
 
     try:
         if ont_unit_id:
-            from app.services.acs_config_adapter import acs_config_adapter
+            from app.services.acs_client import create_acs_config_writer
 
-            result = acs_config_adapter.set_pppoe_credentials(
+            result = create_acs_config_writer().set_pppoe_credentials(
                 db, ont_unit_id, username, password
             )
         elif cpe_device_id:

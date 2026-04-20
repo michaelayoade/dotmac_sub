@@ -6,6 +6,7 @@ This module provides a client for interacting with the GenieACS NBI
 
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -48,6 +49,12 @@ class GenieACSError(Exception):
 
 class GenieACSMethodNotAllowedError(GenieACSError):
     """Raised when a GenieACS endpoint rejects the HTTP method."""
+
+    pass
+
+
+class GenieACSTaskRejectedError(GenieACSError):
+    """Raised when a task is rejected by local queue-safety policy."""
 
     pass
 
@@ -236,29 +243,113 @@ class GenieACSClient:
             parsed = parsed.replace(tzinfo=UTC)
         return parsed
 
-    def create_task(
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(str(os.getenv(name, "")).strip() or default)
+        except ValueError:
+            return default
+
+    @staticmethod
+    def _env_bool(name: str, default: bool) -> bool:
+        raw = str(os.getenv(name, "")).strip().lower()
+        if not raw:
+            return default
+        return raw in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def _max_pending_tasks_per_device(cls) -> int:
+        return max(cls._env_int("GENIEACS_MAX_PENDING_TASKS_PER_DEVICE", 20), 1)
+
+    @classmethod
+    def _pending_task_ttl(cls) -> timedelta:
+        seconds = cls._env_int("GENIEACS_PENDING_TASK_TTL_SECONDS", 1800)
+        return timedelta(seconds=max(seconds, 60))
+
+    @staticmethod
+    def _is_broad_refresh_task(task: dict[str, Any]) -> bool:
+        if task.get("name") != "refreshObject":
+            return False
+        object_name = str(task.get("objectName") or "").strip().rstrip(".")
+        return object_name in {"Device", "InternetGatewayDevice"}
+
+    @staticmethod
+    def _is_inform_safe_deferred_task(task: dict[str, Any]) -> bool:
+        """Return true for task types that should wait until ACS backlog is clear."""
+        return str(task.get("name") or "").strip() in {
+            "getParameterValues",
+            "refreshObject",
+        }
+
+    @classmethod
+    def _inform_safe_mode_enabled(cls) -> bool:
+        return cls._env_bool("GENIEACS_INFORM_SAFE_MODE", True)
+
+    def _delete_stale_pending_tasks(
         self,
         device_id: str,
-        task: dict,
-        connection_request: bool = True,
-        dedupe_pending: bool = True,
-    ) -> dict:
-        """Create a task for a device.
+        pending_tasks: list[dict[str, Any]],
+        *,
+        older_than: timedelta,
+    ) -> list[dict[str, Any]]:
+        cutoff = datetime.now(UTC) - older_than
+        active_tasks: list[dict[str, Any]] = []
+        for pending_task in pending_tasks:
+            timestamp = self._parse_timestamp(pending_task.get("timestamp"))
+            task_id = str(pending_task.get("_id") or "").strip()
+            if timestamp and timestamp < cutoff and task_id:
+                try:
+                    self.delete_task(task_id)
+                    logger.info(
+                        "Deleted stale pending GenieACS task %s for %s",
+                        task_id,
+                        device_id,
+                    )
+                    continue
+                except GenieACSError:
+                    logger.warning(
+                        "Failed to delete stale pending GenieACS task %s for %s",
+                        task_id,
+                        device_id,
+                        exc_info=True,
+                    )
+            active_tasks.append(pending_task)
+        return active_tasks
 
-        Args:
-            device_id: Device ID
-            task: Task definition
-            connection_request: Whether to trigger connection request
+    def _prepare_pending_tasks_for_create(
+        self,
+        device_id: str,
+        task: dict[str, Any],
+        *,
+        dedupe_pending: bool,
+        enforce_safety: bool,
+        allow_broad_refresh: bool,
+        max_pending_tasks: int | None,
+        allow_when_pending: bool,
+    ) -> None | dict[str, Any]:
+        if enforce_safety and self._is_broad_refresh_task(task) and not allow_broad_refresh:
+            raise GenieACSTaskRejectedError(
+                "Broad root refreshObject tasks are blocked because they can slow or "
+                "fail the next inform. Refresh a targeted object instead."
+            )
 
-        Returns:
-            Task result dict, may include 'connectionRequestError' if device
-            was unreachable when connection_request=True
-        """
+        if not (dedupe_pending or enforce_safety):
+            return None
+
+        pending_tasks = [
+            item for item in self.get_pending_tasks(device_id) if isinstance(item, dict)
+        ]
+        if enforce_safety:
+            pending_tasks = self._delete_stale_pending_tasks(
+                device_id,
+                pending_tasks,
+                older_than=self._pending_task_ttl(),
+            )
+
         if dedupe_pending:
             signature = self._task_signature(task)
-            for pending_task in self.get_pending_tasks(device_id):
-                if not isinstance(pending_task, dict):
-                    continue
+            retained_tasks: list[dict[str, Any]] = []
+            for pending_task in pending_tasks:
                 if (
                     task.get("name") == "setParameterValues"
                     and pending_task.get("name") == "setParameterValues"
@@ -284,6 +375,63 @@ class GenieACSClient:
                     result = dict(pending_task)
                     result["alreadyPending"] = True
                     return result
+                retained_tasks.append(pending_task)
+            pending_tasks = retained_tasks
+
+        if enforce_safety:
+            if (
+                self._inform_safe_mode_enabled()
+                and pending_tasks
+                and self._is_inform_safe_deferred_task(task)
+                and not allow_when_pending
+            ):
+                raise GenieACSTaskRejectedError(
+                    f"Device {device_id} already has {len(pending_tasks)} pending "
+                    "GenieACS task(s). Inform-safe mode blocks read/refresh tasks "
+                    "until the device backlog is clear."
+                )
+            limit = max_pending_tasks or self._max_pending_tasks_per_device()
+            if len(pending_tasks) >= limit:
+                raise GenieACSTaskRejectedError(
+                    f"Device {device_id} already has {len(pending_tasks)} pending "
+                    f"GenieACS task(s), limit is {limit}. Clear stale tasks before "
+                    "queueing more work."
+                )
+        return None
+
+    def create_task(
+        self,
+        device_id: str,
+        task: dict,
+        connection_request: bool = True,
+        dedupe_pending: bool = True,
+        enforce_safety: bool = True,
+        allow_broad_refresh: bool = False,
+        max_pending_tasks: int | None = None,
+        allow_when_pending: bool = False,
+    ) -> dict:
+        """Create a task for a device.
+
+        Args:
+            device_id: Device ID
+            task: Task definition
+            connection_request: Whether to trigger connection request
+
+        Returns:
+            Task result dict, may include 'connectionRequestError' if device
+            was unreachable when connection_request=True
+        """
+        prepared = self._prepare_pending_tasks_for_create(
+            device_id,
+            task,
+            dedupe_pending=dedupe_pending,
+            enforce_safety=enforce_safety,
+            allow_broad_refresh=allow_broad_refresh,
+            max_pending_tasks=max_pending_tasks,
+            allow_when_pending=allow_when_pending,
+        )
+        if prepared is not None:
+            return prepared
 
         encoded_id = quote(device_id, safe="")
         params = {"connection_request": str(connection_request).lower()}
@@ -322,6 +470,7 @@ class GenieACSClient:
         device_id: str,
         parameters: list[str],
         connection_request: bool = True,
+        allow_when_pending: bool = False,
     ) -> dict:
         """Get parameter values from device.
 
@@ -334,7 +483,12 @@ class GenieACSClient:
             Task result
         """
         task = {"name": "getParameterValues", "parameterNames": parameters}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(
+            device_id,
+            task,
+            connection_request,
+            allow_when_pending=allow_when_pending,
+        )
 
     def set_parameter_values(
         self,
@@ -364,6 +518,8 @@ class GenieACSClient:
         device_id: str,
         object_path: str,
         connection_request: bool = True,
+        allow_broad_refresh: bool = False,
+        allow_when_pending: bool = False,
     ) -> dict:
         """Refresh object tree from device.
 
@@ -376,7 +532,13 @@ class GenieACSClient:
             Task result for the refreshObject task.
         """
         task = {"name": "refreshObject", "objectName": object_path.rstrip(".")}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(
+            device_id,
+            task,
+            connection_request,
+            allow_broad_refresh=allow_broad_refresh,
+            allow_when_pending=allow_when_pending,
+        )
 
     def reboot_device(self, device_id: str, connection_request: bool = True) -> dict:
         """Reboot device.

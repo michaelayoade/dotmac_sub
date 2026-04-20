@@ -44,7 +44,7 @@ class OntAuthorizationService:
     ) -> StepResult:
         """Register an ONT serial on its assigned OLT.
 
-        Wraps ``olt_ssh.authorize_ont()`` with DB state tracking.
+        Wraps the OLT protocol adapter with DB state tracking.
         Sets ``authorization_status = authorized`` on success.
 
         Does NOT trigger any provisioning steps (service-ports, TR-069,
@@ -67,7 +67,7 @@ class OntAuthorizationService:
             ensure_ont_service_profile_match,
             resolve_authorization_profiles_from_db,
         )
-        from app.services.network.olt_ssh import authorize_ont as ssh_authorize
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
         if line_profile_id is None or service_profile_id is None:
             profiles_ok, profiles_msg, profiles = (
@@ -82,13 +82,15 @@ class OntAuthorizationService:
             line_profile_id = profiles.line_profile_id
             service_profile_id = profiles.service_profile_id
 
-        ok, msg, olt_ont_id = ssh_authorize(
-            ctx.olt,
+        auth_result = get_protocol_adapter(ctx.olt).authorize_ont(
             ctx.fsp,
             ctx.ont.serial_number,
             line_profile_id=line_profile_id,
             service_profile_id=service_profile_id,
         )
+        ok = auth_result.success
+        msg = auth_result.message
+        olt_ont_id = auth_result.ont_id
 
         if ok:
             from app.services.network.olt_write_reconciliation import (
@@ -162,7 +164,7 @@ class OntAuthorizationService:
     def deauthorize(db: Session, ont_id: str) -> StepResult:
         """Remove an ONT registration from its OLT.
 
-        Wraps ``olt_ssh_ont.delete_ont_registration()`` with DB state tracking.
+        Wraps the OLT protocol adapter with DB state tracking.
         Sets ``authorization_status = unauthorized`` on success.
 
         Args:
@@ -172,13 +174,18 @@ class OntAuthorizationService:
         Returns:
             StepResult with success/failure details.
         """
-        from app.services.network.olt_ssh_ont import delete_ont_registration
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
         ctx, err = resolve_olt_context(db, ont_id)
         if not ctx:
             return StepResult("deauthorize", False, err, critical=True)
 
-        ok, msg = delete_ont_registration(ctx.olt, ctx.fsp, ctx.olt_ont_id)
+        deauth_result = get_protocol_adapter(ctx.olt).deauthorize_ont(
+            ctx.fsp,
+            ctx.olt_ont_id,
+        )
+        ok = deauth_result.success
+        msg = deauth_result.message
 
         if ok:
             from app.services.network.olt_write_reconciliation import (

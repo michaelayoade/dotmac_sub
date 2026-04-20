@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import ClassVar
 
+import sqlalchemy.orm as sa_orm
 from geoalchemy2 import Geometry
 from sqlalchemy import (
     JSON,
@@ -23,7 +24,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.mutable import MutableDict
-from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+    relationship,
+    synonym,
+)
 
 from app.db import Base
 from app.models.catalog import BillingMode
@@ -290,6 +296,9 @@ class Subscriber(Base):
     channels = relationship(
         "SubscriberChannel", back_populates="subscriber", cascade="all, delete-orphan"
     )
+    contacts = relationship(
+        "SubscriberContact", back_populates="subscriber", cascade="all, delete-orphan"
+    )
     nin_verifications = relationship(
         "SubscriberNINVerification",
         back_populates="subscriber",
@@ -400,6 +409,49 @@ class SubscriberChannel(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="channels")
+
+
+class SubscriberContact(Base):
+    """Linked contact for a subscriber account.
+
+    Contacts are account-level people, not independent subscriber accounts.
+    """
+
+    __tablename__ = "subscriber_contacts"
+    __table_args__ = (
+        Index("ix_subscriber_contacts_subscriber_id", "subscriber_id"),
+        Index("ix_subscriber_contacts_email", "email"),
+        Index("ix_subscriber_contacts_phone", "phone"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    full_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(40))
+    email: Mapped[str | None] = mapped_column(String(255))
+    relationship: Mapped[str | None] = mapped_column(String(80))
+    contact_type: Mapped[str] = mapped_column(String(40), default="general")
+    is_billing_contact: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    receives_notifications: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    subscriber = sa_orm.relationship("Subscriber", back_populates="contacts")
 
 
 class SubscriberNINVerification(Base):

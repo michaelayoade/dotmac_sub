@@ -13,7 +13,7 @@ from typing import Any
 from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 from app.services.zabbix import ZabbixClientError
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ def sync_devices_to_zabbix() -> dict[str, Any]:
         )
         return {"skipped": "zabbix_not_configured"}
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services.zabbix_host_sync import sync_all_devices
 
@@ -122,7 +122,7 @@ def sync_single_olt_to_zabbix(olt_id: str) -> dict[str, Any]:
 
     from uuid import UUID
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.models.network import OLTDevice
         from app.services.zabbix_host_sync import sync_olt_to_zabbix
@@ -189,7 +189,7 @@ def sync_single_nas_to_zabbix(nas_id: str) -> dict[str, Any]:
 
     from uuid import UUID
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.models.catalog import NasDevice
         from app.services.zabbix_host_sync import sync_nas_to_zabbix
@@ -254,7 +254,7 @@ def remove_device_from_zabbix_task(device_type: str, device_id: str) -> dict[str
 
     from uuid import UUID
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services.zabbix_host_sync import remove_device_from_zabbix
 

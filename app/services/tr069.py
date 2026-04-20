@@ -1,9 +1,9 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, false, func, or_
+from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice
@@ -27,13 +27,14 @@ from app.schemas.tr069 import (
     Tr069SessionCreate,
     Tr069SessionUpdate,
 )
+from app.services.acs_client import AcsClient, create_acs_client
 from app.services.common import (
     apply_ordering,
     apply_pagination,
     validate_enum,
 )
 from app.services.credential_crypto import encrypt_credential
-from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
+from app.services.genieacs import GenieACSError, normalize_tr069_serial
 from app.services.network import cpe as cpe_service
 from app.services.network.ont_status import (
     apply_status_snapshot,
@@ -45,6 +46,7 @@ from app.services.network.serial_utils import search_candidates
 from app.services.response import ListResponseMixin
 
 _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
+_STALE_INFORM_SERVICE_APPLY_DAYS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +289,74 @@ def _upsert_inform_parameters(
     return changed
 
 
+def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
+    from app.models.network import OntUnit, OntWanServiceInstance
+
+    ont = db.get(OntUnit, ont_id)
+    if ont is None or not ont.is_active:
+        return False
+    if (
+        ont.provisioning_profile_id
+        or ont.tr069_last_snapshot
+        or ont.pppoe_username
+        or ont.pppoe_password
+        or ont.wifi_ssid
+        or ont.wifi_password
+        or ont.lan_gateway_ip
+        or ont.lan_subnet_mask
+        or ont.lan_dhcp_start
+        or ont.lan_dhcp_end
+        or ont.wan_mode
+        or ont.wan_vlan_id
+    ):
+        return True
+    return bool(
+        db.scalar(
+            select(OntWanServiceInstance.id)
+            .where(OntWanServiceInstance.ont_id == ont.id)
+            .where(OntWanServiceInstance.is_active.is_(True))
+            .limit(1)
+        )
+    )
+
+
+def _normalize_utc_timestamp(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _queue_saved_service_apply_after_stale_inform(
+    db: Session,
+    *,
+    ont_id: object | None,
+    previous_last_inform_at: datetime | None,
+    now: datetime,
+) -> bool:
+    if ont_id is None:
+        return False
+    current = _normalize_utc_timestamp(now) or datetime.now(UTC)
+    previous = _normalize_utc_timestamp(previous_last_inform_at)
+    stale_cutoff = current - timedelta(days=_STALE_INFORM_SERVICE_APPLY_DAYS)
+    if previous is not None and previous >= stale_cutoff:
+        return False
+    if not _ont_has_saved_service_intent(db, ont_id):
+        return False
+
+    from app.services.queue_adapter import enqueue_task
+
+    dispatch = enqueue_task(
+        "app.tasks.tr069.apply_saved_ont_service_config",
+        args=[str(ont_id), "stale_inform_reconnect"],
+        correlation_id=f"ont_service_reconnect:{ont_id}",
+        source="tr069_inform",
+        countdown=30,
+    )
+    return dispatch.queued
+
+
 def _resolve_default_acs_server(db: Session) -> Tr069AcsServer | None:
     from app.models.domain_settings import SettingDomain
     from app.services import settings_spec
@@ -311,24 +381,15 @@ def _resolve_default_acs_server(db: Session) -> Tr069AcsServer | None:
 def _find_matching_ont_for_serial(db: Session, serial: str | None):
     if not serial:
         return None
-    from app.models.network import OntUnit
+    from app.services.network.ont_serials import find_unique_active_ont_by_serial
 
-    normalized_candidates = [
-        normalize_tr069_serial(candidate) for candidate in search_candidates(serial)
-    ]
-    normalized_candidates = [
-        candidate for candidate in normalized_candidates if candidate
-    ]
-    if not normalized_candidates:
-        return None
-    return (
-        db.query(OntUnit)
-        .filter(OntUnit.is_active.is_(True))
-        .filter(
-            _normalized_serial_expr(OntUnit.serial_number).in_(normalized_candidates)
+    ont = find_unique_active_ont_by_serial(db, serial)
+    if ont is None:
+        logger.info(
+            "TR-069 serial %s did not resolve to a unique active ONT; leaving unlinked",
+            serial,
         )
-        .first()
-    )
+    return ont
 
 
 def _resolve_device_for_inform(
@@ -583,7 +644,7 @@ class CpeDevices(ListResponseMixin):
 
     @staticmethod
     def _extract_identity(
-        client: GenieACSClient, device_data: dict
+        client: AcsClient, device_data: dict
     ) -> tuple[str | None, str | None, str | None]:
         device_id = str(device_data.get("_id") or "").strip()
         parsed_oui: str | None = None
@@ -876,7 +937,7 @@ class CpeDevices(ListResponseMixin):
             raise HTTPException(status_code=404, detail="ACS server not found")
 
         try:
-            client = GenieACSClient(server.base_url)
+            client = create_acs_client(server.base_url)
             devices = client.list_devices()
         except GenieACSError as e:
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
@@ -1006,38 +1067,11 @@ class CpeDevices(ListResponseMixin):
                 if not cpe_dev.serial_number:
                     continue
                 cpe_serial = str(cpe_dev.serial_number).strip()
-                normalized_cpe_serial = normalize_tr069_serial(cpe_serial)
-
-                # Strategy 1: Direct normalized serial match
-                ont = (
-                    db.query(OntUnit)
-                    .filter(
-                        _normalized_serial_expr(OntUnit.serial_number)
-                        == normalized_cpe_serial
-                    )
-                    .filter(OntUnit.is_active.is_(True))
-                    .first()
+                from app.services.network.ont_serials import (
+                    find_unique_active_ont_by_serial,
                 )
 
-                # Strategy 2: Decode Huawei hex serial to display format
-                # e.g., 485754437D4733C3 → first 8 hex chars decode to ASCII
-                # vendor prefix "HWTC" or "HWTT", used in some ONT serial fields
-                if not ont and len(cpe_serial) == 16:
-                    try:
-                        vendor_ascii = bytes.fromhex(cpe_serial[:8]).decode("ascii")
-                        display_serial = vendor_ascii + cpe_serial[8:]
-                        normalized_display = normalize_tr069_serial(display_serial)
-                        ont = (
-                            db.query(OntUnit)
-                            .filter(
-                                _normalized_serial_expr(OntUnit.serial_number)
-                                == normalized_display
-                            )
-                            .filter(OntUnit.is_active.is_(True))
-                            .first()
-                        )
-                    except (ValueError, UnicodeDecodeError):
-                        pass
+                ont = find_unique_active_ont_by_serial(db, cpe_serial)
 
                 if not ont and cpe_dev.ont_unit_id:
                     ont = db.get(OntUnit, cpe_dev.ont_unit_id)
@@ -1350,7 +1384,7 @@ class Jobs(ListResponseMixin):
         )
 
         try:
-            client = GenieACSClient(server.base_url)
+            client = create_acs_client(server.base_url)
 
             genieacs_device_id = str(device.genieacs_device_id or "").strip()
             if not genieacs_device_id:
@@ -1414,32 +1448,35 @@ class Jobs(ListResponseMixin):
                             error=fault_msg,
                         ),
                     )
+                elif connection_request_error:
+                    job.status = Tr069JobStatus.pending
+                    job.error = (
+                        "Task accepted by ACS, but immediate device confirmation "
+                        f"failed: {connection_request_error}"
+                    )
+                    logger.warning(
+                        "tr069_job_connection_request_pending",
+                        extra=_job_extra(
+                            job,
+                            device=device,
+                            server=server,
+                            task=task,
+                            result=result,
+                            error=str(connection_request_error),
+                        ),
+                    )
                 else:
                     job.status = Tr069JobStatus.succeeded
-                    if connection_request_error:
-                        # Task was queued but device couldn't be notified immediately
-                        logger.warning(
-                            "tr069_job_connection_request_failed",
-                            extra=_job_extra(
-                                job,
-                                device=device,
-                                server=server,
-                                task=task,
-                                result=result,
-                                error=str(connection_request_error),
-                            ),
-                        )
-                    else:
-                        logger.info(
-                            "tr069_job_execute_success",
-                            extra=_job_extra(
-                                job,
-                                device=device,
-                                server=server,
-                                task=task,
-                                result=result,
-                            ),
-                        )
+                    logger.info(
+                        "tr069_job_execute_success",
+                        extra=_job_extra(
+                            job,
+                            device=device,
+                            server=server,
+                            task=task,
+                            result=result,
+                        ),
+                    )
             else:
                 job.status = Tr069JobStatus.succeeded
                 logger.info(
@@ -1573,6 +1610,8 @@ def receive_inform(
         return {"status": "ignored", "reason": "unknown device or ACS server"}
 
     now = datetime.now(UTC)
+    previous_last_inform_at = device.last_inform_at
+    ont_id_for_service_apply = device.ont_unit_id
     if serial and not device.serial_number:
         device.serial_number = serial[:120]
     if device_id_str and not device.genieacs_device_id:
@@ -1640,6 +1679,20 @@ def receive_inform(
     )
     db.add(session)
     db.commit()
+    service_apply_queued = False
+    try:
+        service_apply_queued = _queue_saved_service_apply_after_stale_inform(
+            db,
+            ont_id=ont_id_for_service_apply,
+            previous_last_inform_at=previous_last_inform_at,
+            now=now,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to queue saved service config apply after inform for ONT %s",
+            ont_id_for_service_apply,
+            exc_info=True,
+        )
 
     logger.info(
         "Inform received: serial=%s event=%s device_id=%s",
@@ -1653,6 +1706,7 @@ def receive_inform(
         "event": event_str,
         "parameters": parameter_count,
         "session_id": str(session.id),
+        "service_apply_queued": service_apply_queued,
     }
 
 
@@ -1867,7 +1921,7 @@ def push_acs_enforcement_preset(
     )
 
     # Push to GenieACS
-    client = GenieACSClient(server.base_url)
+    client = create_acs_client(server.base_url)
 
     try:
         # Create provision first
@@ -1925,7 +1979,7 @@ def remove_acs_enforcement_preset(db: Session, acs_server_id: str) -> dict:
     provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
     preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
 
-    client = GenieACSClient(server.base_url)
+    client = create_acs_client(server.base_url)
     removed = {"provision": False, "preset": False}
 
     try:
@@ -1974,7 +2028,7 @@ def get_acs_enforcement_status(db: Session, acs_server_id: str) -> dict:
     provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
     preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
 
-    client = GenieACSClient(server.base_url)
+    client = create_acs_client(server.base_url)
     status = {
         "provision_id": provision_name,
         "preset_id": preset_id,
@@ -2227,7 +2281,7 @@ def push_runtime_collection_preset(
         on_periodic=on_periodic,
     )
 
-    client = GenieACSClient(server.base_url)
+    client = create_acs_client(server.base_url)
 
     try:
         client.create_provision(RUNTIME_PROVISION_NAME, provision_script)
@@ -2279,7 +2333,7 @@ def get_runtime_collection_status(db: Session, acs_server_id: str) -> dict:
             "error": "ACS server has no GenieACS base URL configured",
         }
 
-    client = GenieACSClient(server.base_url)
+    client = create_acs_client(server.base_url)
     status = {
         "provision_id": RUNTIME_PROVISION_NAME,
         "preset_id": RUNTIME_PRESET_NAME,

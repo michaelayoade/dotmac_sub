@@ -185,6 +185,23 @@
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Management IP</dt>
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ info.mgmt_ip or 'N/A' }}</dd>
                     </div>
+                    {% if monitoring_source %}
+                    <div>
+                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Monitoring Source</dt>
+                        <dd class="mt-1 space-y-1 text-sm text-slate-900 dark:text-white">
+                            <span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold {% if monitoring_source.authoritative %}bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300{% elif monitoring_source.linked %}bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                {% if monitoring_source.linked %}
+                                Network device via {{ monitoring_source.match_strategy | replace('_', ' ') | title }}
+                                {% else %}
+                                OLT inventory only
+                                {% endif %}
+                            </span>
+                            {% if monitoring_source.warning %}
+                            <p class="text-xs text-amber-600 dark:text-amber-300">{{ monitoring_source.warning }}</p>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    {% endif %}
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
                         <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ info.vendor or 'N/A' }}</dd>

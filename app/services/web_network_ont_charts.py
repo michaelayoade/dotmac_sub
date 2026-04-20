@@ -8,13 +8,13 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
+from app.services.acs_client import create_acs_state_reader
 from app.services.network.ont_metrics import (
     ChartData,
     ChartSeries,
     get_signal_history,
     get_traffic_history,
 )
-from app.services.network.ont_tr069 import OntTR069
 from app.services.network.signal_thresholds import get_signal_thresholds
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def _build_traffic_from_tr069_delta(
         list(previous_snapshot.get("ethernet_ports") or [])
     )
 
-    summary = OntTR069.get_device_summary(
+    summary = create_acs_state_reader().get_device_summary(
         db,
         str(ont.id),
         persist_observed_runtime=True,

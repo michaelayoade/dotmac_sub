@@ -25,11 +25,10 @@ Usage:
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -231,9 +230,9 @@ class ProvisioningCoordinator:
 
     def __init__(
         self,
-        db: "Session",
+        db: Session,
         *,
-        request: "Request | None" = None,
+        request: Request | None = None,
         initiated_by: str | None = None,
     ):
         self.db = db
@@ -497,7 +496,7 @@ class ProvisioningCoordinator:
             return True
 
         try:
-            from app.services.network.olt_ssh_ont import bind_tr069_server_profile
+            from app.services.network.olt_protocol_adapters import get_protocol_adapter
             from app.services.network.olt_tr069_admin import (
                 ensure_tr069_profile_for_linked_acs,
             )
@@ -516,12 +515,13 @@ class ProvisioningCoordinator:
                 return True
 
             # Bind profile to ONT
-            bind_ok, bind_msg = bind_tr069_server_profile(
-                olt,
+            bind_result = get_protocol_adapter(olt).bind_tr069_profile(
                 self._result.fsp or "",
                 self._result.ont_id_on_olt,
                 profile_id=profile_id,
             )
+            bind_ok = bind_result.success
+            bind_msg = bind_result.message
 
             step.complete(bind_ok, bind_msg, {"profile_id": profile_id})
             return bind_ok
@@ -631,12 +631,12 @@ class ProvisioningCoordinator:
     # Helpers
     # -----------------------------------------------------------------------
 
-    def _get_olt(self, olt_id: str) -> "OLTDevice | None":
+    def _get_olt(self, olt_id: str) -> OLTDevice | None:
         from app.services.network.olt_inventory import get_olt_or_none
 
         return get_olt_or_none(self.db, olt_id)
 
-    def _get_ont(self, ont_id: str) -> "OntUnit | None":
+    def _get_ont(self, ont_id: str) -> OntUnit | None:
         from app.models.network import OntUnit
 
         return self.db.get(OntUnit, ont_id)
@@ -658,7 +658,7 @@ class AsyncProvisioningResult:
 
 
 def queue_provisioning(
-    db: "Session",
+    db: Session,
     olt_id: str,
     fsp: str,
     serial_number: str,
@@ -666,7 +666,7 @@ def queue_provisioning(
     profile_id: str | None = None,
     force_reauthorize: bool = False,
     initiated_by: str | None = None,
-    request: "Request | None" = None,
+    request: Request | None = None,
 ) -> AsyncProvisioningResult:
     """Queue the complete provisioning workflow as a tracked operation.
 
@@ -753,11 +753,10 @@ def queue_provisioning(
     db.commit()
 
     try:
-        from app.celery_app import enqueue_celery_task
-        from app.tasks.provisioning import run_coordinated_provisioning_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
-            run_coordinated_provisioning_task,
+        dispatch = enqueue_task(
+            "app.tasks.provisioning.run_coordinated_provisioning_task",
             args=[str(op.id), olt_id, fsp, serial_number],
             kwargs={
                 "profile_id": profile_id,
@@ -766,6 +765,8 @@ def queue_provisioning(
             correlation_id=correlation_key,
             source="provisioning_coordinator",
         )
+        if not dispatch.queued:
+            raise RuntimeError(dispatch.error or "Failed to queue provisioning task")
 
         return AsyncProvisioningResult(
             queued=True,
@@ -801,14 +802,14 @@ def queue_provisioning(
 
 
 def provision_ont_sync(
-    db: "Session",
+    db: Session,
     olt_id: str,
     fsp: str,
     serial_number: str,
     *,
     profile_id: str | None = None,
     force_reauthorize: bool = False,
-    request: "Request | None" = None,
+    request: Request | None = None,
 ) -> ProvisioningResult:
     """Execute synchronous provisioning (blocking).
 
@@ -826,14 +827,14 @@ def provision_ont_sync(
 
 
 def provision_ont_resilient(
-    db: "Session",
+    db: Session,
     olt_id: str,
     fsp: str,
     serial_number: str,
     *,
     profile_id: str | None = None,
     force_reauthorize: bool = False,
-    request: "Request | None" = None,
+    request: Request | None = None,
     prefer_sync: bool = False,
 ) -> ProvisioningResult | AsyncProvisioningResult:
     """Provision ONT with async/sync fallback.

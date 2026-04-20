@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.tr069 import (
     Tr069AcsServer,
     Tr069CpeDevice,
@@ -22,6 +21,7 @@ from app.models.tr069 import (
     Tr069JobStatus,
     Tr069Session,
 )
+from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def sync_all_acs_devices() -> dict[str, int]:
         Stats: {servers_synced, total_created, total_updated, errors}.
     """
     logger.info("Starting TR-069 ACS device sync")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         servers = list(
             db.scalars(
@@ -144,7 +144,7 @@ def wait_for_ont_bootstrap(
     from app.services.network_operations import network_operations
 
     logger.info("Starting TR-069 bootstrap wait for ONT %s", ont_id)
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         if operation_id:
             network_operations.mark_running(db, operation_id)
@@ -191,9 +191,9 @@ def wait_for_ont_bootstrap(
                     operation_id,
                     str(payload["message"]),
                 )
-                from app.celery_app import enqueue_celery_task
+                from app.services.queue_adapter import enqueue_task
 
-                enqueue_celery_task(
+                enqueue_task(
                     "app.tasks.tr069.wait_for_ont_bootstrap",
                     args=[ont_id, operation_id, service_retry_count + 1],
                     correlation_id=f"tr069_bootstrap:{ont_id}",
@@ -230,6 +230,40 @@ def wait_for_ont_bootstrap(
         db.close()
 
 
+@celery_app.task(name="app.tasks.tr069.apply_saved_ont_service_config")
+@idempotent_task(
+    key_func=lambda ont_id, reason="inform_reconnect", **kw: f"{ont_id}:{reason}"
+)
+def apply_saved_ont_service_config(
+    ont_id: str,
+    reason: str = "inform_reconnect",
+) -> dict[str, object]:
+    """Apply saved ONT service intent after a stale device informs again."""
+    from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    logger.info("Applying saved ONT service config for %s (%s)", ont_id, reason)
+    db = db_session_adapter.create_session()
+    try:
+        result = apply_saved_service_config(db, ont_id)
+        db.commit()
+        return {
+            "ont_id": ont_id,
+            "reason": reason,
+            "step_name": result.step_name,
+            "success": result.success,
+            "message": result.message,
+            "waiting": result.waiting,
+            "skipped": result.skipped,
+            "data": result.data or {},
+        }
+    except Exception:
+        db.rollback()
+        logger.exception("Saved ONT service config apply failed for %s", ont_id)
+        raise
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.tr069.apply_acs_config")
 def apply_acs_config(
     action: str,
@@ -238,18 +272,21 @@ def apply_acs_config(
     kwargs: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Execute a queued ACS configuration action through the ACS adapter."""
-    from app.services.acs_config_adapter import acs_config_adapter
+    from app.services.acs_client import create_acs_config_writer
 
-    if action not in acs_config_adapter._QUEUEABLE_ACTIONS:
+    writer = create_acs_config_writer()
+    if not writer.supports_config_action(action):
         raise ValueError(f"Unsupported ACS configuration action: {action}")
 
-    method = getattr(acs_config_adapter, action, None)
-    if method is None:
-        raise ValueError(f"ACS configuration action is not implemented: {action}")
-
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
-        result = method(db, ont_id, *(args or []), **dict(kwargs or {}))
+        result = writer.execute_config_action(
+            db,
+            action,
+            ont_id,
+            args=args,
+            kwargs=kwargs,
+        )
         db.commit()
         return {
             "action": action,
@@ -280,10 +317,10 @@ def execute_pending_jobs() -> dict[str, int]:
     exponential backoff (1m, 5m, 15m).
 
     Returns:
-        Stats: {executed, succeeded, failed, retried, skipped}.
+        Stats: {executed, succeeded, pending, failed, retried, skipped}.
     """
     logger.info("Starting TR-069 job execution")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services.events import emit_event
         from app.services.events.types import EventType
@@ -292,6 +329,7 @@ def execute_pending_jobs() -> dict[str, int]:
         now = datetime.now(UTC)
         executed = 0
         succeeded = 0
+        pending = 0
         failed = 0
         retried = 0
         skipped = 0
@@ -314,6 +352,8 @@ def execute_pending_jobs() -> dict[str, int]:
                     _emit_job_event(
                         db, emit_event, EventType.tr069_job_completed, result
                     )
+                elif result.status == Tr069JobStatus.pending:
+                    pending += 1
                 else:
                     failed += 1
                     _emit_job_event(db, emit_event, EventType.tr069_job_failed, result)
@@ -350,6 +390,8 @@ def execute_pending_jobs() -> dict[str, int]:
                     _emit_job_event(
                         db, emit_event, EventType.tr069_job_completed, result
                     )
+                elif result.status == Tr069JobStatus.pending:
+                    pending += 1
                 else:
                     failed += 1
             except Exception as e:
@@ -374,9 +416,10 @@ def execute_pending_jobs() -> dict[str, int]:
             db.commit()
 
         logger.info(
-            "TR-069 job execution: %d executed, %d succeeded, %d failed, %d retried, %d skipped",
+            "TR-069 job execution: %d executed, %d succeeded, %d pending, %d failed, %d retried, %d skipped",
             executed,
             succeeded,
+            pending,
             failed,
             retried,
             skipped,
@@ -384,6 +427,7 @@ def execute_pending_jobs() -> dict[str, int]:
         return {
             "executed": executed,
             "succeeded": succeeded,
+            "pending": pending,
             "failed": failed,
             "retried": retried,
             "skipped": skipped,
@@ -406,7 +450,7 @@ def check_device_health() -> dict[str, int]:
         Stats: {total_checked, healthy, stale, errors}.
     """
     logger.info("Starting TR-069 device health check")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         now = datetime.now(UTC)
         stale_cutoff = now - timedelta(hours=24)
@@ -475,7 +519,7 @@ def cleanup_tr069_records() -> dict[str, int]:
         Stats: {sessions_cleaned, jobs_cleaned}.
     """
     logger.info("Starting TR-069 record cleanup")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         now = datetime.now(UTC)
         session_cutoff = now - timedelta(days=30)
@@ -570,7 +614,7 @@ def execute_bulk_action(
     from app.services.tr069 import Jobs
 
     logger.info("Starting bulk TR-069 %s for %d device(s)", action, len(device_ids))
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     processed = 0
     errors = 0
     skipped = 0
@@ -727,7 +771,7 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
     from app.services.network.ont_tr069 import ont_tr069
 
     logger.info("Starting TR-069 ONT runtime refresh (batch_size=%d)", batch_size)
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         now = datetime.now(UTC)
         stale_cutoff = now - timedelta(hours=1)
@@ -758,7 +802,7 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
             )
             db.invalidate()
             db.close()
-            db = SessionLocal()
+            db = db_session_adapter.create_session()
             onts = list(db.scalars(stmt).all())
 
         if not onts:
@@ -821,7 +865,7 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.tr069.cleanup_stale_genieacs_tasks")
 def cleanup_stale_genieacs_tasks(
-    max_age_hours: int = 6,
+    max_age_hours: int = 1,
     dry_run: bool = False,
 ) -> dict[str, int]:
     """Clean up stale pending tasks and faults from GenieACS.
@@ -831,20 +875,21 @@ def cleanup_stale_genieacs_tasks(
     caused by permanently failing tasks (e.g., invalid parameter values).
 
     Args:
-        max_age_hours: Delete tasks older than this (default 6 hours).
+        max_age_hours: Delete tasks older than this (default 1 hour).
         dry_run: If True, report what would be deleted without deleting.
 
     Returns:
         Stats: {tasks_deleted, faults_deleted, servers_processed, errors}.
     """
-    from app.services.genieacs import GenieACSClient, GenieACSError
+    from app.services.acs_client import create_acs_client
+    from app.services.genieacs import GenieACSError
 
     logger.info(
         "Starting GenieACS stale task cleanup (max_age=%dh, dry_run=%s)",
         max_age_hours,
         dry_run,
     )
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         servers = list(
             db.scalars(
@@ -867,7 +912,7 @@ def cleanup_stale_genieacs_tasks(
             if not server.base_url:
                 continue
             try:
-                client = GenieACSClient(server.base_url)
+                client = create_acs_client(server.base_url)
 
                 # Delete stale tasks
                 result = client.delete_stale_tasks(
@@ -1022,7 +1067,7 @@ def scrape_genieacs_metrics() -> dict[str, Any]:
     stats["cpes"] = len(devices)
 
     # online-silent: ONT online per OLT but ACS silent >15min
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         online_serials = {
             s

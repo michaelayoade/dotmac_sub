@@ -168,9 +168,9 @@ def bulk_activate_execute(
             mapping=mapping,
             actor_id=actor_id,
         )
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
+        enqueue_task(
             run_bulk_activation_job,
             kwargs={"job_id": str(job["job_id"])},
             correlation_id=f"bulk_activation:{job['job_id']}",
@@ -313,9 +313,9 @@ def service_migration_execute(
         scheduled_at = job.get("scheduled_at")
         if scheduled_at:
             eta = datetime.fromisoformat(str(scheduled_at))
-            from app.celery_app import enqueue_celery_task
+            from app.services.queue_adapter import enqueue_task
 
-            enqueue_celery_task(
+            enqueue_task(
                 run_service_migration_job,
                 kwargs={"job_id": str(job["job_id"])},
                 eta=eta,
@@ -326,9 +326,9 @@ def service_migration_execute(
             )
             notice = quote_plus("Service migration scheduled.")
         else:
-            from app.celery_app import enqueue_celery_task
+            from app.services.queue_adapter import enqueue_task
 
-            enqueue_celery_task(
+            enqueue_task(
                 run_service_migration_job,
                 kwargs={"job_id": str(job["job_id"])},
                 correlation_id=f"service_migration:{job['job_id']}",

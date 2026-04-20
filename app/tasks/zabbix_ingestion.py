@@ -11,8 +11,8 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.catalog import Subscription
+from app.services.db_session_adapter import db_session_adapter
 from app.services.redis_client import get_redis
 from app.services.zabbix import ZabbixClientError
 from app.services.zabbix_engine import (
@@ -109,7 +109,7 @@ def dispatch_portal_usage_ingestion() -> dict[str, Any]:
         return {"skipped": "dispatch_already_running"}
     redis, lock_token = lock
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         rows = db.execute(
             select(Subscription.id)
@@ -179,7 +179,7 @@ def ingest_portal_usage_chunk(
         }
     redis, lock_token = lock
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         start_at, end_at = _period_bounds(normalized_period)
         subscriptions = (
@@ -235,13 +235,13 @@ def ingest_olt_signals_from_zabbix() -> dict[str, Any]:
     if not _zabbix_enabled():
         return {"skipped": "zabbix_token_missing"}
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         # Import here to avoid circular imports
-        from app.services.zabbix_data_ingest import ingest_all_olt_signals
         from app.services.network.olt_polling_metrics import (
             push_signal_metrics_to_victoriametrics,
         )
+        from app.services.zabbix_data_ingest import ingest_all_olt_signals
 
         # Step 1: Pull data from Zabbix into database
         ingest_result = ingest_all_olt_signals(db)
@@ -292,7 +292,7 @@ def sync_devices_to_zabbix() -> dict[str, Any]:
     if not _zabbix_enabled():
         return {"skipped": "zabbix_token_missing"}
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services.zabbix_host_sync import sync_all_devices
 

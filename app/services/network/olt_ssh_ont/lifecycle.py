@@ -204,6 +204,9 @@ def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
             return False, f"OLT rejected: {delete_out.strip()[-150:]}"
 
         logger.info("Deleted ONT %d from OLT %s on %s", ont_id, olt.name, fsp)
+        core._invalidate_olt_read_cache(
+            olt, "autofind", "service_ports", "running_config", "ont_info"
+        )
         return True, f"ONT {ont_id} deleted from OLT"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error("Error deleting ONT on OLT %s: %s", olt.name, exc, exc_info=True)
@@ -228,10 +231,10 @@ def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
 
     if server is None and getattr(olt, "tr069_acs_server_id", None):
         try:
-            from app.db import SessionLocal
             from app.models.tr069 import Tr069AcsServer
+            from app.services.db_session_adapter import db_session_adapter
 
-            with SessionLocal() as db:
+            with db_session_adapter.create_session() as db:
                 server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
                 if server is None:
                     return None
@@ -455,6 +458,9 @@ def authorize_ont(
             message = f"ONT {serial_number} authorized on port {fsp}"
             if ont_id is not None:
                 message += f" (ONT-ID {ont_id})"
+            core._invalidate_olt_read_cache(
+                olt, "autofind", "service_ports", "running_config", "ont_info"
+            )
             return True, message, ont_id
         if core.is_error_output(output):
             logger.warning(

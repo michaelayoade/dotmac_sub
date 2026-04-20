@@ -10,15 +10,15 @@ from sqlalchemy.orm import Session
 class OltActionAdapter:
     """Keep OLT UI flows behind the operational OLT boundary."""
 
-    def __getattr__(self, name: str) -> Any:
-        from app.services.network import olt_operations as olt_operations_service
-
-        return getattr(olt_operations_service, name)
-
     def fetch_running_config(self, olt: object, db: Session | None = None) -> str | None:
         from app.services.network import olt_operations as olt_operations_service
 
         return olt_operations_service.fetch_running_config(olt, db=db)
+
+    def get_olt_firmware_images(self, db: Session, olt_id: str) -> list:
+        from app.services.network import olt_operations as olt_operations_service
+
+        return olt_operations_service.get_olt_firmware_images(db, olt_id)
 
     def execute_cli_command(
         self, db: Session, olt_id: str, command: str, **kwargs: Any

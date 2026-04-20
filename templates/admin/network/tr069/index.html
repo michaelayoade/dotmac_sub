@@ -16,6 +16,7 @@
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "TR-069 / ACS"}]
     ) %}
         {{ action_button("Add ACS Server", href="/admin/network/tr069/acs/new", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>', variant="primary", color="sky", color2="blue") }}
+        {{ action_button("Pending Tasks", href="/admin/network/tr069/tasks" ~ ("?acs_server_id=" ~ selected_server_id if selected_server_id else ""), icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5h6M9 12h6M9 19h6M5 5h.01M5 12h.01M5 19h.01"/></svg>', variant="secondary", color="slate") }}
     {% endcall %}
 
     {% if message %}
@@ -32,6 +33,7 @@
         {{ stats_card("Unmatched", stats.unmatched, color="slate") }}
         {{ stats_card("Seen 24h", stats.seen_24h, color="emerald") }}
         {{ stats_card("Unlinked", stats.unlinked, color="amber") }}
+        {{ stats_card("Pending Jobs", stats.jobs_pending, color="amber") }}
         {{ stats_card("Failed Jobs", stats.jobs_failed, color="rose") }}
     </div>
 
@@ -504,6 +506,8 @@
                 <div>
                     {% if job.status.value == 'succeeded' %}
                         {{ status_badge('Succeeded', 'active') }}
+                    {% elif job.status.value == 'pending' %}
+                        {{ status_badge('Pending', 'warning') }}
                     {% elif job.status.value == 'failed' %}
                         {{ status_badge('Failed', 'inactive') }}
                     {% else %}

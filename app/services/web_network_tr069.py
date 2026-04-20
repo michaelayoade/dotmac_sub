@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
@@ -21,8 +22,9 @@ from app.schemas.tr069 import (
 )
 from app.services import network as network_service
 from app.services import tr069 as tr069_service
+from app.services.acs_client import create_acs_client
 from app.services.common import coerce_uuid
-from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
+from app.services.genieacs import GenieACSError, normalize_tr069_serial
 from app.services.network import cpe as cpe_service
 from app.services.network._common import decode_huawei_hex_serial
 from app.services.tr069_web_audit import log_tr069_audit_event
@@ -200,8 +202,8 @@ def validate_acs_connection(values: dict[str, object]) -> str | None:
         return "ACS base URL is required."
 
     try:
-        # Lightweight reachability/auth check against GenieACS NBI.
-        GenieACSClient(base_url, timeout=5.0).count_devices()
+        # Lightweight reachability/auth check against the configured ACS NBI.
+        create_acs_client(base_url, timeout=5.0).count_devices()
     except GenieACSError as exc:
         return f"Failed to connect to GenieACS ({base_url}): {exc}"
     return None
@@ -289,6 +291,251 @@ def update_acs_server(
 
 def get_acs_server(db: Session, *, acs_id: str):
     return tr069_service.acs_servers.get(db=db, server_id=acs_id)
+
+
+def _active_acs_servers(db: Session):
+    return tr069_service.acs_servers.list(
+        db=db,
+        is_active=None,
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
+    )
+
+
+def _selected_acs_server(db: Session, acs_server_id: str | None):
+    servers = _active_acs_servers(db)
+    selected_server_id = str(acs_server_id or "").strip()
+    if not selected_server_id and servers:
+        selected_server_id = str(servers[0].id)
+    server = (
+        tr069_service.acs_servers.get(db=db, server_id=selected_server_id)
+        if selected_server_id
+        else None
+    )
+    return servers, selected_server_id, server
+
+
+def _task_parameters(task: dict[str, Any]) -> list[str]:
+    if isinstance(task.get("parameterNames"), list):
+        return [str(item) for item in task.get("parameterNames") or []]
+    if isinstance(task.get("parameterValues"), list):
+        names: list[str] = []
+        for item in task.get("parameterValues") or []:
+            if isinstance(item, (list, tuple)) and item:
+                names.append(str(item[0]))
+        return names
+    return []
+
+
+def _task_timestamp(task: dict[str, Any]) -> str:
+    for key in ("timestamp", "created", "createdAt", "created_at"):
+        value = str(task.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _parse_task_timestamp(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _task_age_label(age_seconds: int | None) -> str:
+    if age_seconds is None:
+        return ""
+    if age_seconds < 60:
+        return f"{age_seconds}s"
+    minutes = age_seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}h"
+    return f"{hours // 24}d"
+
+
+def _is_broad_refresh_task(task: dict[str, Any]) -> bool:
+    if task.get("name") != "refreshObject":
+        return False
+    object_name = str(task.get("objectName") or "").strip().rstrip(".")
+    return object_name in {"Device", "InternetGatewayDevice"}
+
+
+def acs_task_console_data(
+    db: Session,
+    *,
+    acs_server_id: str | None = None,
+) -> dict[str, object]:
+    """Return pending GenieACS task data for the operator console."""
+    servers, selected_server_id, server = _selected_acs_server(db, acs_server_id)
+    tasks: list[dict[str, Any]] = []
+    error: str | None = None
+
+    if server:
+        try:
+            client = create_acs_client(str(server.base_url))
+            tasks = client.list_tasks()
+        except Exception as exc:
+            error = str(exc)
+
+    device_ids = {
+        str(task.get("device") or "").strip()
+        for task in tasks
+        if str(task.get("device") or "").strip()
+    }
+    local_by_genieacs_id: dict[str, Tr069CpeDevice] = {}
+    if selected_server_id and device_ids:
+        local_devices = (
+            db.query(Tr069CpeDevice)
+            .filter(Tr069CpeDevice.acs_server_id == coerce_uuid(selected_server_id))
+            .filter(Tr069CpeDevice.genieacs_device_id.in_(device_ids))
+            .all()
+        )
+        local_by_genieacs_id = {
+            str(device.genieacs_device_id): device for device in local_devices
+        }
+
+    now = datetime.now(UTC)
+    stale_after = timedelta(minutes=15)
+    device_task_counts: dict[str, int] = {}
+    for task in tasks:
+        device_id = str(task.get("device") or "").strip()
+        if device_id:
+            device_task_counts[device_id] = device_task_counts.get(device_id, 0) + 1
+
+    rows: list[dict[str, object]] = []
+    for task in tasks:
+        task_id = str(task.get("_id") or "").strip()
+        device_id = str(task.get("device") or "").strip()
+        local_device = local_by_genieacs_id.get(device_id)
+        parameters = _task_parameters(task)
+        timestamp = _task_timestamp(task)
+        parsed_timestamp = _parse_task_timestamp(timestamp)
+        age_seconds = (
+            max(0, int((now - parsed_timestamp).total_seconds()))
+            if parsed_timestamp
+            else None
+        )
+        is_stale = bool(age_seconds is not None and age_seconds >= stale_after.total_seconds())
+        is_broad_refresh = _is_broad_refresh_task(task)
+        device_task_count = device_task_counts.get(device_id, 0) if device_id else 0
+        rows.append(
+            {
+                "id": task_id,
+                "device_id": device_id,
+                "device_label": (
+                    _display_serial_number(local_device.serial_number)
+                    if local_device and local_device.serial_number
+                    else device_id
+                ),
+                "local_device_id": str(local_device.id) if local_device else "",
+                "name": str(task.get("name") or "task"),
+                "timestamp": timestamp,
+                "age_label": _task_age_label(age_seconds),
+                "age_seconds": age_seconds,
+                "is_stale": is_stale,
+                "is_broad_refresh": is_broad_refresh,
+                "device_task_count": device_task_count,
+                "is_inform_blocking_suspect": bool(
+                    is_stale or is_broad_refresh or device_task_count > 1
+                ),
+                "parameters": parameters,
+                "parameter_count": len(parameters),
+                "raw": task,
+            }
+        )
+
+    return {
+        "servers": servers,
+        "selected_server_id": selected_server_id,
+        "selected_server": server,
+        "tasks": rows,
+        "task_count": len(rows),
+        "stale_task_count": sum(1 for row in rows if row["is_stale"]),
+        "suspect_task_count": sum(
+            1 for row in rows if row["is_inform_blocking_suspect"]
+        ),
+        "devices_with_backlog": sum(
+            1 for count in device_task_counts.values() if count > 1
+        ),
+        "error": error,
+    }
+
+
+def delete_acs_task(
+    db: Session,
+    *,
+    acs_server_id: str,
+    task_id: str,
+    request: Request | None = None,
+) -> None:
+    _, _, server = _selected_acs_server(db, acs_server_id)
+    if not server:
+        raise ValueError("ACS server not found")
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        raise ValueError("Task ID is required")
+    client = create_acs_client(str(server.base_url))
+    client.delete_task(clean_task_id)
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="delete_acs_task",
+        entity_type="genieacs_task",
+        entity_id=clean_task_id,
+        metadata={"acs_server_id": str(server.id), "server_name": server.name},
+    )
+
+
+def clear_acs_tasks(
+    db: Session,
+    *,
+    acs_server_id: str,
+    request: Request | None = None,
+) -> dict[str, object]:
+    _, _, server = _selected_acs_server(db, acs_server_id)
+    if not server:
+        raise ValueError("ACS server not found")
+    client = create_acs_client(str(server.base_url))
+    tasks = client.list_tasks()
+    deleted = 0
+    errors: list[dict[str, str]] = []
+    for task in tasks:
+        task_id = str(task.get("_id") or "").strip()
+        if not task_id:
+            continue
+        try:
+            client.delete_task(task_id)
+            deleted += 1
+        except Exception as exc:
+            errors.append({"task_id": task_id, "error": str(exc)})
+
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="clear_acs_tasks",
+        entity_type="tr069_acs_server",
+        entity_id=str(server.id),
+        metadata={
+            "server_name": server.name,
+            "task_count": len(tasks),
+            "deleted": deleted,
+            "errors": errors[:10],
+        },
+    )
+    return {"deleted": deleted, "errors": errors, "attempted": len(tasks)}
 
 
 def _device_registered_in_acs(device: Tr069CpeDevice) -> bool:
@@ -595,6 +842,9 @@ def tr069_dashboard_data(
             "jobs_failed": sum(
                 1 for item in jobs if item.status == Tr069JobStatus.failed
             ),
+            "jobs_pending": sum(
+                1 for item in jobs if item.status == Tr069JobStatus.pending
+            ),
         },
         "filters": {
             "search": str(search or "").strip(),
@@ -881,10 +1131,10 @@ def queue_bulk_action(
     if not registered_ids:
         raise ValueError("No selected devices are registered in GenieACS yet")
 
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task
     from app.tasks.tr069 import execute_bulk_action
 
-    task = enqueue_celery_task(
+    task = enqueue_task(
         execute_bulk_action,
         args=[registered_ids, action, params or {}],
         correlation_id=f"tr069_bulk:{action}:{len(registered_ids)}",
@@ -896,11 +1146,11 @@ def queue_bulk_action(
             "event": "tr069_bulk_action",
             "action": action,
             "device_count": len(registered_ids),
-            "task_id": str(task.id),
+            "task_id": str(task.task_id or ""),
             "correlation_id": f"tr069_bulk:{action}:{len(registered_ids)}",
         },
     )
-    task_id = str(task.id)
+    task_id = str(task.task_id or "")
     if isinstance(db, Session):
         log_tr069_audit_event(
             db,

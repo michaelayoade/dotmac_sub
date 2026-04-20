@@ -16,12 +16,15 @@ from __future__ import annotations
 import logging
 import os
 import re
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
+
+if TYPE_CHECKING:
+    from app.services.zabbix import ZabbixClient
 
 logger = logging.getLogger(__name__)
 
@@ -331,10 +334,10 @@ class ZabbixMetricsAdapter(MetricsReader):
         )
         self.api_token = api_token or os.getenv("ZABBIX_API_TOKEN", "")
         self.timeout = timeout
-        self._client: "ZabbixClient | None" = None
+        self._client: ZabbixClient | None = None
 
     @property
-    def client(self) -> "ZabbixClient":
+    def client(self) -> ZabbixClient:
         """Lazy-initialize Zabbix client."""
         if self._client is None:
             from app.services.zabbix import ZabbixClient

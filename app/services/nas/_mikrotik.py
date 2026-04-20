@@ -12,7 +12,6 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.models.catalog import (
     NasDevice,
     NasVendor,
@@ -22,6 +21,7 @@ from app.models.catalog import (
 )
 from app.schemas.catalog import NasDeviceUpdate
 from app.services.credential_crypto import decrypt_credential
+from app.services.db_session_adapter import db_session_adapter
 from app.services.nas._helpers import (
     merge_single_tag,
     prefixed_value_from_tags,
@@ -405,7 +405,7 @@ def _record_mikrotik_auth_attempt(
     error: str | None = None,
 ) -> None:
     """Persist MikroTik auth/connect attempt as provisioning log."""
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
     try:
         log = ProvisioningLog(
             nas_device_id=nas_device_id,

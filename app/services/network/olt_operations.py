@@ -174,9 +174,32 @@ def compare_olt_backups(
 
 
 def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | None:
-    """Fetch a lightweight running-config snapshot via SNMP."""
+    """Fetch an OLT running-config through the protocol adapter.
+
+    Falls back to a lightweight SNMP snapshot when full CLI config capture is
+    unavailable.
+    """
     if not olt.mgmt_ip:
         return None
+
+    try:
+        from app.services.network.olt_protocol_adapters import (
+            OltProtocol,
+            get_protocol_adapter,
+        )
+
+        result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+        config_text = result.data.get("config_text") if result.success else None
+        if isinstance(config_text, str) and config_text.strip():
+            return config_text
+        logger.warning(
+            "Adapter running-config fetch failed for OLT %s: %s",
+            olt.name,
+            result.message,
+        )
+    except Exception as exc:
+        logger.warning("Adapter running-config fetch errored for OLT %s: %s", olt.name, exc)
+
     try:
         from pysnmp.hlapi import (
             CommunityData,
@@ -196,9 +219,16 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
             db, mgmt_ip=olt.mgmt_ip, hostname=olt.hostname, name=olt.name
         )
         if linked and linked.snmp_community:
-            decrypted = decrypt_credential(linked.snmp_community)
-            if decrypted:
-                community_str = decrypted
+            try:
+                decrypted = decrypt_credential(linked.snmp_community)
+                if decrypted:
+                    community_str = decrypted
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping linked SNMP community for OLT %s: %s",
+                    olt.name,
+                    exc,
+                )
 
     try:
         engine = SnmpEngine()
@@ -569,7 +599,16 @@ def fetch_running_config_ssh_preview(
     if not olt:
         return False, "OLT not found", ""
 
-    ok, message, config_text = olt_ssh_service.fetch_running_config_ssh(olt)
+    from app.services.network.olt_protocol_adapters import (
+        OltProtocol,
+        get_protocol_adapter,
+    )
+
+    result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+    ok = result.success
+    message = result.message
+    raw_config_text = result.data.get("config_text") if ok else ""
+    config_text = raw_config_text if isinstance(raw_config_text, str) else ""
     log_olt_audit_event(
         db,
         request=request,
@@ -764,9 +803,16 @@ def backup_running_config_ssh(
     if not olt:
         return None, "OLT not found"
 
-    ok, message, config_text = olt_ssh_service.fetch_running_config_ssh(olt)
-    if not ok or not config_text:
-        return None, f"SSH config backup failed: {message}"
+    from app.services.network.olt_protocol_adapters import (
+        OltProtocol,
+        get_protocol_adapter,
+    )
+
+    result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+    raw_config_text = result.data.get("config_text") if result.success else ""
+    config_text = raw_config_text if isinstance(raw_config_text, str) else ""
+    if not result.success or not config_text:
+        return None, f"SSH config backup failed: {result.message}"
 
     try:
         timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")

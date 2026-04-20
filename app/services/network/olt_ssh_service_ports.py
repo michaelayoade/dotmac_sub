@@ -143,6 +143,7 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info("Deleted service-port %d on OLT %s", index, olt.name)
+        core._invalidate_olt_read_cache(olt, "service_ports", "running_config")
         return True, f"Service-port {index} deleted"
     except Exception as exc:
         logger.error("Error deleting service-port on OLT %s: %s", olt.name, exc)
@@ -227,6 +228,7 @@ def create_single_service_port(
             olt.name,
             fsp,
         )
+        core._invalidate_olt_read_cache(olt, "service_ports", "running_config")
         return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})", port_index
     except Exception as exc:
         logger.error("Error creating service-port on OLT %s: %s", olt.name, exc)

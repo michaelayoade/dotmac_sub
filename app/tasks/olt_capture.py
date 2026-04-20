@@ -9,7 +9,8 @@ import logging
 from uuid import UUID
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
+from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +38,13 @@ def capture_olt_samples_task(self, olt_id: str, force: bool = False) -> dict:
     """
     from app.services.network.olt_cli_capture import capture_olt_samples
 
-    session = SessionLocal()
     try:
-        success, message, metadata = capture_olt_samples(
-            session,
-            UUID(olt_id),
-            force=force,
-        )
+        with db_session_adapter.session() as session:
+            success, message, metadata = capture_olt_samples(
+                session,
+                UUID(olt_id),
+                force=force,
+            )
         result = {
             "success": success,
             "message": message,
@@ -59,8 +60,6 @@ def capture_olt_samples_task(self, olt_id: str, force: bool = False) -> dict:
     except Exception as exc:
         logger.error("Error capturing OLT samples for %s: %s", olt_id, exc)
         raise self.retry(exc=exc)
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.olt_capture.validate_all_parsers_task")
@@ -115,18 +114,15 @@ def capture_all_olts_task(force: bool = False) -> dict:
 
     from app.models.network import OLTDevice
 
-    session = SessionLocal()
-    try:
+    with db_session_adapter.read_session() as session:
         stmt = select(OLTDevice).where(OLTDevice.is_active == True)  # noqa: E712
         olts = session.scalars(stmt).all()
 
         results = []
         for olt in olts:
             # Queue individual capture task
-            from app.celery_app import enqueue_celery_task
-
-            task = enqueue_celery_task(
-                capture_olt_samples_task,
+            dispatch = enqueue_task(
+                "app.tasks.olt_capture.capture_olt_samples_task",
                 args=[str(olt.id)],
                 kwargs={"force": force},
                 correlation_id=f"olt_capture:{olt.id}",
@@ -136,7 +132,7 @@ def capture_all_olts_task(force: bool = False) -> dict:
                 {
                     "olt_id": str(olt.id),
                     "olt_name": olt.name,
-                    "task_id": task.id,
+                    "task_id": dispatch.task_id,
                 }
             )
 
@@ -144,5 +140,3 @@ def capture_all_olts_task(force: bool = False) -> dict:
             "queued": len(results),
             "tasks": results,
         }
-    finally:
-        session.close()

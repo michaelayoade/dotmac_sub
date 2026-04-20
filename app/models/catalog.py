@@ -836,22 +836,22 @@ class NasDevice(Base):
     nas_ip: Mapped[str | None] = mapped_column(String(64))  # IP used in RADIUS requests
 
     # RADIUS Configuration
-    shared_secret: Mapped[str | None] = mapped_column(String(255))  # Keep existing
+    shared_secret: Mapped[str | None] = mapped_column(String(512))  # Keep existing
     coa_port: Mapped[int | None] = mapped_column(Integer, default=3799)
 
     # Management Credentials
     ssh_username: Mapped[str | None] = mapped_column(String(120))
-    ssh_password: Mapped[str | None] = mapped_column(String(255))
+    ssh_password: Mapped[str | None] = mapped_column(String(512))
     ssh_key: Mapped[str | None] = mapped_column(Text)
     ssh_verify_host_key: Mapped[bool] = mapped_column(Boolean, default=False)
     api_username: Mapped[str | None] = mapped_column(String(120))
-    api_password: Mapped[str | None] = mapped_column(String(255))
+    api_password: Mapped[str | None] = mapped_column(String(512))
     api_token: Mapped[str | None] = mapped_column(Text)
     api_url: Mapped[str | None] = mapped_column(String(500))
     api_verify_tls: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # SNMP Configuration
-    snmp_community: Mapped[str | None] = mapped_column(String(120))
+    snmp_community: Mapped[str | None] = mapped_column(String(512))
     snmp_version: Mapped[str | None] = mapped_column(String(10), default="2c")
     snmp_port: Mapped[int | None] = mapped_column(Integer, default=161)
 
@@ -1084,7 +1084,7 @@ class AccessCredential(Base):
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
     username: Mapped[str] = mapped_column(String(120), nullable=False)
-    secret_hash: Mapped[str | None] = mapped_column(String(255))
+    secret_hash: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(

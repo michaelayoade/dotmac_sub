@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.olt_protocol_adapters import get_protocol_adapter
-from app.services.network.olt_ssh import ServicePortEntry, create_service_ports
+from app.services.network.olt_ssh import ServicePortEntry
 from app.services.network.olt_ssh_ont import ServicePortDiagnostics
 from app.services.network.ont_olt_context import resolve_ont_olt_write_context
 
@@ -72,6 +72,17 @@ def _resolve_ont_olt_context(
         return ctx.ont, ctx.olt, ctx.fsp, ctx.ont_id_on_olt
 
     ont = db.get(OntUnit, ont_id)
+    if ont is None:
+        return None, None, None, None
+
+    fsp = None
+    if ont.board and ont.port:
+        fsp = _normalize_fsp(f"{ont.board}/{ont.port}")
+    olt_ont_id = _parse_ont_id_on_olt(ont.external_id)
+    olt = db.get(OLTDevice, str(ont.olt_device_id)) if ont.olt_device_id else None
+    if olt and fsp and olt_ont_id is not None:
+        return ont, olt, fsp, olt_ont_id
+
     return ont, None, None, None
 
 
@@ -397,8 +408,30 @@ def handle_clone(
     if not ref_ports:
         return False, f"Could not get reference ports: {result.message}"
 
-    # Create on target using existing bulk function
-    return create_service_ports(olt, fsp, olt_ont_id, ref_ports)
+    target_adapter = get_protocol_adapter(olt)
+    created = 0
+    for ref_port in ref_ports:
+        user_vlan: int | str | None = None
+        flow_para = str(getattr(ref_port, "flow_para", "") or "")
+        if flow_para.isdigit():
+            user_vlan = int(flow_para)
+        elif flow_para in {"untagged", "transparent"}:
+            user_vlan = flow_para
+
+        tag_transform = getattr(ref_port, "tag_transform", None) or "translate"
+        result = target_adapter.create_service_port(
+            fsp,
+            olt_ont_id,
+            gem_index=ref_port.gem_index,
+            vlan_id=ref_port.vlan_id,
+            user_vlan=user_vlan,
+            tag_transform=tag_transform,
+        )
+        if not result.success:
+            return False, result.message
+        created += 1
+
+    return True, f"Created {created} service-port(s) from reference ONT"
 
 
 def handle_diagnose(

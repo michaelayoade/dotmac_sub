@@ -6,7 +6,7 @@
 {% block content %}
 <div class="relative space-y-4" x-data='{
     view: "{{ filters.view or 'list' }}",
-    filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %}
+    filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'authorized' or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %}
 }'>
     {% call page_header(
         title="ONT Fleet",
@@ -19,15 +19,27 @@
         <div class="flex flex-wrap items-center gap-2">
             {# View toggle: List, Diagnostics, Unconfigured #}
             <div class="flex items-center rounded-lg border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-800" role="group" aria-label="View mode">
-                <button @click="view = 'list'" :class="view === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'" class="rounded-l-lg px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1" :aria-pressed="view === 'list'">
+                <a href="/admin/network/onts?view=list"
+                   @click="view = 'list'"
+                   :class="view === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'"
+                   class="rounded-l-lg px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+                   :aria-current="view === 'list' ? 'page' : null">
                     List
-                </button>
-                <button @click="view = 'diagnostics'" :class="view === 'diagnostics' ? 'bg-amber-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'" class="px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1" :aria-pressed="view === 'diagnostics'">
+                </a>
+                <a href="/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc"
+                   @click="view = 'diagnostics'"
+                   :class="view === 'diagnostics' ? 'bg-amber-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'"
+                   class="px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
+                   :aria-current="view === 'diagnostics' ? 'page' : null">
                     Diagnostics
-                </button>
-                <button @click="view = 'unconfigured'" :class="view === 'unconfigured' ? 'bg-emerald-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'" class="rounded-r-lg px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1" :aria-pressed="view === 'unconfigured'">
+                </a>
+                <a href="/admin/network/onts?view=unconfigured"
+                   @click="view = 'unconfigured'"
+                   :class="view === 'unconfigured' ? 'bg-emerald-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'"
+                   class="rounded-r-lg px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                   :aria-current="view === 'unconfigured' ? 'page' : null">
                     Unconfigured
-                </button>
+                </a>
             </div>
             <a href="/admin/network/tr069?only_unlinked=true"
                class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
@@ -61,7 +73,7 @@
 
     {# ═══════════════ Filter Bar ═══════════════ #}
     <div x-show="view !== 'unconfigured'" x-cloak class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <form method="GET" action="/admin/network/onts" id="ont-filter-form">
+        <form method="GET" action="/admin/network/onts" id="ont-filter-form" autocomplete="off">
             <input type="hidden" name="view" :value="view">
             <input type="hidden" name="pon_port_id" value="{{ filters.pon_port_id }}">
             <input type="hidden" name="pon_hint" value="{{ filters.pon_hint }}">
@@ -73,6 +85,7 @@
                         <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                     </div>
                     <input type="text" name="search" value="{{ filters.search }}" placeholder="Search serial, hex serial, MAC, OLT, PON..."
+                           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
                            class="w-full rounded-lg border border-slate-200 bg-slate-50/50 py-2 pl-9 pr-4 text-sm text-slate-900 transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-700 dark:focus:text-white"
                            hx-get="/admin/network/onts" hx-trigger="keyup changed delay:400ms" hx-target="body" hx-push-url="true" hx-include="#ont-filter-form">
                 </div>
@@ -120,7 +133,7 @@
                 </button>
 
                 {# Clear filters #}
-                {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.search or filters.vendor %}
+                {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'authorized' or filters.signal_quality or filters.search or filters.vendor %}
                     <a href="/admin/network/onts?view={{ filters.view or 'list' }}" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50 min-h-[44px]">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     Clear
@@ -154,6 +167,14 @@
                     <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All Records</option>
                     <option value="active" {% if status_filter == 'active' %}selected{% endif %}>Active Only</option>
                     <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive Only</option>
+                </select>
+
+                {# Authorization status #}
+                <select name="authorization" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="authorized" {% if filters.authorization == 'authorized' %}selected{% endif %}>Authorized Only</option>
+                    <option value="unauthorized" {% if filters.authorization == 'unauthorized' %}selected{% endif %}>Unauthorized/Pending</option>
+                    <option value="all" {% if filters.authorization == 'all' %}selected{% endif %}>All Authorization</option>
                 </select>
 
                 {# Sort controls #}
@@ -198,7 +219,7 @@
         </div>
 
         {% call filter_bar() %}
-            <form method="GET" action="/admin/network/onts" class="grid gap-4 grid-cols-2 lg:grid-cols-8">
+            <form method="GET" action="/admin/network/onts" class="grid gap-4 grid-cols-2 lg:grid-cols-8" autocomplete="off">
                 <input type="hidden" name="view" value="unconfigured">
                 <div class="col-span-1 lg:col-span-2">
                     {% set candidate_view_options = [
@@ -218,7 +239,7 @@
                 </div>
                 <div class="col-span-2 lg:col-span-2">
                     <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Search</label>
-                    {{ search_input(name="search", value=filters.search or "", placeholder="Serial, hex serial, OLT, port, model, MAC...", color="emerald") }}
+                    {{ search_input(name="search", value=filters.search or "", placeholder="Serial, hex serial, OLT, port, model, MAC...", color="emerald", hx_attrs={"autocomplete": "off", "autocapitalize": "off", "autocorrect": "off", "spellcheck": "false"}) }}
                 </div>
                 <div class="col-span-1 lg:col-span-1">
                     {% set unconfigured_olt_options = [{"value": "", "label": "All OLTs"}] %}
@@ -528,14 +549,14 @@
                 </p>
                 <div class="flex items-center gap-2">
                     {% if pagination.has_prev %}
-                    <a href="/admin/network/onts?view=list&page={{ pagination.page - 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="/admin/network/onts?view=list&page={{ pagination.page - 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="/admin/network/onts?view=list&page={{ pagination.page + 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="/admin/network/onts?view=list&page={{ pagination.page + 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
@@ -684,14 +705,14 @@
                 </p>
                 <div class="flex items-center gap-2">
                     {% if diagnostics_pagination.has_prev %}
-                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page - 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page - 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if diagnostics_pagination.has_next %}
-                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page + 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page + 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>

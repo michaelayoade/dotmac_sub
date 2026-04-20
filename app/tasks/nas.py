@@ -10,13 +10,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.catalog import (
     NasDevice,
     NasDeviceStatus,
     Subscription,
     SubscriptionStatus,
 )
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 def cleanup_nas_backups() -> dict[str, int]:
     """Remove old NAS config backups beyond retention limits."""
     logger.info("Starting cleanup_nas_backups")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services.nas.backups import NasConfigBackups
 
@@ -51,7 +51,7 @@ def run_scheduled_backups() -> dict[str, int]:
         Stats: {attempted, succeeded, failed, skipped}.
     """
     logger.info("Starting scheduled NAS config backups")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         devices = list(
             db.scalars(
@@ -150,7 +150,7 @@ def update_subscriber_counts() -> dict[str, int]:
         Stats: {devices_updated, over_capacity}.
     """
     logger.info("Starting NAS subscriber count update")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         devices = list(
             db.scalars(select(NasDevice).where(NasDevice.is_active.is_(True))).all()
@@ -214,7 +214,7 @@ def check_nas_health() -> dict[str, int]:
         Stats: {total, reachable, unreachable, marked_offline}.
     """
     logger.info("Starting NAS health check")
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services import ping as ping_service
 

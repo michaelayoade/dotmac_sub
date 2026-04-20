@@ -43,25 +43,36 @@ _PROVISIONING_TRANSITIONS: dict[
 ] = {
     None: {
         OntProvisioningStatus.unprovisioned,
+        OntProvisioningStatus.partial,
         OntProvisioningStatus.provisioned,
         OntProvisioningStatus.failed,
     },
     OntProvisioningStatus.unprovisioned: {
+        OntProvisioningStatus.partial,
         OntProvisioningStatus.provisioned,
         OntProvisioningStatus.failed,
         OntProvisioningStatus.drift_detected,
     },
+    OntProvisioningStatus.partial: {
+        OntProvisioningStatus.provisioned,
+        OntProvisioningStatus.failed,
+        OntProvisioningStatus.drift_detected,
+        OntProvisioningStatus.unprovisioned,
+    },
     OntProvisioningStatus.provisioned: {
+        OntProvisioningStatus.partial,
         OntProvisioningStatus.drift_detected,
         OntProvisioningStatus.failed,
         OntProvisioningStatus.unprovisioned,
     },
     OntProvisioningStatus.drift_detected: {
+        OntProvisioningStatus.partial,
         OntProvisioningStatus.provisioned,
         OntProvisioningStatus.failed,
         OntProvisioningStatus.unprovisioned,
     },
     OntProvisioningStatus.failed: {
+        OntProvisioningStatus.partial,
         OntProvisioningStatus.unprovisioned,
         OntProvisioningStatus.provisioned,
         OntProvisioningStatus.drift_detected,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import cast
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -19,11 +18,9 @@ from app.services import web_admin as web_admin_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
-from app.services import web_network_operations as web_network_operations_service
 from app.services import (
     web_network_pon_interfaces as web_network_pon_interfaces_service,
 )
-from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.services.ipam_adapter import ipam_adapter
 from app.services.network import olt_autofind as olt_autofind_service
@@ -379,31 +376,10 @@ def olt_detail(
             status_code=404,
         )
 
-    activities = build_audit_activities(db, "olt", str(olt_id))
-    try:
-        operations = web_network_operations_service.build_operation_history(
-            db, "olt", str(olt_id)
-        )
-    except Exception:
-        logger.error(
-            "Failed to load operation history for OLT %s", olt_id, exc_info=True
-        )
-        operations = []
-    available_olt_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
-
-    olt_obj = cast(OLTDevice | None, page_data.get("olt"))
-
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
             **page_data,
-            "activities": activities,
-            "operations": operations,
-            "available_olt_firmware": available_olt_firmware,
-            "acs_prefill": _acs_prefill_from_olt(olt_obj),
-            "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
-                db, olt=olt_obj
-            ),
             "ssh_test_status": ssh_test_status,
             "ssh_test_message": ssh_test_message,
             "snmp_test_status": snmp_test_status,
@@ -440,33 +416,10 @@ def olt_detail_preview(
             status_code=404,
         )
 
-    activities = build_audit_activities(db, "olt", str(olt_id))
-    try:
-        operations = web_network_operations_service.build_operation_history(
-            db, "olt", str(olt_id)
-        )
-    except Exception:
-        logger.error(
-            "Failed to load operation history for OLT preview %s",
-            olt_id,
-            exc_info=True,
-        )
-        operations = []
-    available_olt_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
-
-    olt_obj = cast(OLTDevice | None, page_data.get("olt"))
-
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
             **page_data,
-            "activities": activities,
-            "operations": operations,
-            "available_olt_firmware": available_olt_firmware,
-            "acs_prefill": _acs_prefill_from_olt(olt_obj),
-            "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
-                db, olt=olt_obj
-            ),
             "ssh_test_status": ssh_test_status,
             "ssh_test_message": ssh_test_message,
             "snmp_test_status": snmp_test_status,
@@ -510,7 +463,7 @@ def olt_assign_vlan(
     db: Session = Depends(get_db),
 ) -> Response:
     ipam_adapter.assign_vlan_to_olt(db, olt_id, vlan_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
 
 
 @router.post(
@@ -524,7 +477,7 @@ def olt_unassign_vlan(
     db: Session = Depends(get_db),
 ) -> Response:
     ipam_adapter.unassign_vlan_from_olt(db, olt_id, vlan_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
 
 
 @router.post(
@@ -538,7 +491,7 @@ def olt_assign_ip_pool(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     ipam_adapter.assign_ip_pool_to_olt(db, olt_id, pool_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
 
 
 @router.post(
@@ -552,7 +505,7 @@ def olt_unassign_ip_pool(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     ipam_adapter.unassign_ip_pool_from_olt(db, olt_id, pool_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
 
 
 @router.post(
@@ -898,7 +851,7 @@ def olt_discover_hardware(
             message="OLT not found",
         )
         return RedirectResponse(
-            f"/admin/network/olts/{olt_id}?tab=hardware&sync_status=error&sync_message={quote_plus('OLT not found')}",
+            f"/admin/network/olts/{olt_id}?tab=overview&sync_status=error&sync_message={quote_plus('OLT not found')}",
             status_code=303,
         )
 
@@ -912,7 +865,7 @@ def olt_discover_hardware(
     )
     status = "success" if ok else "error"
     return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?tab=hardware&sync_status={status}&sync_message={quote_plus(message)}",
+        f"/admin/network/olts/{olt_id}?tab=overview&sync_status={status}&sync_message={quote_plus(message)}",
         status_code=303,
     )
 
@@ -978,7 +931,7 @@ def olt_autofind_scan_redirect(olt_id: str) -> RedirectResponse:
     auth refresh endpoint and then replayed as GET requests by the browser.
     """
     return RedirectResponse(
-        url=f"/admin/network/olts/{olt_id}?tab=autofind",
+        url=f"/admin/network/olts/{olt_id}?tab=provisioning",
         status_code=303,
     )
 
@@ -988,10 +941,10 @@ def olt_autofind_scan_redirect(olt_id: str) -> RedirectResponse:
     dependencies=[Depends(require_permission("network:write"))],
 )
 def unconfigured_onts_scan_now() -> RedirectResponse:
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task
     from app.tasks.ont_autofind import discover_all_olt_autofind
 
-    enqueue_celery_task(
+    enqueue_task(
         discover_all_olt_autofind,
         correlation_id="olt_autofind:all",
         source="admin_network_olts_inventory",
@@ -1096,7 +1049,7 @@ def olt_authorize_ont(
                 f"{target}{separator}status=error&message={msg}",
                 status_code=303,
             )
-        target = f"/admin/network/olts/{olt_id}?tab=autofind&sync_status=error&sync_message={msg}"
+        target = f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status=error&sync_message={msg}"
         if is_htmx:
             return Response(
                 status_code=200,
@@ -1212,7 +1165,7 @@ def olt_authorize_ont(
         return RedirectResponse(target, status_code=303)
 
     target = (
-        f"/admin/network/olts/{olt_id}?tab=autofind&sync_status={status}"
+        f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status={status}"
         f"&sync_message={quote_plus(queue_msg)}"
     )
     if is_htmx:

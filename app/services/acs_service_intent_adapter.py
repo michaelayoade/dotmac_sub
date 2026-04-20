@@ -36,6 +36,13 @@ def _first_value(group: Mapping[str, Any], *keys: str) -> Any:
 
 
 def _text(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        if "_value" in value:
+            value = value.get("_value")
+        elif value and all(str(key).startswith("_") for key in value):
+            return None
+        else:
+            return None
     if value is None:
         return None
     text = str(value).strip()
@@ -85,10 +92,13 @@ def _missing_count(*groups: Mapping[str, object]) -> int:
 class AcsServiceIntentAdapter:
     """Normalize ACS observed state into service-intent-shaped UI data."""
 
-    def load_observed_intent_for_ont(self, db: Session, *, ont_id: str) -> dict[str, object]:
-        from app.services.network.ont_tr069 import OntTR069
+    def load_observed_intent_for_ont(
+        self, db: Session, *, ont_id: str
+    ) -> dict[str, object]:
+        from app.services.acs_client import create_acs_state_reader
 
-        summary = OntTR069.get_device_summary(
+        reader = create_acs_state_reader()
+        summary = reader.get_device_summary(
             db,
             ont_id,
             persist_observed_runtime=True,
@@ -116,7 +126,9 @@ class AcsServiceIntentAdapter:
         ethernet_ports = self._map_ethernet_ports(
             list(_summary_attr(summary, "ethernet_ports", []) or [])
         )
-        lan_hosts = self._map_lan_hosts(list(_summary_attr(summary, "lan_hosts", []) or []))
+        lan_hosts = self._map_lan_hosts(
+            list(_summary_attr(summary, "lan_hosts", []) or [])
+        )
 
         sections = [
             {
@@ -329,9 +341,9 @@ class AcsServiceIntentAdapter:
 
     def refresh_observed_summary_for_ont(self, db: Session, *, ont_id: str) -> object:
         """Refresh/persist ACS observed runtime through the adapter boundary."""
-        from app.services.network.ont_tr069 import OntTR069
+        from app.services.acs_client import create_acs_state_reader
 
-        return OntTR069.get_device_summary(
+        return create_acs_state_reader().get_device_summary(
             db,
             ont_id,
             persist_observed_runtime=True,

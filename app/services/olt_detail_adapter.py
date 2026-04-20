@@ -29,6 +29,7 @@ class OltDetailAdapter:
         from app.services import audit_helpers
         from app.services import web_network_core_devices as core_devices_service
         from app.services import web_network_operations as operations_service
+        from app.services.network import olt_tr069_admin as olt_tr069_admin_service
         from app.services.olt_action_adapter import olt_action_adapter
 
         page_data = core_devices_service.olt_detail_page_data(db, olt_id)
@@ -61,7 +62,11 @@ class OltDetailAdapter:
                 "operations": operations,
                 "available_olt_firmware": available_firmware,
                 "acs_prefill": self._build_acs_prefill(olt),
+                "operational_acs_server": (
+                    olt_tr069_admin_service.resolve_operational_acs_server(db, olt=olt)
+                ),
                 "access_info": self._build_access_info(olt, monitoring_device),
+                "monitoring_source": self._build_monitoring_source(page_data),
                 "detail_actions": self._build_detail_actions(olt_id, olt),
                 "terminal_context": self._build_terminal_context(olt_id),
                 "firmware_context": self._build_firmware_context(
@@ -128,6 +133,20 @@ class OltDetailAdapter:
                 "credential_label": snmp_credential_label,
                 "credential_status": "Saved" if snmp_credential_saved else "Not saved",
             },
+        }
+
+    def _build_monitoring_source(
+        self, page_data: dict[str, object]
+    ) -> dict[str, object]:
+        resolution = page_data.get("monitoring_resolution")
+        resolution = resolution if isinstance(resolution, dict) else {}
+        monitoring_device = page_data.get("monitoring_device")
+        return {
+            "linked": monitoring_device is not None,
+            "source": "network_device" if monitoring_device is not None else "olt_device",
+            "match_strategy": resolution.get("match_strategy", "unknown"),
+            "authoritative": bool(resolution.get("authoritative", False)),
+            "warning": resolution.get("warning"),
         }
 
     def _build_detail_actions(

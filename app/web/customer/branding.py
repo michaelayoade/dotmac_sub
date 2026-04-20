@@ -8,7 +8,7 @@ from typing import TypedDict
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def customer_branding_context(request: Request) -> dict[str, object]:
     if cached is not None:
         stats, portal_name, favicon = cached
     else:
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             from app.services import web_admin as web_admin_service
 
@@ -89,7 +89,7 @@ def customer_branding_context(request: Request) -> dict[str, object]:
         from app.services.customer_portal_context import is_subscriber_restricted
         from app.web.customer.auth import get_current_customer_from_request
 
-        db = SessionLocal()
+        db = db_session_adapter.create_session()
         try:
             customer = get_current_customer_from_request(request, db)
             if customer:

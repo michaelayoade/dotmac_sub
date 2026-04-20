@@ -2319,6 +2319,26 @@ class TestOntAssignmentValidation:
 
         assert error is None
 
+    def test_assignment_edit_payload_does_not_require_subscription_id(self) -> None:
+        from types import SimpleNamespace
+        from uuid import uuid4
+
+        from app.services import web_network_ont_assignments as svc
+
+        assignment = SimpleNamespace(
+            pon_port_id=uuid4(),
+            subscriber_id=uuid4(),
+            subscriber=SimpleNamespace(name="Jane Customer"),
+            service_address_id=None,
+            notes="Installed at side wall",
+        )
+
+        payload = svc.assignment_form_payload_from_assignment(assignment)
+
+        assert payload["account_id"] == str(assignment.subscriber_id)
+        assert payload["account_label"] == "Jane Customer"
+        assert "subscription_id" not in payload
+
 
 # ---------------------------------------------------------------------------
 # OLT SSH function existence checks

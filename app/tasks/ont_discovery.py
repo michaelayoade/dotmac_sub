@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.network import OLTDevice
+from app.services.db_session_adapter import db_session_adapter
+from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -41,64 +42,62 @@ def discover_single_olt_onts(olt_id: str) -> dict[str, int | str]:
         Stats dict with olt_name, created, updated, errors.
     """
     logger.info("Starting single OLT ONT discovery for %s", olt_id)
-    db = SessionLocal()
     lock_key = _ont_discovery_lock_key(olt_id)
-    lock_acquired = False
     try:
-        lock_acquired = bool(
-            db.execute(
-                text("SELECT pg_try_advisory_lock(:key)"),
-                {"key": lock_key},
-            ).scalar()
-        )
-        if not lock_acquired:
-            logger.warning(
-                "Skipping ONT discovery for OLT %s: another discovery already in progress",
-                olt_id,
+        with db_session_adapter.advisory_lock(lock_key) as (db, lock_acquired):
+            if not lock_acquired:
+                logger.warning(
+                    "Skipping ONT discovery for OLT %s: another discovery already in progress",
+                    olt_id,
+                )
+                return {
+                    "olt_id": olt_id,
+                    "created": 0,
+                    "updated": 0,
+                    "errors": 0,
+                    "skipped_due_to_lock": 1,
+                }
+
+            from app.services.network.olt_snmp_sync import (
+                sync_onts_from_olt_snmp_tracked,
             )
-            return {
-                "olt_id": olt_id,
-                "created": 0,
-                "updated": 0,
-                "errors": 0,
-                "skipped_due_to_lock": 1,
-            }
 
-        from app.services.network.olt_snmp_sync import sync_onts_from_olt_snmp_tracked
+            olt = db.get(OLTDevice, olt_id)
+            if not olt:
+                logger.warning("ONT discovery: OLT %s not found", olt_id)
+                return {
+                    "olt_id": olt_id,
+                    "created": 0,
+                    "updated": 0,
+                    "errors": 1,
+                    "error": "olt_not_found",
+                }
 
-        olt = db.get(OLTDevice, olt_id)
-        if not olt:
-            logger.warning("ONT discovery: OLT %s not found", olt_id)
-            return {
-                "olt_id": olt_id,
-                "created": 0,
-                "updated": 0,
-                "errors": 1,
-                "error": "olt_not_found",
-            }
-
-        ok, msg, stats = sync_onts_from_olt_snmp_tracked(
-            db, olt_id, initiated_by="celery:discover_single_olt_onts"
-        )
-
-        if ok:
-            created = int(str(stats.get("created", 0))) if stats.get("created") else 0
-            updated = int(str(stats.get("updated", 0))) if stats.get("updated") else 0
-            logger.info(
-                "ONT discovery complete for OLT %s (%s): created=%d, updated=%d",
-                olt.name,
-                olt.mgmt_ip,
-                created,
-                updated,
+            ok, msg, stats = sync_onts_from_olt_snmp_tracked(
+                db, olt_id, initiated_by="celery:discover_single_olt_onts"
             )
-            return {
-                "olt_id": olt_id,
-                "olt_name": olt.name,
-                "created": created,
-                "updated": updated,
-                "errors": 0,
-            }
-        else:
+
+            if ok:
+                created = (
+                    int(str(stats.get("created", 0))) if stats.get("created") else 0
+                )
+                updated = (
+                    int(str(stats.get("updated", 0))) if stats.get("updated") else 0
+                )
+                logger.info(
+                    "ONT discovery complete for OLT %s (%s): created=%d, updated=%d",
+                    olt.name,
+                    olt.mgmt_ip,
+                    created,
+                    updated,
+                )
+                return {
+                    "olt_id": olt_id,
+                    "olt_name": olt.name,
+                    "created": created,
+                    "updated": updated,
+                    "errors": 0,
+                }
             logger.warning(
                 "ONT discovery skipped for OLT %s (%s): %s",
                 olt.name,
@@ -116,7 +115,6 @@ def discover_single_olt_onts(olt_id: str) -> dict[str, int | str]:
             }
     except Exception as e:
         logger.error("ONT discovery failed for OLT %s: %s", olt_id, e, exc_info=True)
-        db.rollback()
         return {
             "olt_id": olt_id,
             "created": 0,
@@ -124,19 +122,6 @@ def discover_single_olt_onts(olt_id: str) -> dict[str, int | str]:
             "errors": 1,
             "error": str(e),
         }
-    finally:
-        if lock_acquired:
-            try:
-                db.execute(
-                    text("SELECT pg_advisory_unlock(:key)"),
-                    {"key": lock_key},
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to release ONT discovery lock for OLT %s", olt_id
-                )
-        db.close()
-
 
 @celery_app.task(name="app.tasks.ont_discovery.discover_all_olt_onts")
 def discover_all_olt_onts() -> dict[str, int]:
@@ -151,11 +136,12 @@ def discover_all_olt_onts() -> dict[str, int]:
         Statistics dict with olts_dispatched count.
     """
     logger.info("Starting parallel ONT discovery orchestrator")
-    db = SessionLocal()
     try:
-        olts = list(
-            db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
-        )
+        with db_session_adapter.read_session() as db:
+            stmt = select(OLTDevice.id, OLTDevice.name).where(
+                OLTDevice.is_active.is_(True)
+            )
+            olts = [(str(row.id), row.name) for row in db.execute(stmt).all()]
 
         if not olts:
             logger.info("No active OLTs found for ONT discovery")
@@ -163,19 +149,27 @@ def discover_all_olt_onts() -> dict[str, int]:
 
         logger.info("Dispatching parallel ONT discovery for %d OLTs", len(olts))
 
-        from app.celery_app import enqueue_celery_task
-
         dispatched = 0
-        for olt in olts:
-            enqueue_celery_task(
-                discover_single_olt_onts,
-                args=[str(olt.id)],
-                correlation_id=f"ont_discovery:{olt.id}",
+        for olt_id_str, olt_name in olts:
+            dispatch = enqueue_task(
+                "app.tasks.ont_discovery.discover_single_olt_onts",
+                args=[olt_id_str],
+                correlation_id=f"ont_discovery:{olt_id_str}",
                 source="discover_all_olt_onts",
             )
+            if not dispatch.queued:
+                logger.warning(
+                    "Failed to dispatch ONT discovery task for OLT %s (%s): %s",
+                    olt_name,
+                    olt_id_str,
+                    dispatch.error,
+                )
+                continue
             dispatched += 1
             logger.debug(
-                "Dispatched ONT discovery task for OLT %s (%s)", olt.name, olt.id
+                "Dispatched ONT discovery task for OLT %s (%s)",
+                olt_name,
+                olt_id_str,
             )
 
         logger.info(
@@ -185,7 +179,4 @@ def discover_all_olt_onts() -> dict[str, int]:
         return {"olts_dispatched": dispatched}
     except Exception as e:
         logger.error("ONT discovery orchestrator failed: %s", e, exc_info=True)
-        db.rollback()
         raise
-    finally:
-        db.close()

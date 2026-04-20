@@ -6,7 +6,7 @@ import logging
 from typing import Literal
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def run_post_authorization_follow_up_task(
     )
     from app.services.network_operations import network_operations
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         network_operations.mark_running(db, operation_id)
         db.commit()
@@ -96,7 +96,7 @@ def run_authorize_autofind_ont_task(
     from app.services.network_operations import network_operations
     from app.services.operation_notifications import publish_operation_status
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     olt_name = None
     start_time = None
     try:

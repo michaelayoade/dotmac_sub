@@ -157,8 +157,13 @@ def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
     refresh = getattr(client, "refresh_object", None)
     if not callable(refresh):
         return
+    refresh_path = (
+        "Device.WiFi."
+        if root == "Device"
+        else "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+    )
     try:
-        refresh(device_id, f"{root}.", connection_request=True)
+        refresh(device_id, refresh_path, connection_request=True)
     except Exception:
         logger.debug(
             "Runtime refresh request failed for device %s after WiFi update",

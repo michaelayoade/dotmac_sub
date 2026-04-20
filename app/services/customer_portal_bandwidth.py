@@ -8,8 +8,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
-from app.db import SessionLocal
 from app.models.bandwidth import BandwidthSample
+from app.services.db_session_adapter import db_session_adapter
 from app.services.metrics_store import get_metrics_store
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def live_bandwidth_events(
 
         try:
             if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
-                sse_db = SessionLocal()
+                sse_db = db_session_adapter.create_session()
                 try:
                     cutoff = datetime.now(UTC) - timedelta(minutes=2)
                     latest_sample = (

@@ -1,0 +1,204 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Contacts - Customer Portal{% endblock %}
+
+{% macro contact_type_options(selected) -%}
+    {% for option in contact_types %}
+    <option value="{{ option }}" {% if selected == option %}selected{% endif %}>{{ option|replace('_', ' ')|title }}</option>
+    {% endfor %}
+{%- endmacro %}
+
+{% block content %}
+<div class="space-y-8">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Contacts</h1>
+            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Manage people linked to your account.</p>
+        </div>
+        <a href="#add-contact" class="inline-flex items-center justify-center rounded-lg bg-[var(--color-brand-600)] px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-brand-700)]">
+            Add Contact
+        </a>
+    </div>
+
+    {% if success %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+        {{ success }}
+    </div>
+    {% endif %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {% if warnings %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+        <p class="font-semibold">Duplicate warning</p>
+        <ul class="mt-1 list-disc space-y-1 pl-5">
+            {% for warning in warnings %}
+            <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <section class="rounded-lg border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Primary Account Holder</h2>
+        <div class="mt-4 grid gap-4 text-sm sm:grid-cols-3">
+            <div>
+                <p class="text-stone-500 dark:text-stone-400">Name</p>
+                <p class="mt-1 font-semibold text-stone-900 dark:text-white">{{ subscriber.name if subscriber else customer.name }}</p>
+            </div>
+            <div>
+                <p class="text-stone-500 dark:text-stone-400">Phone</p>
+                <p class="mt-1 font-semibold text-stone-900 dark:text-white">{{ subscriber.phone if subscriber and subscriber.phone else customer.phone|default('Not provided') }}</p>
+            </div>
+            <div>
+                <p class="text-stone-500 dark:text-stone-400">Email</p>
+                <p class="mt-1 font-semibold text-stone-900 dark:text-white">{{ subscriber.email if subscriber else customer.email }}</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="rounded-lg border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <div class="border-b border-stone-200 px-6 py-4 dark:border-stone-700">
+            <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Linked Contacts</h2>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Contacts do not receive portal login access.</p>
+        </div>
+
+        {% if contacts %}
+        <div class="divide-y divide-stone-200 dark:divide-stone-700">
+            {% for contact in contacts %}
+            <details class="group">
+                <summary class="flex cursor-pointer list-none flex-col gap-3 px-6 py-4 hover:bg-stone-50 dark:hover:bg-stone-700/30 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <p class="font-semibold text-stone-900 dark:text-white">{{ contact.full_name }}</p>
+                        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                            {{ contact.phone or 'No phone' }}{% if contact.email %} · {{ contact.email }}{% endif %}
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2 text-xs font-semibold">
+                        {% if contact.relationship %}
+                        <span class="rounded-full bg-stone-100 px-2.5 py-1 text-stone-700 dark:bg-stone-700 dark:text-stone-200">{{ contact.relationship }}</span>
+                        {% endif %}
+                        <span class="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ contact.contact_type|title }}</span>
+                        {% if contact.is_authorized %}
+                        <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Authorized</span>
+                        {% endif %}
+                        {% if contact.is_billing_contact %}
+                        <span class="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Billing Contact</span>
+                        {% endif %}
+                    </div>
+                </summary>
+
+                <form method="post" action="/portal/contacts/{{ contact.id }}" class="grid gap-4 border-t border-stone-100 bg-stone-50 px-6 py-5 dark:border-stone-700 dark:bg-stone-900/30 sm:grid-cols-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Full Name</label>
+                        <input name="full_name" value="{{ contact.full_name }}" required class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Phone Number</label>
+                        <input name="phone" value="{{ contact.phone or '' }}" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Email Address</label>
+                        <input type="email" name="email" value="{{ contact.email or '' }}" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Relationship</label>
+                        <input name="relationship" value="{{ contact.relationship or '' }}" placeholder="Spouse, sibling, parent, tenant, staff" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Contact Type</label>
+                        <select name="contact_type" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                            {{ contact_type_options(contact.contact_type) }}
+                        </select>
+                    </div>
+                    <div class="space-y-3">
+                        <label class="flex items-center gap-2 text-sm font-medium text-stone-700 dark:text-stone-300">
+                            <input type="checkbox" name="is_authorized" value="true" {% if contact.is_authorized %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
+                            Can speak on behalf of account
+                        </label>
+                        <label class="flex items-center gap-2 text-sm font-medium text-stone-700 dark:text-stone-300">
+                            <input type="checkbox" name="receives_notifications" value="true" {% if contact.receives_notifications %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
+                            Receive notifications
+                        </label>
+                        <label class="flex items-center gap-2 text-sm font-medium text-stone-700 dark:text-stone-300">
+                            <input type="checkbox" name="is_billing_contact" value="true" {% if contact.is_billing_contact %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
+                            Billing contact
+                        </label>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Notes</label>
+                        <textarea name="notes" rows="3" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">{{ contact.notes or '' }}</textarea>
+                    </div>
+                    <div class="sm:col-span-2 flex justify-end">
+                        <button type="submit" class="rounded-lg bg-stone-900 px-4 py-2 text-sm font-semibold text-white hover:bg-stone-700 dark:bg-white dark:text-stone-900 dark:hover:bg-stone-200">Save Contact</button>
+                    </div>
+                </form>
+            </details>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="px-6 py-10 text-center">
+            <p class="text-sm font-semibold text-stone-900 dark:text-white">No linked contacts yet.</p>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Add a contact for billing, technical, installation, emergency, or general account communication.</p>
+        </div>
+        {% endif %}
+    </section>
+
+    <section id="add-contact" class="rounded-lg border border-stone-200 bg-white p-6 shadow-premium dark:border-stone-700 dark:bg-stone-800">
+        <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white">Add Contact</h2>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">This creates a contact record only. Portal login access is not created.</p>
+
+        <form method="post" action="/portal/contacts" class="mt-6 grid gap-4 sm:grid-cols-2">
+            {% include "components/forms/csrf_input.html" %}
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Full Name</label>
+                <input name="full_name" value="{{ form_values.full_name if form_values else '' }}" required class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Phone Number</label>
+                <input name="phone" value="{{ form_values.phone if form_values and form_values.phone else '' }}" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Email Address</label>
+                <input type="email" name="email" value="{{ form_values.email if form_values and form_values.email else '' }}" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Relationship</label>
+                <input name="relationship" value="{{ form_values.relationship if form_values and form_values.relationship else '' }}" placeholder="Spouse, sibling, parent, tenant, staff" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Contact Type</label>
+                <select name="contact_type" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">
+                    {{ contact_type_options(form_values.contact_type if form_values else 'general') }}
+                </select>
+            </div>
+            <div class="space-y-3">
+                <label class="flex items-center gap-2 text-sm font-medium text-stone-700 dark:text-stone-300">
+                    <input type="checkbox" name="is_authorized" value="true" {% if form_values and form_values.is_authorized %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
+                    Can speak on behalf of account
+                </label>
+                <label class="flex items-center gap-2 text-sm font-medium text-stone-700 dark:text-stone-300">
+                    <input type="checkbox" name="receives_notifications" value="true" {% if form_values and form_values.receives_notifications %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
+                    Receive notifications
+                </label>
+                <label class="flex items-center gap-2 text-sm font-medium text-stone-700 dark:text-stone-300">
+                    <input type="checkbox" name="is_billing_contact" value="true" {% if form_values and form_values.is_billing_contact %}checked{% endif %} class="rounded border-stone-300 text-[var(--color-brand-600)]">
+                    Billing contact
+                </label>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300">Notes</label>
+                <textarea name="notes" rows="3" class="mt-2 block w-full rounded-lg border-2 border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none dark:border-stone-600 dark:bg-stone-700 dark:text-white">{{ form_values.notes if form_values and form_values.notes else '' }}</textarea>
+            </div>
+            <div class="sm:col-span-2 flex justify-end">
+                <button type="submit" class="rounded-lg bg-[var(--color-brand-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-brand-700)]">Add Contact</button>
+            </div>
+        </form>
+    </section>
+</div>
+{% endblock %}

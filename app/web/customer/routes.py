@@ -14,6 +14,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.db import get_db
 from app.services import crm_portal, customer_portal
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
+from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import (
@@ -961,6 +962,148 @@ def customer_update_profile(
             "customer": customer,
             "success": "Profile updated successfully",
             "active_page": "profile",
+        },
+    )
+
+
+@router.get("/contacts", response_class=HTMLResponse)
+def customer_contacts(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Linked account contacts."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/contacts", status_code=303
+        )
+    return templates.TemplateResponse(
+        "customer/contacts/index.html",
+        {
+            "request": request,
+            "customer": customer,
+            **customer_portal_contacts_service.get_contacts_page(db, customer),
+            "active_page": "contacts",
+        },
+    )
+
+
+@router.post("/contacts", response_class=HTMLResponse)
+def customer_contacts_create(
+    request: Request,
+    full_name: str = Form(...),
+    phone: str | None = Form(None),
+    email: str | None = Form(None),
+    relationship: str | None = Form(None),
+    contact_type: str | None = Form("general"),
+    is_authorized: bool = Form(False),
+    receives_notifications: bool = Form(False),
+    is_billing_contact: bool = Form(False),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Create a linked contact without creating portal login access."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    form = customer_portal_contacts_service.normalize_contact_form(
+        full_name=full_name,
+        phone=phone,
+        email=email,
+        relationship=relationship,
+        contact_type=contact_type,
+        is_authorized=is_authorized,
+        receives_notifications=receives_notifications,
+        is_billing_contact=is_billing_contact,
+        notes=notes,
+    )
+    try:
+        warnings = customer_portal_contacts_service.create_contact(db, customer, form)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "customer/contacts/index.html",
+            {
+                "request": request,
+                "customer": customer,
+                **customer_portal_contacts_service.get_contacts_page(db, customer),
+                "error": str(exc),
+                "form_values": form,
+                "active_page": "contacts",
+            },
+            status_code=400,
+        )
+
+    return templates.TemplateResponse(
+        "customer/contacts/index.html",
+        {
+            "request": request,
+            "customer": customer,
+            **customer_portal_contacts_service.get_contacts_page(db, customer),
+            "success": "Contact added.",
+            "warnings": warnings,
+            "active_page": "contacts",
+        },
+    )
+
+
+@router.post("/contacts/{contact_id}", response_class=HTMLResponse)
+def customer_contacts_update(
+    request: Request,
+    contact_id: str,
+    full_name: str = Form(...),
+    phone: str | None = Form(None),
+    email: str | None = Form(None),
+    relationship: str | None = Form(None),
+    contact_type: str | None = Form("general"),
+    is_authorized: bool = Form(False),
+    receives_notifications: bool = Form(False),
+    is_billing_contact: bool = Form(False),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Update a linked contact owned by the logged-in subscriber account."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    form = customer_portal_contacts_service.normalize_contact_form(
+        full_name=full_name,
+        phone=phone,
+        email=email,
+        relationship=relationship,
+        contact_type=contact_type,
+        is_authorized=is_authorized,
+        receives_notifications=receives_notifications,
+        is_billing_contact=is_billing_contact,
+        notes=notes,
+    )
+    try:
+        warnings = customer_portal_contacts_service.update_contact(
+            db, customer, contact_id, form
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "customer/contacts/index.html",
+            {
+                "request": request,
+                "customer": customer,
+                **customer_portal_contacts_service.get_contacts_page(db, customer),
+                "error": str(exc),
+                "active_page": "contacts",
+            },
+            status_code=400,
+        )
+
+    return templates.TemplateResponse(
+        "customer/contacts/index.html",
+        {
+            "request": request,
+            "customer": customer,
+            **customer_portal_contacts_service.get_contacts_page(db, customer),
+            "success": "Contact updated.",
+            "warnings": warnings,
+            "active_page": "contacts",
         },
     )
 

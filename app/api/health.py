@@ -202,7 +202,42 @@ def database_health(db: Session = Depends(get_db)) -> dict[str, Any]:
                 else None,
             }
 
-        result["status"] = "up"
+        activity = db.execute(
+            text(
+                """
+                SELECT
+                    count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_transaction,
+                    count(*) FILTER (
+                        WHERE state = 'idle in transaction'
+                        AND now() - COALESCE(xact_start, state_change) > interval '60 seconds'
+                    )::int AS idle_in_transaction_over_60s,
+                    COALESCE(
+                        EXTRACT(EPOCH FROM max(now() - COALESCE(xact_start, state_change))
+                            FILTER (WHERE state = 'idle in transaction')),
+                        0
+                    )::float AS max_idle_in_transaction_seconds,
+                    count(*) FILTER (WHERE wait_event_type = 'Lock')::int AS waiting_on_lock
+                FROM pg_stat_activity
+                """
+            )
+        ).mappings().first()
+        degraded = False
+        if activity:
+            result["stale_sessions"] = {
+                "idle_in_transaction": int(activity["idle_in_transaction"] or 0),
+                "idle_in_transaction_over_60s": int(
+                    activity["idle_in_transaction_over_60s"] or 0
+                ),
+                "max_idle_in_transaction_seconds": round(
+                    float(activity["max_idle_in_transaction_seconds"] or 0), 1
+                ),
+                "waiting_on_lock": int(activity["waiting_on_lock"] or 0),
+            }
+            if result["stale_sessions"]["idle_in_transaction_over_60s"] > 0:
+                degraded = True
+                result["warning"] = "idle-in-transaction sessions over 60 seconds"
+
+        result["status"] = "degraded" if degraded else "up"
 
     except Exception as exc:
         result["status"] = "down"

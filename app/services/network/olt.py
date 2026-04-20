@@ -701,6 +701,7 @@ class OntUnits(CRUDManager[OntUnit]):
         zone_id: str | None = None,
         signal_quality: str | None = None,
         online_status: str | None = None,
+        authorization_status: str | None = None,
         vendor: str | None = None,
         search: str | None = None,
         is_active: bool | None = None,
@@ -718,14 +719,30 @@ class OntUnits(CRUDManager[OntUnit]):
 
         stmt = select(OntUnit).options(*_ONT_STATUS_LOADS)
 
-        # Filter by OLT or PON port via active assignment join
+        # Filter by OLT or PON port via active assignment join, with ONT-row
+        # topology fallback for authorized/discovered ONTs that are not assigned
+        # to a subscriber yet.
         if pon_port_id:
-            stmt = stmt.join(
+            pon_uuid = coerce_uuid(pon_port_id)
+            pon_port = db.get(PonPort, pon_uuid)
+            stmt = stmt.outerjoin(
                 OntAssignment,
                 (OntAssignment.ont_unit_id == OntUnit.id)
                 & (OntAssignment.active.is_(True)),
             )
-            stmt = stmt.where(OntAssignment.pon_port_id == coerce_uuid(pon_port_id))
+            pon_conditions: list[Any] = [OntAssignment.pon_port_id == pon_uuid]
+            if pon_port is not None:
+                parsed = _parse_canonical_pon_name(pon_port.name)
+                if parsed:
+                    board, port_number = parsed
+                    pon_conditions.append(
+                        and_(
+                            OntUnit.olt_device_id == pon_port.olt_id,
+                            OntUnit.board == board,
+                            OntUnit.port == str(port_number),
+                        )
+                    )
+            stmt = stmt.where(or_(*pon_conditions))
         elif olt_id:
             # Include ONTs linked by assignment->pon_port and ONTs directly linked to OLT.
             stmt = stmt.outerjoin(
@@ -744,10 +761,10 @@ class OntUnits(CRUDManager[OntUnit]):
         # Optional hint for SNMP-only PON rows (e.g., "0/2/7")
         if pon_hint:
             like_hint = f"%{pon_hint.strip()}%"
-            combined = func.concat(
-                func.coalesce(OntUnit.board, ""),
-                "/",
-                func.coalesce(OntUnit.port, ""),
+            combined = (
+                func.coalesce(OntUnit.board, "")
+                + "/"
+                + func.coalesce(OntUnit.port, "")
             )
             stmt = stmt.where(
                 or_(
@@ -772,6 +789,26 @@ class OntUnits(CRUDManager[OntUnit]):
                 OntUnit.effective_status == OnuOnlineStatus(online_status)
             )
 
+        # Filter by OLT authorization state. The service-facing ONT fleet should
+        # not mix unauthorized/autofound records into normal customer inventory.
+        from app.models.network import OntAuthorizationStatus
+
+        if authorization_status:
+            normalized_auth = authorization_status.strip().lower()
+            if normalized_auth == "authorized":
+                stmt = stmt.where(
+                    OntUnit.authorization_status
+                    == OntAuthorizationStatus.authorized
+                )
+            elif normalized_auth == "unauthorized":
+                stmt = stmt.where(
+                    or_(
+                        OntUnit.authorization_status.is_(None),
+                        OntUnit.authorization_status
+                        != OntAuthorizationStatus.authorized,
+                    )
+                )
+
         # Filter by vendor
         if vendor:
             stmt = stmt.where(OntUnit.vendor.ilike(f"%{vendor}%"))
@@ -782,6 +819,13 @@ class OntUnits(CRUDManager[OntUnit]):
             search_assignment = aliased(OntAssignment)
             search_pon_port = aliased(PonPort)
             search_olt = aliased(OLTDevice)
+            direct_olt = aliased(OLTDevice)
+            direct_pon_port = aliased(PonPort)
+            direct_pon_name = (
+                func.coalesce(OntUnit.board, "")
+                + "/"
+                + func.coalesce(OntUnit.port, "")
+            )
 
             # Build list of serial search conditions including hex serial variants
             serial_conditions = [OntUnit.serial_number.ilike(term)]
@@ -807,6 +851,12 @@ class OntUnits(CRUDManager[OntUnit]):
                     search_pon_port, search_pon_port.id == search_assignment.pon_port_id
                 )
                 .outerjoin(search_olt, search_olt.id == search_pon_port.olt_id)
+                .outerjoin(direct_olt, direct_olt.id == OntUnit.olt_device_id)
+                .outerjoin(
+                    direct_pon_port,
+                    (direct_pon_port.olt_id == OntUnit.olt_device_id)
+                    & (direct_pon_port.name == direct_pon_name),
+                )
             )
 
             # Optionally let the subscriber bridge add its own joins/conditions.
@@ -830,10 +880,15 @@ class OntUnits(CRUDManager[OntUnit]):
                     OntUnit.notes.ilike(term),
                     OntUnit.board.ilike(term),
                     OntUnit.port.ilike(term),
+                    direct_pon_name.ilike(term),
                     search_olt.name.ilike(term),
                     search_olt.hostname.ilike(term),
                     search_pon_port.name.ilike(term),
                     search_pon_port.notes.ilike(term),
+                    direct_olt.name.ilike(term),
+                    direct_olt.hostname.ilike(term),
+                    direct_pon_port.name.ilike(term),
+                    direct_pon_port.notes.ilike(term),
                     *subscriber_conditions,
                 )
             )

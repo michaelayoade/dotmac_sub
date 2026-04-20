@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 from app import celery_app as celery_app_module
@@ -122,7 +123,7 @@ def test_poll_all_olt_signals_uses_correlated_enqueue(monkeypatch):
             return self._items
 
     class _FakeSession:
-        def scalars(self, _stmt):
+        def execute(self, _stmt):
             return _FakeScalarResult(
                 [
                     SimpleNamespace(id="olt-1", name="OLT One"),
@@ -135,6 +136,17 @@ def test_poll_all_olt_signals_uses_correlated_enqueue(monkeypatch):
 
         def close(self):
             return None
+
+    class _FakeSessionAdapter:
+        def session(self):
+            class _Context:
+                def __enter__(self):
+                    return _FakeSession()
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            return _Context()
 
     def _fake_enqueue(
         task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
@@ -151,7 +163,7 @@ def test_poll_all_olt_signals_uses_correlated_enqueue(monkeypatch):
         )
         return SimpleNamespace(id=f"task-{len(captured)}")
 
-    monkeypatch.setattr(olt_polling_module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(olt_polling_module, "db_session_adapter", _FakeSessionAdapter())
     monkeypatch.setattr(
         olt_polling_module, "_mark_stale_onts_offline", lambda *_args, **_kwargs: 1
     )
@@ -192,6 +204,10 @@ def test_capture_all_olts_task_uses_correlated_enqueue(monkeypatch):
         def close(self):
             return None
 
+    @contextmanager
+    def _fake_read_session():
+        yield _FakeSession()
+
     def _fake_enqueue(
         task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
     ):
@@ -206,11 +222,15 @@ def test_capture_all_olts_task_uses_correlated_enqueue(monkeypatch):
                 "extra": extra,
                 "task_id": task_id,
             }
-        )
-        return SimpleNamespace(id=task_id)
+            )
+        return SimpleNamespace(task_id=task_id)
 
-    monkeypatch.setattr(olt_capture_module, "SessionLocal", lambda: _FakeSession())
-    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
+    monkeypatch.setattr(
+        olt_capture_module.db_session_adapter,
+        "read_session",
+        _fake_read_session,
+    )
+    monkeypatch.setattr(olt_capture_module, "enqueue_task", _fake_enqueue)
 
     result = olt_capture_module.capture_all_olts_task(force=True)
 

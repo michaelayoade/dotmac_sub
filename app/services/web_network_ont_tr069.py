@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.services.network.ont_tr069 import OntTR069, TR069Summary
+from app.services.acs_client import create_acs_state_reader
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def tr069_tab_data(db: Session, ont_id: str) -> dict[str, object]:
     Returns:
         Template context dict with TR-069 summary data.
     """
-    summary: TR069Summary = OntTR069.get_device_summary(
+    summary = create_acs_state_reader().get_device_summary(
         db,
         ont_id,
         persist_observed_runtime=True,

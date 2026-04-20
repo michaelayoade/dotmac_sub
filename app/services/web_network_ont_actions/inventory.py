@@ -62,11 +62,7 @@ def _cleanup_olt_state_for_return(
     Returns:
         (success, completed_steps, errors)
     """
-    from app.services.network.olt_ssh_ont import deauthorize_ont
-    from app.services.network.olt_ssh_service_ports import (
-        delete_service_port,
-        get_service_ports_for_ont,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     completed: list[str] = []
     errors: list[str] = []
@@ -78,21 +74,26 @@ def _cleanup_olt_state_for_return(
         # No OLT context to clean up - that's OK
         return True, completed, errors
 
-    ok, msg, service_ports = get_service_ports_for_ont(olt, fsp, olt_ont_id)
-    if not ok:
-        errors.append(f"Cannot read OLT service-ports: {msg}")
+    adapter = get_protocol_adapter(olt)
+    ports_result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
+    if not ports_result.success:
+        errors.append(f"Cannot read OLT service-ports: {ports_result.message}")
         return False, completed, errors
+    service_ports_data = ports_result.data.get("service_ports", [])
+    service_ports = service_ports_data if isinstance(service_ports_data, list) else []
 
     for service_port in service_ports:
-        ok, msg = delete_service_port(olt, service_port.index)
-        if not ok:
-            errors.append(f"Failed to remove service-port {service_port.index}: {msg}")
+        delete_result = adapter.delete_service_port(service_port.index)
+        if not delete_result.success:
+            errors.append(
+                f"Failed to remove service-port {service_port.index}: {delete_result.message}"
+            )
             return False, completed, errors
         completed.append(f"Removed service-port {service_port.index}")
 
-    ok, msg = deauthorize_ont(olt, fsp, olt_ont_id)
-    if not ok:
-        errors.append(f"Failed to deauthorize ONT: {msg}")
+    deauth_result = adapter.deauthorize_ont(fsp, olt_ont_id)
+    if not deauth_result.success:
+        errors.append(f"Failed to deauthorize ONT: {deauth_result.message}")
         return False, completed, errors
     completed.append("Deauthorized ONT from OLT")
 
@@ -107,11 +108,7 @@ def return_to_inventory(
     request: Request | None = None,
 ) -> ActionResult:
     """Release an ONT from the OLT, close assignment, and clear service state."""
-    from app.services.network.olt_ssh_ont import deauthorize_ont
-    from app.services.network.olt_ssh_service_ports import (
-        delete_service_port,
-        get_service_ports_for_ont,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     initiated_by = initiated_by or actor_name_from_request(request)
     ont, olt, fsp, olt_ont_id = _resolve_return_olt_context(db, ont_id)
@@ -125,21 +122,24 @@ def return_to_inventory(
     previous_olt_id = str(olt.id)
     previous_fsp = fsp
 
-    ok, msg, service_ports = get_service_ports_for_ont(olt, fsp, olt_ont_id)
-    if not ok:
+    adapter = get_protocol_adapter(olt)
+    ports_result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
+    if not ports_result.success:
         return ActionResult(
             success=False,
-            message=f"Cannot read OLT service-ports before release: {msg}",
+            message=f"Cannot read OLT service-ports before release: {ports_result.message}",
         )
+    service_ports_data = ports_result.data.get("service_ports", [])
+    service_ports = service_ports_data if isinstance(service_ports_data, list) else []
 
     deleted_service_ports = 0
     for service_port in service_ports:
-        ok, msg = delete_service_port(olt, service_port.index)
-        if not ok:
+        delete_result = adapter.delete_service_port(service_port.index)
+        if not delete_result.success:
             return ActionResult(
                 success=False,
                 message=(
-                    f"Failed to remove OLT service-port {service_port.index}: {msg}"
+                    f"Failed to remove OLT service-port {service_port.index}: {delete_result.message}"
                 ),
             )
         deleted_service_ports += 1
@@ -161,11 +161,11 @@ def return_to_inventory(
         except Exception as e:
             logger.warning("Failed to emit ont_service_port_deleted event: %s", e)
 
-    ok, msg = deauthorize_ont(olt, fsp, olt_ont_id)
-    if not ok:
+    deauth_result = adapter.deauthorize_ont(fsp, olt_ont_id)
+    if not deauth_result.success:
         return ActionResult(
             success=False,
-            message=f"Failed to delete ONT from OLT: {msg}",
+            message=f"Failed to delete ONT from OLT: {deauth_result.message}",
         )
 
     # Emit audit event for ONT deauthorization

@@ -21,7 +21,6 @@ from app.models.catalog import (
     ProvisioningLogStatus,
     ProvisioningTemplate,
 )
-from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import (
     DeviceMetric,
     DeviceStatus,
@@ -52,7 +51,6 @@ from app.services.nas._helpers import (
     resolve_radius_pool_names,
     validate_ipv4_address,
 )
-from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -880,47 +878,6 @@ def build_nas_dashboard_data(
     total_pages = (total + limit - 1) // limit
 
     linked_by_nas = _resolve_linked_monitoring_devices(db, devices)
-    force_refresh = str(refresh or "").strip().lower() in {"1", "true", "yes", "on"}
-    if linked_by_nas:
-        try:
-            ping_interval_seconds = int(
-                str(
-                    resolve_value(
-                        db,
-                        SettingDomain.network_monitoring,
-                        "core_device_ping_interval_seconds",
-                    )
-                    or 120
-                )
-            )
-        except (TypeError, ValueError):
-            ping_interval_seconds = 120
-        try:
-            snmp_interval_seconds = int(
-                str(
-                    resolve_value(
-                        db,
-                        SettingDomain.network_monitoring,
-                        "core_device_snmp_walk_interval_seconds",
-                    )
-                    or 300
-                )
-            )
-        except (TypeError, ValueError):
-            snmp_interval_seconds = 300
-        from app.services import web_network_core_runtime as core_runtime_service
-
-        core_runtime_service.refresh_stale_devices_health(
-            db,
-            list(linked_by_nas.values()),
-            ping_interval_seconds=ping_interval_seconds,
-            snmp_interval_seconds=snmp_interval_seconds,
-            include_snmp=True,
-            force=force_refresh,
-        )
-        # Re-read after refresh to ensure UI reflects current state.
-        linked_by_nas = _resolve_linked_monitoring_devices(db, devices)
-
     runtime_statuses: dict[str, str] = {}
     runtime_last_seen: dict[str, datetime | None] = {}
     ping_statuses = {

@@ -47,6 +47,7 @@ from app.services.network.ont_provisioning.profiles import (
     resolve_profile as resolve_profile,
 )
 from app.services.network.ont_provisioning.result import StepResult as StepResult
+from app.services.network.provisioning_events import record_ont_provisioning_event
 from app.services.notification_adapter import broadcast_websocket, notify
 
 logger = logging.getLogger(__name__)
@@ -76,17 +77,24 @@ _PPPOE_PUSH_MAX_ATTEMPTS = _PROVISIONING_DEFAULTS.pppoe_push_max_attempts
 _PPPOE_PUSH_RETRY_DELAY_SEC = _PROVISIONING_DEFAULTS.pppoe_push_retry_delay_sec
 
 
+def _acs_config_writer():
+    from app.services.acs_client import create_acs_config_writer
+
+    return create_acs_config_writer()
+
+
 # ---------------------------------------------------------------------------
 # Step completion tracking
 # ---------------------------------------------------------------------------
 
 
 def _record_step(db: Session, ont: OntUnit, step_name: str, result: StepResult) -> None:
-    """Log provisioning step completion on the ONT.
+    """Log and persist provisioning step completion.
 
-    The step data is logged for observability. The ONT's provisioning_status
+    The event log is append-only for audit/replay. The ONT's provisioning_status
     is updated when the overall workflow completes, not per-step.
     """
+    record_ont_provisioning_event(db, ont, step_name, result)
     logger.info(
         "Provisioning step %s for ONT %s: success=%s waiting=%s duration_ms=%s message=%s",
         step_name,
@@ -367,18 +375,26 @@ def activate_internet_config(
         ont_id: OntUnit primary key.
         ip_index: IP index for the internet-config command (default 0).
     """
-    from app.services.network.olt_ssh_ont import configure_ont_internet_config
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("activate_internet_config", False, err, critical=False)
 
-    ok, msg = configure_ont_internet_config(
-        ctx.olt, ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+    action_result = get_protocol_adapter(ctx.olt).configure_internet_config(
+        ctx.fsp,
+        ctx.olt_ont_id,
+        ip_index=ip_index,
     )
     ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult("activate_internet_config", ok, msg, ms, critical=False)
+    result = StepResult(
+        "activate_internet_config",
+        action_result.success,
+        action_result.message,
+        ms,
+        critical=False,
+    )
     _record_step(db, ctx.ont, "activate_internet_config", result)
     return result
 
@@ -403,22 +419,27 @@ def configure_wan_olt(
         ip_index: IP index (default 0).
         profile_id: OLT wan-config profile ID (default 0).
     """
-    from app.services.network.olt_ssh_ont import configure_ont_wan_config
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("configure_wan_olt", False, err, critical=False)
 
-    ok, msg = configure_ont_wan_config(
-        ctx.olt,
+    action_result = get_protocol_adapter(ctx.olt).configure_wan_config(
         ctx.fsp,
         ctx.olt_ont_id,
         ip_index=ip_index,
         profile_id=profile_id,
     )
     ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult("configure_wan_olt", ok, msg, ms, critical=False)
+    result = StepResult(
+        "configure_wan_olt",
+        action_result.success,
+        action_result.message,
+        ms,
+        critical=False,
+    )
     _record_step(db, ctx.ont, "configure_wan_olt", result)
     return result
 
@@ -441,7 +462,7 @@ def bind_tr069(
         ont_id: OntUnit primary key.
         tr069_olt_profile_id: OLT-level TR-069 server profile ID.
     """
-    from app.services.network.olt_ssh_ont import bind_tr069_server_profile
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
@@ -457,9 +478,13 @@ def bind_tr069(
         ctx.olt_ont_id,
         tr069_olt_profile_id,
     )
-    ok, msg = bind_tr069_server_profile(
-        ctx.olt, ctx.fsp, ctx.olt_ont_id, tr069_olt_profile_id
+    action_result = get_protocol_adapter(ctx.olt).bind_tr069_profile(
+        ctx.fsp,
+        ctx.olt_ont_id,
+        profile_id=tr069_olt_profile_id,
     )
+    ok = action_result.success
+    msg = action_result.message
     ms = int((time.monotonic() - t0) * 1000)
     logger.info(
         "Provisioning TR-069 bind finished: ont_id=%s serial=%s success=%s duration_ms=%s message=%s",
@@ -694,14 +719,16 @@ def queue_wait_tr069_bootstrap(
             "Waiting for background TR-069 bootstrap polling to start.",
         )
         db.commit()
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
+        dispatch = enqueue_task(
             "app.tasks.tr069.wait_for_ont_bootstrap",
             args=[ont_id, str(op.id)],
             correlation_id=f"tr069_bootstrap:{ont_id}",
             source="ont_provision_step",
         )
+        if not dispatch.queued:
+            raise RuntimeError(dispatch.error or "Failed to queue TR-069 bootstrap")
         return StepResult(
             "wait_tr069_bootstrap",
             False,
@@ -759,13 +786,8 @@ def _provision_wan_service_instances(
         WanConnectionType,
         WanServiceProvisioningStatus,
     )
-    from app.services.acs_config_adapter import acs_config_adapter
     from app.services.credential_crypto import decrypt_credential
-    from app.services.network.olt_ssh_ont import (
-        configure_ont_internet_config,
-        configure_ont_pppoe_omci,
-        configure_ont_wan_config,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     ont = db.get(OntUnit, ont_id)
     if not ont:
@@ -783,6 +805,8 @@ def _provision_wan_service_instances(
 
     if not instances:
         return [], [], []
+
+    acs_config_adapter = _acs_config_writer()
 
     profile = getattr(ont, "provisioning_profile", None)
     if profile is None and getattr(ont, "provisioning_profile_id", None):
@@ -905,12 +929,14 @@ def _provision_wan_service_instances(
         )
 
         # Step 1: Activate TCP stack on ONT via internet-config
-        inet_ok, inet_msg = configure_ont_internet_config(
-            ctx.olt,
+        adapter = get_protocol_adapter(ctx.olt)
+        inet_result = adapter.configure_internet_config(
             ctx.fsp,
             ctx.olt_ont_id,
             ip_index=ip_index,
         )
+        inet_ok = inet_result.success
+        inet_msg = inet_result.message
         _append_step(
             f"internet_config_olt:{service_label}",
             inet_ok,
@@ -930,13 +956,14 @@ def _provision_wan_service_instances(
         # ONT WAN profiles. Some MA56xx builds support PPPoE ipconfig but not
         # `ont wan-profile`; those profiles keep wan_config_profile_id empty.
         if wan_profile_id:
-            wan_ok, wan_msg = configure_ont_wan_config(
-                ctx.olt,
+            wan_result = adapter.configure_wan_config(
                 ctx.fsp,
                 ctx.olt_ont_id,
                 ip_index=ip_index,
                 profile_id=wan_profile_id,
             )
+            wan_ok = wan_result.success
+            wan_msg = wan_result.message
             _append_step(f"configure_wan_olt:{service_label}", wan_ok, wan_msg)
             if not wan_ok:
                 # wan-config failed - fall through to TR-069
@@ -947,8 +974,7 @@ def _provision_wan_service_instances(
                 )
                 return (True, False)
 
-        pppoe_ok, pppoe_msg = configure_ont_pppoe_omci(
-            ctx.olt,
+        pppoe_result = adapter.configure_pppoe(
             ctx.fsp,
             ctx.olt_ont_id,
             ip_index=ip_index,
@@ -957,6 +983,8 @@ def _provision_wan_service_instances(
             username=str(pppoe_username),
             password=str(pppoe_password),
         )
+        pppoe_ok = pppoe_result.success
+        pppoe_msg = pppoe_result.message
         _append_step(
             f"configure_pppoe_omci:{service_label}",
             pppoe_ok,
@@ -1229,7 +1257,6 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     Missing operator inputs are reported in ``data["needs_input"]`` and do not
     fail the bootstrap operation; they can be supplied later and retried.
     """
-    from app.services.acs_config_adapter import acs_config_adapter
     from app.services.credential_crypto import decrypt_credential
     from app.services.network.ont_action_network import (
         probe_wan_capabilities,
@@ -1240,6 +1267,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     ont = db.get(OntUnit, ont_id)
     if ont is None:
         return StepResult("apply_saved_service_config", False, "ONT not found")
+    acs_config_adapter = _acs_config_writer()
 
     ont_plan: dict[str, object] = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
     steps: list[dict[str, object]] = []
@@ -1498,10 +1526,8 @@ def set_connection_request_credentials(
         username: Connection request username.
         password: Connection request password.
     """
-    from app.services.acs_config_adapter import acs_config_adapter
-
     t0 = time.monotonic()
-    cr_result = acs_config_adapter.set_connection_request_credentials(
+    cr_result = _acs_config_writer().set_connection_request_credentials(
         db,
         ont_id,
         username,
@@ -1549,15 +1575,14 @@ def push_pppoe_omci(
         ip_index: IP index (default 1).
         priority: CoS priority (default 0).
     """
-    from app.services.network.olt_ssh_ont import configure_ont_pppoe_omci
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("push_pppoe_omci", False, err)
 
-    ok, msg = configure_ont_pppoe_omci(
-        ctx.olt,
+    action_result = get_protocol_adapter(ctx.olt).configure_pppoe(
         ctx.fsp,
         ctx.olt_ont_id,
         ip_index=ip_index,
@@ -1566,6 +1591,8 @@ def push_pppoe_omci(
         username=username,
         password=password,
     )
+    ok = action_result.success
+    msg = action_result.message
     ms = int((time.monotonic() - t0) * 1000)
     unsupported = not ok and _is_unsupported_omci_command(msg)
     if unsupported:
@@ -1601,8 +1628,6 @@ def push_pppoe_tr069(
         instance_index: WAN instance index (default 1, must be 1-8).
         retry: Whether to retry on failure (default True).
     """
-    from app.services.acs_config_adapter import acs_config_adapter
-
     t0 = time.monotonic()
 
     # Validate instance_index early
@@ -1619,7 +1644,7 @@ def push_pppoe_tr069(
     last_result = None
 
     for attempt in range(1, max_attempts + 1):
-        last_result = acs_config_adapter.set_pppoe_credentials(
+        last_result = _acs_config_writer().set_pppoe_credentials(
             db, ont_id, username, password, instance_index=instance_index
         )
         if last_result.success or getattr(last_result, "waiting", False):
@@ -1683,8 +1708,6 @@ def configure_wan_tr069(
         dns_servers: Comma-separated DNS servers when wan_mode is "static".
         instance_index: WAN instance index (default 1).
     """
-    from app.services.acs_config_adapter import acs_config_adapter
-
     t0 = time.monotonic()
     resolved_wan_vlan = (
         int(wan_vlan)
@@ -1694,7 +1717,7 @@ def configure_wan_tr069(
     if isinstance(resolved_wan_vlan, str):
         resolved_wan_vlan = None
 
-    action_result = acs_config_adapter.configure_wan_config(
+    action_result = _acs_config_writer().configure_wan_config(
         db,
         ont_id,
         wan_mode=wan_mode,
@@ -1741,9 +1764,7 @@ def enable_ipv6(
     """
     t0 = time.monotonic()
     try:
-        from app.services.acs_config_adapter import acs_config_adapter
-
-        v6_result = acs_config_adapter.enable_ipv6_on_wan(
+        v6_result = _acs_config_writer().enable_ipv6_on_wan(
             db,
             ont_id,
             wan_instance=wan_instance,
@@ -1870,6 +1891,32 @@ def deprovision(
     return StepResult("deprovision", action_result.success, action_result.message, ms)
 
 
+def download_firmware(
+    db: Session,
+    ont_id: str,
+    *,
+    firmware_image_id: str,
+) -> StepResult:
+    """Trigger an ACS Download RPC for an ONT firmware image."""
+    t0 = time.monotonic()
+    ont = db.get(OntUnit, ont_id)
+    if ont is None:
+        return StepResult("download_firmware", False, "ONT not found")
+
+    result = _acs_config_writer().firmware_upgrade(db, ont_id, firmware_image_id)
+    ms = int((time.monotonic() - t0) * 1000)
+    step_result = StepResult(
+        "download_firmware",
+        bool(result.success),
+        result.message,
+        ms,
+        critical=False,
+        data=result.data,
+    )
+    _record_step(db, ont, "download_firmware", step_result)
+    return step_result
+
+
 def rollback_service_ports(
     db: Session,
     ont_id: str,
@@ -1882,18 +1929,18 @@ def rollback_service_ports(
         db: Database session.
         ont_id: OntUnit primary key.
     """
-    from app.services.network.olt_ssh_service_ports import (
-        delete_service_port,
-        get_service_ports_for_ont,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("rollback_service_ports", False, err)
 
-    ok, _msg, ports = get_service_ports_for_ont(ctx.olt, ctx.fsp, ctx.olt_ont_id)
-    if not ok or not ports:
+    adapter = get_protocol_adapter(ctx.olt)
+    ports_result = adapter.get_service_ports_for_ont(ctx.fsp, ctx.olt_ont_id)
+    ports_data = ports_result.data.get("service_ports", []) if ports_result.success else []
+    ports = ports_data if isinstance(ports_data, list) else []
+    if not ports_result.success or not ports:
         ms = int((time.monotonic() - t0) * 1000)
         return StepResult(
             "rollback_service_ports", True, "No service ports to remove", ms
@@ -1902,13 +1949,15 @@ def rollback_service_ports(
     deleted = 0
     errors = 0
     for port in ports:
-        ok, msg = delete_service_port(ctx.olt, port.index)
-        if ok:
+        delete_result = adapter.delete_service_port(port.index)
+        if delete_result.success:
             deleted += 1
         else:
             errors += 1
             logger.warning(
-                "Rollback: failed to delete service-port %d: %s", port.index, msg
+                "Rollback: failed to delete service-port %d: %s",
+                port.index,
+                delete_result.message,
             )
 
     ms = int((time.monotonic() - t0) * 1000)
@@ -2063,7 +2112,7 @@ def provision_with_reconciliation(
     Returns:
         StepResult with provisioning outcome.
     """
-    from app.services.network.ont_provisioning.executor import execute_delta
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.ont_provisioning.reconciler import (
         get_delta_summary,
         reconcile_ont_state,
@@ -2170,8 +2219,21 @@ def provision_with_reconciliation(
             data={"dry_run": True, **summary},
         )
 
-    # Execute the delta
-    exec_result = execute_delta(ctx.olt, delta, desired)
+    # Execute the delta through the OLT adapter so batch writes stay protocol-owned.
+    adapter = get_protocol_adapter(ctx.olt)
+    adapter_result = adapter.execute_provisioning_delta(delta, desired)
+    exec_result = adapter_result.data.get("execution_result")
+    if exec_result is None:
+        ms = int((time.monotonic() - t0) * 1000)
+        result = StepResult(
+            "provision_reconciled",
+            False,
+            adapter_result.message,
+            ms,
+            data={"protocol_used": adapter_result.protocol_used},
+        )
+        _record_step(db, ctx.ont, "provision_reconciled", result)
+        return result
 
     ms = int((time.monotonic() - t0) * 1000)
 

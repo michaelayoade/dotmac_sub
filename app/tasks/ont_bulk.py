@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +29,11 @@ def execute_bulk_action(
         return _queue_bulk_provision_saga(ont_ids, params)
 
     logger.info("Starting bulk %s for %d ONT(s)", action, len(ont_ids))
-    db = SessionLocal()
     processed = 0
     errors = 0
     skipped = 0
 
-    try:
+    with db_session_adapter.session() as db:
         for ont_id in ont_ids:
             try:
                 result = _dispatch_action(db, ont_id, action, params)
@@ -53,14 +52,6 @@ def execute_bulk_action(
             except Exception as exc:
                 logger.error("Bulk %s error for ONT %s: %s", action, ont_id, exc)
                 errors += 1
-
-        db.commit()
-    except Exception as exc:
-        logger.error("Bulk action %s failed: %s", action, exc)
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
     stats = {"processed": processed, "errors": errors, "skipped": skipped}
     logger.info("Bulk %s complete: %s", action, stats)
@@ -129,8 +120,7 @@ def _queue_bulk_provision_saga(
 
     params = dict(params or {})
     saga_name = str(params.get("saga_name") or "full_provisioning")
-    db = SessionLocal()
-    try:
+    with db_session_adapter.session() as db:
         result = bulk_provision_onts(
             db,
             ont_ids,
@@ -148,8 +138,6 @@ def _queue_bulk_provision_saga(
             step_data=dict(params.get("step_data") or {}),
             metadata={"source": "ont_bulk_action"},
         )
-    finally:
-        db.close()
 
     return {
         "processed": 0,

@@ -2252,6 +2252,7 @@ CREATE TYPE public.tr069event AS ENUM (
 CREATE TYPE public.tr069jobstatus AS ENUM (
     'queued',
     'running',
+    'pending',
     'succeeded',
     'failed',
     'canceled'

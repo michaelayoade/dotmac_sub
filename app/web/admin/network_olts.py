@@ -666,10 +666,10 @@ def unconfigured_onts_list(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def unconfigured_onts_scan_now() -> RedirectResponse:
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task
     from app.tasks.ont_autofind import discover_all_olt_autofind
 
-    enqueue_celery_task(
+    enqueue_task(
         discover_all_olt_autofind,
         correlation_id="olt_autofind:all",
         source="admin_network_olts",
@@ -1436,11 +1436,11 @@ def olt_firmware_upgrade_verified(
 
     if do_async:
         # Queue background task
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
         from app.tasks.olt_firmware import upgrade_firmware_task
 
         try:
-            enqueue_celery_task(
+            enqueue_task(
                 upgrade_firmware_task,
                 args=[olt_id, firmware_image_id],
                 kwargs={"verify_after": do_verify},

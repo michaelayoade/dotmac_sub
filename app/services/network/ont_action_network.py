@@ -1171,7 +1171,16 @@ def configure_wan_config(
             _verify_dns_readback(client, device_id, dns_expected)
         refresh = getattr(client, "refresh_object", None)
         if callable(refresh):
-            refresh(device_id, f"{root}.", connection_request=True)
+            refresh_path = (
+                "Device.IP."
+                if root == "Device"
+                else f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{instance_index}."
+            )
+            refresh(
+                device_id,
+                refresh_path,
+                connection_request=True,
+            )
         logger.info(
             "WAN config set on ONT %s mode=%s vlan=%s root=%s",
             ont.serial_number,

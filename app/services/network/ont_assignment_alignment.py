@@ -25,6 +25,14 @@ class AssignmentAlignmentResult:
         return self.created or self.updated or self.reactivated
 
 
+@dataclass(frozen=True)
+class OntTopologyAlignmentResult:
+    """Result of aligning direct ONT topology to an authoritative F/S/P."""
+
+    pon_port: PonPort
+    updated: bool = False
+
+
 def parse_fsp_parts(fsp: str) -> tuple[str | None, str | None]:
     """Split an F/S/P string into stored board and port fragments."""
     parts = [part.strip() for part in str(fsp or "").split("/") if part.strip()]
@@ -40,6 +48,8 @@ def align_ont_assignment_to_authoritative_fsp(
     olt_id: object,
     fsp: str,
     assigned_at: datetime | None = None,
+    create_missing_assignment: bool = True,
+    reactivate_existing_assignment: bool = True,
 ) -> AssignmentAlignmentResult | None:
     """Point the ONT's active assignment at the PON from the OLT scan.
 
@@ -52,15 +62,15 @@ def align_ont_assignment_to_authoritative_fsp(
         return None
 
     now = assigned_at or datetime.now(UTC)
-    pon_port = ensure_canonical_pon_port(
+    topology = sync_ont_topology_to_authoritative_fsp(
         db,
+        ont=ont,
         olt_id=olt_id,
         fsp=fsp,
-        board=board,
-        port=port,
     )
-    if getattr(ont, "olt_device_id", None) is None:
-        ont.olt_device_id = pon_port.olt_id
+    if topology is None:
+        return None
+    pon_port = topology.pon_port
 
     active_assignment = db.scalars(
         select(OntAssignment)
@@ -96,7 +106,7 @@ def align_ont_assignment_to_authoritative_fsp(
         )
         .with_for_update()
     ).first()
-    if latest_assignment is not None:
+    if latest_assignment is not None and reactivate_existing_assignment:
         latest_assignment.pon_port_id = pon_port.id
         latest_assignment.active = True
         if latest_assignment.assigned_at is None:
@@ -106,6 +116,9 @@ def align_ont_assignment_to_authoritative_fsp(
             pon_port=pon_port,
             reactivated=True,
         )
+
+    if not create_missing_assignment:
+        return None
 
     assignment = OntAssignment(
         ont_unit_id=ont.id,
@@ -118,4 +131,33 @@ def align_ont_assignment_to_authoritative_fsp(
         assignment=assignment,
         pon_port=pon_port,
         created=True,
+    )
+
+
+def sync_ont_topology_to_authoritative_fsp(
+    db: Session,
+    *,
+    ont: OntUnit,
+    olt_id: object,
+    fsp: str,
+) -> OntTopologyAlignmentResult | None:
+    """Align direct ONT topology without implying customer assignment."""
+    board, port = parse_fsp_parts(fsp)
+    if not board or not port:
+        return None
+
+    pon_port = ensure_canonical_pon_port(
+        db,
+        olt_id=olt_id,
+        fsp=fsp,
+        board=board,
+        port=port,
+    )
+    updated = False
+    if getattr(ont, "olt_device_id", None) is None:
+        ont.olt_device_id = pon_port.olt_id
+        updated = True
+    return OntTopologyAlignmentResult(
+        pon_port=pon_port,
+        updated=updated,
     )

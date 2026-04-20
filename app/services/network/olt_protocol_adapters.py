@@ -28,6 +28,11 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
+    from app.services.network.olt_batched_auth import BatchedAuthorizationSpec
+    from app.services.network.ont_provisioning.state import (
+        DesiredOntState,
+        ProvisioningDelta,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +80,15 @@ class ProtocolCapabilities:
     # Specific operation support
     can_authorize: bool = False
     can_deauthorize: bool = False
+    can_update_ont_profiles: bool = False
+    can_find_ont_by_serial: bool = False
     can_configure_iphost: bool = False
     can_bind_tr069: bool = False
     can_create_service_port: bool = False
     can_reboot_ont: bool = False
     can_factory_reset: bool = False
+    can_execute_authorization_batch: bool = False
+    can_execute_provisioning_delta: bool = False
 
     # Extended configuration operations
     can_configure_internet_config: bool = False
@@ -91,7 +100,10 @@ class ProtocolCapabilities:
     # Read operations
     can_get_service_ports: bool = False
     can_get_autofind_onts: bool = False
+    can_get_profiles: bool = False
+    can_create_tr069_profile: bool = False
     can_diagnose_service_ports: bool = False
+    can_fetch_running_config: bool = False
 
 
 # ============================================================================
@@ -149,6 +161,21 @@ class OltProtocolAdapter(Protocol):
         """Remove/deauthorize an ONT from the OLT."""
         ...
 
+    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
+        """Find an existing ONT registration by serial number."""
+        ...
+
+    def update_ont_profiles(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+    ) -> OltOperationResult:
+        """Update an existing ONT's line and/or service profile."""
+        ...
+
     # ========== ONT Configuration ==========
 
     def configure_iphost(
@@ -195,6 +222,25 @@ class OltProtocolAdapter(Protocol):
 
     def delete_service_port(self, port_index: int) -> OltOperationResult:
         """Delete a service port by index."""
+        ...
+
+    # ========== Batched Write Operations ==========
+
+    def execute_authorization_batch(
+        self,
+        spec: BatchedAuthorizationSpec,
+    ) -> OltOperationResult:
+        """Authorize an ONT and apply related OLT config in one protocol session."""
+        ...
+
+    def execute_provisioning_delta(
+        self,
+        delta: ProvisioningDelta,
+        desired: DesiredOntState,
+        *,
+        dry_run: bool = False,
+    ) -> OltOperationResult:
+        """Execute a reconciled ONT provisioning delta with compensation tracking."""
         ...
 
     # ========== ONT Operations ==========
@@ -328,6 +374,30 @@ class OltProtocolAdapter(Protocol):
         """
         ...
 
+    def get_line_profiles(self) -> OltOperationResult:
+        """Get line profiles from the OLT."""
+        ...
+
+    def get_service_profiles(self) -> OltOperationResult:
+        """Get service profiles from the OLT."""
+        ...
+
+    def get_tr069_profiles(self) -> OltOperationResult:
+        """Get TR-069 server profiles from the OLT."""
+        ...
+
+    def create_tr069_profile(
+        self,
+        *,
+        profile_name: str,
+        acs_url: str,
+        username: str,
+        password: str,
+        inform_interval: int,
+    ) -> OltOperationResult:
+        """Create a TR-069 server profile on the OLT."""
+        ...
+
     def diagnose_service_ports(
         self,
         fsp: str,
@@ -337,6 +407,14 @@ class OltProtocolAdapter(Protocol):
 
         Returns:
             OltOperationResult with data["diagnostics"] containing diagnostic info.
+        """
+        ...
+
+    def fetch_running_config(self) -> OltOperationResult:
+        """Fetch the full OLT running configuration.
+
+        Returns:
+            OltOperationResult with data["config_text"] containing the config text.
         """
         ...
 
@@ -374,6 +452,19 @@ class BaseProtocolAdapter(ABC):
 
     def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._not_supported("deauthorize_ont")
+
+    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
+        return self._not_supported("find_ont_by_serial")
+
+    def update_ont_profiles(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+    ) -> OltOperationResult:
+        return self._not_supported("update_ont_profiles")
 
     def configure_iphost(
         self,
@@ -414,6 +505,21 @@ class BaseProtocolAdapter(ABC):
 
     def delete_service_port(self, port_index: int) -> OltOperationResult:
         return self._not_supported("delete_service_port")
+
+    def execute_authorization_batch(
+        self,
+        spec: BatchedAuthorizationSpec,
+    ) -> OltOperationResult:
+        return self._not_supported("execute_authorization_batch")
+
+    def execute_provisioning_delta(
+        self,
+        delta: ProvisioningDelta,
+        desired: DesiredOntState,
+        *,
+        dry_run: bool = False,
+    ) -> OltOperationResult:
+        return self._not_supported("execute_provisioning_delta")
 
     def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._not_supported("reboot_ont")
@@ -512,6 +618,26 @@ class BaseProtocolAdapter(ABC):
     def get_autofind_onts(self) -> OltOperationResult:
         return self._not_supported("get_autofind_onts")
 
+    def get_line_profiles(self) -> OltOperationResult:
+        return self._not_supported("get_line_profiles")
+
+    def get_service_profiles(self) -> OltOperationResult:
+        return self._not_supported("get_service_profiles")
+
+    def get_tr069_profiles(self) -> OltOperationResult:
+        return self._not_supported("get_tr069_profiles")
+
+    def create_tr069_profile(
+        self,
+        *,
+        profile_name: str,
+        acs_url: str,
+        username: str,
+        password: str,
+        inform_interval: int,
+    ) -> OltOperationResult:
+        return self._not_supported("create_tr069_profile")
+
     def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._not_supported("diagnose_service_ports")
 
@@ -541,11 +667,15 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             reason="" if ssh_available else f"{adapter.vendor_name} SSH not implemented",
             can_authorize=ssh_available,
             can_deauthorize=ssh_available,
+            can_update_ont_profiles=ssh_available,
+            can_find_ont_by_serial=ssh_available,
             can_configure_iphost=ssh_available,
             can_bind_tr069=ssh_available,
             can_create_service_port=ssh_available,
             can_reboot_ont=ssh_available,
             can_factory_reset=ssh_available,
+            can_execute_authorization_batch=ssh_available,
+            can_execute_provisioning_delta=ssh_available,
             # Extended configuration operations
             can_configure_internet_config=ssh_available,
             can_configure_wan_config=ssh_available,
@@ -555,8 +685,31 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             # Read operations
             can_get_service_ports=ssh_available,
             can_get_autofind_onts=ssh_available,
+            can_get_profiles=ssh_available,
+            can_create_tr069_profile=ssh_available,
             can_diagnose_service_ports=ssh_available,
+            can_fetch_running_config=ssh_available,
         )
+
+    def fetch_running_config(self) -> OltOperationResult:
+        """Fetch full running config via SSH CLI."""
+        from app.services.network.olt_ssh import fetch_running_config_ssh
+
+        try:
+            ok, message, config_text = fetch_running_config_ssh(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"config_text": config_text} if config_text else {},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH fetch_running_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH running-config fetch failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
 
     def authorize_ont(
         self,
@@ -594,7 +747,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
     def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         """Deauthorize ONT via SSH CLI."""
-        from app.services.network.olt_ssh_ont.lifecycle import deauthorize_ont
+        from app.services.network.olt_ssh_ont import deauthorize_ont
 
         try:
             ok, message = deauthorize_ont(self._olt, fsp, ont_id)
@@ -608,6 +761,58 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             return OltOperationResult(
                 success=False,
                 message=f"SSH deauthorization failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
+        """Find ONT registration by serial via SSH CLI."""
+        from app.services.network.olt_ssh_ont import find_ont_by_serial
+
+        try:
+            ok, message, entry = find_ont_by_serial(self._olt, serial_number)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"registration": entry} if entry is not None else {},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH find_ont_by_serial failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH ONT lookup failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def update_ont_profiles(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+    ) -> OltOperationResult:
+        """Update ONT profile binding via SSH CLI."""
+        from app.services.network.olt_ssh import update_ont_profiles
+
+        try:
+            ok, message = update_ont_profiles(
+                self._olt,
+                fsp,
+                ont_id,
+                line_profile_id=line_profile_id,
+                service_profile_id=service_profile_id,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH update_ont_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH ONT profile update failed: {exc}",
                 protocol_used=OltProtocol.SSH,
             )
 
@@ -661,7 +866,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         profile_id: int,
     ) -> OltOperationResult:
         """Bind TR-069 profile via SSH CLI."""
-        from app.services.network.olt_ssh_ont.tr069 import bind_tr069_server_profile
+        from app.services.network.olt_ssh_ont import bind_tr069_server_profile
 
         try:
             ok, message = bind_tr069_server_profile(
@@ -705,6 +910,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 vlan_id,
                 user_vlan=user_vlan,
                 tag_transform=tag_transform,
+                port_index=port_index,
             )
             return OltOperationResult(
                 success=ok,
@@ -738,6 +944,68 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             return OltOperationResult(
                 success=False,
                 message=f"SSH service port deletion failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def execute_authorization_batch(
+        self,
+        spec: BatchedAuthorizationSpec,
+    ) -> OltOperationResult:
+        """Execute batched ONT authorization via one SSH session."""
+        from app.services.network.olt_batched_auth import execute_batched_authorization
+
+        try:
+            result = execute_batched_authorization(self._olt, spec)
+            return OltOperationResult(
+                success=result.success,
+                message=result.error_message or "Batched authorization complete",
+                ont_id=result.ont_id,
+                data={
+                    "batch_result": result,
+                    "service_port_indices": result.service_port_indices,
+                    "steps_completed": result.steps_completed,
+                    "steps_failed": result.steps_failed,
+                    "raw_output": result.raw_output,
+                },
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH execute_authorization_batch failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH batched authorization failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def execute_provisioning_delta(
+        self,
+        delta: ProvisioningDelta,
+        desired: DesiredOntState,
+        *,
+        dry_run: bool = False,
+    ) -> OltOperationResult:
+        """Execute reconciled provisioning delta via the SSH batch engine."""
+        from app.services.network.ont_provisioning.executor import execute_delta
+
+        try:
+            result = execute_delta(self._olt, delta, desired, dry_run=dry_run)
+            return OltOperationResult(
+                success=result.success,
+                message=result.message,
+                data={
+                    "execution_result": result,
+                    "steps_completed": result.steps_completed,
+                    "steps_failed": result.steps_failed,
+                    "errors": result.errors,
+                    "compensation_log": result.compensation_log,
+                },
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH execute_provisioning_delta failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH provisioning delta execution failed: {exc}",
                 protocol_used=OltProtocol.SSH,
             )
 
@@ -1085,6 +1353,103 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 protocol_used=OltProtocol.SSH,
             )
 
+    def get_line_profiles(self) -> OltOperationResult:
+        """Get line profiles via SSH CLI."""
+        from app.services.network.olt_ssh_profiles import get_line_profiles
+
+        try:
+            ok, message, entries = get_line_profiles(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profiles": entries},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH get_line_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get line profiles failed: {exc}",
+                data={"profiles": []},
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def get_service_profiles(self) -> OltOperationResult:
+        """Get service profiles via SSH CLI."""
+        from app.services.network.olt_ssh_profiles import get_service_profiles
+
+        try:
+            ok, message, entries = get_service_profiles(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profiles": entries},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH get_service_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get service profiles failed: {exc}",
+                data={"profiles": []},
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def get_tr069_profiles(self) -> OltOperationResult:
+        """Get TR-069 server profiles via SSH CLI."""
+        from app.services.network.olt_ssh_profiles import get_tr069_server_profiles
+
+        try:
+            ok, message, entries = get_tr069_server_profiles(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profiles": entries},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH get_tr069_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get TR-069 profiles failed: {exc}",
+                data={"profiles": []},
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def create_tr069_profile(
+        self,
+        *,
+        profile_name: str,
+        acs_url: str,
+        username: str,
+        password: str,
+        inform_interval: int,
+    ) -> OltOperationResult:
+        """Create a TR-069 server profile via SSH CLI."""
+        from app.services.network.olt_ssh import create_tr069_server_profile
+
+        try:
+            ok, message = create_tr069_server_profile(
+                self._olt,
+                profile_name=profile_name,
+                acs_url=acs_url,
+                username=username,
+                password=password,
+                inform_interval=inform_interval,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH create_tr069_profile failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH create TR-069 profile failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
     def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
         """Run diagnostics to troubleshoot service port state issues."""
         from app.services.network.olt_ssh_ont.diagnostics import (
@@ -1141,6 +1506,8 @@ class NetconfProtocolAdapter(BaseProtocolAdapter):
             can_authorize=can_use,
             # NETCONF currently only supports authorization
             can_deauthorize=False,
+            can_update_ont_profiles=False,
+            can_find_ont_by_serial=False,
             can_configure_iphost=False,
             can_bind_tr069=False,
             can_create_service_port=False,
@@ -1227,11 +1594,25 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
             reason="",
             can_authorize=nc_caps.can_authorize or ssh_caps.can_authorize,
             can_deauthorize=nc_caps.can_deauthorize or ssh_caps.can_deauthorize,
+            can_update_ont_profiles=(
+                nc_caps.can_update_ont_profiles or ssh_caps.can_update_ont_profiles
+            ),
+            can_find_ont_by_serial=(
+                nc_caps.can_find_ont_by_serial or ssh_caps.can_find_ont_by_serial
+            ),
             can_configure_iphost=nc_caps.can_configure_iphost or ssh_caps.can_configure_iphost,
             can_bind_tr069=nc_caps.can_bind_tr069 or ssh_caps.can_bind_tr069,
             can_create_service_port=nc_caps.can_create_service_port or ssh_caps.can_create_service_port,
             can_reboot_ont=nc_caps.can_reboot_ont or ssh_caps.can_reboot_ont,
             can_factory_reset=nc_caps.can_factory_reset or ssh_caps.can_factory_reset,
+            can_execute_authorization_batch=(
+                nc_caps.can_execute_authorization_batch
+                or ssh_caps.can_execute_authorization_batch
+            ),
+            can_execute_provisioning_delta=(
+                nc_caps.can_execute_provisioning_delta
+                or ssh_caps.can_execute_provisioning_delta
+            ),
             # Extended configuration operations
             can_configure_internet_config=(
                 nc_caps.can_configure_internet_config or ssh_caps.can_configure_internet_config
@@ -1251,10 +1632,20 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
             can_get_autofind_onts=(
                 nc_caps.can_get_autofind_onts or ssh_caps.can_get_autofind_onts
             ),
+            can_get_profiles=nc_caps.can_get_profiles or ssh_caps.can_get_profiles,
+            can_create_tr069_profile=(
+                nc_caps.can_create_tr069_profile or ssh_caps.can_create_tr069_profile
+            ),
             can_diagnose_service_ports=(
                 nc_caps.can_diagnose_service_ports or ssh_caps.can_diagnose_service_ports
             ),
+            can_fetch_running_config=(
+                nc_caps.can_fetch_running_config or ssh_caps.can_fetch_running_config
+            ),
         )
+
+    def fetch_running_config(self) -> OltOperationResult:
+        return self._ssh.fetch_running_config()
 
     def authorize_ont(
         self,
@@ -1317,6 +1708,24 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
     def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._ssh.deauthorize_ont(fsp, ont_id)
 
+    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
+        return self._ssh.find_ont_by_serial(serial_number)
+
+    def update_ont_profiles(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+    ) -> OltOperationResult:
+        return self._ssh.update_ont_profiles(
+            fsp,
+            ont_id,
+            line_profile_id=line_profile_id,
+            service_profile_id=service_profile_id,
+        )
+
     def configure_iphost(
         self,
         fsp: str,
@@ -1374,6 +1783,25 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
 
     def delete_service_port(self, port_index: int) -> OltOperationResult:
         return self._ssh.delete_service_port(port_index)
+
+    def execute_authorization_batch(
+        self,
+        spec: BatchedAuthorizationSpec,
+    ) -> OltOperationResult:
+        return self._ssh.execute_authorization_batch(spec)
+
+    def execute_provisioning_delta(
+        self,
+        delta: ProvisioningDelta,
+        desired: DesiredOntState,
+        *,
+        dry_run: bool = False,
+    ) -> OltOperationResult:
+        return self._ssh.execute_provisioning_delta(
+            delta,
+            desired,
+            dry_run=dry_run,
+        )
 
     def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._ssh.reboot_ont(fsp, ont_id)
@@ -1482,6 +1910,32 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
 
     def get_autofind_onts(self) -> OltOperationResult:
         return self._ssh.get_autofind_onts()
+
+    def get_line_profiles(self) -> OltOperationResult:
+        return self._ssh.get_line_profiles()
+
+    def get_service_profiles(self) -> OltOperationResult:
+        return self._ssh.get_service_profiles()
+
+    def get_tr069_profiles(self) -> OltOperationResult:
+        return self._ssh.get_tr069_profiles()
+
+    def create_tr069_profile(
+        self,
+        *,
+        profile_name: str,
+        acs_url: str,
+        username: str,
+        password: str,
+        inform_interval: int,
+    ) -> OltOperationResult:
+        return self._ssh.create_tr069_profile(
+            profile_name=profile_name,
+            acs_url=acs_url,
+            username=username,
+            password=password,
+            inform_interval=inform_interval,
+        )
 
     def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._ssh.diagnose_service_ports(fsp, ont_id)

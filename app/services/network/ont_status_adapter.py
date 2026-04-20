@@ -84,11 +84,13 @@ class OpticalMetrics:
     @property
     def has_signal_data(self) -> bool:
         """Check if any signal data is present."""
-        return any([
-            self.olt_rx_dbm is not None,
-            self.onu_rx_dbm is not None,
-            self.onu_tx_dbm is not None,
-        ])
+        return any(
+            [
+                self.olt_rx_dbm is not None,
+                self.onu_rx_dbm is not None,
+                self.onu_tx_dbm is not None,
+            ]
+        )
 
 
 @dataclass(frozen=True)
@@ -138,7 +140,7 @@ class OntStatusProvider(Protocol):
 
     def get_status(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
         *,
         include_optical: bool = False,
@@ -157,7 +159,7 @@ class OntStatusProvider(Protocol):
 
     def get_optical_metrics(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
     ) -> OpticalMetrics:
         """Get current optical signal metrics.
@@ -205,66 +207,35 @@ class SnmpStatusProvider:
 
     def get_status(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
         *,
         include_optical: bool = False,
     ) -> OntStatusResult:
         """Get status from cached SNMP poll data."""
         from app.services.network.ont_status import (
-            resolve_acs_online_window_minutes_for_model,
-            resolve_acs_status,
+            resolve_ont_status_for_model,
         )
 
         now = datetime.now(UTC)
-
-        # Get OLT status from ONT record (updated by polling)
-        olt_status = getattr(ont, "online_status", None) or OnuOnlineStatus.unknown
-
-        # Resolve ACS status for combined view
-        acs_last_inform = getattr(ont, "acs_last_inform_at", None)
-        managed = bool(
-            getattr(ont, "tr069_acs_server_id", None)
-            or getattr(ont, "tr069_acs_server", None)
-        )
-        window_minutes = resolve_acs_online_window_minutes_for_model(ont)
-        acs_status = resolve_acs_status(
-            acs_last_inform_at=acs_last_inform,
-            managed=managed,
-            now=now,
-            online_window_minutes=window_minutes,
-        )
-
-        # Determine effective status
-        if olt_status == OnuOnlineStatus.online:
-            effective_status = OnuOnlineStatus.online
-            source = OntStatusSource.olt
-        elif olt_status == OnuOnlineStatus.offline:
-            effective_status = OnuOnlineStatus.offline
-            source = OntStatusSource.olt
-        elif acs_status == OntAcsStatus.online:
-            effective_status = OnuOnlineStatus.online
-            source = OntStatusSource.acs
-        else:
-            effective_status = OnuOnlineStatus.unknown
-            source = OntStatusSource.derived
+        snapshot = resolve_ont_status_for_model(ont, now=now)
 
         optical = None
         if include_optical:
             optical = self.get_optical_metrics(db, ont)
 
         return OntStatusResult(
-            online_status=effective_status,
-            acs_status=acs_status,
-            status_source=source,
-            acs_last_inform_at=acs_last_inform,
-            resolved_at=now,
+            online_status=snapshot.effective_status,
+            acs_status=snapshot.acs_status,
+            status_source=snapshot.effective_status_source,
+            acs_last_inform_at=snapshot.acs_last_inform_at,
+            resolved_at=snapshot.status_resolved_at,
             optical_metrics=optical,
         )
 
     def get_optical_metrics(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
     ) -> OpticalMetrics:
         """Get optical metrics from cached SNMP poll data."""
@@ -272,12 +243,12 @@ class SnmpStatusProvider:
             olt_rx_dbm=getattr(ont, "olt_rx_signal_dbm", None),
             onu_rx_dbm=getattr(ont, "onu_rx_signal_dbm", None),
             onu_tx_dbm=getattr(ont, "onu_tx_signal_dbm", None),
-            temperature_c=getattr(ont, "temperature_c", None),
-            voltage_v=getattr(ont, "voltage_v", None),
-            bias_current_ma=getattr(ont, "bias_current_ma", None),
+            temperature_c=getattr(ont, "ont_temperature_c", None),
+            voltage_v=getattr(ont, "ont_voltage_v", None),
+            bias_current_ma=getattr(ont, "ont_bias_current_ma", None),
             distance_m=getattr(ont, "distance_meters", None),
             source="snmp",
-            fetched_at=getattr(ont, "last_polled_at", None),
+            fetched_at=getattr(ont, "signal_updated_at", None),
         )
 
 
@@ -318,7 +289,7 @@ class Tr069StatusProvider:
 
     def get_status(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
         *,
         include_optical: bool = False,
@@ -364,7 +335,7 @@ class Tr069StatusProvider:
 
     def get_optical_metrics(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
     ) -> OpticalMetrics:
         """Get optical metrics via TR-069.
@@ -389,7 +360,7 @@ class Tr069StatusProvider:
 
     def fetch_optical_metrics_live(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
         *,
         timeout_seconds: int = 30,
@@ -399,7 +370,7 @@ class Tr069StatusProvider:
         This triggers an actual parameter fetch from the device.
         Use for on-demand diagnostics, not bulk polling.
         """
-        from app.services.genieacs import GenieACSClient
+        from app.services.acs_client import create_acs_client
         from app.services.network.tr069_paths import resolve_parameters
 
         tr069_device = self._get_tr069_device(db, ont)
@@ -407,17 +378,13 @@ class Tr069StatusProvider:
             logger.warning("No TR-069 device found for ONT %s", ont.id)
             return OpticalMetrics(source="tr069", fetched_at=datetime.now(UTC))
 
-        device_id = getattr(tr069_device, "device_id", None)
+        device_id = getattr(tr069_device, "genieacs_device_id", None)
         acs_server = self._get_acs_server(ont)
         if not device_id or not acs_server:
             return OpticalMetrics(source="tr069", fetched_at=datetime.now(UTC))
 
         try:
-            client = GenieACSClient(
-                base_url=acs_server.api_url,
-                username=acs_server.username,
-                password=acs_server.password,
-            )
+            client = create_acs_client(acs_server.base_url)
 
             # Get optical parameter paths for this device
             data_model = getattr(tr069_device, "data_model_root", "Device")
@@ -448,11 +415,21 @@ class Tr069StatusProvider:
                 fetched_at=datetime.now(UTC),
             )
 
-    def _get_tr069_device(self, db: "Session", ont: OntUnit):
+    def _get_tr069_device(self, db: Session, ont: OntUnit):
         """Get the TR-069 CPE device record for this ONT."""
         from sqlalchemy import select
 
         from app.models.tr069 import Tr069CpeDevice
+
+        ont_id = getattr(ont, "id", None)
+        if ont_id is not None:
+            stmt = select(Tr069CpeDevice).where(
+                Tr069CpeDevice.ont_unit_id == ont_id,
+                Tr069CpeDevice.is_active.is_(True),
+            )
+            found = db.scalars(stmt).first()
+            if found is not None:
+                return found
 
         serial = getattr(ont, "serial_number", None)
         if not serial:
@@ -462,10 +439,29 @@ class Tr069StatusProvider:
         import re
 
         normalized = re.sub(r"[^A-Za-z0-9]", "", serial).upper()
+        acs_server_id = getattr(ont, "tr069_acs_server_id", None)
+        if acs_server_id is None:
+            olt = getattr(ont, "olt_device", None)
+            acs_server_id = getattr(olt, "tr069_acs_server_id", None) if olt else None
 
         stmt = select(Tr069CpeDevice).where(
-            Tr069CpeDevice.serial_number.ilike(f"%{normalized[-8:]}%")
+            Tr069CpeDevice.is_active.is_(True),
+            Tr069CpeDevice.serial_number.ilike(normalized),
         )
+        if acs_server_id is not None:
+            stmt = stmt.where(Tr069CpeDevice.acs_server_id == acs_server_id)
+        found = db.scalars(stmt).first()
+        if found is not None:
+            return found
+
+        if len(normalized) < 8:
+            return None
+        stmt = select(Tr069CpeDevice).where(
+            Tr069CpeDevice.is_active.is_(True),
+            Tr069CpeDevice.serial_number.ilike(f"%{normalized[-8:]}"),
+        )
+        if acs_server_id is not None:
+            stmt = stmt.where(Tr069CpeDevice.acs_server_id == acs_server_id)
         return db.scalars(stmt).first()
 
     def _get_acs_server(self, ont: OntUnit):
@@ -530,7 +526,7 @@ class CompositeStatusProvider:
 
     def get_status(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
         *,
         include_optical: bool = False,
@@ -580,7 +576,7 @@ class CompositeStatusProvider:
 
     def get_optical_metrics(
         self,
-        db: "Session",
+        db: Session,
         ont: OntUnit,
     ) -> OpticalMetrics:
         """Get optical metrics from first available provider with data."""
@@ -648,7 +644,7 @@ def get_status_provider(
 
 
 def get_ont_status(
-    db: "Session",
+    db: Session,
     ont: OntUnit,
     *,
     include_optical: bool = False,
@@ -672,7 +668,7 @@ def get_ont_status(
 
 
 def get_ont_optical_metrics(
-    db: "Session",
+    db: Session,
     ont: OntUnit,
     *,
     mode: StatusProviderMode | str = StatusProviderMode.auto,
@@ -692,7 +688,7 @@ def get_ont_optical_metrics(
 
 
 def refresh_ont_status(
-    db: "Session",
+    db: Session,
     ont: OntUnit,
     *,
     mode: StatusProviderMode | str = StatusProviderMode.auto,
@@ -709,7 +705,7 @@ def refresh_ont_status(
     Returns:
         OntStatusResult with updated status
     """
-    from app.services.network.ont_status import apply_status_snapshot, OntStatusSnapshot
+    from app.services.network.ont_status import OntStatusSnapshot, apply_status_snapshot
 
     result = get_ont_status(db, ont, include_optical=True, mode=mode)
 
@@ -734,11 +730,11 @@ def refresh_ont_status(
         if metrics.onu_tx_dbm is not None:
             ont.onu_tx_signal_dbm = metrics.onu_tx_dbm
         if metrics.temperature_c is not None:
-            ont.temperature_c = metrics.temperature_c
+            ont.ont_temperature_c = metrics.temperature_c
         if metrics.voltage_v is not None:
-            ont.voltage_v = metrics.voltage_v
+            ont.ont_voltage_v = metrics.voltage_v
         if metrics.bias_current_ma is not None:
-            ont.bias_current_ma = metrics.bias_current_ma
+            ont.ont_bias_current_ma = metrics.bias_current_ma
         if metrics.distance_m is not None:
             ont.distance_meters = metrics.distance_m
 
@@ -765,7 +761,7 @@ class BulkStatusResult:
 
 
 def get_bulk_ont_status(
-    db: "Session",
+    db: Session,
     onts: list[OntUnit],
     *,
     include_optical: bool = False,
@@ -823,8 +819,8 @@ def get_bulk_ont_status(
 
 
 def refresh_olt_ont_status(
-    db: "Session",
-    olt: "OLTDevice",
+    db: Session,
+    olt: OLTDevice,
     *,
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> BulkStatusResult:
@@ -865,7 +861,7 @@ def refresh_olt_ont_status(
 
 def _apply_status_to_ont(ont: OntUnit, result: OntStatusResult) -> None:
     """Apply status result to ONT model fields."""
-    from app.services.network.ont_status import apply_status_snapshot, OntStatusSnapshot
+    from app.services.network.ont_status import OntStatusSnapshot, apply_status_snapshot
 
     snapshot = OntStatusSnapshot(
         olt_status=result.online_status,
@@ -886,10 +882,10 @@ def _apply_status_to_ont(ont: OntUnit, result: OntStatusResult) -> None:
         if metrics.onu_tx_dbm is not None:
             ont.onu_tx_signal_dbm = metrics.onu_tx_dbm
         if metrics.temperature_c is not None:
-            ont.temperature_c = metrics.temperature_c
+            ont.ont_temperature_c = metrics.temperature_c
         if metrics.voltage_v is not None:
-            ont.voltage_v = metrics.voltage_v
+            ont.ont_voltage_v = metrics.voltage_v
         if metrics.bias_current_ma is not None:
-            ont.bias_current_ma = metrics.bias_current_ma
+            ont.ont_bias_current_ma = metrics.bias_current_ma
         if metrics.distance_m is not None:
             ont.distance_meters = metrics.distance_m

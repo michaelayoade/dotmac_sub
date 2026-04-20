@@ -12,7 +12,8 @@ from app.models.domain_settings import SettingDomain
 from app.models.network import CPEDevice, OLTDevice, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
-from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
+from app.services.acs_client import AcsClient, create_acs_client
+from app.services.genieacs import GenieACSError, normalize_tr069_serial
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +83,7 @@ def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
     return None
 
 
-def _resolve_device_id_from_server(
-    client: GenieACSClient,
-    serial_number: str,
-) -> str | None:
+def _resolve_device_id_from_server(client: AcsClient, serial_number: str) -> str | None:
     for candidate in _serial_search_candidates(serial_number):
         escaped_candidate = re.escape(candidate)
         devices = client.list_devices(
@@ -133,10 +131,52 @@ def _cache_genieacs_device_id(
     clean_id = str(device_id).strip()
     if not clean_id or device.genieacs_device_id == clean_id:
         return
+
+    owner = db.scalars(
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.genieacs_device_id == clean_id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .where(Tr069CpeDevice.id != device.id)
+        .limit(1)
+    ).first()
+    if owner:
+        if device.ont_unit_id and not owner.ont_unit_id:
+            owner_id = owner.id
+            placeholder_id = device.id
+            ont_unit_id = device.ont_unit_id
+            cpe_device_id = device.cpe_device_id
+            device.ont_unit_id = None
+            device.is_active = False
+            try:
+                db.flush()
+                owner.ont_unit_id = ont_unit_id
+                if owner.cpe_device_id is None and cpe_device_id is not None:
+                    owner.cpe_device_id = cpe_device_id
+                db.flush()
+            except Exception:
+                db.rollback()
+                logger.debug(
+                    "Failed to move ONT link from TR-069 placeholder %s to "
+                    "GenieACS device %s",
+                    placeholder_id,
+                    owner_id,
+                    exc_info=True,
+                )
+            return
+        logger.info(
+            "Skipping GenieACS device id cache for TR-069 device %s because %s "
+            "is already assigned to active TR-069 device %s",
+            device.id,
+            clean_id,
+            owner.id,
+        )
+        return
+
     device.genieacs_device_id = clean_id[:255]
     try:
         db.flush()
     except Exception:
+        db.rollback()
         logger.debug(
             "Failed to cache GenieACS device id %s on TR-069 device %s",
             clean_id,
@@ -145,14 +185,14 @@ def _cache_genieacs_device_id(
         )
 
 
-def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[GenieACSClient, str] | None:
+def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[AcsClient, str] | None:
     resolved, _reason = resolve_genieacs_with_reason(db, ont)
     return resolved
 
 
 def resolve_genieacs_with_reason(
     db: Session, ont: OntUnit
-) -> tuple[tuple[GenieACSClient, str] | None, str]:
+) -> tuple[tuple[AcsClient, str] | None, str]:
     """Resolve GenieACS client and device ID for an ONT.
 
     Resolution priority:
@@ -177,7 +217,7 @@ def resolve_genieacs_with_reason(
     if linked and linked.acs_server_id and linked.genieacs_device_id:
         server = _resolve_server_by_id(db, str(linked.acs_server_id))
         if server:
-            client = GenieACSClient(server.base_url)
+            client = create_acs_client(server.base_url)
             return (
                 client,
                 linked.genieacs_device_id,
@@ -223,7 +263,7 @@ def resolve_genieacs_with_reason(
 
     serial = str(getattr(ont, "serial_number", "") or "").strip()
     for server, reason in servers_to_try:
-        client = GenieACSClient(server.base_url)
+        client = create_acs_client(server.base_url)
         try:
             found_device_id = (
                 _resolve_device_id_from_server(client, serial) if serial else None
@@ -248,7 +288,7 @@ def resolve_genieacs_with_reason(
 
 def resolve_genieacs_for_cpe(
     db: Session, cpe: CPEDevice
-) -> tuple[GenieACSClient, str] | None:
+) -> tuple[AcsClient, str] | None:
     """Resolve GenieACS client and device ID for a CPE device."""
     resolved, _reason = resolve_genieacs_for_cpe_with_reason(db, cpe)
     return resolved
@@ -256,7 +296,7 @@ def resolve_genieacs_for_cpe(
 
 def resolve_genieacs_for_cpe_with_reason(
     db: Session, cpe: CPEDevice
-) -> tuple[tuple[GenieACSClient, str] | None, str]:
+) -> tuple[tuple[AcsClient, str] | None, str]:
     """Resolve GenieACS client and device ID for a CPE device.
 
     Resolution tiers (simpler than ONT — no OLT hierarchy):
@@ -285,7 +325,7 @@ def resolve_genieacs_for_cpe_with_reason(
         if linked and linked.acs_server_id:
             server = _resolve_server_by_id(db, str(linked.acs_server_id))
             if server:
-                client = GenieACSClient(server.base_url)
+                client = create_acs_client(server.base_url)
                 if linked.genieacs_device_id:
                     return (
                         client,
@@ -320,7 +360,7 @@ def resolve_genieacs_for_cpe_with_reason(
         if cpe_tr069 and cpe_tr069.acs_server_id:
             server = _resolve_server_by_id(db, str(cpe_tr069.acs_server_id))
             if server:
-                client = GenieACSClient(server.base_url)
+                client = create_acs_client(server.base_url)
                 if cpe_tr069.genieacs_device_id:
                     return (
                         client,
@@ -343,7 +383,7 @@ def resolve_genieacs_for_cpe_with_reason(
     if default_server_id:
         server = _resolve_server_by_id(db, str(default_server_id))
         if server:
-            client = GenieACSClient(server.base_url)
+            client = create_acs_client(server.base_url)
             try:
                 device_id = _resolve_device_id_from_server(client, serial)
                 if device_id:

@@ -9,6 +9,7 @@ import pytest
 from app.services.genieacs import (
     GenieACSClient,
     GenieACSError,
+    GenieACSTaskRejectedError,
 )
 
 
@@ -426,6 +427,236 @@ class TestTaskOperations:
             )
             assert calls[1].args[0] == "DELETE"
             assert calls[2].args[0] == "POST"
+
+    def test_create_task_deletes_stale_pending_tasks_before_enqueue(
+        self, client, mock_response
+    ):
+        pending = [
+            {
+                "_id": "old-task",
+                "name": "refreshObject",
+                "device": "device1",
+                "objectName": "Device.WiFi",
+                "timestamp": "2024-01-01T00:00:00Z",
+            }
+        ]
+        accepted = {"_id": "new-task"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.side_effect = [
+                mock_response(json_data=pending),
+                mock_response(),
+                mock_response(json_data=accepted, text=json.dumps(accepted)),
+            ]
+
+            result = client.create_task(
+                "device1",
+                {"name": "reboot"},
+            )
+
+            assert result["_id"] == "new-task"
+            calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
+            assert calls[1].args[0] == "DELETE"
+            assert calls[2].args[0] == "POST"
+
+    def test_create_task_rejects_when_pending_limit_is_reached(
+        self, client, mock_response
+    ):
+        pending = [
+            {"_id": f"task-{idx}", "name": "reboot", "device": "device1"}
+            for idx in range(3)
+        ]
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=pending)
+            )
+
+            with pytest.raises(GenieACSTaskRejectedError, match="already has 3"):
+                client.create_task(
+                    "device1",
+                    {"name": "factoryReset"},
+                    max_pending_tasks=3,
+                )
+
+            calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
+            assert len(calls) == 1
+            assert calls[0].args[0] == "GET"
+
+    def test_create_task_dedupe_runs_before_pending_limit(self, client, mock_response):
+        pending = [
+            {"_id": "existing", "name": "reboot", "device": "device1"},
+            {"_id": "other-1", "name": "factoryReset", "device": "device1"},
+            {"_id": "other-2", "name": "getParameterValues", "device": "device1"},
+        ]
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=pending)
+            )
+
+            result = client.create_task(
+                "device1",
+                {"name": "reboot"},
+                max_pending_tasks=3,
+            )
+
+            assert result["_id"] == "existing"
+            assert result["alreadyPending"] is True
+            assert (
+                mock_client.return_value.__enter__.return_value.request.call_count == 1
+            )
+
+    def test_inform_safe_mode_rejects_refresh_when_device_has_backlog(
+        self, client, mock_response
+    ):
+        pending = [
+            {
+                "_id": "existing",
+                "name": "setParameterValues",
+                "device": "device1",
+                "timestamp": "2999-01-01T00:00:00Z",
+            }
+        ]
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=pending)
+            )
+
+            with pytest.raises(GenieACSTaskRejectedError, match="Inform-safe mode"):
+                client.refresh_object("device1", "Device.WiFi.")
+
+            assert (
+                mock_client.return_value.__enter__.return_value.request.call_count == 1
+            )
+
+    def test_inform_safe_mode_rejects_read_when_device_has_backlog(
+        self, client, mock_response
+    ):
+        pending = [
+            {
+                "_id": "existing",
+                "name": "setParameterValues",
+                "device": "device1",
+                "timestamp": "2999-01-01T00:00:00Z",
+            }
+        ]
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=pending)
+            )
+
+            with pytest.raises(GenieACSTaskRejectedError, match="Inform-safe mode"):
+                client.get_parameter_values(
+                    "device1",
+                    ["Device.DeviceInfo.SerialNumber"],
+                )
+
+            assert (
+                mock_client.return_value.__enter__.return_value.request.call_count == 1
+            )
+
+    def test_inform_safe_mode_allows_explicit_read_override(
+        self, client, mock_response
+    ):
+        pending = [
+            {
+                "_id": "existing",
+                "name": "setParameterValues",
+                "device": "device1",
+                "timestamp": "2999-01-01T00:00:00Z",
+            }
+        ]
+        accepted = {"_id": "read-task"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.side_effect = [
+                mock_response(json_data=pending),
+                mock_response(json_data=accepted, text=json.dumps(accepted)),
+            ]
+
+            result = client.get_parameter_values(
+                "device1",
+                ["Device.DeviceInfo.SerialNumber"],
+                allow_when_pending=True,
+            )
+
+            assert result["_id"] == "read-task"
+            calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
+            assert calls[0].args[0] == "GET"
+            assert calls[1].args[0] == "POST"
+
+    def test_inform_safe_mode_still_allows_config_write_with_backlog(
+        self, client, mock_response
+    ):
+        pending = [
+            {
+                "_id": "existing",
+                "name": "reboot",
+                "device": "device1",
+                "timestamp": "2999-01-01T00:00:00Z",
+            }
+        ]
+        accepted = {"_id": "write-task"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.side_effect = [
+                mock_response(json_data=pending),
+                mock_response(json_data=accepted, text=json.dumps(accepted)),
+            ]
+
+            result = client.set_parameter_values(
+                "device1",
+                {"Device.WiFi.SSID.1.SSID": "DotMac"},
+            )
+
+            assert result["_id"] == "write-task"
+            calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
+            assert calls[0].args[0] == "GET"
+            assert calls[1].args[0] == "POST"
+
+    def test_refresh_object_rejects_root_refresh_by_default(self, client):
+        with patch("httpx.Client") as mock_client:
+            with pytest.raises(GenieACSTaskRejectedError, match="Broad root"):
+                client.refresh_object("device1", "Device.")
+
+            assert (
+                mock_client.return_value.__enter__.return_value.request.call_count == 0
+            )
+
+    def test_refresh_object_allows_root_refresh_when_explicit(
+        self, client, mock_response
+    ):
+        accepted = {"_id": "root-refresh"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.side_effect = [
+                mock_response(json_data=[]),
+                mock_response(json_data=accepted, text=json.dumps(accepted)),
+            ]
+
+            result = client.refresh_object(
+                "device1",
+                "Device.",
+                allow_broad_refresh=True,
+            )
+
+            assert result["_id"] == "root-refresh"
+            calls = (
+                mock_client.return_value.__enter__.return_value.request.call_args_list
+            )
+            assert calls[0].args[0] == "GET"
+            assert calls[1].args[0] == "POST"
 
     def test_get_parameter_values(self, client, mock_response):
         """Test get_parameter_values creates correct task."""

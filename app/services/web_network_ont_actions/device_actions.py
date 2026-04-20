@@ -12,7 +12,7 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
-from app.services.acs_config_adapter import acs_config_adapter
+from app.services.acs_client import create_acs_config_writer
 from app.services.acs_service_intent_adapter import acs_service_intent_adapter
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -24,6 +24,10 @@ from app.services.web_network_ont_actions._common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _acs_config_writer():
+    return create_acs_config_writer()
 
 
 def execute_reboot(
@@ -175,14 +179,16 @@ def execute_omci_reboot(
     db: Session, ont_id: str, *, initiated_by: str | None = None
 ) -> tuple[bool, str]:
     """Reboot ONT via OMCI through the OLT."""
-    from app.services.network.olt_ssh_ont import reboot_ont_omci
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
 
-    ok, msg = reboot_ont_omci(olt, fsp, olt_ont_id)
+    reboot_result = get_protocol_adapter(olt).reboot_ont(fsp, olt_ont_id)
+    ok = reboot_result.success
+    msg = reboot_result.message
 
     # Emit audit event for reboot operation
     if ok:
@@ -221,7 +227,7 @@ def execute_enable_ipv6(
         NetworkOperationType.ont_enable_ipv6,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: acs_config_adapter.enable_ipv6_on_wan(db, ont_id),
+        lambda: _acs_config_writer().enable_ipv6_on_wan(db, ont_id),
         correlation_key=f"ont_enable_ipv6:{ont_id}",
         initiated_by=initiated_by,
     )
@@ -241,7 +247,7 @@ def execute_connection_request(
         NetworkOperationType.ont_send_conn_request,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: acs_config_adapter.send_connection_request(db, ont_id),
+        lambda: _acs_config_writer().send_connection_request(db, ont_id),
         correlation_key=f"ont_conn_req:{ont_id}",
         initiated_by=initiated_by,
     )

@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 import httpx
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.webhook import WebhookDelivery, WebhookDeliveryStatus
 from app.services.credential_crypto import decrypt_credential
+from app.services.db_session_adapter import db_session_adapter
+from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -52,110 +53,101 @@ def deliver_webhook(self, delivery_id: str):
     Args:
         delivery_id: UUID of the WebhookDelivery record
     """
-    session = SessionLocal()
     try:
-        delivery = session.get(WebhookDelivery, delivery_id)
-        if not delivery:
-            logger.error("WebhookDelivery not found: %s", delivery_id)
-            return
+        with db_session_adapter.session() as session:
+            delivery = session.get(WebhookDelivery, delivery_id)
+            if not delivery:
+                logger.error("WebhookDelivery not found: %s", delivery_id)
+                return
 
-        # Get endpoint
-        endpoint = delivery.endpoint
-        if not endpoint:
-            logger.error("Endpoint not found for delivery %s", delivery_id)
-            delivery.status = WebhookDeliveryStatus.failed
-            delivery.error = "Endpoint not found"
+            endpoint = delivery.endpoint
+            if not endpoint:
+                logger.error("Endpoint not found for delivery %s", delivery_id)
+                delivery.status = WebhookDeliveryStatus.failed
+                delivery.error = "Endpoint not found"
+                return
+
+            if not endpoint.is_active:
+                logger.info("Endpoint %s is inactive, skipping delivery", endpoint.id)
+                delivery.status = WebhookDeliveryStatus.failed
+                delivery.error = "Endpoint is inactive"
+                return
+
+            payload_json = json.dumps(delivery.payload or {})
+            headers = {
+                "Content-Type": "application/json",
+                "X-Webhook-Event": delivery.event_type.value,
+                "X-Webhook-Delivery-Id": str(delivery.id),
+            }
+
+            if endpoint.secret:
+                plaintext_secret = decrypt_credential(endpoint.secret) or endpoint.secret
+                signature = _compute_signature(payload_json, plaintext_secret)
+                headers["X-Webhook-Signature-256"] = f"sha256={signature}"
+
+            delivery.last_attempt_at = datetime.now(UTC)
+            endpoint_url = endpoint.url
+            attempt = delivery.attempt_count + 1
             session.commit()
-            return
 
-        if not endpoint.is_active:
-            logger.info("Endpoint %s is inactive, skipping delivery", endpoint.id)
-            delivery.status = WebhookDeliveryStatus.failed
-            delivery.error = "Endpoint is inactive"
-            session.commit()
-            return
-
-        # Prepare payload
-        payload_json = json.dumps(delivery.payload or {})
-
-        # Build headers
-        headers = {
-            "Content-Type": "application/json",
-            "X-Webhook-Event": delivery.event_type.value,
-            "X-Webhook-Delivery-Id": str(delivery.id),
-        }
-
-        # Add signature if secret is configured
-        if endpoint.secret:
-            plaintext_secret = decrypt_credential(endpoint.secret) or endpoint.secret
-            signature = _compute_signature(payload_json, plaintext_secret)
-            headers["X-Webhook-Signature-256"] = f"sha256={signature}"
-
-        # Update attempt timestamp only - count is incremented on failure
-        delivery.last_attempt_at = datetime.now(UTC)
-        session.commit()
-
-        # Make HTTP request
-        logger.info(
-            f"Delivering webhook to {endpoint.url} "
-            f"(attempt {delivery.attempt_count + 1})"
-        )
-
+        logger.info("Delivering webhook to %s (attempt %s)", endpoint_url, attempt)
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                endpoint.url,
+                endpoint_url,
                 content=payload_json,
                 headers=headers,
             )
 
-        # Record response
-        delivery.response_status = response.status_code
+        with db_session_adapter.session() as session:
+            delivery = session.get(WebhookDelivery, delivery_id)
+            if not delivery:
+                logger.error("WebhookDelivery disappeared after send: %s", delivery_id)
+                return
+            delivery.response_status = response.status_code
 
-        if response.is_success:
-            delivery.status = WebhookDeliveryStatus.delivered
-            delivery.delivered_at = datetime.now(UTC)
-            delivery.error = None
-            logger.info(
-                f"Webhook delivered successfully to {endpoint.url} "
-                f"(status {response.status_code})"
-            )
-        else:
-            # Increment attempt count on failure
-            delivery.attempt_count += 1
-            error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
-            delivery.error = error_msg
-            logger.warning(f"Webhook delivery failed to {endpoint.url}: {error_msg}")
-
-            # Retry if we have attempts remaining
-            if delivery.attempt_count < MAX_RETRIES:
-                retry_delay = RETRY_DELAYS[
-                    min(delivery.attempt_count - 1, len(RETRY_DELAYS) - 1)
-                ]
-                session.commit()
-                raise self.retry(countdown=retry_delay)
+            if response.is_success:
+                delivery.status = WebhookDeliveryStatus.delivered
+                delivery.delivered_at = datetime.now(UTC)
+                delivery.error = None
+                logger.info(
+                    "Webhook delivered successfully to %s (status %s)",
+                    endpoint_url,
+                    response.status_code,
+                )
             else:
-                delivery.status = WebhookDeliveryStatus.failed
-                logger.error(f"Webhook delivery exhausted retries to {endpoint.url}")
+                delivery.attempt_count += 1
+                error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
+                delivery.error = error_msg
+                logger.warning("Webhook delivery failed to %s: %s", endpoint_url, error_msg)
 
-        session.commit()
+                if delivery.attempt_count < MAX_RETRIES:
+                    retry_delay = RETRY_DELAYS[
+                        min(delivery.attempt_count - 1, len(RETRY_DELAYS) - 1)
+                    ]
+                    session.commit()
+                    raise self.retry(countdown=retry_delay)
+                delivery.status = WebhookDeliveryStatus.failed
+                logger.error("Webhook delivery exhausted retries to %s", endpoint_url)
 
     except (httpx.RequestError, httpx.TimeoutException) as exc:
         # Network/timeout error - update delivery and retry
         try:
-            delivery = session.get(WebhookDelivery, delivery_id)
-            if delivery:
-                delivery.attempt_count += 1
-                delivery.last_attempt_at = datetime.now(UTC)
-                delivery.error = str(exc)
+            with db_session_adapter.session() as session:
+                delivery = session.get(WebhookDelivery, delivery_id)
+                if delivery:
+                    delivery.attempt_count += 1
+                    delivery.last_attempt_at = datetime.now(UTC)
+                    delivery.error = str(exc)
 
-                if delivery.attempt_count >= MAX_RETRIES:
-                    delivery.status = WebhookDeliveryStatus.failed
-                    logger.error(
-                        f"Webhook delivery exhausted retries for {delivery_id}: {exc}"
-                    )
-                session.commit()
+                    if delivery.attempt_count >= MAX_RETRIES:
+                        delivery.status = WebhookDeliveryStatus.failed
+                        logger.error(
+                            "Webhook delivery exhausted retries for %s: %s",
+                            delivery_id,
+                            exc,
+                        )
         except Exception:
-            session.rollback()
+            logger.exception("Failed to update webhook delivery failure state")
 
         # Re-raise for Celery retry
         raise
@@ -163,17 +155,15 @@ def deliver_webhook(self, delivery_id: str):
     except Exception as exc:
         logger.exception("Unexpected error delivering webhook %s: %s", delivery_id, exc)
         try:
-            delivery = session.get(WebhookDelivery, delivery_id)
-            if delivery:
-                delivery.status = WebhookDeliveryStatus.failed
-                delivery.error = str(exc)
-                session.commit()
+            with db_session_adapter.session() as session:
+                delivery = session.get(WebhookDelivery, delivery_id)
+                if delivery:
+                    delivery.status = WebhookDeliveryStatus.failed
+                    delivery.error = str(exc)
         except Exception:
-            session.rollback()
+            logger.exception("Failed to update unexpected webhook failure state")
         raise
 
-    finally:
-        session.close()
 
 
 @celery_app.task(name="app.tasks.webhooks.retry_failed_deliveries")
@@ -183,10 +173,7 @@ def retry_failed_deliveries():
     This task finds failed deliveries that haven't exhausted retries
     and re-queues them for delivery.
     """
-    session = SessionLocal()
-    try:
-        from app.celery_app import enqueue_celery_task
-
+    with db_session_adapter.session() as session:
         # Find failed deliveries that might be retried
         # (failed but with fewer than max attempts)
         failed_deliveries = (
@@ -202,8 +189,8 @@ def retry_failed_deliveries():
             # Reset status to pending and requeue
             delivery.status = WebhookDeliveryStatus.pending
             session.commit()
-            enqueue_celery_task(
-                deliver_webhook,
+            enqueue_task(
+                "app.tasks.webhooks.deliver_webhook",
                 args=[str(delivery.id)],
                 correlation_id=f"webhook_delivery:{delivery.id}",
                 source="retry_failed_deliveries",
@@ -212,9 +199,3 @@ def retry_failed_deliveries():
 
         if requeued:
             logger.info("Requeued %s failed webhook deliveries", requeued)
-
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

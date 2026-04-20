@@ -2017,6 +2017,54 @@ function notifyNinVerification(detail) {
     window.dispatchEvent(new CustomEvent('show-toast', { detail }));
 }
 
+function ninStatusUrl(form) {
+    return form.action.replace(/\/verify-nin$/, '/nin-verification');
+}
+
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollNinVerification(form) {
+    const url = ninStatusUrl(form);
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+        await delay(2000);
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+            credentials: 'same-origin',
+        });
+        if (!response.ok) {
+            continue;
+        }
+        const payload = await response.json();
+        if (payload.status === 'success') {
+            notifyNinVerification({
+                type: 'success',
+                title: 'NIN verified',
+                message: `Match score: ${payload.match_score ?? 'N/A'}.`,
+            });
+            window.setTimeout(() => window.location.reload(), 1200);
+            return;
+        }
+        if (payload.status === 'failed') {
+            notifyNinVerification({
+                type: 'error',
+                title: 'NIN verification failed',
+                message: payload.failure_reason || 'Subscriber identity mismatch.',
+            });
+            window.setTimeout(() => window.location.reload(), 1200);
+            return;
+        }
+    }
+    notifyNinVerification({
+        type: 'info',
+        title: 'NIN verification still pending',
+        message: 'The lookup has been queued, but the worker has not returned a result yet.',
+    });
+    window.setTimeout(() => window.location.reload(), 1200);
+}
+
 document.addEventListener('submit', async (event) => {
     const form = event.target.closest('[data-nin-verification-form]');
     if (!form) {
@@ -2063,8 +2111,9 @@ document.addEventListener('submit', async (event) => {
         notifyNinVerification({
             type: 'success',
             title: 'NIN verification queued',
-            message: 'Check back shortly for the result.',
+            message: 'Waiting for the result...',
         });
+        await pollNinVerification(form);
     } catch (error) {
         notifyNinVerification({
             type: 'error',

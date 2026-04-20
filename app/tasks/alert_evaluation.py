@@ -10,7 +10,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.network_monitoring import (
     Alert,
     AlertEvent,
@@ -19,6 +18,7 @@ from app.models.network_monitoring import (
     AlertStatus,
     DeviceMetric,
 )
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +44,11 @@ def evaluate_alert_rules() -> dict[str, int]:
         Statistics dict with rules_checked, alerts_created, alerts_resolved.
     """
     logger.info("Starting alert rule evaluation")
-    db = SessionLocal()
     rules_checked = 0
     alerts_created = 0
     alerts_resolved = 0
 
-    try:
+    with db_session_adapter.session() as db:
         rules = list(
             db.scalars(select(AlertRule).where(AlertRule.is_active.is_(True))).all()
         )
@@ -72,22 +71,14 @@ def evaluate_alert_rules() -> dict[str, int]:
                 logger.exception("Error evaluating alert rule %s", rule.id)
                 errors += 1
 
-        db.commit()
-    except Exception:
-        db.rollback()
-        logger.exception("Alert rule evaluation failed")
-        raise
-    finally:
-        db.close()
-
-    stats = {
-        "rules_checked": rules_checked,
-        "alerts_created": alerts_created,
-        "alerts_resolved": alerts_resolved,
-        "errors": errors,
-    }
-    logger.info("Alert rule evaluation complete: %s", stats)
-    return stats
+        stats = {
+            "rules_checked": rules_checked,
+            "alerts_created": alerts_created,
+            "alerts_resolved": alerts_resolved,
+            "errors": errors,
+        }
+        logger.info("Alert rule evaluation complete: %s", stats)
+        return stats
 
 
 def _notify_alert(

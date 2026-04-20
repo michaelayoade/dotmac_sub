@@ -8,7 +8,7 @@ from typing import TypedDict
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def reseller_branding_context(_request: Request) -> dict[str, object]:
             "portal_name": portal_name,
         }
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         from app.services import web_admin as web_admin_service
 

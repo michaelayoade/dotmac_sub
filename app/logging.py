@@ -60,6 +60,13 @@ def configure_logging() -> None:
             }
         },
         "root": {"handlers": ["default"], "level": "INFO"},
+        "loggers": {
+            # Paramiko logs expected network/banner failures from remote devices
+            # as ERROR tracebacks before application code can handle them. Keep
+            # those details in our OLT SSH result messages instead of flooding
+            # app logs with transport internals.
+            "paramiko.transport": {"level": "CRITICAL", "propagate": False},
+        },
     }
     logging.config.dictConfig(logging_config)
 

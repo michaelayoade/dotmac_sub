@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.network import OLTDevice
+from app.services.db_session_adapter import db_session_adapter
+from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -43,62 +44,54 @@ def autofind_single_olt(olt_id: str) -> dict[str, int | str]:
     from app.services import web_network_ont_autofind as ont_autofind_service
 
     logger.info("Starting single OLT autofind for %s", olt_id)
-    db = SessionLocal()
     lock_key = _autofind_lock_key(olt_id)
-    lock_acquired = False
     try:
-        lock_acquired = bool(
-            db.execute(
-                text("SELECT pg_try_advisory_lock(:key)"),
-                {"key": lock_key},
-            ).scalar()
-        )
-        if not lock_acquired:
-            logger.warning(
-                "Skipping autofind for OLT %s: another autofind already in progress",
-                olt_id,
+        with db_session_adapter.advisory_lock(lock_key) as (db, lock_acquired):
+            if not lock_acquired:
+                logger.warning(
+                    "Skipping autofind for OLT %s: another autofind already in progress",
+                    olt_id,
+                )
+                return {
+                    "olt_id": olt_id,
+                    "created": 0,
+                    "updated": 0,
+                    "resolved": 0,
+                    "errors": 0,
+                    "skipped_due_to_lock": 1,
+                }
+
+            olt = db.get(OLTDevice, olt_id)
+            if not olt:
+                logger.warning("Autofind: OLT %s not found", olt_id)
+                return {
+                    "olt_id": olt_id,
+                    "created": 0,
+                    "updated": 0,
+                    "resolved": 0,
+                    "errors": 1,
+                    "error": "olt_not_found",
+                }
+
+            ok, message, stats = ont_autofind_service.sync_olt_autofind_candidates(
+                db, olt_id
             )
-            return {
-                "olt_id": olt_id,
-                "created": 0,
-                "updated": 0,
-                "resolved": 0,
-                "errors": 0,
-                "skipped_due_to_lock": 1,
-            }
 
-        olt = db.get(OLTDevice, olt_id)
-        if not olt:
-            logger.warning("Autofind: OLT %s not found", olt_id)
-            return {
-                "olt_id": olt_id,
-                "created": 0,
-                "updated": 0,
-                "resolved": 0,
-                "errors": 1,
-                "error": "olt_not_found",
-            }
-
-        ok, message, stats = ont_autofind_service.sync_olt_autofind_candidates(
-            db, olt_id
-        )
-
-        if ok:
-            logger.info(
-                "Autofind complete for OLT %s (%s): %s",
-                olt.name,
-                olt.mgmt_ip,
-                stats,
-            )
-            return {
-                "olt_id": olt_id,
-                "olt_name": olt.name,
-                "created": int(stats.get("created", 0)),
-                "updated": int(stats.get("updated", 0)),
-                "resolved": int(stats.get("resolved", 0)),
-                "errors": 0,
-            }
-        else:
+            if ok:
+                logger.info(
+                    "Autofind complete for OLT %s (%s): %s",
+                    olt.name,
+                    olt.mgmt_ip,
+                    stats,
+                )
+                return {
+                    "olt_id": olt_id,
+                    "olt_name": olt.name,
+                    "created": int(stats.get("created", 0)),
+                    "updated": int(stats.get("updated", 0)),
+                    "resolved": int(stats.get("resolved", 0)),
+                    "errors": 0,
+                }
             logger.warning(
                 "Autofind failed for OLT %s (%s): %s",
                 olt.name,
@@ -116,7 +109,6 @@ def autofind_single_olt(olt_id: str) -> dict[str, int | str]:
             }
     except Exception as e:
         logger.error("Autofind failed for OLT %s: %s", olt_id, e, exc_info=True)
-        db.rollback()
         return {
             "olt_id": olt_id,
             "created": 0,
@@ -125,16 +117,6 @@ def autofind_single_olt(olt_id: str) -> dict[str, int | str]:
             "errors": 1,
             "error": str(e),
         }
-    finally:
-        if lock_acquired:
-            try:
-                db.execute(
-                    text("SELECT pg_advisory_unlock(:key)"),
-                    {"key": lock_key},
-                )
-            except Exception:
-                logger.exception("Failed to release autofind lock for OLT %s", olt_id)
-        db.close()
 
 
 @celery_app.task(name="app.tasks.ont_autofind.discover_all_olt_autofind")
@@ -150,11 +132,14 @@ def discover_all_olt_autofind() -> dict[str, int]:
         Statistics dict with olts_dispatched count.
     """
     logger.info("Starting parallel OLT autofind orchestrator")
-    db = SessionLocal()
     try:
-        olts = list(
-            db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
-        )
+        with db_session_adapter.read_session() as db:
+            rows = db.execute(
+                select(OLTDevice.id, OLTDevice.name).where(
+                    OLTDevice.is_active.is_(True)
+                )
+            ).all()
+            olts = [(str(row.id), row.name) for row in rows]
 
         if not olts:
             logger.info("No active OLTs found for autofind")
@@ -162,18 +147,26 @@ def discover_all_olt_autofind() -> dict[str, int]:
 
         logger.info("Dispatching parallel autofind for %d OLTs", len(olts))
 
-        from app.celery_app import enqueue_celery_task
-
         dispatched = 0
-        for olt in olts:
-            enqueue_celery_task(
-                autofind_single_olt,
-                args=[str(olt.id)],
-                correlation_id=f"autofind:{olt.id}",
+        for olt_id_str, olt_name in olts:
+            dispatch = enqueue_task(
+                "app.tasks.ont_autofind.autofind_single_olt",
+                args=[olt_id_str],
+                correlation_id=f"autofind:{olt_id_str}",
                 source="discover_all_olt_autofind",
             )
+            if not dispatch.queued:
+                logger.warning(
+                    "Failed to dispatch autofind task for OLT %s (%s): %s",
+                    olt_name,
+                    olt_id_str,
+                    dispatch.error,
+                )
+                continue
             dispatched += 1
-            logger.debug("Dispatched autofind task for OLT %s (%s)", olt.name, olt.id)
+            logger.debug(
+                "Dispatched autofind task for OLT %s (%s)", olt_name, olt_id_str
+            )
 
         logger.info(
             "Parallel OLT autofind orchestrator complete: dispatched %d tasks",
@@ -182,7 +175,4 @@ def discover_all_olt_autofind() -> dict[str, int]:
         return {"olts_dispatched": dispatched}
     except Exception as e:
         logger.error("OLT autofind orchestrator failed: %s", e, exc_info=True)
-        db.rollback()
         raise
-    finally:
-        db.close()

@@ -150,10 +150,12 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
 
     assert result.success is True
     assert attempts == [
-        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey",
         "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
     ]
-    assert refresh_calls == [("device-1", "InternetGatewayDevice.", True)]
+    assert refresh_calls == [
+        ("device-1", "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", True)
+    ]
 
 
 def test_set_wifi_password_fails_when_device_cache_does_not_confirm(

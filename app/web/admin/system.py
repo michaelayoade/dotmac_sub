@@ -387,9 +387,9 @@ def system_import_wizard_submit(
                     "error": None,
                 },
             )
-            from app.celery_app import enqueue_celery_task
+            from app.services.queue_adapter import enqueue_task
 
-            enqueue_celery_task(
+            enqueue_task(
                 run_import_job,
                 kwargs={
                     "job_id": job_id,
@@ -639,9 +639,9 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
                 requested_by_email=requester_email,
                 row_count=row_count,
             )
-            from app.celery_app import enqueue_celery_task
+            from app.services.queue_adapter import enqueue_task
 
-            enqueue_celery_task(
+            enqueue_task(
                 run_export_job,
                 kwargs={"job_id": str(job["id"])},
                 correlation_id=f"system_export:{job['id']}",
@@ -2961,9 +2961,9 @@ def geocode_tool_start(
         filters=filters,
         actor_id=str(actor_id) if actor_id else None,
     )
-    from app.celery_app import enqueue_celery_task
+    from app.services.queue_adapter import enqueue_task
 
-    enqueue_celery_task(
+    enqueue_task(
         run_batch_geocode_job,
         kwargs={"job_id": job["job_id"]},
         correlation_id=f"batch_geocode:{job['job_id']}",

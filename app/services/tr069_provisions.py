@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.tr069 import Tr069AcsServer
-from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.acs_client import AcsClient, create_acs_client
+from app.services.genieacs import GenieACSError
 from app.services.tr069_web_audit import log_tr069_audit_event
 
 logger = logging.getLogger(__name__)
@@ -18,12 +19,12 @@ logger = logging.getLogger(__name__)
 class Tr069ProvisionManager:
     """Manager for GenieACS provision operations."""
 
-    def _get_client(self, db: Session, acs_server_id: str) -> GenieACSClient:
+    def _get_client(self, db: Session, acs_server_id: str) -> AcsClient:
         """Get a GenieACS client for the specified ACS server."""
         server = db.get(Tr069AcsServer, acs_server_id)
         if not server:
             raise ValueError(f"ACS server not found: {acs_server_id}")
-        return GenieACSClient(server.base_url)
+        return create_acs_client(server.base_url)
 
     def list(self, db: Session, acs_server_id: str) -> list[dict[str, Any]]:
         """List all provisions from GenieACS.

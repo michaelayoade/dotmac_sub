@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 
@@ -41,6 +42,7 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
         web_network_operations,
     )
     from app.services import olt_action_adapter as action_adapter_module
+    from app.services.network import olt_tr069_admin
     from app.services.olt_detail_adapter import olt_detail_adapter
 
     calls = {}
@@ -100,6 +102,11 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
             "olt": olt,
             "monitoring_device": monitoring_device,
             "adapter": "olt_detail",
+            "monitoring_resolution": {
+                "match_strategy": "mgmt_ip",
+                "authoritative": True,
+                "warning": None,
+            },
             "olt_vlans": ["vlan-1"],
             "available_vlans": ["vlan-2"],
             "olt_ip_pool_usage": ["pool-1"],
@@ -126,11 +133,20 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
         calls["firmware"] = (db, olt_id)
         return ["firmware"]
 
+    def fake_operational_acs_server(db, *, olt):
+        calls["operational_acs"] = (db, olt)
+        return "operational-acs"
+
     monkeypatch.setattr(web_network_core_devices, "olt_detail_page_data", fake_page_data)
     monkeypatch.setattr(
         web_network_operations, "build_operation_history", fake_operation_history
     )
     monkeypatch.setattr(audit_helpers, "build_audit_activities", fake_audit_activities)
+    monkeypatch.setattr(
+        olt_tr069_admin,
+        "resolve_operational_acs_server",
+        fake_operational_acs_server,
+    )
     monkeypatch.setattr(
         action_adapter_module.olt_action_adapter,
         "get_olt_firmware_images",
@@ -145,9 +161,11 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
     assert calls["operations"] == (db, "olt", "olt-1")
     assert calls["activities"] == (db, "olt", "olt-1")
     assert calls["firmware"] == (db, "olt-1")
+    assert calls["operational_acs"] == (db, olt)
     assert result["activities"] == ["activity"]
     assert result["operations"] == ["operation"]
     assert result["available_olt_firmware"] == ["firmware"]
+    assert result["operational_acs_server"] == "operational-acs"
     assert result["acs_prefill"] == {
         "cwmp_url": "https://acs.example/cwmp",
         "cwmp_username": "cwmp-user",
@@ -179,8 +197,93 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
     assert access_info["ssh"]["password_status"] == "Saved"
     assert access_info["snmp"]["credential_label"] == "Community"
     assert access_info["snmp"]["credential_status"] == "Saved"
+    assert result["monitoring_source"] == {
+        "linked": True,
+        "source": "network_device",
+        "match_strategy": "mgmt_ip",
+        "authoritative": True,
+        "warning": None,
+    }
     assert "private-community" not in repr(access_info)
     assert "snmp-user" not in repr(access_info)
+
+
+def test_olt_profile_adapter_reads_live_profiles(monkeypatch) -> None:
+    from app.services.network import olt_ssh_profiles
+    from app.services.olt_profile_adapter import olt_profile_adapter
+
+    olt = SimpleNamespace(id="olt-1", name="OLT 1")
+    db = SimpleNamespace(get=lambda _model, _id: olt)
+
+    monkeypatch.setattr(
+        olt_ssh_profiles,
+        "get_line_profiles",
+        lambda target: (True, "ok", [{"id": 1, "name": f"{target.name}-line"}]),
+    )
+    monkeypatch.setattr(
+        olt_ssh_profiles,
+        "get_service_profiles",
+        lambda target: (True, "ok", [{"id": 2, "name": f"{target.name}-service"}]),
+    )
+    monkeypatch.setattr(
+        olt_ssh_profiles,
+        "get_tr069_server_profiles",
+        lambda target: (True, "ok", [{"id": 3, "name": f"{target.name}-tr069"}]),
+    )
+
+    line_context = olt_profile_adapter.line_profiles_context(db, "olt-1")
+    tr069_context = olt_profile_adapter.tr069_profiles_context(db, "olt-1")
+
+    assert line_context["line_profiles"] == [{"id": 1, "name": "OLT 1-line"}]
+    assert line_context["service_profiles"] == [{"id": 2, "name": "OLT 1-service"}]
+    assert tr069_context["tr069_profiles"] == [{"id": 3, "name": "OLT 1-tr069"}]
+
+
+def test_olt_monitoring_resolution_reports_match_source() -> None:
+    from app.services.network.olt_monitoring_devices import (
+        resolve_linked_network_device,
+    )
+
+    class _ScalarResult:
+        def __init__(self, value):
+            self.value = value
+
+        def first(self):
+            return self.value
+
+    class _Db:
+        def __init__(self):
+            self.calls = 0
+
+        def scalars(self, _stmt):
+            self.calls += 1
+            return _ScalarResult(SimpleNamespace(name="monitoring-olt"))
+
+    resolution = resolve_linked_network_device(
+        _Db(),
+        SimpleNamespace(mgmt_ip="192.0.2.10", hostname="olt-1", name="OLT 1"),
+    )
+
+    assert resolution.device.name == "monitoring-olt"
+    assert resolution.match_strategy == "mgmt_ip"
+    assert resolution.authoritative is True
+    assert resolution.warning is None
+
+
+def test_olt_detail_routes_do_not_recompute_adapter_owned_context() -> None:
+    from app.web.admin import network_olts_inventory
+
+    for route_func in (
+        network_olts_inventory.olt_detail,
+        network_olts_inventory.olt_detail_preview,
+    ):
+        source = inspect.getsource(route_func)
+
+        assert "build_audit_activities" not in source
+        assert "build_operation_history" not in source
+        assert "get_olt_firmware_images" not in source
+        assert "_acs_prefill_from_olt" not in source
+        assert "resolve_operational_acs_server" not in source
 
 
 def test_olt_action_adapter_delegates_find_ont_and_running_config(monkeypatch) -> None:
@@ -224,6 +327,12 @@ def test_olt_action_adapter_delegates_find_ont_and_running_config(monkeypatch) -
         "HWTC1234",
         {"request": "request-context"},
     )
+
+
+def test_olt_action_adapter_rejects_unknown_legacy_passthrough() -> None:
+    from app.services.olt_action_adapter import olt_action_adapter
+
+    assert not hasattr(olt_action_adapter, "nonexistent_legacy_action")
 
 
 def test_olt_action_adapter_delegates_authorization_queue(monkeypatch) -> None:

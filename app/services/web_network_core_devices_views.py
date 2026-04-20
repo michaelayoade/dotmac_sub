@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import (
@@ -164,6 +164,21 @@ def _normalize_ont_port_display(board: object, port: object) -> str | None:
     return f"{board_text}/{port_text}"
 
 
+def _pon_port_display_value(pon_port: object | None, fallback: str = "-") -> str:
+    """Return a concise PON label with optional description."""
+    if pon_port is None:
+        return fallback
+    pon_number = (
+        str(getattr(pon_port, "port_number", ""))
+        if getattr(pon_port, "port_number", None) is not None
+        else _pon_port_table_label(getattr(pon_port, "name", None))
+    )
+    pon_description = str(getattr(pon_port, "notes", None) or "").strip()
+    if pon_description:
+        return f"{pon_number} - {pon_description}"
+    return str(pon_number or getattr(pon_port, "name", None) or fallback)
+
+
 def _display_ont_serial(value: object) -> str:
     """Return a user-facing ONT serial, decoding Huawei hex form when possible."""
     serial = str(value or "").strip()
@@ -190,6 +205,26 @@ def _ont_display_serial(ont: object) -> str:
     if _is_synthetic_ont_serial(raw_serial):
         return ""
     return _display_ont_serial(raw_serial) or raw_serial
+
+
+def _infer_ont_vendor_from_serial(serial: object) -> str:
+    text = str(serial or "").strip().upper()
+    if text.startswith("HWTC"):
+        return "Huawei"
+    if text.startswith("ZTEG"):
+        return "ZTE"
+    if text.startswith("ALCL"):
+        return "Nokia"
+    return ""
+
+
+def _ont_identity_label(ont: object, display_serial_number: str) -> str:
+    vendor = str(getattr(ont, "vendor", "") or "").strip()
+    model = str(getattr(ont, "model", "") or "").strip()
+    inferred_vendor = _infer_ont_vendor_from_serial(display_serial_number)
+    parts = [vendor or inferred_vendor, model]
+    label = " ".join(part for part in parts if part).strip()
+    return label or display_serial_number or "Unknown ONT"
 
 
 def _recent_acs_inform_by_ont_id(
@@ -858,19 +893,12 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     from app.models.network import OltConfigBackup
 
     # SNMP settings are stored on the linked core monitoring device record.
-    monitoring_device = None
-    if olt.mgmt_ip:
-        monitoring_device = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
-        ).first()
-    if monitoring_device is None and olt.hostname:
-        monitoring_device = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
-        ).first()
-    if monitoring_device is None and olt.name:
-        monitoring_device = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.name == olt.name).limit(1)
-        ).first()
+    from app.services.network.olt_monitoring_devices import (
+        resolve_linked_network_device,
+    )
+
+    monitoring_resolution = resolve_linked_network_device(db, olt)
+    monitoring_device = monitoring_resolution.device
 
     monitoring_data: dict[str, object] | None = None
     live_board_inventory: list[dict[str, object]] = []
@@ -1357,6 +1385,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "crit_threshold": crit,
         "olt_health": olt_health,
         "monitoring_device": monitoring_device,
+        "monitoring_resolution": {
+            "match_strategy": monitoring_resolution.match_strategy,
+            "authoritative": monitoring_resolution.authoritative,
+            "warning": monitoring_resolution.warning,
+        },
         "monitoring_data": monitoring_data,
         "resolved_device_info": resolved_device_info,
         "resolved_pon_ports_count": resolved_pon_ports_count,
@@ -1454,6 +1487,7 @@ def onts_list_page_data(
     pon_hint: str | None = None,
     zone_id: str | None = None,
     online_status: str | None = None,
+    authorization: str | None = None,
     offline_reason: str | None = None,
     signal_quality: str | None = None,
     search: str | None = None,
@@ -1485,6 +1519,11 @@ def onts_list_page_data(
     elif status_filter == "inactive":
         is_active = False
 
+    authorization_filter = (authorization or "authorized").strip().lower()
+    if authorization_filter not in {"authorized", "unauthorized", "all"}:
+        authorization_filter = "authorized"
+    query_authorization = None if authorization_filter == "all" else authorization_filter
+
     # Calculate pagination offset
     offset = (max(page, 1) - 1) * per_page
 
@@ -1498,6 +1537,7 @@ def onts_list_page_data(
         zone_id=zone_id,
         signal_quality=signal_quality,
         online_status=online_status,
+        authorization_status=query_authorization,
         vendor=vendor,
         search=search,
         is_active=is_active,
@@ -1518,6 +1558,7 @@ def onts_list_page_data(
             zone_id=zone_id,
             signal_quality=signal_quality,
             online_status=online_status,
+            authorization_status=query_authorization,
             vendor=vendor,
             search=search,
             is_active=is_active,
@@ -1609,6 +1650,7 @@ def onts_list_page_data(
         "zone_id": zone_id,
         "vendor": vendor,
         "search": search,
+        "authorization_status": query_authorization,
         "is_active": is_active,
         "order_by": order_by,
         "order_dir": order_dir,
@@ -1685,50 +1727,41 @@ def onts_list_page_data(
     assignment_info: dict[str, dict[str, str]] = {}
     serial_display_by_ont_id: dict[str, str] = {}
     hex_serial_by_ont_id: dict[str, str] = {}
+    displayed_ont_by_id: dict[str, object] = {}
+    serial_keys_by_ont_id: dict[str, str] = {}
+    serial_variants: set[str] = set()
     for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
+        ont_key = str(ont.id)
+        displayed_ont_by_id[ont_key] = ont
         display_serial = _ont_display_serial(ont)
         if display_serial:
-            serial_display_by_ont_id[str(ont.id)] = display_serial
+            serial_display_by_ont_id[ont_key] = display_serial
+            serial_keys_by_ont_id[ont_key] = display_serial.upper()
+            serial_variants.add(display_serial.upper())
             # Compute hex serial for display from the real serial, not a synthetic key.
             hex_serial = encode_to_hex_serial(display_serial)
             if hex_serial:
-                hex_serial_by_ont_id[str(ont.id)] = hex_serial
+                hex_serial_by_ont_id[ont_key] = hex_serial
+                serial_variants.add(hex_serial.upper())
+            raw_serial = str(getattr(ont, "serial_number", "") or "").strip()
+            if raw_serial:
+                serial_variants.add(raw_serial.upper())
             continue
         mac_value = str(getattr(ont, "mac_address", "") or "").strip()
         if mac_value:
-            serial_display_by_ont_id[str(ont.id)] = mac_value
+            serial_display_by_ont_id[ont_key] = mac_value
         else:
-            serial_display_by_ont_id[str(ont.id)] = "-"
+            serial_display_by_ont_id[ont_key] = "-"
     if ont_ids:
-        assign_rows = db.scalars(
-            select(OntAssignment)
-            .options(
-                joinedload(OntAssignment.subscriber),
-                joinedload(OntAssignment.pon_port).joinedload(PonPort.olt),
-            )
-            .where(OntAssignment.active.is_(True))
-            .where(OntAssignment.ont_unit_id.in_(ont_ids))
-        ).all()
-        for assignment in assign_rows:
-            pon_port = assignment.pon_port
+        def assignment_table_info(assignment: object) -> dict[str, str]:
+            pon_port = getattr(assignment, "pon_port", None)
             olt = pon_port.olt if pon_port else None
-            pon_number = (
-                str(pon_port.port_number)
-                if pon_port and pon_port.port_number is not None
-                else _pon_port_table_label(getattr(pon_port, "name", None))
-            )
-            pon_description = str(getattr(pon_port, "notes", None) or "").strip()
-            pon_display = (
-                f"{pon_number} - {pon_description}"
-                if pon_description
-                else str(pon_number or getattr(pon_port, "name", None) or "-")
-            )
-            subscriber = assignment.subscriber
-            assignment_info[str(assignment.ont_unit_id)] = {
+            subscriber = getattr(assignment, "subscriber", None)
+            return {
                 "olt_name": getattr(olt, "name", None),
                 "olt_id": str(olt.id) if olt else "",
                 "pon_port_name": getattr(pon_port, "name", None),
-                "pon_port_display": pon_display,
+                "pon_port_display": _pon_port_display_value(pon_port),
                 "subscriber_name": _subscriber_display_name(subscriber)
                 if subscriber
                 else "",
@@ -1741,6 +1774,86 @@ def onts_list_page_data(
                     if subscriber
                     else ""
                 ),
+            }
+
+        assignment_filters = [OntAssignment.ont_unit_id.in_(ont_ids)]
+        if serial_variants:
+            assignment_filters.append(func.upper(OntUnit.serial_number).in_(serial_variants))
+        assign_rows = db.scalars(
+            select(OntAssignment)
+            .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+            .options(
+                joinedload(OntAssignment.ont_unit),
+                joinedload(OntAssignment.subscriber),
+                joinedload(OntAssignment.pon_port).joinedload(PonPort.olt),
+            )
+            .where(OntAssignment.active.is_(True))
+            .where(or_(*assignment_filters))
+        ).all()
+        assignment_info_by_serial: dict[str, dict[str, str]] = {}
+        for assignment in assign_rows:
+            info = assignment_table_info(assignment)
+            assigned_ont_key = str(assignment.ont_unit_id)
+            if assigned_ont_key in displayed_ont_by_id:
+                assignment_info[assigned_ont_key] = info
+            assigned_ont = getattr(assignment, "ont_unit", None)
+            assigned_serial_key = _ont_display_serial(assigned_ont).upper()
+            if assigned_serial_key:
+                assignment_info_by_serial[assigned_serial_key] = info
+
+        for ont_key, serial_key in serial_keys_by_ont_id.items():
+            if ont_key not in assignment_info and serial_key in assignment_info_by_serial:
+                assignment_info[ont_key] = {
+                    **assignment_info_by_serial[serial_key],
+                    "assignment_source": "normalized_serial",
+                }
+
+        direct_pon_names = {
+            fsp
+            for ont in displayed_onts
+            if (fsp := _normalize_ont_port_display(ont.board, ont.port))
+        }
+        direct_olt_ids = {
+            ont.olt_device_id
+            for ont in displayed_onts
+            if getattr(ont, "olt_device_id", None)
+        }
+        direct_pon_by_key: dict[tuple[str, str], PonPort] = {}
+        if direct_olt_ids and direct_pon_names:
+            direct_pon_rows = db.scalars(
+                select(PonPort)
+                .options(joinedload(PonPort.olt))
+                .where(PonPort.olt_id.in_(direct_olt_ids))
+                .where(PonPort.name.in_(direct_pon_names))
+            ).all()
+            direct_pon_by_key = {
+                (str(row.olt_id), str(row.name)): row for row in direct_pon_rows
+            }
+
+        for ont in displayed_onts:
+            ont_key = str(getattr(ont, "id", ""))
+            if not ont_key:
+                continue
+            olt = getattr(ont, "olt_device", None)
+            ont_olt_id = str(
+                getattr(ont, "olt_device_id", None) or getattr(olt, "id", "") or ""
+            )
+            if not ont_olt_id:
+                continue
+            pon_fsp = _normalize_ont_port_display(ont.board, ont.port)
+            pon_port = direct_pon_by_key.get((ont_olt_id, pon_fsp or ""))
+            existing_info = assignment_info.get(ont_key, {})
+            assignment_info[ont_key] = {
+                **existing_info,
+                "olt_name": str(getattr(olt, "name", None) or ""),
+                "olt_id": ont_olt_id,
+                "pon_port_name": str(getattr(pon_port, "name", None) or pon_fsp or ""),
+                "pon_port_display": _pon_port_display_value(pon_port, pon_fsp or "-"),
+                "subscriber_name": existing_info.get("subscriber_name", ""),
+                "subscriber_customer_url": existing_info.get(
+                    "subscriber_customer_url", ""
+                ),
+                "topology_source": "ont",
             }
 
     # Pagination metadata
@@ -1776,6 +1889,7 @@ def onts_list_page_data(
             "pon_hint": pon_hint or "",
             "zone_id": zone_id or "",
             "online_status": online_status or "",
+            "authorization": authorization_filter,
             "signal_quality": signal_quality or "",
             "search": search or "",
             "vendor": vendor or "",
@@ -1919,6 +2033,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     display_serial_number = _ont_display_serial(ont)
     display_serial_label = display_serial_number or "-"
+    identity_label = _ont_identity_label(ont, display_serial_number)
 
     # Build network path info (OLT → PON Port → Splitter → ONT)
     network_path: dict[str, object] = {}
@@ -2079,10 +2194,13 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
             None
         )
-    last_config_summary = _ont_last_config_summary(ont)
     observed_runtime_summary = _acs_observed_runtime_summary(
         acs_observed_intent,
         ont=ont,
+    )
+    last_config_summary = _ont_last_config_summary(
+        ont,
+        acs_observed_intent=acs_observed_intent,
     )
     connected_wifi_clients = observed_runtime_summary.get("wifi_clients")
     connected_customer_devices = observed_runtime_summary.get("customer_devices")
@@ -2099,6 +2217,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "ont": ont,
         "display_serial_number": display_serial_number,
         "display_serial_label": display_serial_label,
+        "identity_label": identity_label,
         "assignment": assignment,
         "past_assignments": past_assignments,
         "signal_info": signal_info,
@@ -2149,24 +2268,17 @@ def _acs_observed_runtime_summary(
     lan_hosts = observed.get("lan_hosts", [])
     lan_hosts = lan_hosts if isinstance(lan_hosts, list) else []
 
-    snapshot = getattr(ont, "tr069_last_snapshot", None)
     wifi_clients = _safe_int(wifi.get("connected_clients"))
     if wifi_clients is None:
-        wifi_clients = _wifi_client_count(
-            snapshot,
-            getattr(ont, "observed_wifi_clients", None),
-        )
+        wifi_clients = _safe_int(getattr(ont, "observed_wifi_clients", None))
 
     customer_devices = None
     if lan_hosts:
-        customer_devices = _lan_host_connected_count({"lan_hosts": lan_hosts})
+        customer_devices = _lan_host_connected_count(lan_hosts)
     if customer_devices is None:
         customer_devices = _safe_int(lan.get("connected_hosts"))
     if customer_devices is None:
-        customer_devices = _lan_host_connected_count(
-            snapshot,
-            getattr(ont, "observed_lan_hosts", None),
-        )
+        customer_devices = _safe_int(getattr(ont, "observed_lan_hosts", None))
     if customer_devices is None:
         customer_devices = wifi_clients
     fetched_at = acs_observed_intent.get("fetched_at")
@@ -2204,99 +2316,68 @@ def _acs_observed_runtime_summary(
     }
 
 
-def _snapshot_text(section: object, *keys: str) -> str:
-    if not isinstance(section, dict):
-        return ""
-    for key in keys:
-        value = section.get(key)
-        if isinstance(value, dict) and "_value" in value:
-            value = value.get("_value")
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _snapshot_count(section: object, *keys: str) -> int | None:
-    text = _snapshot_text(section, *keys)
-    if not text:
-        return None
-    try:
-        return int(text)
-    except (TypeError, ValueError):
-        return None
-
-
-def _lan_host_connected_count(snapshot: object, fallback: object = None) -> int | None:
+def _lan_host_connected_count(hosts: object) -> int | None:
     """Return the best known customer-device count behind an ONT."""
-    if isinstance(snapshot, dict):
-        lan_hosts = snapshot.get("lan_hosts")
-        if isinstance(lan_hosts, list):
-            connected = 0
-            for host in lan_hosts:
-                if not isinstance(host, dict):
-                    continue
-                active = host.get("active")
-                if active is None:
-                    active = host.get("Active")
-                if isinstance(active, dict) and "_value" in active:
-                    active = active.get("_value")
-                active_text = str(active).strip().lower()
-                if active_text in {"false", "0", "no", "inactive", "down"}:
-                    continue
-                if not any(
-                    str(host.get(key) or "").strip()
-                    for key in (
-                        "host_name",
-                        "HostName",
-                        "ip_address",
-                        "IPAddress",
-                        "mac_address",
-                        "MACAddress",
-                    )
-                ):
-                    continue
-                connected += 1
-            return connected
-
-        lan = snapshot.get("lan")
-        count = _snapshot_count(lan, "Connected Hosts")
-        if count is not None:
-            return count
-
-    try:
-        return int(fallback) if fallback is not None else None
-    except (TypeError, ValueError):
+    if not isinstance(hosts, list):
         return None
+    connected = 0
+    for host in hosts:
+        if not isinstance(host, dict):
+            continue
+        active = host.get("active")
+        active_text = str(active).strip().lower()
+        if active_text in {"false", "0", "no", "inactive", "down"}:
+            continue
+        if not any(
+            str(host.get(key) or "").strip()
+            for key in (
+                "host_name",
+                "ip_address",
+                "mac_address",
+                "HostName",
+                "IPAddress",
+                "MACAddress",
+            )
+        ):
+            continue
+        connected += 1
+    return connected
 
 
-def _wifi_client_count(snapshot: object, fallback: object = None) -> int | None:
-    """Return the best known WiFi client count for an ONT."""
-    if isinstance(snapshot, dict):
-        wireless = snapshot.get("wireless")
-        count = _snapshot_count(wireless, "Connected Clients")
-        if count is not None:
-            return count
-
-    try:
-        return int(fallback) if fallback is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
-def _snapshot_time(
-    snapshot: dict[str, object], fallback: object = None
-) -> datetime | None:
-    fetched_at = snapshot.get("fetched_at")
-    if isinstance(fetched_at, str) and fetched_at:
-        try:
-            return datetime.fromisoformat(fetched_at)
-        except ValueError:
-            pass
-    return fallback if isinstance(fallback, datetime) else None
+def _active_ethernet_port_count(ports: object) -> tuple[int | None, int | None]:
+    if not isinstance(ports, list):
+        return None, None
+    active = 0
+    for port in ports:
+        if not isinstance(port, dict):
+            continue
+        status = str(port.get("link_status") or port.get("Status") or "").strip().lower()
+        if status == "up":
+            active += 1
+    return active, len(ports)
 
 
-def _ont_last_config_summary(ont: object) -> dict[str, object]:
+def _display_bool(value: object) -> str:
+    if value is True:
+        return "Enabled"
+    if value is False:
+        return "Disabled"
+    return str(value or "")
+
+
+def _format_observed_time(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    if value:
+        return str(value)
+    return "unknown time"
+
+
+def _ont_last_config_summary(
+    ont: object,
+    *,
+    acs_observed_intent: dict[str, object],
+) -> dict[str, object]:
     ont_id = str(getattr(ont, "id", ""))
     empty_summary = {
         "has_snapshot": False,
@@ -2322,41 +2403,45 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
         "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
         "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
     }
-    snapshot = getattr(ont, "tr069_last_snapshot", None)
-    if not isinstance(snapshot, dict) or not snapshot:
+    observed = acs_observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    system = observed.get("system", {})
+    system = system if isinstance(system, dict) else {}
+    wan = observed.get("wan", {})
+    wan = wan if isinstance(wan, dict) else {}
+    lan = observed.get("lan", {})
+    lan = lan if isinstance(lan, dict) else {}
+    wifi = observed.get("wifi", {})
+    wifi = wifi if isinstance(wifi, dict) else {}
+    ethernet_ports = observed.get("ethernet_ports", [])
+    lan_hosts = observed.get("lan_hosts", [])
+
+    fetched_at = acs_observed_intent.get("fetched_at")
+    has_snapshot = bool(
+        acs_observed_intent.get("available")
+        or fetched_at
+        or system
+        or wan
+        or lan
+        or wifi
+        or ethernet_ports
+        or lan_hosts
+    )
+    if not has_snapshot:
         return empty_summary
 
-    system = snapshot.get("system")
-    wan = snapshot.get("wan")
-    lan = snapshot.get("lan")
-    wireless = snapshot.get("wireless")
-    ethernet_ports = snapshot.get("ethernet_ports")
-    lan_hosts = snapshot.get("lan_hosts")
+    wifi_clients = _safe_int(wifi.get("connected_clients"))
+    lan_host_count = _lan_host_connected_count(lan_hosts)
+    if lan_host_count is None:
+        lan_host_count = _safe_int(lan.get("connected_hosts"))
+    active_ports, port_count = _active_ethernet_port_count(ethernet_ports)
 
-    wifi_clients = _snapshot_count(wireless, "Connected Clients")
-    lan_host_count = _lan_host_connected_count(snapshot)
-
-    port_count = len(ethernet_ports) if isinstance(ethernet_ports, list) else None
-    active_ports = None
-    if isinstance(ethernet_ports, list):
-        active_ports = 0
-        for port in ethernet_ports:
-            if not isinstance(port, dict):
-                continue
-            status = _snapshot_text(port, "link_status", "Status").lower()
-            if status == "up":
-                active_ports += 1
-
-    wan_ip = _snapshot_text(wan, "WAN IP", "ExternalIPAddress", "IPAddress")
-    wan_status = _snapshot_text(wan, "Status", "ConnectionStatus")
-    pppoe_user = _snapshot_text(wan, "PPPoE Username", "Username")
-    lan_ip = _snapshot_text(lan, "LAN IP", "IP Address", "IPAddress")
-    dhcp_enabled = _snapshot_text(lan, "DHCP Enabled", "DHCPServerEnable")
-    ssid = _snapshot_text(wireless, "SSID")
-    fetched_at = _snapshot_time(
-        snapshot,
-        getattr(ont, "tr069_last_snapshot_at", None),
-    )
+    wan_ip = str(wan.get("wan_ip") or "").strip()
+    wan_status = str(wan.get("status") or "").strip()
+    pppoe_user = str(wan.get("pppoe_username") or "").strip()
+    lan_ip = str(lan.get("lan_ip") or "").strip()
+    dhcp_enabled = _display_bool(lan.get("dhcp_enabled"))
+    ssid = str(wifi.get("ssid") or "").strip()
     metrics = [
         {
             "label": "WAN IP",
@@ -2417,13 +2502,11 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
         "has_snapshot": True,
         "empty_message": "",
         "empty_hint": "",
-        "fetched_at": fetched_at,
-        "fetched_at_display": fetched_at.strftime("%Y-%m-%d %H:%M")
-        if fetched_at
-        else "unknown time",
-        "source": str(snapshot.get("source") or "TR-069 cache"),
-        "manufacturer": _snapshot_text(system, "Manufacturer"),
-        "firmware": _snapshot_text(system, "Firmware"),
+        "fetched_at": fetched_at if isinstance(fetched_at, datetime) else None,
+        "fetched_at_display": _format_observed_time(fetched_at),
+        "source": str(acs_observed_intent.get("source") or "TR-069 cache"),
+        "manufacturer": system.get("manufacturer") or "",
+        "firmware": system.get("firmware") or "",
         "wan_ip": wan_ip,
         "wan_status": wan_status,
         "pppoe_user": pppoe_user,

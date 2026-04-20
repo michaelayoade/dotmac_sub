@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import or_
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.notification import (
     Notification,
     NotificationChannel,
@@ -14,6 +13,7 @@ from app.models.notification import (
 )
 from app.services import email as email_service
 from app.services import sms as sms_service
+from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations.connectors import whatsapp as whatsapp_service
 
 logger = logging.getLogger(__name__)
@@ -151,8 +151,7 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> int:
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")
 def deliver_notification_queue() -> dict[str, int]:
     """Process queued notifications and retry failed ones."""
-    session = SessionLocal()
-    try:
+    with db_session_adapter.session() as session:
         result = _deliver_notification_queue_stats(session)
         logger.info(
             "Notification queue processed: delivered=%d, retried=%d, failed=%d",
@@ -161,8 +160,3 @@ def deliver_notification_queue() -> dict[str, int]:
             result["failed"],
         )
         return result
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

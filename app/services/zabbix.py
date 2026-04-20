@@ -18,6 +18,8 @@ ALLOWED_METHODS = [
     "history.get",
     "trend.get",
     "trigger.get",
+    "discoveryrule.get",
+    "itemprototype.get",
     # Write methods for host management
     "host.create",
     "host.update",
@@ -64,7 +66,7 @@ class ZabbixClient:
         return cls(
             api_url=os.getenv(
                 "ZABBIX_API_URL",
-                "http://160.119.127.193/zabbix/api_jsonrpc.php",
+                "http://zabbix-web:8080/api_jsonrpc.php",
             ),
             api_token=os.getenv("ZABBIX_API_TOKEN", ""),
             timeout=timeout,

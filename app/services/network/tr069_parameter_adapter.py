@@ -20,7 +20,6 @@ For new code, use:
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -872,7 +871,7 @@ def prepare_parameter_values(
     vendor: str | None = None,
     model: str | None = None,
     instance_index: int = 1,
-    db: "Any | None" = None,
+    db: Any | None = None,
 ) -> list[TypedParameterValue]:
     """Prepare parameter values with resolved paths and types.
 
@@ -979,7 +978,7 @@ def validate_parameters(param_values: dict[str, Any]) -> ValidationResult:
 
         # Check writability
         if not info.access.writable:
-            errors[canonical_name] = f"Parameter is read-only"
+            errors[canonical_name] = "Parameter is read-only"
             continue
 
         # Validate value

@@ -74,11 +74,11 @@ def get_encryption_key() -> bytes | None:
 
     if not key_str:
         try:
-            from app.db import SessionLocal
             from app.models.domain_settings import SettingDomain
+            from app.services.db_session_adapter import db_session_adapter
             from app.services.settings_spec import resolve_value
 
-            session = SessionLocal()
+            session = db_session_adapter.create_session()
             try:
                 raw = resolve_value(
                     session, SettingDomain.auth, "credential_encryption_key"

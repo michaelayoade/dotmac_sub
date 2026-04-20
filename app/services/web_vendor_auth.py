@@ -7,8 +7,8 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
 from app.services import vendor_portal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ templates = Jinja2Templates(directory="templates")
 
 
 def vendor_login_page(request: Request, error: str | None = None):
-    with SessionLocal() as db:
+    with db_session_adapter.create_session() as db:
         context = vendor_portal.get_context(
             db, request.cookies.get(vendor_portal.SESSION_COOKIE_NAME)
         )
@@ -142,7 +142,7 @@ def vendor_refresh(request: Request):
     if not session_token:
         return Response(status_code=401)
 
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         session = vendor_portal.refresh_session(session_token, db)
         if not session:

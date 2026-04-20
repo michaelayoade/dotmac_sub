@@ -7,9 +7,13 @@ ONT optical signal quality.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,7 @@ def classify_signal(
 def get_signal_thresholds(
     db: Session,
     *,
-    olt: "OLTDevice | None" = None,
+    olt: OLTDevice | None = None,
 ) -> tuple[float, float]:
     """Load signal thresholds with per-OLT/model override support.
 
@@ -96,14 +100,14 @@ def get_signal_thresholds(
 
 def _get_threshold_override(
     db: Session,
-    olt: "OLTDevice",
+    olt: OLTDevice,
 ) -> tuple[float, float] | None:
     """Check for per-OLT or per-model threshold overrides.
 
     Returns:
         Tuple of (warning, critical) thresholds, or None if no override found.
     """
-    from app.models.network import OLTDevice, SignalThresholdOverride
+    from app.models.network import SignalThresholdOverride
 
     try:
         # 1. Check for per-OLT override

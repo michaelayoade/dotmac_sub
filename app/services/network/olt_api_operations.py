@@ -84,6 +84,120 @@ def queue_authorize_ont(
     )
 
 
+def _serialize_autofind_entry(entry: object) -> dict[str, object]:
+    return {
+        "fsp": getattr(entry, "fsp", ""),
+        "serial_number": getattr(entry, "serial_number", ""),
+        "serial_hex": getattr(entry, "serial_hex", None),
+        "vendor_id": getattr(entry, "vendor_id", None),
+        "model": getattr(entry, "model", None),
+        "software_version": getattr(entry, "software_version", None),
+        "mac": getattr(entry, "mac", None),
+    }
+
+
+def _serialize_service_port(entry: object) -> dict[str, object]:
+    return {
+        "index": getattr(entry, "index", None),
+        "vlan_id": getattr(entry, "vlan_id", None),
+        "ont_id": getattr(entry, "ont_id", None),
+        "gem_index": getattr(entry, "gem_index", None),
+        "flow_type": getattr(entry, "flow_type", None),
+        "state": getattr(entry, "state", None),
+    }
+
+
+def _serialize_profile(entry: object) -> dict[str, object]:
+    return {
+        "profile_id": getattr(entry, "profile_id", None),
+        "name": getattr(entry, "name", None),
+    }
+
+
+def _serialize_tr069_profile(entry: object) -> dict[str, object]:
+    return {
+        "profile_id": getattr(entry, "profile_id", None),
+        "name": getattr(entry, "name", None),
+        "acs_url": getattr(entry, "acs_url", None),
+        "username": getattr(entry, "acs_username", None),
+    }
+
+
+def discover_onts(db: Session, olt_id: str) -> OltApiWriteResult:
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    olt = load_olt(db, olt_id)
+    result = get_protocol_adapter(olt).get_autofind_onts()
+    entries = result.data.get("autofind_entries", [])
+    data = [_serialize_autofind_entry(entry) for entry in entries]
+    return OltApiWriteResult(result.success, result.message, {"entries": data})
+
+
+def list_service_ports(db: Session, olt_id: str, *, fsp: str) -> OltApiWriteResult:
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    olt = load_olt(db, olt_id)
+    result = get_protocol_adapter(olt).get_service_ports(fsp)
+    entries = result.data.get("service_ports", [])
+    data = [_serialize_service_port(entry) for entry in entries]
+    return OltApiWriteResult(result.success, result.message, {"entries": data})
+
+
+def list_service_ports_for_ont(
+    db: Session,
+    olt_id: str,
+    *,
+    fsp: str,
+    ont_id: int,
+) -> OltApiWriteResult:
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    olt = load_olt(db, olt_id)
+    result = get_protocol_adapter(olt).get_service_ports_for_ont(fsp, ont_id)
+    entries = result.data.get("service_ports", [])
+    data = [_serialize_service_port(entry) for entry in entries]
+    return OltApiWriteResult(result.success, result.message, {"entries": data})
+
+
+def get_line_profiles(db: Session, olt_id: str) -> OltApiWriteResult:
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    olt = load_olt(db, olt_id)
+    result = get_protocol_adapter(olt).get_line_profiles()
+    entries = (result.data or {}).get("profiles", [])
+    return OltApiWriteResult(
+        result.success,
+        result.message,
+        {"entries": [_serialize_profile(entry) for entry in entries]},
+    )
+
+
+def get_service_profiles(db: Session, olt_id: str) -> OltApiWriteResult:
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    olt = load_olt(db, olt_id)
+    result = get_protocol_adapter(olt).get_service_profiles()
+    entries = (result.data or {}).get("profiles", [])
+    return OltApiWriteResult(
+        result.success,
+        result.message,
+        {"entries": [_serialize_profile(entry) for entry in entries]},
+    )
+
+
+def get_tr069_profiles(db: Session, olt_id: str) -> OltApiWriteResult:
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    olt = load_olt(db, olt_id)
+    result = get_protocol_adapter(olt).get_tr069_profiles()
+    entries = (result.data or {}).get("profiles", [])
+    return OltApiWriteResult(
+        result.success,
+        result.message,
+        {"entries": [_serialize_tr069_profile(entry) for entry in entries]},
+    )
+
+
 def authorize_ont_resilient(
     db: Session,
     olt_id: str,
@@ -155,23 +269,22 @@ def create_service_port(
     user_vlan: int | None = None,
     tag_transform: str = "translate",
 ) -> OltApiWriteResult:
-    from app.services.network.olt_ssh_service_ports import create_single_service_port
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.olt_write_reconciliation import (
         verify_service_port_present,
     )
 
     olt = load_olt(db, olt_id)
-    ok, message, _port_index = create_single_service_port(
-        olt,
+    result = get_protocol_adapter(olt).create_service_port(
         fsp,
         ont_id,
-        gem_index,
-        vlan_id,
+        gem_index=gem_index,
+        vlan_id=vlan_id,
         user_vlan=user_vlan,
         tag_transform=tag_transform,
     )
-    if not ok:
-        return OltApiWriteResult(False, message)
+    if not result.success:
+        return OltApiWriteResult(False, result.message)
 
     verification = verify_service_port_present(
         olt,
@@ -191,17 +304,15 @@ def delete_service_port(
     *,
     index: int,
 ) -> OltApiWriteResult:
-    from app.services.network.olt_ssh_service_ports import (
-        delete_service_port as ssh_delete_service_port,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.olt_write_reconciliation import (
         verify_service_port_index_absent,
     )
 
     olt = load_olt(db, olt_id)
-    ok, message = ssh_delete_service_port(olt, index)
-    if not ok:
-        return OltApiWriteResult(False, message)
+    result = get_protocol_adapter(olt).delete_service_port(index)
+    if not result.success:
+        return OltApiWriteResult(False, result.message)
 
     verification = verify_service_port_index_absent(olt, service_port_index=index)
     if not verification.success:
@@ -219,27 +330,27 @@ def create_tr069_profile(
     password: str,
     inform_interval: int,
 ) -> OltApiWriteResult:
-    from app.services.network.olt_ssh import create_tr069_server_profile
-    from app.services.network.olt_ssh_profiles import get_tr069_server_profiles
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     olt = load_olt(db, olt_id)
-    ok, message = create_tr069_server_profile(
-        olt,
+    adapter = get_protocol_adapter(olt)
+    result = adapter.create_tr069_profile(
         profile_name=profile_name,
         acs_url=acs_url,
         username=username,
         password=password,
         inform_interval=inform_interval,
     )
-    if not ok:
-        return OltApiWriteResult(False, message)
+    if not result.success:
+        return OltApiWriteResult(False, result.message)
 
-    read_ok, read_msg, profiles = get_tr069_server_profiles(olt)
-    if not read_ok:
+    readback = adapter.get_tr069_profiles()
+    if not readback.success:
         return OltApiWriteResult(
             False,
-            f"OLT accepted the TR-069 profile write, but readback failed: {read_msg}",
+            f"OLT accepted the TR-069 profile write, but readback failed: {readback.message}",
         )
+    profiles = (readback.data or {}).get("profiles", [])
     for profile in profiles:
         if getattr(profile, "name", None) != profile_name:
             continue
@@ -280,3 +391,16 @@ def run_config_backup(db: Session, olt_id: str) -> OltApiWriteResult:
 
 def test_ssh_connection(db: Session, olt_id: str, *, request: Request | None = None):
     return olt_operations.test_olt_ssh_connection(db, olt_id, request=request)
+
+
+def run_cli_command(
+    db: Session,
+    olt_id: str,
+    *,
+    command: str,
+    request: Request | None = None,
+) -> OltApiWriteResult:
+    ok, message, output = olt_operations.execute_cli_command(
+        db, olt_id, command, request=request
+    )
+    return OltApiWriteResult(ok, message, {"output": output})

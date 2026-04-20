@@ -8,6 +8,7 @@ from app.services.network.ont_status import (
     apply_resolved_status_for_model,
     apply_status_snapshot,
     ont_has_acs_management,
+    reconcile_device_state,
     resolve_acs_online_window_minutes_for_model,
     resolve_ont_status_for_model,
     resolve_ont_status_snapshot,
@@ -132,6 +133,52 @@ def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
     # Unknown OLT and no recent ACS inform means no observed status.
     assert snapshot.effective_status == OnuOnlineStatus.unknown
     assert snapshot.effective_status_source == OntStatusSource.derived
+
+
+def test_reconcile_device_state_prefers_recent_acs_over_olt_offline(
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    ont = OntUnit(
+        serial_number="ONT-RECON-ACS",
+        online_status=OnuOnlineStatus.offline,
+        acs_last_inform_at=now,
+    )
+    db_session.add(ont)
+    db_session.commit()
+    db_session.refresh(ont)
+
+    result = reconcile_device_state(db_session, ont.id, now=now)
+
+    assert result.conflict is True
+    assert result.reason == "acs_recent_inform_overrides_olt_offline"
+    assert result.authoritative_source == OntStatusSource.acs
+    assert result.recommended_action == "refresh_olt_status"
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.acs
+
+
+def test_reconcile_device_state_prefers_olt_online_over_stale_acs(
+    db_session,
+) -> None:
+    now = datetime.now(UTC)
+    ont = OntUnit(
+        serial_number="ONT-RECON-OLT",
+        online_status=OnuOnlineStatus.online,
+        acs_last_inform_at=now - timedelta(hours=2),
+    )
+    db_session.add(ont)
+    db_session.commit()
+    db_session.refresh(ont)
+
+    result = reconcile_device_state(db_session, ont.id, now=now)
+
+    assert result.conflict is True
+    assert result.reason == "olt_online_overrides_stale_acs"
+    assert result.authoritative_source == OntStatusSource.olt
+    assert result.recommended_action == "send_connection_request"
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.olt
 
 
 def test_list_advanced_filters_by_persisted_effective_status(db_session) -> None:

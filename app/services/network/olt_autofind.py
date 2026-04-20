@@ -11,13 +11,13 @@ from starlette.requests import Request
 from app.models.network import (
     GponChannel,
     OLTDevice,
+    OntAuthorizationStatus,
     OntUnit,
     OnuOnlineStatus,
     PonType,
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services import tr069 as tr069_service
-from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_assignment_alignment import (
@@ -85,6 +85,7 @@ def persist_authorized_ont_inventory(
     ont.port = port
     ont.external_id = str(ont_id)
     ont.online_status = OnuOnlineStatus.unknown
+    ont.authorization_status = OntAuthorizationStatus.authorized
     ont.tr069_acs_server_id = olt.tr069_acs_server_id
     ont.last_sync_source = "olt_ssh_authorize"
     ont.last_sync_at = now
@@ -117,19 +118,21 @@ def persist_authorized_ont_inventory(
     db.commit()
 
 
-def get_autofind_onts(
-    db: Session, olt_id: str
-) -> tuple[bool, str, list[olt_ssh_service.AutofindEntry]]:
+def get_autofind_onts(db: Session, olt_id: str) -> tuple[bool, str, list[object]]:
     """Retrieve unregistered ONTs from an OLT's autofind table via SSH."""
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found", []
-    return olt_ssh_service.get_autofind_onts(olt)
+    result = get_protocol_adapter(olt).get_autofind_onts()
+    entries = result.data.get("autofind_entries", [])
+    return result.success, result.message, list(entries)
 
 
 def get_autofind_onts_audited(
     db: Session, olt_id: str, *, request: Request | None = None
-) -> tuple[bool, str, list[olt_ssh_service.AutofindEntry]]:
+) -> tuple[bool, str, list[object]]:
     ok, message, entries = get_autofind_onts(db, olt_id)
     log_olt_audit_event(
         db,

@@ -82,16 +82,18 @@ class SqlAlchemySessionAdapter:
         Yields:
             Tuple of (session, acquired) where acquired indicates if lock was obtained.
         """
+        # Validate timeout to prevent injection (defense in depth)
+        if not isinstance(timeout_ms, int) or timeout_ms < 0 or timeout_ms > 300000:
+            timeout_ms = 5000
+
         db = SessionLocal()
         acquired = False
         lock_fn = "pg_try_advisory_lock_shared" if shared else "pg_try_advisory_lock"
         unlock_fn = "pg_advisory_unlock_shared" if shared else "pg_advisory_unlock"
         try:
             # Set statement timeout to prevent indefinite blocking
-            db.execute(
-                text("SET LOCAL statement_timeout = :timeout"),
-                {"timeout": f"{timeout_ms}ms"},
-            )
+            # Note: SET statements require literal values, not parameters
+            db.execute(text(f"SET LOCAL statement_timeout = '{timeout_ms}ms'"))
             acquired = bool(
                 db.execute(text(f"SELECT {lock_fn}(:key)"), {"key": lock_key}).scalar()
             )

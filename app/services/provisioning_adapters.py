@@ -11,7 +11,7 @@ import routeros_api
 from ncclient import manager
 
 from app.models.provisioning import ProvisioningVendor
-from app.services.genieacs import GenieACSClient
+from app.services.acs_client import create_acs_client
 from app.services.network.ont_action_common import set_and_verify
 from app.services.response import ListResponseMixin
 
@@ -335,7 +335,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         headers = dict(connector.get("headers") or {})
         headers.update(config.get("headers") or {})
         timeout = config.get("timeout_sec") or connector.get("timeout_sec") or 30.0
-        client = GenieACSClient(base_url, timeout=float(timeout), headers=headers)
+        client = create_acs_client(base_url, timeout=float(timeout), headers=headers)
 
         connection_request = bool(config.get("connection_request", True))
         results: list[dict] = []

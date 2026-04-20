@@ -3,7 +3,7 @@
 import logging
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,7 @@ def run_enforcement() -> dict[str, int]:
     )
 
     logger.info("Starting provisioning enforcement run")
-    db = SessionLocal()
-    try:
+    with db_session_adapter.session() as db:
         stats = ProvisioningEnforcement.run_full_enforcement(db)
         gaps = stats.get("gaps_detected", {})
         total_gaps = sum(gaps.values())
@@ -27,8 +26,3 @@ def run_enforcement() -> dict[str, int]:
             stats,
         )
         return {"total_gaps": total_gaps, **stats}
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()

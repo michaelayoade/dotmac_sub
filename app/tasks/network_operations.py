@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.network_operation import NetworkOperation, NetworkOperationStatus
+from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,7 @@ def cleanup_old_operations() -> dict[str, int]:
         Statistics dict with purged, stale_marked, errors.
     """
     logger.info("Starting network operations cleanup")
-    db = SessionLocal()
-    try:
+    with db_session_adapter.session() as db:
         cutoff = datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)
         stale_cutoff = datetime.now(UTC) - timedelta(hours=_STALE_RUNNING_HOURS)
 
@@ -93,13 +92,6 @@ def cleanup_old_operations() -> dict[str, int]:
                 op.operation_type.value if op.operation_type else "unknown",
             )
 
-        db.commit()
         result = {"purged": purged, "stale_marked": stale_marked, "errors": 0}
         logger.info("Network operations cleanup complete: %s", result)
         return result
-    except Exception as e:
-        logger.error("Network operations cleanup failed: %s", e)
-        db.rollback()
-        raise
-    finally:
-        db.close()

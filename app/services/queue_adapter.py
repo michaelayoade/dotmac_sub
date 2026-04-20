@@ -64,15 +64,22 @@ class CeleryQueueAdapter:
             apply_async_kwargs["eta"] = message.eta
 
         try:
+            enqueue_kwargs: dict[str, object] = {
+                "args": list(message.args),
+                "correlation_id": message.correlation_id,
+                "source": message.source,
+            }
+            if message.kwargs:
+                enqueue_kwargs["kwargs"] = message.kwargs
+            if message.request_id is not None:
+                enqueue_kwargs["request_id"] = message.request_id
+            if message.actor_id is not None:
+                enqueue_kwargs["actor_id"] = message.actor_id
+            if message.headers:
+                enqueue_kwargs["headers"] = message.headers
             result = enqueue_func(
                 message.task_name,
-                args=message.args,
-                kwargs=message.kwargs,
-                correlation_id=message.correlation_id,
-                source=message.source,
-                request_id=message.request_id,
-                actor_id=message.actor_id,
-                headers=message.headers,
+                **enqueue_kwargs,
                 **apply_async_kwargs,
             )
         except Exception as exc:
@@ -123,4 +130,3 @@ def enqueue_task(
             headers=dict(headers or {}),
         )
     )
-

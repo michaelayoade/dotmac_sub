@@ -364,65 +364,6 @@ def olts_list_page_data(
     )
     monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
 
-    # Keep OLT list statuses fresh without forcing full live polls on every request.
-    try:
-        from app.models.domain_settings import SettingDomain
-        from app.services import web_network_core_runtime as core_runtime_service
-        from app.services.settings_spec import resolve_value
-
-        ping_interval = int(
-            str(
-                resolve_value(
-                    db,
-                    SettingDomain.network_monitoring,
-                    "core_device_ping_interval_seconds",
-                )
-                or 120
-            )
-        )
-        snmp_interval = int(
-            str(
-                resolve_value(
-                    db,
-                    SettingDomain.network_monitoring,
-                    "core_device_snmp_walk_interval_seconds",
-                )
-                or 300
-            )
-        )
-
-        by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
-        by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
-        by_name = {d.name: d for d in monitoring_devices if d.name}
-        linked_devices: list[NetworkDevice] = []
-        seen_device_ids: set[str] = set()
-        for olt in all_olts:
-            linked = None
-            if olt.mgmt_ip:
-                linked = by_mgmt_ip.get(olt.mgmt_ip)
-            if linked is None and olt.hostname:
-                linked = by_hostname.get(olt.hostname)
-            if linked is None and olt.name:
-                linked = by_name.get(olt.name)
-            if linked and str(linked.id) not in seen_device_ids:
-                seen_device_ids.add(str(linked.id))
-                linked_devices.append(linked)
-
-        if linked_devices:
-            core_runtime_service.refresh_stale_devices_health(
-                db,
-                linked_devices,
-                ping_interval_seconds=max(ping_interval, 10),
-                snmp_interval_seconds=max(snmp_interval, 30),
-                include_snmp=True,
-                force=False,
-                max_workers=8,
-            )
-            db.expire_all()
-            monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
-    except Exception:
-        logger.exception("Failed to refresh stale OLT-linked monitoring statuses.")
-
     by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
     by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
     by_name = {d.name: d for d in monitoring_devices if d.name}

@@ -406,11 +406,7 @@ def _configure_management_ip_for_authorization(
     from sqlalchemy import desc, select
 
     from app.models.network import MgmtIpMode, OntProvisioningProfile, Vlan
-    from app.services.network.olt_ssh_ont import (
-        configure_ont_internet_config,
-        configure_ont_iphost,
-    )
-    from app.services.network.olt_ssh_service_ports import create_single_service_port
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     # Get the OLT's provisioning profile (is_default first, then most recent)
     stmt = (
@@ -518,8 +514,8 @@ def _configure_management_ip_for_authorization(
     # Create management service port before configuring IP
     # Uses gemport 2 which is the standard for management/TR-069 traffic
     mgmt_gemport = 2
-    sp_ok, sp_msg, _sp_index = create_single_service_port(
-        olt,
+    adapter = get_protocol_adapter(olt)
+    sp_result = adapter.create_service_port(
         fsp,
         ont_id_on_olt,
         gem_index=mgmt_gemport,
@@ -527,10 +523,10 @@ def _configure_management_ip_for_authorization(
         user_vlan=int(mgmt_vlan_tag),
         tag_transform="translate",
     )
-    if not sp_ok:
+    if not sp_result.success:
         # Check if it's an idempotent case (port already exists)
         # Huawei returns "Service virtual port has existed already" or similar
-        sp_msg_lower = sp_msg.lower()
+        sp_msg_lower = sp_result.message.lower()
         if (
             "already exist" in sp_msg_lower
             or "existed already" in sp_msg_lower
@@ -548,9 +544,9 @@ def _configure_management_ip_for_authorization(
                 "Failed to create management service-port for ONT on %s %s: %s",
                 olt.name,
                 fsp,
-                sp_msg,
+                sp_result.message,
             )
-            return False, f"Management service-port creation failed: {sp_msg}"
+            return False, f"Management service-port creation failed: {sp_result.message}"
     else:
         logger.info(
             "Created management service-port VLAN %d GEM %d for ONT %d on %s %s",
@@ -563,24 +559,24 @@ def _configure_management_ip_for_authorization(
 
     # Configure management IP via OLT SSH
     if mgmt_ip_mode == "static_ip" and allocated_ip and subnet_mask and gateway:
-        iphost_ok, iphost_msg = configure_ont_iphost(
-            olt,
+        iphost_result = adapter.configure_iphost(
             fsp,
             ont_id_on_olt,
-            vlan_id=int(mgmt_vlan_tag),
-            ip_mode="static",
+            vlan=int(mgmt_vlan_tag),
+            mode="static",
             ip_address=allocated_ip,
-            subnet=subnet_mask,
+            subnet_mask=subnet_mask,
             gateway=gateway,
         )
     else:
-        iphost_ok, iphost_msg = configure_ont_iphost(
-            olt,
+        iphost_result = adapter.configure_iphost(
             fsp,
             ont_id_on_olt,
-            vlan_id=int(mgmt_vlan_tag),
-            ip_mode="dhcp",
+            vlan=int(mgmt_vlan_tag),
+            mode="dhcp",
         )
+    iphost_ok = iphost_result.success
+    iphost_msg = iphost_result.message
 
     if not iphost_ok:
         logger.warning(
@@ -631,22 +627,21 @@ def _configure_management_ip_for_authorization(
             fsp,
             internet_config_ip_index,
         )
-        ic_ok, ic_msg = configure_ont_internet_config(
-            olt,
+        ic_result = adapter.configure_internet_config(
             fsp,
             ont_id_on_olt,
             ip_index=int(internet_config_ip_index),
         )
-        if not ic_ok:
+        if not ic_result.success:
             logger.warning(
                 "Internet-config activation failed for ONT on %s %s: %s",
                 olt.name,
                 fsp,
-                ic_msg,
+                ic_result.message,
             )
             # Continue anyway - iphost config succeeded
-            return True, f"{iphost_msg} (internet-config failed: {ic_msg})"
-        return True, f"{iphost_msg}; {ic_msg}"
+            return True, f"{iphost_msg} (internet-config failed: {ic_result.message})"
+        return True, f"{iphost_msg}; {ic_result.message}"
 
     return True, iphost_msg
 
@@ -910,7 +905,7 @@ def authorize_autofind_ont(
             OLT authorization. Callers that continue into inline network
             provisioning should set this to False.
     """
-    from app.services.network import olt_ssh_ont as olt_ssh_ont_service
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.olt_write_reconciliation import (
         verify_ont_absent,
         verify_ont_authorized,
@@ -1118,13 +1113,12 @@ def authorize_autofind_ont(
     # Handle force reauthorize: delete existing registration first
     if force_reauthorize:
         force_started_at = monotonic()
-        find_ok, find_msg, existing = olt_ssh_ont_service.find_ont_by_serial(
-            olt, serial_number
-        )
-        if not find_ok:
+        find_result = get_protocol_adapter(olt).find_ont_by_serial(serial_number)
+        existing = find_result.data.get("registration") if find_result.success else None
+        if not find_result.success:
             return _fail(
                 "Find existing ONT registration",
-                f"Failed to search for existing registration: {find_msg}",
+                f"Failed to search for existing registration: {find_result.message}",
                 step_started_at=force_started_at,
             )
         if existing:
@@ -1135,13 +1129,14 @@ def authorize_autofind_ont(
                 existing.fsp,
                 existing.onu_id,
             )
-            delete_ok, delete_msg = olt_ssh_ont_service.deauthorize_ont(
-                olt, existing.fsp, existing.onu_id
+            delete_result = get_protocol_adapter(olt).deauthorize_ont(
+                existing.fsp,
+                existing.onu_id,
             )
-            if not delete_ok:
+            if not delete_result.success:
                 return _fail(
                     "Delete existing ONT registration",
-                    f"Failed to delete existing registration on {existing.fsp}: {delete_msg}",
+                    f"Failed to delete existing registration on {existing.fsp}: {delete_result.message}",
                     step_started_at=force_started_at,
                 )
             absence = verify_ont_absent(
@@ -2035,7 +2030,7 @@ def run_post_authorization_follow_up(
 
     try:
         if olt is not None:
-            from app.services.network.olt_ssh_ont import bind_tr069_server_profile
+            from app.services.network.olt_protocol_adapters import get_protocol_adapter
             from app.services.network.olt_tr069_admin import (
                 ensure_tr069_profile_for_linked_acs,
             )
@@ -2045,9 +2040,13 @@ def run_post_authorization_follow_up(
             )
             _add_step("Verify DotMac ACS profile", profile_ok, profile_msg)
             if profile_ok and profile_id is not None:
-                bind_ok, bind_msg = bind_tr069_server_profile(
-                    olt, fsp, ont_id_on_olt, profile_id=profile_id
+                bind_result = get_protocol_adapter(olt).bind_tr069_profile(
+                    fsp,
+                    ont_id_on_olt,
+                    profile_id=profile_id,
                 )
+                bind_ok = bind_result.success
+                bind_msg = bind_result.message
             else:
                 bind_ok = False
                 bind_msg = profile_msg
@@ -2155,9 +2154,9 @@ def queue_post_authorization_follow_up(
     db.commit()
 
     try:
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
+        enqueue_task(
             run_post_authorization_follow_up_task,
             args=[
                 str(op.id),
@@ -2267,9 +2266,9 @@ def queue_authorize_autofind_ont(
     db.commit()
 
     try:
-        from app.celery_app import enqueue_celery_task
+        from app.services.queue_adapter import enqueue_task
 
-        enqueue_celery_task(
+        enqueue_task(
             run_authorize_autofind_ont_task,
             args=[
                 str(op.id),

@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.domain_settings import SettingDomain
 from app.services import email as email_service
 from app.services import settings_spec
 from app.services import web_system_import_wizard as import_wizard_service
+from app.services.db_session_adapter import db_session_adapter
 
 
 def _job_progress_percent(update: dict[str, Any]) -> int:
@@ -40,7 +40,7 @@ def run_import_job(
     notify_email: str | None = None,
 ) -> dict[str, Any]:
     started_at = datetime.now(UTC).isoformat()
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
     try:
         import_wizard_service.upsert_job(
             session,
@@ -74,7 +74,7 @@ def run_import_job(
         if phase != "completed" and pct <= tracker["last_pct"]:
             return
         tracker["last_pct"] = pct
-        progress_session = SessionLocal()
+        progress_session = db_session_adapter.create_session()
         try:
             import_wizard_service.upsert_job(
                 progress_session,
@@ -95,7 +95,7 @@ def run_import_job(
         finally:
             progress_session.close()
 
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
     try:
         result = import_wizard_service.execute_import(
             session,
@@ -149,7 +149,7 @@ def run_import_job(
         return {"job_id": job_id, "status": "completed", "result": result}
     except Exception as exc:
         session.rollback()
-        failed_session = SessionLocal()
+        failed_session = db_session_adapter.create_session()
         try:
             import_wizard_service.upsert_job(
                 failed_session,

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
@@ -122,6 +122,21 @@ def _read_until_prompt(
             return buffer
 
 
+def _derive_prompt_regex(output: str, fallback: str) -> str:
+    """Return a prompt regex anchored to the actual device prompt.
+
+    Huawei running configs use bare ``#`` lines as section separators, so a loose
+    ``[>#]`` prompt matcher truncates config capture at the first separator.
+    """
+    for raw_line in reversed(output.splitlines()):
+        line = raw_line.strip()
+        if not line or line == "#":
+            continue
+        if re.search(r"[>#]\s*$", line):
+            return rf"(?:^|\r?\n){re.escape(line)}\s*$"
+    return fallback
+
+
 def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
     """SSH into an OLT and run the version command."""
     transport, channel, policy = _open_shell(olt)
@@ -203,7 +218,10 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     # Use wider PTY and set terminal type to avoid control sequence issues
     channel.get_pty(term="dumb", width=400, height=50)
     channel.invoke_shell()
-    _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
+    initial_output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
+    prompt_regex = _derive_prompt_regex(initial_output, policy.prompt_regex)
+    if prompt_regex != policy.prompt_regex:
+        policy = replace(policy, prompt_regex=prompt_regex)
     channel.send("screen-length 0 temporary\n")
     _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
     return transport, channel, policy
@@ -283,12 +301,120 @@ def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
     return _parse_huawei_autofind_legacy(output)
 
 
+def _cached_autofind_entries(olt: OLTDevice) -> list[AutofindEntry] | None:
+    from app.services.network.olt_read_cache import olt_cache
+
+    cached = olt_cache.get_autofind(str(olt.id))
+    if cached is None:
+        return None
+    try:
+        return [AutofindEntry(**entry) for entry in cached]
+    except (TypeError, ValueError) as exc:
+        logger.debug(
+            "Ignoring invalid cached autofind entries for OLT %s: %s",
+            olt.id,
+            exc,
+        )
+        olt_cache.invalidate(str(olt.id), "autofind")
+        return None
+
+
+def _cache_autofind_entries(olt: OLTDevice, entries: list[AutofindEntry]) -> None:
+    from app.services.network.olt_read_cache import olt_cache
+
+    olt_cache.set_autofind(str(olt.id), [asdict(entry) for entry in entries])
+
+
 def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
     """SSH into OLT and retrieve unregistered ONTs from autofind table.
 
     Returns:
         Tuple of (success, message, list of autofind entries).
     """
+    cached_entries = _cached_autofind_entries(olt)
+    if cached_entries is not None:
+        count = len(cached_entries)
+        msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''} (cached)"
+        return True, msg, cached_entries
+
+    try:
+        from app.services.network.olt_ssh_pool import pooled_ssh_connection
+
+        ssh_context = pooled_ssh_connection(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", []
+
+    try:
+        with ssh_context as (channel, policy):
+            # Enter enable mode and set terminal length
+            channel.send("enable\n")
+            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            channel.send("screen-length 0 temporary\n")
+            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+
+            channel.send("display ont autofind all\n")
+            # Huawei prompts "{ <cr>||<K> }:" — send CR to confirm
+            initial = _read_until_prompt(
+                channel, rf"{policy.prompt_regex}|<cr>", timeout_sec=10
+            )
+            if "<cr>" in initial:
+                channel.send("\n")
+                output = _read_until_prompt(
+                    channel, policy.prompt_regex, timeout_sec=15
+                )
+            else:
+                output = initial
+            entries = _parse_huawei_autofind(output)
+            _cache_autofind_entries(olt, entries)
+            count = len(entries)
+            msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
+            return True, msg, entries
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True
+        )
+        return False, f"Error reading autofind: {exc}", []
+
+
+def _cached_service_ports(olt: OLTDevice, fsp: str) -> list[ServicePortEntry] | None:
+    from app.services.network.olt_read_cache import olt_cache
+
+    cached = olt_cache.get_service_ports(str(olt.id), fsp)
+    if cached is None:
+        return None
+    try:
+        return [ServicePortEntry(**entry) for entry in cached]
+    except (TypeError, ValueError) as exc:
+        logger.debug(
+            "Ignoring invalid cached service-port entries for OLT %s %s: %s",
+            olt.id,
+            fsp,
+            exc,
+        )
+        olt_cache.invalidate(str(olt.id), "service_ports")
+        return None
+
+
+def _cache_service_ports(
+    olt: OLTDevice, fsp: str, entries: list[ServicePortEntry]
+) -> None:
+    from app.services.network.olt_read_cache import olt_cache
+
+    olt_cache.set_service_ports(str(olt.id), fsp, [asdict(entry) for entry in entries])
+
+
+def _invalidate_olt_read_cache(
+    olt: OLTDevice,
+    *operations: str,
+) -> None:
+    from app.services.network.olt_read_cache import olt_cache
+
+    for operation in operations:
+        olt_cache.invalidate(str(olt.id), operation)
+
+
+def _legacy_get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
+    """Compatibility path retained for tests that monkeypatch _open_shell directly."""
     try:
         transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
@@ -524,27 +650,41 @@ def get_service_ports(
     if not ok:
         return False, err, []
 
+    cached_entries = _cached_service_ports(olt, fsp)
+    if cached_entries is not None:
+        return (
+            True,
+            f"Found {len(cached_entries)} service-ports on {fsp} (cached)",
+            cached_entries,
+        )
+
     try:
-        transport, channel, policy = _open_shell(olt)
+        from app.services.network.olt_ssh_pool import pooled_ssh_connection
+
+        ssh_context = pooled_ssh_connection(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        with ssh_context as (channel, policy):
+            channel.send("enable\n")
+            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            channel.send("screen-length 0 temporary\n")
+            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
 
-        output = _run_huawei_paged_cmd(channel, f"display service-port port {fsp}")
-        entries = _parse_service_port_table(output)
-        return True, f"Found {len(entries)} service-ports on {fsp}", entries
-    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+            output = _run_huawei_paged_cmd(
+                channel,
+                f"display service-port port {fsp}",
+                prompt=policy.prompt_regex,
+            )
+            entries = _parse_service_port_table(output)
+            _cache_service_ports(olt, fsp, entries)
+            return True, f"Found {len(entries)} service-ports on {fsp}", entries
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
         logger.error(
             "Error reading service-ports from OLT %s: %s", olt.name, exc, exc_info=True
         )
         return False, f"Error: {exc}", []
-    finally:
-        transport.close()
 
 
 def create_service_ports(
@@ -624,6 +764,7 @@ def create_service_ports(
         if errors:
             msg += f" ({errors} failed)"
         logger.info(msg)
+        _invalidate_olt_read_cache(olt, "service_ports", "running_config")
         return errors == 0, msg
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
@@ -890,21 +1031,30 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
 
     Returns (success, message, config_text).
     """
+    from app.services.network.olt_read_cache import olt_cache
+
+    cached_config = olt_cache.get(str(olt.id), "running_config")
+    if isinstance(cached_config, str) and cached_config.strip():
+        return True, "Configuration retrieved (cached)", cached_config
+
     try:
-        transport, channel, policy = _open_shell(olt)
+        from app.services.network.olt_ssh_pool import pooled_ssh_connection
+
+        ssh_context = pooled_ssh_connection(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", ""
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        with ssh_context as (channel, policy):
+            channel.send("enable\n")
+            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
 
-        output = _run_huawei_paged_cmd(
-            channel,
-            "display current-configuration",
-            prompt=policy.prompt_regex,
-            timeout_sec=60,
-        )
+            output = _run_huawei_paged_cmd(
+                channel,
+                "display current-configuration",
+                prompt=policy.prompt_regex,
+                timeout_sec=60,
+            )
 
         # Strip echoed command and trailing prompt
         lines = output.splitlines()
@@ -920,14 +1070,17 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
                 "Config output too short — device may not support this command",
                 config_text,
             )
+        if is_error_output(config_text):
+            return False, "OLT rejected running-config command", config_text
+        if "return" not in config_text.lower():
+            return False, "Config output incomplete — missing return marker", config_text
+        olt_cache.set(str(olt.id), "running_config", config_text)
         return True, "Configuration retrieved", config_text
-    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
         logger.error(
             "Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True
         )
         return False, f"Error: {exc}", ""
-    finally:
-        transport.close()
 
 
 # Read-only command prefixes allowed for run_cli_command()
@@ -1016,17 +1169,27 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
         )
         return False, error_msg, ""
 
+    from app.services.network.olt_read_cache import olt_cache
+
+    cache_params = f"cli:{command.strip()}"
+    cached_output = olt_cache.get(str(olt.id), "running_config", cache_params)
+    if isinstance(cached_output, str):
+        return True, "Command executed (cached)", cached_output
+
     try:
-        transport, channel, policy = _open_shell(olt)
+        from app.services.network.olt_ssh_pool import pooled_ssh_connection
+
+        ssh_context = pooled_ssh_connection(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", ""
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        with ssh_context as (channel, policy):
+            channel.send("enable\n")
+            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
 
-        channel.send(f"{command}\n")
-        output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=30)
+            channel.send(f"{command}\n")
+            output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=30)
 
         # Strip the echoed command and trailing prompt from the output
         lines = output.splitlines()
@@ -1036,14 +1199,15 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
         if lines and re.search(policy.prompt_regex, lines[-1]):
             lines = lines[:-1]
         clean_output = "\n".join(lines).strip()
+        olt_cache.set(
+            str(olt.id), "running_config", clean_output, cache_params, ttl=60
+        )
         return True, "Command executed", clean_output
-    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
         logger.error(
             "Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True
         )
         return False, f"Error: {exc}", ""
-    finally:
-        transport.close()
 
 
 def get_service_ports_for_ont(
@@ -1106,10 +1270,89 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info("Deleted service-port %d on OLT %s", index, olt.name)
+        _invalidate_olt_read_cache(olt, "service_ports", "running_config")
         return True, f"Service-port {index} deleted"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
             "Error deleting service-port on OLT %s: %s", olt.name, exc, exc_info=True
+        )
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
+def update_ont_profiles(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    line_profile_id: int | None = None,
+    service_profile_id: int | None = None,
+) -> tuple[bool, str]:
+    """Update an existing Huawei ONT's line and/or service profile."""
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+    if line_profile_id is None and service_profile_id is None:
+        return False, "No ONT profile changes requested"
+
+    try:
+        transport, channel, policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+
+    try:
+        from app.services.network.olt_ssh_ont._common import _send_slow
+
+        channel.send("enable\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        _run_huawei_cmd(channel, "config", prompt=config_prompt)
+
+        parts = fsp.split("/")
+        frame_slot = f"{parts[0]}/{parts[1]}"
+        port_num = parts[2]
+        _send_slow(channel, f"interface gpon {frame_slot}")
+        _read_until_prompt(channel, config_prompt, timeout_sec=5)
+
+        cmd = f"ont modify {port_num} {ont_id}"
+        if line_profile_id is not None:
+            cmd += f" ont-lineprofile-id {line_profile_id}"
+        if service_profile_id is not None:
+            cmd += f" ont-srvprofile-id {service_profile_id}"
+
+        _send_slow(channel, cmd)
+        output = _read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
+        if "<cr>" in output:
+            channel.send("\n")
+            output += _read_until_prompt(channel, config_prompt, timeout_sec=10)
+
+        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
+        if is_error_output(output):
+            logger.warning(
+                "ONT profile update failed on OLT %s %s ONT %d: %s",
+                olt.name,
+                fsp,
+                ont_id,
+                output.strip()[-200:],
+            )
+            return False, f"OLT rejected: {output.strip()[-200:]}"
+
+        profile_bits: list[str] = []
+        if line_profile_id is not None:
+            profile_bits.append(f"line profile {line_profile_id}")
+        if service_profile_id is not None:
+            profile_bits.append(f"service profile {service_profile_id}")
+        message = f"Updated ONT {ont_id} on {fsp}: {', '.join(profile_bits)}"
+        logger.info("%s on OLT %s", message, olt.name)
+        _invalidate_olt_read_cache(olt, "profiles", "running_config")
+        return True, message
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error updating ONT profiles on OLT %s: %s", olt.name, exc, exc_info=True
         )
         return False, f"Error: {exc}"
     finally:

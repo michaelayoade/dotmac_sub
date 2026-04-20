@@ -434,6 +434,7 @@ from app.models.subscriber import (  # noqa: F401
     Reseller,
     Subscriber,
     SubscriberChannel,
+    SubscriberContact,
     SubscriberCustomField,
     SubscriberStatus,
 )

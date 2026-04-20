@@ -33,8 +33,8 @@ from celery import current_task
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.db import SessionLocal
 from app.models.task_execution import TaskExecution, TaskExecutionStatus
+from app.services.db_session_adapter import db_session_adapter
 
 if TYPE_CHECKING:
     pass
@@ -229,7 +229,7 @@ def idempotent_task(
                 task_name, key_func, key_params, args, kwargs
             )
 
-            db = SessionLocal()
+            db = db_session_adapter.create_session()
             try:
                 execution, is_new = _get_or_create_execution(
                     db,

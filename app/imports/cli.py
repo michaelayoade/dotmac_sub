@@ -4,9 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from app.db import SessionLocal
 from app.imports.loader import ImportError
 from app.services import imports as import_service
+from app.services.db_session_adapter import db_session_adapter
 
 
 def _coerce_error_index(value: object) -> int:
@@ -22,7 +22,7 @@ def _coerce_error_index(value: object) -> int:
 
 def import_subscriber_custom_fields(path: str) -> int:
     errors: list[ImportError] = []
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     try:
         content = Path(path).expanduser().read_text(encoding="utf-8")
         created, service_errors = (

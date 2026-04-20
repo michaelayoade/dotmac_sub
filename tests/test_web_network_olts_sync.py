@@ -515,7 +515,7 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
     assert ok is True
     assert stats["created"] == 0
     assert stats["updated"] == 1
-    assert stats["assignments_created"] == 1
+    assert stats["assignments_created"] == 0
     assert pon is not None
     assert pon.name == "0/2/0"
     assert pon.port_number == 0

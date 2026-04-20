@@ -333,6 +333,30 @@ def _configure_lan(ctx: SagaContext) -> StepResult:
     )
 
 
+def _download_firmware(ctx: SagaContext) -> StepResult:
+    """Trigger ACS firmware download.
+
+    Uses step_data keys:
+    - firmware_image_id: OntFirmwareImage ID to download (required)
+    """
+    from app.services.network import ont_provision_steps
+
+    firmware_image_id = ctx.step_data.get("firmware_image_id")
+    if not firmware_image_id:
+        return StepResult(
+            step_name="download_firmware",
+            success=False,
+            message="firmware_image_id not provided in step_data",
+            critical=False,
+        )
+
+    return ont_provision_steps.download_firmware(
+        ctx.db,
+        ctx.ont_id,
+        firmware_image_id=str(firmware_image_id),
+    )
+
+
 def _provision_with_reconciliation(ctx: SagaContext) -> StepResult:
     """Full provisioning using state reconciliation.
 
@@ -523,11 +547,28 @@ ACS_CONFIG_SAGA = SagaDefinition(
 )
 
 
+FIRMWARE_DOWNLOAD_SAGA = SagaDefinition(
+    name="firmware_download",
+    description="ONT firmware download via ACS Download RPC",
+    steps=[
+        SagaStep(
+            name="download_firmware",
+            action=_download_firmware,
+            compensate=None,
+            critical=True,
+            description="Trigger ONT firmware download",
+        ),
+    ],
+    version="1.0",
+)
+
+
 # Saga registry for lookup by name
 SAGA_REGISTRY: dict[str, SagaDefinition] = {
     "wifi_setup": WIFI_SETUP_SAGA,
     "full_provisioning": FULL_PROVISIONING_SAGA,
     "acs_config": ACS_CONFIG_SAGA,
+    "firmware_download": FIRMWARE_DOWNLOAD_SAGA,
 }
 
 

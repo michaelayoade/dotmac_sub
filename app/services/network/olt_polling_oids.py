@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from app.services.network.olt_vendor_adapters import (
     SIGNAL_SENTINELS as _SIGNAL_SENTINELS,
+)
+from app.services.network.olt_vendor_adapters import (
     GenericOltAdapter,
     HuaweiOltAdapter,
     NokiaOltAdapter,

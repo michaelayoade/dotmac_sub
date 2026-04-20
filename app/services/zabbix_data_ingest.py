@@ -16,9 +16,8 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntUnit
@@ -77,6 +76,68 @@ def _get_client() -> ZabbixClient:
     return ZabbixClient.from_env()
 
 
+def _decode_huawei_pon_index(encoded: int) -> tuple[str, int]:
+    """Decode Huawei PON port index from encoded SNMP ifIndex.
+
+    For Huawei MA5680T and similar OLTs, the ifIndex encoding is:
+    ifIndex = 4194304000 + (snmp_slot * 2048) + (port * 256)
+
+    SNMP slot numbers have an offset from physical slot numbers:
+    - SNMP slot 8 = Physical slot 2 (offset of 6)
+    - This is because SNMP slots 0-7 are reserved for system boards
+
+    Args:
+        encoded: The encoded ifIndex from SNMP OID (e.g., 4194320384)
+
+    Returns:
+        Tuple of (port_string like "0/2/1", encoded_value)
+    """
+    base = 4194304000
+    snmp_slot_offset = 6  # SNMP slot = physical slot + 6
+
+    offset = encoded - base
+    snmp_slot = offset // 2048
+    port = (offset % 2048) // 256
+
+    # Convert SNMP slot to physical slot
+    physical_slot = snmp_slot - snmp_slot_offset
+
+    # Frame is always 0 for these OLTs
+    return f"0/{physical_slot}/{port}", encoded
+
+
+def _parse_snmp_walk(walk_data: str) -> list[tuple[str, int, int | float]]:
+    """Parse raw SNMP walk output into structured data.
+
+    Args:
+        walk_data: Raw SNMP walk output from Zabbix
+
+    Returns:
+        List of (pon_port, ont_index, value) tuples
+    """
+    results = []
+    # Pattern matches: .OID.ifIndex.ont_idx = TYPE: value
+    # OID examples:
+    #   .1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194320384.0 = INTEGER: -2318
+    pattern = re.compile(
+        r"\.(\d+)\.(\d+)\s*=\s*(?:INTEGER|Gauge32|Counter32|Opaque):\s*([-\d.]+)"
+    )
+
+    for line in walk_data.strip().split("\n"):
+        match = pattern.search(line)
+        if match:
+            ifindex = int(match.group(1))
+            ont_index = int(match.group(2))
+            value = float(match.group(3))
+
+            # Only process valid Huawei ifIndex values (base is 4194304000)
+            if ifindex >= 4194304000:
+                pon_port, _ = _decode_huawei_pon_index(ifindex)
+                results.append((pon_port, ont_index, value))
+
+    return results
+
+
 def _extract_ont_identifier(item_key: str) -> tuple[str | None, str | None]:
     """Extract PON port and ONT index from Zabbix item key.
 
@@ -117,8 +178,8 @@ def ingest_olt_signal_data(
 ) -> int:
     """Ingest ONT signal data from Zabbix for a single OLT.
 
-    Fetches latest item values from Zabbix for this OLT's host,
-    parses the ONT identifiers, and updates corresponding OntUnit records.
+    Fetches raw SNMP walk items from Zabbix, parses the ONT data,
+    and updates corresponding OntUnit records.
 
     Args:
         db: Database session
@@ -136,11 +197,11 @@ def ingest_olt_signal_data(
         return 0
 
     try:
-        # Get all items for this OLT host
+        # Get walk items for this OLT host
         items = client.get_items(
             host_ids=[olt.zabbix_host_id],
-            metric="gpon",  # Filter to GPON-related items
-            limit=10000,
+            metric="walk",  # Get raw walk items
+            limit=100,
         )
     except ZabbixClientError as exc:
         logger.error(
@@ -153,38 +214,41 @@ def ingest_olt_signal_data(
         logger.debug("olt_no_items", extra={"olt_id": str(olt.id)})
         return 0
 
-    # Group items by ONT identifier
-    ont_data: dict[tuple[str, str], dict[str, float]] = {}
+    # Parse walk items to extract per-ONT data
+    ont_data: dict[tuple[str, int], dict[str, float]] = {}
     now = datetime.now(UTC)
 
     for item in items:
         item_key = item.get("key_", "")
-        last_value = item.get("lastvalue")
-        last_clock = item.get("lastclock")
+        last_value = item.get("lastvalue", "")
 
-        # Skip if no recent value
-        if not last_value or last_value in ("", "0"):
+        if not last_value:
             continue
 
-        # Extract ONT identifier
-        pon_port, ont_index = _extract_ont_identifier(item_key)
-        if not pon_port or not ont_index:
+        # Determine metric type from item key
+        if "opt.rx" in item_key or "rx.walk" in item_key.lower():
+            metric_type = "olt_rx"
+        elif "ont.status" in item_key or "status.walk" in item_key.lower():
+            metric_type = "status"
+        else:
             continue
 
-        # Identify metric type
-        metric_type = _identify_metric_type(item_key)
-        if not metric_type:
-            continue
+        # Parse the raw SNMP walk data
+        parsed = _parse_snmp_walk(last_value)
+        for pon_port, ont_index, value in parsed:
+            key = (pon_port, ont_index)
+            if key not in ont_data:
+                ont_data[key] = {}
 
-        try:
-            value = float(last_value)
-        except ValueError:
-            continue
-
-        key = (pon_port, ont_index)
-        if key not in ont_data:
-            ont_data[key] = {}
-        ont_data[key][metric_type] = value
+            if metric_type == "olt_rx":
+                # Signal values are in 0.01 dBm units, convert to dBm
+                dbm_value = value / 100.0
+                # Filter out invalid values (0x7FFFFFFF/100 = 21474836.47 means no signal)
+                # Valid optical signal range is roughly -45 to +5 dBm
+                if -50 < dbm_value < 10:
+                    ont_data[key]["olt_rx"] = dbm_value
+            elif metric_type == "status":
+                ont_data[key]["status"] = value
 
     if not ont_data:
         logger.debug("olt_no_ont_data", extra={"olt_id": str(olt.id)})
@@ -193,20 +257,17 @@ def ingest_olt_signal_data(
     # Update OntUnit records
     updated_count = 0
     for (pon_port, ont_index), metrics in ont_data.items():
-        # Find matching OntUnit
-        # Try matching by pon_port_name and onu_id
+        # Find matching OntUnit by external_id (format: board/port.ont_index)
+        # Normalize pon_port by stripping "gpon" prefix if present
+        normalized_port = pon_port.lower().replace("gpon", "").strip()
+        external_id = f"{normalized_port}.{ont_index}"
+
         stmt = (
             select(OntUnit)
             .where(OntUnit.olt_device_id == olt.id)
             .where(OntUnit.is_active.is_(True))
+            .where(OntUnit.external_id == external_id)
         )
-
-        # Try to match on onu_id if available
-        try:
-            onu_id = int(ont_index)
-            stmt = stmt.where(OntUnit.onu_id == onu_id)
-        except ValueError:
-            continue
 
         ont = db.scalars(stmt).first()
         if not ont:
@@ -224,8 +285,17 @@ def ingest_olt_signal_data(
             ont.onu_tx_signal_dbm = metrics["onu_tx"]
             changed = True
 
+        # Update online status based on signal presence
+        # If we have valid signal data, the ONT must be online
         if changed:
+            from app.models.network import OnuOnlineStatus
+            from app.services.network.ont_status import apply_resolved_status_for_model
+
+            ont.online_status = OnuOnlineStatus.online
+            ont.last_seen_at = now
             ont.signal_updated_at = now
+            # Resolve effective_status considering ACS data
+            apply_resolved_status_for_model(ont, now=now)
             updated_count += 1
 
     db.flush()

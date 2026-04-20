@@ -80,6 +80,7 @@ def _check_postgres(db: Session) -> ServiceStatus:
     start = time.monotonic()
     try:
         row = db.execute(text("SELECT version()")).scalar()
+        activity = _postgres_activity_snapshot(db)
         elapsed = (time.monotonic() - start) * 1000
         version = ""
         if row:
@@ -87,11 +88,18 @@ def _check_postgres(db: Session) -> ServiceStatus:
             parts = str(row).split()
             if len(parts) >= 2:
                 version = parts[1]
+        status = "up"
+        if (
+            activity.get("idle_in_transaction_over_60s", 0) > 0
+            or activity.get("connection_utilization_pct", 0) >= 80
+        ):
+            status = "degraded"
         return ServiceStatus(
             name="PostgreSQL",
-            status="up",
+            status=status,
             version=version,
             response_ms=round(elapsed, 1),
+            details=activity,
             icon=_ICON_DATABASE,
         )
     except Exception as exc:
@@ -109,6 +117,55 @@ def _check_postgres(db: Session) -> ServiceStatus:
             details={"error": str(exc)[:200]},
             icon=_ICON_DATABASE,
         )
+
+
+def _postgres_activity_snapshot(db: Session) -> dict[str, object]:
+    """Return connection and transaction age indicators for stale-session alerts."""
+    from sqlalchemy import text
+
+    row = db.execute(
+        text(
+            """
+            SELECT
+                count(*)::int AS total_connections,
+                count(*) FILTER (WHERE state = 'active')::int AS active_connections,
+                count(*) FILTER (WHERE state = 'idle')::int AS idle_connections,
+                count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_transaction,
+                count(*) FILTER (
+                    WHERE state = 'idle in transaction'
+                    AND now() - COALESCE(xact_start, state_change) > interval '60 seconds'
+                )::int AS idle_in_transaction_over_60s,
+                COALESCE(
+                    EXTRACT(EPOCH FROM max(now() - COALESCE(xact_start, state_change))
+                        FILTER (WHERE state = 'idle in transaction')),
+                    0
+                )::float AS max_idle_in_transaction_seconds,
+                count(*) FILTER (WHERE wait_event_type = 'Lock')::int AS waiting_on_lock,
+                (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max_connections
+            FROM pg_stat_activity
+            """
+        )
+    ).mappings().first()
+    if not row:
+        return {}
+    max_connections = int(row["max_connections"] or 0)
+    total = int(row["total_connections"] or 0)
+    utilization = round(total / max_connections * 100, 1) if max_connections else 0
+    return {
+        "total_connections": total,
+        "active_connections": int(row["active_connections"] or 0),
+        "idle_connections": int(row["idle_connections"] or 0),
+        "idle_in_transaction": int(row["idle_in_transaction"] or 0),
+        "idle_in_transaction_over_60s": int(
+            row["idle_in_transaction_over_60s"] or 0
+        ),
+        "max_idle_in_transaction_seconds": round(
+            float(row["max_idle_in_transaction_seconds"] or 0), 1
+        ),
+        "waiting_on_lock": int(row["waiting_on_lock"] or 0),
+        "max_connections": max_connections,
+        "connection_utilization_pct": utilization,
+    }
 
 
 def _check_redis(db: Session) -> ServiceStatus:
@@ -342,9 +399,13 @@ def _check_celery(db: Session) -> ServiceStatus:
     start = time.monotonic()
     try:
         from app.celery_app import celery_app
+        from app.services.redis_client import get_redis
 
         inspector = celery_app.control.inspect(timeout=1.0)
         ping_result = inspector.ping()
+        active = inspector.active() or {}
+        reserved = inspector.reserved() or {}
+        scheduled = inspector.scheduled() or {}
         elapsed = (time.monotonic() - start) * 1000
 
         if not ping_result:
@@ -357,12 +418,52 @@ def _check_celery(db: Session) -> ServiceStatus:
             )
 
         worker_names = list(ping_result.keys())
+        now = time.time()
+        long_running: list[dict[str, object]] = []
+        active_count = 0
+        reserved_count = 0
+        scheduled_count = 0
+        for worker, tasks in active.items():
+            active_count += len(tasks)
+            for task in tasks:
+                started_at = task.get("time_start")
+                age_seconds = now - float(started_at) if started_at else None
+                if age_seconds is not None and age_seconds > 1800:
+                    long_running.append(
+                        {
+                            "worker": worker,
+                            "task_id": task.get("id"),
+                            "task_name": task.get("name"),
+                            "age_seconds": round(age_seconds, 1),
+                        }
+                    )
+        for tasks in reserved.values():
+            reserved_count += len(tasks)
+        for tasks in scheduled.values():
+            scheduled_count += len(tasks)
+
+        queue_lengths: dict[str, int] = {}
+        redis_client = get_redis()
+        if redis_client is not None:
+            for queue_name in ("celery", "tr069", "acs"):
+                queue_lengths[queue_name] = int(redis_client.llen(queue_name))
+
+        status = "up"
+        if long_running or reserved_count > 100 or any(v > 500 for v in queue_lengths.values()):
+            status = "degraded"
         return ServiceStatus(
             name="Celery",
-            status="up",
+            status=status,
             version=f"{len(worker_names)} worker{'s' if len(worker_names) != 1 else ''}",
             response_ms=round(elapsed, 1),
-            details={"workers": worker_names},
+            details={
+                "workers": worker_names,
+                "active_tasks": active_count,
+                "reserved_tasks": reserved_count,
+                "scheduled_tasks": scheduled_count,
+                "queue_lengths": queue_lengths,
+                "long_running_tasks_over_30m": long_running[:20],
+            },
             icon=_ICON_WORKER,
         )
     except Exception as exc:

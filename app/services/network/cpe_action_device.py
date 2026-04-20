@@ -71,7 +71,11 @@ def refresh_status(db: Session, cpe_id: str) -> ActionResult:
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     try:
-        result = client.refresh_object(device_id, "Device.", connection_request=True)
+        result = client.refresh_object(
+            device_id,
+            "Device.DeviceInfo.",
+            connection_request=True,
+        )
         logger.info("Refresh sent to CPE %s (device %s)", cpe.serial_number, device_id)
         return ActionResult(
             success=True,

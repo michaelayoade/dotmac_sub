@@ -7,10 +7,10 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.logging import get_logger
 from app.metrics import observe_job
 from app.models.oauth_token import OAuthToken
+from app.services.db_session_adapter import db_session_adapter
 
 logger = get_logger(__name__)
 
@@ -30,7 +30,7 @@ def refresh_expiring_tokens(buffer_days: int = 7):
     """
     start = time.monotonic()
     status = "success"
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
     refreshed_count = 0
     error_count = 0
 
@@ -158,7 +158,7 @@ def check_token_health():
     Returns:
         Dict with token health statistics
     """
-    session = SessionLocal()
+    session = db_session_adapter.create_session()
 
     try:
         now = datetime.now(UTC)

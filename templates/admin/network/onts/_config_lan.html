@@ -14,7 +14,7 @@
 {% endif %}
 
 {# LAN Configuration #}
-{% set lan_intent = ont_plan.get('configure_lan_tr069') if ont_plan is defined and ont_plan else {} %}
+{% set lan_intent = desired_lan_config if desired_lan_config is defined else (ont_plan.get('configure_lan_tr069') if ont_plan is defined and ont_plan else {}) %}
 {% set lan_ip = lan_intent.get('lan_ip') or (lan_info.get('lan_ip') if lan_info else '') %}
 {% set lan_subnet = lan_intent.get('lan_subnet') or (lan_info.get('subnet_mask') if lan_info else '') %}
 {% set dhcp_enabled = lan_intent.get('dhcp_enabled') if lan_intent.get('dhcp_enabled') is not none else (lan_info.get('dhcp_enabled') if lan_info else '') %}
