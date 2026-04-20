@@ -598,6 +598,26 @@ class TestMaskCredentials:
         assert "bearer123" not in masked
         assert masked.count("********") == 4
 
+    def test_masks_qualified_authorization_and_structured_credentials(self) -> None:
+        from app.services.network.ont_provision_steps import mask_credentials
+
+        cmd = (
+            "ont wan pppoe password cipher ppp-secret "
+            "snmp-agent community read cipher public123 "
+            "Authorization: Bearer token-value "
+            '"Password": "json-secret" '
+            "<PreSharedKey>xml-secret</PreSharedKey>"
+        )
+
+        masked = mask_credentials(cmd)
+
+        assert "ppp-secret" not in masked
+        assert "public123" not in masked
+        assert "token-value" not in masked
+        assert "json-secret" not in masked
+        assert "xml-secret" not in masked
+        assert masked.count("********") == 5
+
 
 class TestWebRouteRegistration:
     """Verify per-step routes are registered."""
