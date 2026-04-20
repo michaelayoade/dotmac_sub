@@ -297,11 +297,15 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
         def close(self):
             return None
 
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
+
+    # Mock db_session_adapter to return the test db_session
+    mock_adapter = MagicMock()
+    mock_adapter.create_session.return_value = db_session
 
     with (
         patch("app.tasks.bandwidth._get_redis_client", return_value=_FakeRedis()),
-        patch("app.tasks.bandwidth.SessionLocal", return_value=db_session),
+        patch("app.tasks.bandwidth.db_session_adapter", mock_adapter),
     ):
         result = bandwidth_tasks.process_bandwidth_stream()
 

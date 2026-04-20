@@ -5,7 +5,6 @@ These tasks consume the Redis stream produced by the poller service,
 insert samples into PostgreSQL, and push aggregates to VictoriaMetrics.
 """
 
-import asyncio
 import logging
 import os
 from datetime import UTC, datetime, timedelta
@@ -13,14 +12,17 @@ from typing import Any
 from uuid import UUID
 
 import redis
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, select
 
 from app.celery_app import celery_app
-from app.db import SessionLocal
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import NasDevice, Subscription
+from app.models.catalog import NasDevice
 from app.models.domain_settings import SettingDomain
-from app.services.metrics_store import get_metrics_store
+from app.services.bandwidth_metrics_adapter import (
+    BandwidthAggregate,
+    get_bandwidth_metrics_adapter,
+)
+from app.services.db_session_adapter import db_session_adapter
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -103,7 +105,7 @@ def process_bandwidth_stream():
     batches of bandwidth samples from the Redis stream.
     """
     r = _get_redis_client()
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         # Get configurable settings
@@ -179,9 +181,9 @@ def process_bandwidth_stream():
         if nas_device_ids:
             network_device_by_nas = {
                 row.id: row.network_device_id
-                for row in (
-                    db.query(NasDevice).filter(NasDevice.id.in_(nas_device_ids)).all()
-                )
+                for row in db.scalars(
+                    select(NasDevice).where(NasDevice.id.in_(nas_device_ids))
+                ).all()
             }
 
         for sample, (_msg_id, data) in zip(samples, all_messages, strict=False):
@@ -196,16 +198,12 @@ def process_bandwidth_stream():
 
         # Bulk insert samples — filter out orphaned subscription IDs first
         # to prevent a single bad FK from failing the entire batch.
+        # Uses cached subscription ID validation to reduce DB queries.
         inserted = 0
         if samples:
-            from sqlalchemy import select
-
-            valid_ids = set(
-                db.scalars(
-                    select(Subscription.id).where(
-                        Subscription.id.in_({s.subscription_id for s in samples})
-                    )
-                ).all()
+            adapter = get_bandwidth_metrics_adapter()
+            valid_ids = adapter.filter_valid_subscription_ids(
+                db, {s.subscription_id for s in samples}
             )
             valid_samples = [s for s in samples if s.subscription_id in valid_ids]
             skipped = len(samples) - len(valid_samples)
@@ -247,7 +245,7 @@ def cleanup_hot_data():
     Hot data (raw samples) is kept in PostgreSQL for the configured retention hours,
     after which it's deleted. Aggregated data is retained in VictoriaMetrics.
     """
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
     retention_hours = _get_hot_retention_hours(db)
     cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
 
@@ -276,18 +274,20 @@ def aggregate_to_metrics():
 
     This task runs every minute and calculates 1-minute aggregates
     (avg, max) for each subscription, then pushes them to VictoriaMetrics.
+
+    Uses sync VictoriaMetrics writer with batched writes for efficiency.
     """
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         # Calculate aggregates for the last minute
         now = datetime.now(UTC)
         minute_start = now.replace(second=0, microsecond=0)
-        minute_start + timedelta(minutes=1)
+        aggregate_timestamp = minute_start - timedelta(minutes=1)
 
-        # Query aggregates grouped by subscription
-        aggregates = (
-            db.query(
+        # Query aggregates grouped by subscription (SQLAlchemy 2.0 style)
+        stmt = (
+            select(
                 BandwidthSample.subscription_id,
                 BandwidthSample.device_id,
                 func.avg(BandwidthSample.rx_bps).label("rx_avg"),
@@ -296,55 +296,61 @@ def aggregate_to_metrics():
                 func.max(BandwidthSample.tx_bps).label("tx_max"),
                 func.count().label("sample_count"),
             )
-            .filter(
-                BandwidthSample.sample_at >= minute_start - timedelta(minutes=1),
+            .where(
+                BandwidthSample.sample_at >= aggregate_timestamp,
                 BandwidthSample.sample_at < minute_start,
             )
             .group_by(BandwidthSample.subscription_id, BandwidthSample.device_id)
-            .all()
         )
+        aggregates = db.execute(stmt).all()
 
         if not aggregates:
             return {"pushed": 0}
 
+        # Map network device IDs to NAS device IDs
         nas_device_by_network_device: dict[UUID, UUID] = {}
         device_ids = {agg.device_id for agg in aggregates if agg.device_id}
         if device_ids:
             nas_device_by_network_device = {
                 row.network_device_id: row.id
-                for row in (
-                    db.query(NasDevice)
-                    .filter(NasDevice.network_device_id.in_(device_ids))
-                    .all()
-                )
+                for row in db.scalars(
+                    select(NasDevice).where(NasDevice.network_device_id.in_(device_ids))
+                ).all()
                 if row.network_device_id
             }
 
-        # Push to VictoriaMetrics
-        async def push_aggregates():
-            metrics_store = get_metrics_store()
-            for agg in aggregates:
-                await metrics_store.write_aggregates(
+        # Build batch of aggregates for VictoriaMetrics
+        batch: list[BandwidthAggregate] = []
+        for agg in aggregates:
+            nas_device_id = None
+            if agg.device_id and nas_device_by_network_device.get(agg.device_id):
+                nas_device_id = str(nas_device_by_network_device[agg.device_id])
+
+            batch.append(
+                BandwidthAggregate(
                     subscription_id=str(agg.subscription_id),
-                    nas_device_id=(
-                        str(nas_device_by_network_device.get(agg.device_id))
-                        if agg.device_id
-                        and nas_device_by_network_device.get(agg.device_id)
-                        else None
-                    ),
-                    timestamp=minute_start - timedelta(minutes=1),
+                    nas_device_id=nas_device_id,
+                    timestamp=aggregate_timestamp,
                     rx_avg=float(agg.rx_avg or 0),
                     tx_avg=float(agg.tx_avg or 0),
                     rx_max=float(agg.rx_max or 0),
                     tx_max=float(agg.tx_max or 0),
                     sample_count=int(agg.sample_count),
                 )
-            await metrics_store.close()
+            )
 
-        asyncio.run(push_aggregates())
+        # Push to VictoriaMetrics in a single batched HTTP call (sync)
+        adapter = get_bandwidth_metrics_adapter()
+        result = adapter.write_aggregates_batch(batch)
 
-        logger.info("Pushed %s aggregates to VictoriaMetrics", len(aggregates))
-        return {"pushed": len(aggregates)}
+        if result.success:
+            logger.info("Pushed %d aggregates to VictoriaMetrics", result.written)
+        else:
+            logger.error(
+                "Failed to push aggregates to VictoriaMetrics: %s", result.error
+            )
+
+        return {"pushed": result.written, "success": result.success}
 
     except Exception as e:
         logger.error("Error aggregating to metrics: %s", e)
@@ -361,7 +367,7 @@ def trim_redis_stream():
     Keeps only the configured max number of messages in the stream.
     """
     r = _get_redis_client()
-    db = SessionLocal()
+    db = db_session_adapter.create_session()
 
     try:
         # Get configurable max length

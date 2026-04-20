@@ -680,12 +680,13 @@ def poll_onu_signal_strength(
     db: Session,
     olt_device: NetworkDevice,
 ) -> dict[str, int]:
-    """Delegate ONT signal polling to the OLT polling service.
+    """Query ONT signal status from inventory (polling moved to Zabbix).
 
-    Resolves the corresponding ``OLTDevice`` record for the monitoring device,
-    updates ``OntUnit`` signal fields there, and returns summarized counts.
+    DEPRECATED: Direct SNMP polling has been moved to Zabbix.
+    This function now only returns current low-signal counts from inventory
+    which is updated by Zabbix data ingestion.
     """
-    from app.models.network import OLTDevice
+    from app.models.network import OLTDevice, OntUnit
     from app.services.network import olt_polling as olt_polling_service
 
     host = str(olt_device.mgmt_ip or olt_device.hostname or "").strip()
@@ -700,29 +701,14 @@ def poll_onu_signal_strength(
     ).first()
     if not olt:
         logger.warning(
-            "Monitoring device %s has no matching OLT inventory record for signal polling",
+            "Monitoring device %s has no matching OLT inventory record",
             olt_device.name,
         )
-        return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 1}
+        return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 0}
 
-    community = None
-    if olt.snmp_ro_community:
-        try:
-            from app.services.credential_crypto import decrypt_credential
-
-            community = decrypt_credential(olt.snmp_ro_community)
-        except Exception as exc:
-            logger.warning(
-                "Failed to decrypt OLT SNMP community for %s: %s", olt.name, exc
-            )
-            return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 1}
-
-    result = olt_polling_service.poll_olt_ont_signals(db, olt, community=community)
-    olt_polling_service.push_signal_metrics_to_victoriametrics(db)
-
+    # Count low-signal ONTs from existing inventory data
+    # (signal values are now updated by Zabbix data ingestion)
     warning_threshold, _ = olt_polling_service.get_signal_thresholds(db)
-    # Count low-signal ONTs directly from updated inventory.
-    from app.models.network import OntUnit
 
     low_signal = (
         db.scalar(
@@ -739,8 +725,8 @@ def poll_onu_signal_strength(
     )
 
     return {
-        "polled": int(result.get("polled", 0)),
-        "stored": int(result.get("updated", 0)),
+        "polled": 0,  # Polling now handled by Zabbix
+        "stored": 0,
         "low_signal": int(low_signal),
-        "errors": int(result.get("errors", 0)),
+        "errors": 0,
     }
