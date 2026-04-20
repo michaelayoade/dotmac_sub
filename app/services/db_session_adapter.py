@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
+from app.services.adapters import adapter_registry
 
 
 class DbSessionProvider(Protocol):
@@ -38,6 +39,8 @@ class SqlAlchemySessionAdapter:
     the pool. That rollback is important because SQLAlchemy opens transactions
     for SELECTs when autocommit is disabled.
     """
+
+    name = "db.session.sqlalchemy"
 
     def create_session(self) -> Session:
         return SessionLocal()
@@ -116,3 +119,4 @@ class SqlAlchemySessionAdapter:
 
 
 db_session_adapter = SqlAlchemySessionAdapter()
+adapter_registry.register(db_session_adapter)

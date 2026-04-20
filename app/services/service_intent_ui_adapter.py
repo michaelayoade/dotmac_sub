@@ -10,8 +10,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 class ServiceIntentUiAdapter:
+    name = "service_intent.ui"
+
     def build_ont_service_intent(
         self,
         ont: object,
@@ -221,3 +225,4 @@ class ServiceIntentUiAdapter:
 
 
 service_intent_ui_adapter = ServiceIntentUiAdapter()
+adapter_registry.register(service_intent_ui_adapter)

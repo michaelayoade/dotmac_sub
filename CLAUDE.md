@@ -131,6 +131,19 @@ def dashboard(db: Session = Depends(get_db)):
     return stats
 ```
 
+### 1a. Adapter Boundaries — Register and Return Shared Results
+Adapters in `app/services/*adapter*.py` should declare a stable `name` and register singleton instances with `app.services.adapters.adapter_registry` when they are safe to import without network I/O. Operation-style adapters should return or convert through `AdapterResult` from `app.services.adapters.base` so success, queued, warning, skipped, and error semantics stay consistent.
+
+```python
+from app.services.adapters import adapter_registry
+
+class ExampleAdapter:
+    name = "example"
+
+example_adapter = ExampleAdapter()
+adapter_registry.register(example_adapter)
+```
+
 ### 2. Multi-tenancy — Filter Data Appropriately
 For reseller/organization-scoped data, ensure proper filtering to prevent data leaks across tenants.
 

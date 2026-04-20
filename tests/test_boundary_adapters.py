@@ -122,24 +122,32 @@ def test_global_adapter_registry_contains_core_singletons() -> None:
     from app.services import (
         audit_adapter,
         billing_adapter,
+        db_session_adapter,
         external_bss_adapter,
         ipam_adapter,
+        olt_action_adapter,
+        olt_detail_adapter,
         olt_profile_adapter,
         payment_gateway_adapter,
         queue_adapter,
         rate_limiter_adapter,
+        service_intent_ui_adapter,
     )
     from app.services.adapters import adapter_registry
 
     expected = {
         "audit": audit_adapter.audit_adapter,
         "billing": billing_adapter.billing_adapter,
+        "db.session.sqlalchemy": db_session_adapter.db_session_adapter,
         "external_bss": external_bss_adapter.external_bss_adapter,
         "ipam": ipam_adapter.ipam_adapter,
+        "olt_action": olt_action_adapter.olt_action_adapter,
+        "olt_detail": olt_detail_adapter.olt_detail_adapter,
         "olt_profile": olt_profile_adapter.olt_profile_adapter,
         "payment_gateway": payment_gateway_adapter.payment_gateway_adapter,
         "queue.celery": queue_adapter.queue_adapter,
         "rate_limiter.memory": rate_limiter_adapter.rate_limiter_adapter,
+        "service_intent.ui": service_intent_ui_adapter.service_intent_ui_adapter,
     }
 
     for name, adapter in expected.items():

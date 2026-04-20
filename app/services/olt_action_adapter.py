@@ -6,9 +6,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 class OltActionAdapter:
     """Keep OLT UI flows behind the operational OLT boundary."""
+
+    name = "olt_action"
 
     def fetch_running_config(self, olt: object, db: Session | None = None) -> str | None:
         from app.services.network import olt_operations as olt_operations_service
@@ -128,3 +132,4 @@ class OltActionAdapter:
 
 
 olt_action_adapter = OltActionAdapter()
+adapter_registry.register(olt_action_adapter)

@@ -7,6 +7,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 logger = logging.getLogger(__name__)
 
 ALLOWED_CLI_PREFIXES = ("display", "show", "ping", "traceroute")
@@ -24,6 +26,8 @@ QUICK_CLI_COMMANDS = (
 
 class OltDetailAdapter:
     """Expose OLT detail context through a single UI boundary."""
+
+    name = "olt_detail"
 
     def page_data(self, db: Session, *, olt_id: str) -> dict[str, object] | None:
         from app.services import audit_helpers
@@ -332,3 +336,4 @@ class OltDetailAdapter:
 
 
 olt_detail_adapter = OltDetailAdapter()
+adapter_registry.register(olt_detail_adapter)
