@@ -917,10 +917,10 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
-            logger.exception("SSH create_service_port failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH service port creation failed: {exc}",
+            return OltOperationResult.from_exception(
+                exc,
+                operation="SSH service port creation",
+                logger_=logger,
                 protocol_used=OltProtocol.SSH,
             )
 
@@ -938,10 +938,10 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
-            logger.exception("SSH delete_service_port failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH service port deletion failed: {exc}",
+            return OltOperationResult.from_exception(
+                exc,
+                operation="SSH service port deletion",
+                logger_=logger,
                 protocol_used=OltProtocol.SSH,
             )
 
@@ -1301,10 +1301,10 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
-            logger.exception("SSH get_service_ports failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH get service ports failed: {exc}",
+            return OltOperationResult.from_exception(
+                exc,
+                operation="SSH get service ports",
+                logger_=logger,
                 data={"service_ports": []},
                 protocol_used=OltProtocol.SSH,
             )
@@ -1322,10 +1322,10 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
-            logger.exception("SSH get_service_ports_for_ont failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH get service ports for ONT failed: {exc}",
+            return OltOperationResult.from_exception(
+                exc,
+                operation="SSH get service ports for ONT",
+                logger_=logger,
                 data={"service_ports": []},
                 protocol_used=OltProtocol.SSH,
             )

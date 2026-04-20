@@ -234,6 +234,14 @@ class HuaweiProvisioner(Provisioner, ListResponseMixin):
             raise ValueError(
                 f"{step} requires commands, edit_config, rpc, or get_filter"
             )
+        if step in {"assign_ont", "push_config"} and get_filter and not any(
+            [edit_config, rpc]
+        ):
+            return ProvisioningResult(
+                status="failed",
+                detail=f"{step} cannot be satisfied by read-only get_filter",
+                payload={"requires_write_operation": True},
+            )
         with _netconf_manager(conn) as mgr:
             netconf_outputs: list[str] = []
             if edit_config:
@@ -253,8 +261,24 @@ class HuaweiProvisioner(Provisioner, ListResponseMixin):
         )
 
 
-class ZteProvisioner(HuaweiProvisioner, ListResponseMixin):
+class ZteProvisioner(Provisioner, ListResponseMixin):
     vendor = ProvisioningVendor.zte
+
+    def assign_ont(self, context: dict, config: dict | None) -> ProvisioningResult:
+        return self._not_implemented("assign_ont")
+
+    def push_config(self, context: dict, config: dict | None) -> ProvisioningResult:
+        return self._not_implemented("push_config")
+
+    def confirm_up(self, context: dict, config: dict | None) -> ProvisioningResult:
+        return self._not_implemented("confirm_up")
+
+    def _not_implemented(self, step: str) -> ProvisioningResult:
+        return ProvisioningResult(
+            status="failed",
+            detail=f"ZTE provisioning step '{step}' is not implemented",
+            payload={"vendor": self.vendor.value, "implemented": False},
+        )
 
 
 class GenieACSProvisioner(Provisioner, ListResponseMixin):

@@ -1273,11 +1273,26 @@ class TestProvisioningAdapters:
         provisioner = get_provisioner(ProvisioningVendor.huawei)
         assert isinstance(provisioner, HuaweiProvisioner)
 
-    def test_get_provisioner_zte_is_huawei_subclass(self):
+    def test_huawei_mutating_step_rejects_read_only_filter(self):
+        from app.services.provisioning_adapters import HuaweiProvisioner
+
+        result = HuaweiProvisioner().push_config(
+            {"connector": {"auth_config": {"host": "olt.example"}}},
+            {"get_filter": "<filter/>"},
+        )
+
+        assert result.success is False
+        assert result.status == "failed"
+        assert "read-only get_filter" in (result.detail or "")
+
+    def test_get_provisioner_zte_is_explicitly_unsupported(self):
         from app.services.provisioning_adapters import ZteProvisioner
 
         provisioner = get_provisioner(ProvisioningVendor.zte)
         assert isinstance(provisioner, ZteProvisioner)
+        result = provisioner.push_config({}, {})
+        assert result.success is False
+        assert "not implemented" in (result.detail or "")
 
     def test_get_provisioner_genieacs(self):
         from app.services.provisioning_adapters import GenieACSProvisioner

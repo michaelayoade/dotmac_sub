@@ -583,6 +583,21 @@ class TestMaskCredentials:
         assert "********" in masked
         assert "user test" in masked
 
+    def test_masks_common_credential_forms(self) -> None:
+        from app.services.network.ont_provision_steps import mask_credentials
+
+        cmd = (
+            "wifi psk='wifi secret' api_key=abc123 "
+            "snmp community public token:bearer123"
+        )
+        masked = mask_credentials(cmd)
+
+        assert "wifi secret" not in masked
+        assert "abc123" not in masked
+        assert "public" not in masked
+        assert "bearer123" not in masked
+        assert masked.count("********") == 4
+
 
 class TestWebRouteRegistration:
     """Verify per-step routes are registered."""
