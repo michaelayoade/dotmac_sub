@@ -14,7 +14,7 @@ from app.celery_app import celery_app
 from app.models.catalog import Subscription
 from app.services.db_session_adapter import db_session_adapter
 from app.services.redis_client import get_redis
-from app.services.zabbix import ZabbixClientError
+from app.services.zabbix import ZabbixClientError, zabbix_configured
 from app.services.zabbix_engine import (
     PORTAL_VISIBLE_SERVICE_STATUSES,
     get_zabbix_engine,
@@ -28,7 +28,7 @@ _LOCK_TTL_SECONDS = 900
 
 
 def _zabbix_enabled() -> bool:
-    return bool(os.getenv("ZABBIX_API_TOKEN"))
+    return zabbix_configured()
 
 
 def _chunk_size() -> int:

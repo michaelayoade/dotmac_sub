@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from itertools import count
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -49,6 +50,95 @@ class ZabbixConfigurationError(ZabbixClientError):
     pass
 
 
+DEFAULT_ZABBIX_API_URL = "http://zabbix-web:8080/api_jsonrpc.php"
+
+
+def _read_secret_file(path: str | None) -> str:
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError:
+        logger.warning(
+            "zabbix_secret_file_unreadable",
+            extra={"event": "zabbix_secret_file_unreadable", "path": path},
+        )
+        return ""
+
+
+def get_zabbix_api_url() -> str:
+    """Resolve the configured Zabbix API URL."""
+    from app.services.secrets import resolve_secret
+
+    configured = resolve_secret(os.getenv("ZABBIX_API_URL")) or DEFAULT_ZABBIX_API_URL
+    return str(configured)
+
+
+def get_zabbix_api_token() -> str:
+    """Resolve the Zabbix API token from OpenBao, file, or environment."""
+    from app.services.secrets import get_secret, resolve_secret
+
+    env_value = os.getenv("ZABBIX_API_TOKEN")
+    if env_value:
+        return str(resolve_secret(env_value) or "")
+
+    file_value = _read_secret_file(os.getenv("ZABBIX_API_TOKEN_FILE"))
+    if file_value:
+        return file_value
+
+    return get_secret("zabbix", "api_token", default="")
+
+
+def zabbix_configured() -> bool:
+    """Return true when the Zabbix API has enough config to be used."""
+    try:
+        return bool(get_zabbix_api_url() and get_zabbix_api_token())
+    except Exception:
+        logger.debug("zabbix_config_resolution_failed", exc_info=True)
+        return False
+
+
+def check_zabbix_availability(timeout: float = 3.0) -> dict[str, Any]:
+    """Check whether the configured Zabbix API accepts authenticated requests."""
+    api_url = get_zabbix_api_url()
+    api_token = get_zabbix_api_token()
+    if not api_token:
+        return {
+            "configured": False,
+            "available": False,
+            "status": "not_configured",
+            "api_url": api_url,
+            "message": "Zabbix API token is not configured",
+        }
+
+    try:
+        client = ZabbixClient(api_url=api_url, api_token=api_token, timeout=timeout)
+        client.get_hosts(limit=1)
+    except ZabbixConfigurationError as exc:
+        return {
+            "configured": False,
+            "available": False,
+            "status": "not_configured",
+            "api_url": api_url,
+            "message": str(exc),
+        }
+    except ZabbixClientError as exc:
+        return {
+            "configured": True,
+            "available": False,
+            "status": "unavailable",
+            "api_url": api_url,
+            "message": str(exc),
+        }
+
+    return {
+        "configured": True,
+        "available": True,
+        "status": "up",
+        "api_url": api_url,
+    }
+
+
 class ZabbixClient:
     def __init__(self, api_url: str, api_token: str, timeout: float = 10.0) -> None:
         if not api_url:
@@ -64,11 +154,8 @@ class ZabbixClient:
     def from_env(cls) -> ZabbixClient:
         timeout = float(os.getenv("ZABBIX_TIMEOUT_SECONDS", "10"))
         return cls(
-            api_url=os.getenv(
-                "ZABBIX_API_URL",
-                "http://zabbix-web:8080/api_jsonrpc.php",
-            ),
-            api_token=os.getenv("ZABBIX_API_TOKEN", ""),
+            api_url=get_zabbix_api_url(),
+            api_token=get_zabbix_api_token(),
             timeout=timeout,
         )
 

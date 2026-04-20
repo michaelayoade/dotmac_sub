@@ -10,6 +10,7 @@ from app.services.settings_spec import resolve_value
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.sync_all_acs_devices",
@@ -24,6 +25,16 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
 }
+
+
+def _zabbix_configured_default() -> bool:
+    try:
+        from app.services.zabbix import zabbix_configured
+
+        return zabbix_configured()
+    except Exception:
+        logger.debug("zabbix_scheduler_default_resolution_failed", exc_info=True)
+        return False
 
 
 def _env_value(name: str) -> str | None:
@@ -185,7 +196,7 @@ def get_celery_config() -> dict:
     long_soft_time_limit = 1740
     long_time_limit = 1800
     worker_prefetch_multiplier = 1
-    session = db_session_adapter.create_session()
+    session = SessionLocal()
     try:
         broker = _effective_str(
             session, SettingDomain.scheduler, "broker_url", "CELERY_BROKER_URL", None
@@ -314,7 +325,7 @@ def get_celery_config() -> dict:
 
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
-    session = db_session_adapter.create_session()
+    session = SessionLocal()
     try:
         enabled = _effective_bool(
             session, SettingDomain.gis, "sync_enabled", "GIS_SYNC_ENABLED", True
@@ -375,7 +386,7 @@ def build_beat_schedule() -> dict:
             enabled=radius_accounting_enabled,
             interval_seconds=radius_accounting_interval_seconds,
         )
-        zabbix_usage_enabled_by_default = bool(_env_value("ZABBIX_API_TOKEN"))
+        zabbix_usage_enabled_by_default = _zabbix_configured_default()
         zabbix_usage_enabled = _effective_bool(
             session,
             SettingDomain.usage,
@@ -1272,7 +1283,7 @@ def build_beat_schedule() -> dict:
         )
 
         # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
-        zabbix_sync_enabled_by_default = bool(_env_value("ZABBIX_API_TOKEN"))
+        zabbix_sync_enabled_by_default = _zabbix_configured_default()
         zabbix_device_sync_enabled = _effective_bool(
             session,
             SettingDomain.network_monitoring,

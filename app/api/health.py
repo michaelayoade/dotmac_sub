@@ -117,6 +117,19 @@ def reset_redis_circuit() -> dict[str, Any]:
     }
 
 
+@router.get("/zabbix")
+def zabbix_health() -> dict[str, Any]:
+    """Detailed Zabbix API health without exposing credentials."""
+    from app.services.zabbix import check_zabbix_availability
+
+    health = check_zabbix_availability(timeout=3.0)
+    return {
+        **health,
+        "zabbix_status": health.get("status"),
+        "status": "up" if health.get("available") else "down",
+    }
+
+
 @router.get("/infrastructure")
 def infrastructure_health(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Full infrastructure health check.

@@ -7,22 +7,20 @@ This module provides background tasks for syncing DotMac network devices
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
-from app.services.zabbix import ZabbixClientError
+from app.services.zabbix import ZabbixClientError, zabbix_configured
 
 logger = logging.getLogger(__name__)
 
 
 def _zabbix_sync_enabled() -> bool:
     """Check if Zabbix sync is enabled and configured."""
-    # Zabbix sync requires API token and URL
-    return bool(os.getenv("ZABBIX_API_TOKEN")) and bool(os.getenv("ZABBIX_API_URL"))
+    return zabbix_configured()
 
 
 @celery_app.task(

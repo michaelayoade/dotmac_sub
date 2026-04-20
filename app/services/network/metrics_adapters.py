@@ -329,10 +329,10 @@ class ZabbixMetricsAdapter(MetricsReader):
         api_token: str | None = None,
         timeout: float = 15.0,
     ):
-        self.api_url = api_url or os.getenv(
-            "ZABBIX_API_URL", "http://zabbix-web:8080/api_jsonrpc.php"
-        )
-        self.api_token = api_token or os.getenv("ZABBIX_API_TOKEN", "")
+        from app.services.zabbix import get_zabbix_api_token, get_zabbix_api_url
+
+        self.api_url = api_url or get_zabbix_api_url()
+        self.api_token = api_token or get_zabbix_api_token()
         self.timeout = timeout
         self._client: ZabbixClient | None = None
 

@@ -253,10 +253,38 @@ def _seed_startup_settings() -> None:
     )
 
 
+def _log_zabbix_startup_health() -> None:
+    try:
+        from app.services.zabbix import check_zabbix_availability
+
+        health = check_zabbix_availability(timeout=3.0)
+    except Exception:
+        logger.warning(
+            "zabbix_startup_health_failed",
+            exc_info=True,
+            extra={"event": "zabbix_startup_health_failed"},
+        )
+        return
+
+    log = logger.info if health.get("available") else logger.warning
+    log(
+        "zabbix_startup_health",
+        extra={
+            "event": "zabbix_startup_health",
+            "status": health.get("status"),
+            "configured": health.get("configured"),
+            "available": health.get("available"),
+            "api_url": health.get("api_url"),
+            "message": health.get("message"),
+        },
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _seed_startup_settings()
+    _log_zabbix_startup_health()
     from app.websocket.manager import get_connection_manager
 
     manager = get_connection_manager()
