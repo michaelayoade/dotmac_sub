@@ -862,6 +862,30 @@
                 </div>
                 {% endcall %}
 
+                {% if desired_config_summary is defined %}
+                {% set desired_config_actions %}
+                <a href="{{ desired_config_summary.configure_url }}"
+                   class="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
+                    Configure
+                </a>
+                {% endset %}
+                {% call card("Configured Service", color="blue", actions=desired_config_actions) %}
+                <div class="space-y-3">
+                    <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        {% for item in desired_config_summary.rows %}
+                        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+                            <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ item.label }}</dt>
+                            <dd class="mt-1 truncate text-sm text-slate-900 dark:text-white {{ item.value_class }}" title="{{ item.value }}">{{ item.value }}</dd>
+                        </div>
+                        {% endfor %}
+                    </dl>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Password fields are masked on overview. Use the configuration actions to update credentials.
+                    </p>
+                </div>
+                {% endcall %}
+                {% endif %}
+
                 {% if last_config_summary is defined %}
                 {% set last_config_actions %}
                 <div class="flex items-center gap-2">

@@ -15,7 +15,7 @@ from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
 )
-from app.services.web_network_ont_actions.diagnostics import fetch_iphost_config
+from app.services.web_network_ont_actions.diagnostics import fetch_iphost_config_with_meta
 
 logger = logging.getLogger(__name__)
 
@@ -158,20 +158,33 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services.network import ont_web_forms as ont_web_forms_service
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    ok, msg, config = fetch_iphost_config(db, ont_id)
+    iphost_result = fetch_iphost_config_with_meta(db, ont_id)
+    ok, msg, config = (
+        iphost_result.ok,
+        iphost_result.message,
+        dict(iphost_result.data or {}),
+    )
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    tr069_profiles, tr069_profiles_error = (
-        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    profiles_result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
+        db, ont
+    )
+    tr069_profiles = list(profiles_result.data or [])
+    tr069_profiles_error = (
+        profiles_result.message
+        if (not profiles_result.ok or profiles_result.stale)
+        else None
     )
     context = {
         "ont": ont,
         "iphost_config": config,
         "iphost_ok": ok,
         "iphost_msg": msg,
+        "iphost_freshness": iphost_result.freshness,
         "initial_iphost_form": ont_web_forms_service.initial_iphost_form(ont, config),
         "vlans": vlans,
         "tr069_profiles": tr069_profiles,
         "tr069_profiles_error": tr069_profiles_error,
+        "tr069_profiles_freshness": profiles_result.freshness,
     }
     context.update(
         _desired_config_context(
@@ -200,10 +213,21 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         .scalars()
         .first()
     )
-    ok, msg, iphost_config = fetch_iphost_config(db, ont_id)
+    iphost_result = fetch_iphost_config_with_meta(db, ont_id)
+    ok, msg, iphost_config = (
+        iphost_result.ok,
+        iphost_result.message,
+        dict(iphost_result.data or {}),
+    )
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    tr069_profiles, tr069_profiles_error = (
-        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    profiles_result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
+        db, ont
+    )
+    tr069_profiles = list(profiles_result.data or [])
+    tr069_profiles_error = (
+        profiles_result.message
+        if (not profiles_result.ok or profiles_result.stale)
+        else None
     )
     initial_form = ont_web_forms_service.initial_iphost_form(ont, iphost_config)
 
@@ -264,10 +288,12 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "iphost_config": iphost_config,
         "iphost_ok": ok,
         "iphost_msg": msg,
+        "iphost_freshness": iphost_result.freshness,
         "initial_iphost_form": initial_form,
         "vlans": vlans,
         "tr069_profiles": tr069_profiles,
         "tr069_profiles_error": tr069_profiles_error,
+        "tr069_profiles_freshness": profiles_result.freshness,
         "has_tr069": bool(
             linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
         ),
@@ -368,8 +394,14 @@ def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_onts as web_network_onts_service
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    tr069_profiles, tr069_profiles_error = (
-        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    profiles_result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
+        db, ont
+    )
+    tr069_profiles = list(profiles_result.data or [])
+    tr069_profiles_error = (
+        profiles_result.message
+        if (not profiles_result.ok or profiles_result.stale)
+        else None
     )
     current_profile, current_profile_error = (
         service_intent_ui_adapter.resolve_effective_tr069_profile(db, ont=ont)
@@ -378,6 +410,7 @@ def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "ont_id": ont_id,
         "tr069_profiles": tr069_profiles,
         "tr069_profiles_error": tr069_profiles_error or current_profile_error,
+        "tr069_profiles_freshness": profiles_result.freshness,
         "current_profile": getattr(current_profile, "profile_name", None)
         or getattr(current_profile, "name", None),
         "current_profile_id": getattr(current_profile, "profile_id", None),

@@ -553,23 +553,47 @@ def get_tr069_profiles_for_ont(
     ont: OntUnit | Any | None,
 ) -> tuple[list[Any], str | None]:
     """Fetch TR-069 server profiles for the ONT's assigned OLT."""
+    result = get_tr069_profiles_for_ont_with_meta(db, ont)
+    profiles = list(result.data or []) if result.ok else []
+    error = None if result.ok and not result.stale else result.message
+    return profiles, error
+
+
+def get_tr069_profiles_for_ont_with_meta(
+    db: Session,
+    ont: OntUnit | Any | None,
+):
+    """Fetch TR-069 server profiles with source/freshness metadata."""
+    from app.services.olt_observed_state_adapter import ObservedReadResult
+
     if ont is None:
-        return [], None
+        return ObservedReadResult(
+            ok=True, message="", data=[], source="none", fetched_at=None
+        )
 
     olt_device_id = getattr(ont, "olt_device_id", None)
     if not olt_device_id:
-        return [], "No OLT is assigned to this ONT"
+        return ObservedReadResult(
+            ok=False,
+            message="No OLT is assigned to this ONT",
+            data=[],
+            source="none",
+            fetched_at=None,
+        )
 
     olt = db.get(OLTDevice, olt_device_id)
     if not olt:
-        return [], "OLT not found"
+        return ObservedReadResult(
+            ok=False,
+            message="OLT not found",
+            data=[],
+            source="none",
+            fetched_at=None,
+        )
 
-    from app.services.network.olt_ssh_profiles import get_tr069_server_profiles
+    from app.services.olt_observed_state_adapter import get_tr069_profiles_for_olt
 
-    ok, msg, profiles = get_tr069_server_profiles(olt)
-    if ok:
-        return profiles, None
-    return [], msg
+    return get_tr069_profiles_for_olt(db, olt)
 
 
 def get_zones(db: Session) -> list[Any]:

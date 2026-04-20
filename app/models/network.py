@@ -699,6 +699,10 @@ class OLTDevice(Base):
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
+    tr069_profiles_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    tr069_profiles_snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     supported_pon_types: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[DeviceStatus] = mapped_column(
@@ -1198,6 +1202,10 @@ class OntUnit(Base):
     )
     tr069_last_snapshot: Mapped[dict | None] = mapped_column(JSON)
     tr069_last_snapshot_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    olt_observed_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    olt_observed_snapshot_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
     wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -59,13 +59,58 @@ def fetch_running_config(db: Session, ont_id: str) -> ActionResult:
 
 def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, str]]:
     """Fetch ONT IPHOST config from OLT."""
+    result = fetch_iphost_config_with_meta(db, ont_id)
+    return result.ok, result.message, dict(result.data or {})
+
+
+def fetch_iphost_config_with_meta(db: Session, ont_id: str):
+    """Fetch ONT IPHOST config from OLT, falling back to last-known-good DB data."""
     from app.services.network.olt_ssh_ont import get_ont_iphost_config
+    from app.services.olt_observed_state_adapter import (
+        ObservedReadResult,
+        get_cached_iphost_config,
+        persist_iphost_config,
+    )
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
     if not olt or not fsp or olt_ont_id is None:
-        return False, "Cannot resolve OLT context for this ONT", {}
-    return get_ont_iphost_config(olt, fsp, olt_ont_id)
+        cached = get_cached_iphost_config(ont) if ont else None
+        if cached:
+            return cached
+        return ObservedReadResult(
+            ok=False,
+            message="Cannot resolve OLT context for this ONT",
+            data={},
+            source="none",
+        )
+    ok, message, config = get_ont_iphost_config(olt, fsp, olt_ont_id)
+    if ok:
+        persist_iphost_config(db, ont, config)
+        return ObservedReadResult(
+            ok=True,
+            message=message,
+            data=config,
+            source="live",
+            fetched_at=getattr(ont, "olt_observed_snapshot_at", None),
+            stale=False,
+        )
+    cached = get_cached_iphost_config(ont)
+    if cached:
+        return ObservedReadResult(
+            ok=True,
+            message=f"Live IPHOST read unavailable: {message}",
+            data=cached.data,
+            source=cached.source,
+            fetched_at=cached.fetched_at,
+            stale=True,
+        )
+    return ObservedReadResult(
+        ok=False,
+        message=message,
+        data={},
+        source="live",
+    )
 
 
 def running_config_context(db: Session, ont_id: str) -> dict[str, object]:

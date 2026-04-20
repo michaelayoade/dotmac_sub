@@ -2185,12 +2185,16 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         ont_plan=ont_plan,
     )
     try:
-        acs_observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-            db,
-            ont_id=ont_id,
+        from app.services.network.ont_tr069 import OntTR069
+
+        cached_summary = OntTR069._summary_from_snapshot(ont)
+        acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+            cached_summary
         )
     except Exception:
-        logger.exception("Failed to load ACS observed service intent for ONT %s", ont_id)
+        logger.exception(
+            "Failed to load cached ACS observed service intent for ONT %s", ont_id
+        )
         acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
             None
         )
@@ -2202,6 +2206,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         ont,
         acs_observed_intent=acs_observed_intent,
     )
+    desired_config_summary = _ont_desired_config_summary(ont, ont_plan=ont_plan)
     connected_wifi_clients = observed_runtime_summary.get("wifi_clients")
     connected_customer_devices = observed_runtime_summary.get("customer_devices")
 
@@ -2229,6 +2234,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "acs_observed_intent": acs_observed_intent,
         "observed_runtime_summary": observed_runtime_summary,
         "last_config_summary": last_config_summary,
+        "desired_config_summary": desired_config_summary,
         "connected_customer_devices": connected_customer_devices,
         "connected_wifi_clients": connected_wifi_clients,
         "profile_state": profile_state,
@@ -2521,6 +2527,157 @@ def _ont_last_config_summary(
         "details": details,
         "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
         "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
+    }
+
+
+def _display_config_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    text = str(value or "").strip()
+    return text or "-"
+
+
+def _secret_status(value: object) -> str:
+    return "Set (hidden)" if str(value or "").strip() else "Not set"
+
+
+def _enum_or_text(value: object) -> str:
+    raw = getattr(value, "value", value)
+    return str(raw or "").strip()
+
+
+def _ont_desired_config_summary(
+    ont: object,
+    *,
+    ont_plan: dict[str, object],
+) -> dict[str, object]:
+    """Return DB-backed intended config for the overview page."""
+    plan = ont_plan if isinstance(ont_plan, dict) else {}
+    mgmt = plan.get("configure_management_ip")
+    mgmt = mgmt if isinstance(mgmt, dict) else {}
+    wan = plan.get("configure_wan_tr069")
+    wan = wan if isinstance(wan, dict) else {}
+    pppoe = plan.get("push_pppoe_tr069") or plan.get("push_pppoe_omci")
+    pppoe = pppoe if isinstance(pppoe, dict) else {}
+    lan = plan.get("configure_lan_tr069")
+    lan = lan if isinstance(lan, dict) else {}
+    wifi = plan.get("configure_wifi_tr069")
+    wifi = wifi if isinstance(wifi, dict) else {}
+    olt_snapshot = getattr(ont, "olt_observed_snapshot", None)
+    olt_snapshot = olt_snapshot if isinstance(olt_snapshot, dict) else {}
+    iphost = olt_snapshot.get("iphost_config")
+    iphost = iphost if isinstance(iphost, dict) else {}
+
+    mgmt_vlan = getattr(getattr(ont, "mgmt_vlan", None), "tag", None)
+    wan_vlan = getattr(getattr(ont, "wan_vlan", None), "tag", None)
+    rows = [
+        {
+            "label": "Mgmt mode",
+            "value": _display_config_value(
+                _enum_or_text(getattr(ont, "mgmt_ip_mode", None))
+                or mgmt.get("ip_mode")
+            ),
+            "value_class": "",
+        },
+        {
+            "label": "Mgmt VLAN",
+            "value": _display_config_value(mgmt_vlan or mgmt.get("vlan_id")),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "Mgmt IP",
+            "value": _display_config_value(
+                getattr(ont, "mgmt_ip_address", None) or mgmt.get("ip_address")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "Observed IPHOST",
+            "value": _display_config_value(
+                iphost.get("IP Address")
+                or iphost.get("IP")
+                or iphost.get("ip_address")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "TR-069 profile",
+            "value": _display_config_value(getattr(ont, "tr069_olt_profile_id", None)),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "WAN mode",
+            "value": _display_config_value(
+                _enum_or_text(getattr(ont, "wan_mode", None)) or wan.get("wan_mode")
+            ),
+            "value_class": "",
+        },
+        {
+            "label": "WAN VLAN",
+            "value": _display_config_value(
+                wan_vlan or wan.get("wan_vlan") or pppoe.get("vlan_id")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "PPPoE user",
+            "value": _display_config_value(
+                getattr(ont, "pppoe_username", None) or pppoe.get("username")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "PPPoE password",
+            "value": _secret_status(getattr(ont, "pppoe_password", None)),
+            "value_class": "",
+        },
+        {
+            "label": "LAN gateway",
+            "value": _display_config_value(
+                getattr(ont, "lan_gateway_ip", None) or lan.get("lan_ip")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "LAN subnet",
+            "value": _display_config_value(
+                getattr(ont, "lan_subnet_mask", None) or lan.get("lan_subnet")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "WiFi enabled",
+            "value": _display_config_value(
+                getattr(ont, "wifi_enabled", None)
+                if getattr(ont, "wifi_enabled", None) is not None
+                else wifi.get("enabled")
+            ),
+            "value_class": "",
+        },
+        {
+            "label": "SSID",
+            "value": _display_config_value(
+                getattr(ont, "wifi_ssid", None) or wifi.get("ssid")
+            ),
+            "value_class": "font-mono",
+        },
+        {
+            "label": "WiFi password",
+            "value": _secret_status(getattr(ont, "wifi_password", None)),
+            "value_class": "",
+        },
+        {
+            "label": "WiFi channel",
+            "value": _display_config_value(
+                getattr(ont, "wifi_channel", None) or wifi.get("channel")
+            ),
+            "value_class": "",
+        },
+    ]
+    return {
+        "rows": rows,
+        "configured_count": sum(1 for row in rows if row["value"] != "-"),
+        "configure_url": f"/admin/network/onts/{getattr(ont, 'id', '')}?tab=device-config",
     }
 
 
