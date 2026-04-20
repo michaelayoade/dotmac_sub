@@ -7,6 +7,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 _UNSET_DISPLAY = "Not observed"
 
 
@@ -91,6 +93,8 @@ def _missing_count(*groups: Mapping[str, object]) -> int:
 
 class AcsServiceIntentAdapter:
     """Normalize ACS observed state into service-intent-shaped UI data."""
+
+    name = "acs.service_intent"
 
     def load_observed_intent_for_ont(
         self, db: Session, *, ont_id: str
@@ -351,3 +355,4 @@ class AcsServiceIntentAdapter:
 
 
 acs_service_intent_adapter = AcsServiceIntentAdapter()
+adapter_registry.register(acs_service_intent_adapter)

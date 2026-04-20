@@ -44,6 +44,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from app.services.adapters import adapter_registry
+
 if TYPE_CHECKING:
     pass
 
@@ -506,6 +508,8 @@ class NotificationAdapter:
     with automatic provider selection, fallback, and retry support.
     """
 
+    name = "notification"
+
     def __init__(self):
         self._providers: dict[NotificationChannel, ChannelProvider] = {}
         self._register_providers()
@@ -852,6 +856,7 @@ class NotificationAdapter:
 
 
 notify = NotificationAdapter()
+adapter_registry.register(notify)
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from app.services.adapters import adapter_registry
 from app.services.queue_adapter import QueueDispatchResult, QueueMessage, enqueue_task
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,8 @@ TASK_PRIORITY_MAPPING: dict[str, TaskPriority] = {
 
 class QueueStrategyAdapter:
     """Strategic queue adapter with health monitoring and backpressure."""
+
+    name = "queue.strategy"
 
     def __init__(self, config: StrategyConfig | None = None) -> None:
         self.config = config or StrategyConfig()
@@ -383,6 +386,7 @@ class QueueStrategyAdapter:
 
 # Global instance
 queue_strategy = QueueStrategyAdapter()
+adapter_registry.register(queue_strategy)
 
 
 def strategic_enqueue(

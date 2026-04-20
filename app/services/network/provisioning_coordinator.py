@@ -286,31 +286,12 @@ class ProvisioningCoordinator:
             ):
                 return self._finalize("OLT registration failed")
 
-            # Phase 2: Service Port Creation
-            if not self._execute_service_port_creation(olt_id):
-                # Non-fatal - continue with warning
-                pass
-
-            # Phase 3: Management IP
-            if not self._execute_management_ip_config(olt_id):
-                # Non-fatal - continue with warning
-                pass
-
-            # Phase 4: TR-069 Profile Binding
-            if not self._execute_tr069_binding(olt_id):
-                # Non-fatal for provisioning, but ACS won't work
-                pass
-
-            # Phase 5: ACS Discovery (wait for ONT to appear)
-            if not skip_acs_config:
-                if not self._execute_acs_discovery(acs_config_timeout_seconds):
-                    # Non-fatal - ONT may appear later
-                    pass
-
-                # Phase 6: Config Push
-                if not self._execute_acs_config_push():
-                    # Non-fatal - can retry later
-                    pass
+            if not self._execute_post_registration_saga(
+                olt_id,
+                skip_acs_config=skip_acs_config,
+                acs_config_timeout_seconds=acs_config_timeout_seconds,
+            ):
+                return self._finalize("Post-registration provisioning saga failed")
 
             return self._finalize("Provisioning completed successfully", success=True)
 
@@ -378,6 +359,128 @@ class ProvisioningCoordinator:
     # -----------------------------------------------------------------------
     # Phase Executors
     # -----------------------------------------------------------------------
+
+    def _execute_post_registration_saga(
+        self,
+        olt_id: str,
+        *,
+        skip_acs_config: bool,
+        acs_config_timeout_seconds: int,
+    ) -> bool:
+        """Run coordinator post-registration phases through SagaExecutor."""
+        assert self._result is not None
+        if not self._result.ont_id:
+            return False
+
+        from app.services.network.ont_provisioning.result import StepResult
+        from app.services.network.ont_provisioning.saga import (
+            SagaContext,
+            SagaDefinition,
+            SagaExecutor,
+            SagaStep,
+            generate_saga_execution_id,
+        )
+
+        def _step_result(name: str, ok: bool, *, critical: bool = False) -> StepResult:
+            return StepResult(
+                step_name=name,
+                success=ok,
+                message=f"{name.replace('_', ' ').title()} {'completed' if ok else 'failed'}",
+                critical=critical,
+            )
+
+        def _verify_service_ports(_ctx: SagaContext) -> StepResult:
+            ok = self._execute_service_port_creation(olt_id)
+            return _step_result("verify_service_ports", ok)
+
+        def _compensate_service_ports(
+            ctx: SagaContext, _original: StepResult
+        ) -> StepResult:
+            from app.services.network.ont_provision_steps import rollback_service_ports
+
+            return rollback_service_ports(ctx.db, ctx.ont_id)
+
+        def _management_ip(_ctx: SagaContext) -> StepResult:
+            ok = self._execute_management_ip_config(olt_id)
+            return _step_result("management_ip", ok)
+
+        def _tr069_binding(_ctx: SagaContext) -> StepResult:
+            ok = self._execute_tr069_binding(olt_id)
+            return _step_result("tr069_binding", ok)
+
+        def _acs_discovery(_ctx: SagaContext) -> StepResult:
+            ok = self._execute_acs_discovery(acs_config_timeout_seconds)
+            return _step_result("acs_discovery", ok)
+
+        def _acs_config_push(_ctx: SagaContext) -> StepResult:
+            ok = self._execute_acs_config_push()
+            return _step_result("acs_config_push", ok)
+
+        steps = [
+            SagaStep(
+                name="verify_service_ports",
+                action=_verify_service_ports,
+                compensate=_compensate_service_ports,
+                critical=False,
+                description="Verify service ports after OLT registration",
+            ),
+            SagaStep(
+                name="management_ip",
+                action=_management_ip,
+                critical=False,
+                description="Verify or configure management IP",
+            ),
+            SagaStep(
+                name="tr069_binding",
+                action=_tr069_binding,
+                critical=False,
+                description="Bind TR-069 server profile",
+            ),
+        ]
+        if not skip_acs_config:
+            steps.extend(
+                [
+                    SagaStep(
+                        name="acs_discovery",
+                        action=_acs_discovery,
+                        critical=False,
+                        description="Queue ACS discovery wait",
+                    ),
+                    SagaStep(
+                        name="acs_config_push",
+                        action=_acs_config_push,
+                        critical=False,
+                        description="Queue ACS config push",
+                    ),
+                ]
+            )
+
+        saga = SagaDefinition(
+            name="coordinated_post_registration",
+            description="Coordinator post-registration OLT/ACS provisioning phases",
+            steps=steps,
+            version="1.0",
+        )
+        context = SagaContext(
+            db=self.db,
+            ont_id=self._result.ont_id,
+            saga_execution_id=generate_saga_execution_id(),
+            ont=self._get_ont(self._result.ont_id),
+            olt=self._get_olt(olt_id),
+            initiated_by=self.initiated_by,
+        )
+        saga_result = SagaExecutor(saga, context).execute()
+        if saga_result.compensation_failures:
+            self._result.add_step(
+                ProvisioningPhase.rollback,
+                "Saga compensation failures",
+                False,
+                "; ".join(
+                    f"{step}: {error}"
+                    for step, error in saga_result.compensation_failures
+                ),
+            )
+        return saga_result.success
 
     def _execute_olt_registration(
         self,

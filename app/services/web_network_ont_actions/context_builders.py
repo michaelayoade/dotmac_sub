@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import OntAssignment
+from app.models.network import OLTDevice, OntAssignment
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
@@ -197,9 +198,14 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    """Build context for the unified ONT configuration partial."""
+    """Build context for the unified ONT configuration partial from DB state."""
     from app.services import web_network_onts as web_network_onts_service
     from app.services.network import ont_web_forms as ont_web_forms_service
+    from app.services.olt_observed_state_adapter import (
+        ObservedReadResult,
+        get_cached_iphost_config,
+        get_cached_tr069_profiles_for_olt,
+    )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     linked_tr069 = (
@@ -213,15 +219,30 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         .scalars()
         .first()
     )
-    iphost_result = fetch_iphost_config_with_meta(db, ont_id)
-    ok, msg, iphost_config = (
-        iphost_result.ok,
-        iphost_result.message,
-        dict(iphost_result.data or {}),
+    iphost_result = get_cached_iphost_config(ont) or ObservedReadResult(
+        ok=True,
+        message="No cached IPHOST configuration.",
+        data={},
+        source="db",
+        fetched_at=getattr(ont, "olt_observed_snapshot_at", None),
+        stale=True,
     )
+    ok, msg, iphost_config = True, iphost_result.message, dict(iphost_result.data or {})
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    profiles_result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
-        db, ont
+    olt = getattr(ont, "olt_device", None)
+    if olt is None and getattr(ont, "olt_device_id", None):
+        olt = db.get(OLTDevice, getattr(ont, "olt_device_id"))
+    profiles_result = (
+        get_cached_tr069_profiles_for_olt(olt)
+        if olt is not None
+        else ObservedReadResult(
+            ok=True,
+            message="No OLT is assigned to this ONT.",
+            data=[],
+            source="db",
+            fetched_at=None,
+            stale=True,
+        )
     )
     tr069_profiles = list(profiles_result.data or [])
     tr069_profiles_error = (
@@ -260,16 +281,38 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )
-    try:
-        acs_observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-            db,
-            ont_id=ont_id,
+    acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+        SimpleNamespace(
+            available=bool(linked_tr069),
+            source="db",
+            fetched_at=getattr(ont, "observed_runtime_updated_at", None),
+            system={
+                "SerialNumber": getattr(ont, "serial_number", None),
+                "MACAddress": getattr(ont, "mac_address", None),
+            },
+            wan={
+                "pppoe_username": getattr(ont, "pppoe_username", None),
+                "wan_ip": getattr(ont, "observed_wan_ip", None),
+                "status": getattr(ont, "observed_pppoe_status", None),
+                "wan_mode": _enum_value(getattr(ont, "wan_mode", None)),
+            },
+            lan={
+                "lan_ip": getattr(ont, "lan_gateway_ip", None),
+                "lan_subnet": getattr(ont, "lan_subnet_mask", None),
+                "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
+                "dhcp_start": getattr(ont, "lan_dhcp_start", None),
+                "dhcp_end": getattr(ont, "lan_dhcp_end", None),
+            },
+            wireless={
+                "SSID": getattr(ont, "wifi_ssid", None),
+                "Enable": getattr(ont, "wifi_enabled", None),
+                "Channel": getattr(ont, "wifi_channel", None),
+                "Security Mode": getattr(ont, "wifi_security_mode", None),
+            },
+            ethernet_ports=[],
+            lan_hosts=[],
         )
-    except Exception:
-        logger.exception("Failed to load ACS observed service intent for ONT %s", ont_id)
-        acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
-            None
-        )
+    )
 
     observed = acs_observed_intent.get("observed", {})
     observed_wan = observed.get("wan", {}) if isinstance(observed, dict) else {}

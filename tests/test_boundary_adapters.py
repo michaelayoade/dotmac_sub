@@ -120,33 +120,49 @@ def test_adapter_registry_tracks_named_adapters() -> None:
 
 def test_global_adapter_registry_contains_core_singletons() -> None:
     from app.services import (
+        acs_config_adapter,
+        acs_event_adapter,
+        acs_service_intent_adapter,
+        acs_state_adapter,
         audit_adapter,
         billing_adapter,
         db_session_adapter,
         external_bss_adapter,
         ipam_adapter,
+        notification_adapter,
         olt_action_adapter,
         olt_detail_adapter,
+        olt_observed_state_adapter,
         olt_profile_adapter,
         payment_gateway_adapter,
         queue_adapter,
+        queue_strategy_adapter,
         rate_limiter_adapter,
+        service_intent_adapter,
         service_intent_ui_adapter,
     )
     from app.services.adapters import adapter_registry
 
     expected = {
+        "acs.config": acs_config_adapter.acs_config_adapter,
+        "acs.events": acs_event_adapter.acs_event_adapter,
+        "acs.service_intent": acs_service_intent_adapter.acs_service_intent_adapter,
+        "acs.state": acs_state_adapter.acs_state_adapter,
         "audit": audit_adapter.audit_adapter,
         "billing": billing_adapter.billing_adapter,
         "db.session.sqlalchemy": db_session_adapter.db_session_adapter,
         "external_bss": external_bss_adapter.external_bss_adapter,
         "ipam": ipam_adapter.ipam_adapter,
+        "notification": notification_adapter.notify,
         "olt_action": olt_action_adapter.olt_action_adapter,
         "olt_detail": olt_detail_adapter.olt_detail_adapter,
+        "olt.observed_state": olt_observed_state_adapter.olt_observed_state_adapter,
         "olt_profile": olt_profile_adapter.olt_profile_adapter,
         "payment_gateway": payment_gateway_adapter.payment_gateway_adapter,
         "queue.celery": queue_adapter.queue_adapter,
+        "queue.strategy": queue_strategy_adapter.queue_strategy,
         "rate_limiter.memory": rate_limiter_adapter.rate_limiter_adapter,
+        "service_intent": service_intent_adapter.service_intent_adapter,
         "service_intent.ui": service_intent_ui_adapter.service_intent_ui_adapter,
     }
 

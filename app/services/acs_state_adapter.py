@@ -6,9 +6,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 class GenieAcsStateReader:
     """Read observed ONT state from GenieACS/TR-069 sources."""
+
+    name = "acs.state"
 
     def get_device_summary(
         self,
@@ -51,3 +55,7 @@ class GenieAcsStateReader:
             summary,
             commit=commit,
         )
+
+
+acs_state_adapter = GenieAcsStateReader()
+adapter_registry.register(acs_state_adapter)

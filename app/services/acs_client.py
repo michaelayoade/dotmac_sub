@@ -469,15 +469,15 @@ def _create_genieacs_config_writer() -> AcsConfigWriter:
 
 
 def _create_genieacs_state_reader() -> AcsStateReader:
-    from app.services.acs_state_adapter import GenieAcsStateReader
+    from app.services.acs_state_adapter import acs_state_adapter
 
-    return GenieAcsStateReader()
+    return acs_state_adapter
 
 
 def _create_genieacs_event_ingestor() -> AcsEventIngestor:
-    from app.services.acs_event_adapter import GenieAcsEventIngestor
+    from app.services.acs_event_adapter import acs_event_adapter
 
-    return GenieAcsEventIngestor()
+    return acs_event_adapter
 
 
 register_acs_backend(

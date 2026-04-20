@@ -17,6 +17,8 @@ from uuid import UUID
 import httpx
 from sqlalchemy import select
 
+from app.services.adapters import adapter_registry
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -235,6 +237,8 @@ class BandwidthMetricsAdapter:
     for efficient use in Celery tasks.
     """
 
+    name = "bandwidth.metrics"
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -298,4 +302,5 @@ def get_bandwidth_metrics_adapter() -> BandwidthMetricsAdapter:
     global _adapter
     if _adapter is None:
         _adapter = BandwidthMetricsAdapter()
+        adapter_registry.register(_adapter)
     return _adapter

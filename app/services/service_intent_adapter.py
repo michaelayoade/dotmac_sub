@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from app.services.adapters import adapter_registry
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -163,6 +165,8 @@ class SubscriptionProvisioningSpec:
 
 class ServiceIntentAdapter:
     """Build network service intent from catalog and subscription records."""
+
+    name = "service_intent"
 
     def translate_offer(
         self,
@@ -404,6 +408,7 @@ class ServiceIntentAdapter:
 
 
 service_intent_adapter = ServiceIntentAdapter()
+adapter_registry.register(service_intent_adapter)
 
 
 def translate_catalog_offer(

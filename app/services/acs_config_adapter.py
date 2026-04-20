@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
 from app.services.network.ont_action_common import ActionResult
 
 
@@ -31,6 +32,8 @@ class AcsConfigQueueResult:
 
 class GenieAcsConfigWriter:
     """Write ONT configuration through the current GenieACS/TR-069 backend."""
+
+    name = "acs.config"
 
     _QUEUE_TASK = "app.tasks.tr069.apply_acs_config"
     _QUEUE_NAME = "acs"
@@ -686,3 +689,4 @@ class GenieAcsConfigWriter:
 
 AcsConfigAdapter = GenieAcsConfigWriter
 acs_config_adapter = GenieAcsConfigWriter()
+adapter_registry.register(acs_config_adapter)

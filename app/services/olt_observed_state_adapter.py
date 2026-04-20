@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntUnit
+from app.services.adapters import adapter_registry
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,8 @@ def _write_redis_json(key: str, value: dict[str, object], ttl: int) -> None:
 class OltObservedStateAdapter:
     """Read and persist observed OLT-side state behind one adapter boundary."""
 
+    name = "olt.observed_state"
+
     def get_tr069_profiles_for_olt(
         self,
         db: Session,
@@ -194,6 +197,36 @@ class OltObservedStateAdapter:
             stale=False,
         )
 
+    def get_cached_tr069_profiles_for_olt(self, olt: OLTDevice) -> ObservedReadResult:
+        """Return DB-cached TR-069 profiles without Redis or SSH reads."""
+        snapshot = (
+            olt.tr069_profiles_snapshot
+            if isinstance(olt.tr069_profiles_snapshot, dict)
+            else {}
+        )
+        profiles = _profiles_from_payload(snapshot.get("profiles"))
+        fetched_at = (
+            _parse_datetime(snapshot.get("fetched_at"))
+            or olt.tr069_profiles_snapshot_at
+        )
+        if profiles:
+            return ObservedReadResult(
+                ok=True,
+                message="Using DB-cached TR-069 profile list.",
+                data=profiles,
+                source="db",
+                fetched_at=fetched_at,
+                stale=True,
+            )
+        return ObservedReadResult(
+            ok=True,
+            message="No cached TR-069 profile list.",
+            data=[],
+            source="db",
+            fetched_at=fetched_at,
+            stale=True,
+        )
+
     def persist_iphost_config(
         self,
         db: Session,
@@ -235,6 +268,7 @@ class OltObservedStateAdapter:
 
 
 olt_observed_state_adapter = OltObservedStateAdapter()
+adapter_registry.register(olt_observed_state_adapter)
 
 
 def get_tr069_profiles_for_olt(
@@ -250,6 +284,10 @@ def get_tr069_profiles_for_olt(
         ttl_seconds=ttl_seconds,
         force_live=force_live,
     )
+
+
+def get_cached_tr069_profiles_for_olt(olt: OLTDevice) -> ObservedReadResult:
+    return olt_observed_state_adapter.get_cached_tr069_profiles_for_olt(olt)
 
 
 def persist_iphost_config(

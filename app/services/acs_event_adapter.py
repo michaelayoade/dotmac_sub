@@ -6,9 +6,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 class GenieAcsEventIngestor:
     """Ingest GenieACS webhook payloads into normalized local ACS state."""
+
+    name = "acs.events"
 
     def receive_inform(
         self,
@@ -40,3 +44,7 @@ class GenieAcsEventIngestor:
             product_class=product_class,
             acs_server_id=acs_server_id,
         )
+
+
+acs_event_adapter = GenieAcsEventIngestor()
+adapter_registry.register(acs_event_adapter)
