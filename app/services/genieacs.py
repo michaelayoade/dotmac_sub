@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import quote
@@ -257,6 +259,49 @@ class GenieACSClient:
             return default
         return raw in {"1", "true", "yes", "on"}
 
+    @staticmethod
+    def _task_value_count(task: dict[str, Any]) -> int:
+        if task.get("name") == "setParameterValues":
+            return len(task.get("parameterValues") or [])
+        if task.get("name") == "getParameterValues":
+            return len(task.get("parameterNames") or [])
+        return 0
+
+    @classmethod
+    def _task_wait_log_interval_seconds(cls) -> int:
+        return max(cls._env_int("GENIEACS_TASK_WAIT_LOG_INTERVAL_SECONDS", 15), 0)
+
+    @staticmethod
+    def _start_task_wait_logger(
+        *,
+        device_id: str,
+        task_name: str,
+        connection_request: bool,
+        interval_seconds: int,
+        started_at: float,
+    ) -> tuple[threading.Event, threading.Thread | None]:
+        done = threading.Event()
+        if not connection_request or interval_seconds <= 0:
+            return done, None
+
+        def _log_waiting() -> None:
+            while not done.wait(interval_seconds):
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                logger.info(
+                    "genieacs_task_create_waiting",
+                    extra={
+                        "event": "genieacs_task_create_waiting",
+                        "device_id": device_id,
+                        "task_name": task_name,
+                        "connection_request": connection_request,
+                        "elapsed_ms": elapsed_ms,
+                    },
+                )
+
+        thread = threading.Thread(target=_log_waiting, daemon=True)
+        thread.start()
+        return done, thread
+
     @classmethod
     def _max_pending_tasks_per_device(cls) -> int:
         return max(cls._env_int("GENIEACS_MAX_PENDING_TASKS_PER_DEVICE", 20), 1)
@@ -435,13 +480,53 @@ class GenieACSClient:
 
         encoded_id = quote(device_id, safe="")
         params = {"connection_request": str(connection_request).lower()}
-
-        response = self._request(
-            "POST",
-            f"/devices/{encoded_id}/tasks",
-            params=params,
-            json_data=task,
+        task_name = str(task.get("name") or "unknown")
+        value_count = self._task_value_count(task)
+        started_at = time.monotonic()
+        logger.info(
+            "genieacs_task_create_begin",
+            extra={
+                "event": "genieacs_task_create_begin",
+                "device_id": device_id,
+                "task_name": task_name,
+                "connection_request": connection_request,
+                "value_count": value_count,
+                "timeout_seconds": self.timeout,
+            },
         )
+        done, wait_thread = self._start_task_wait_logger(
+            device_id=device_id,
+            task_name=task_name,
+            connection_request=connection_request,
+            interval_seconds=self._task_wait_log_interval_seconds(),
+            started_at=started_at,
+        )
+
+        try:
+            response = self._request(
+                "POST",
+                f"/devices/{encoded_id}/tasks",
+                params=params,
+                json_data=task,
+            )
+        except Exception:
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "genieacs_task_create_failed",
+                extra={
+                    "event": "genieacs_task_create_failed",
+                    "device_id": device_id,
+                    "task_name": task_name,
+                    "connection_request": connection_request,
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+            raise
+        finally:
+            done.set()
+            if wait_thread is not None:
+                wait_thread.join(timeout=0.1)
+
         result = response.json() if response.text else {}
 
         # GenieACS returns 202 even when device is offline, with error in reason phrase
@@ -462,6 +547,22 @@ class GenieACSClient:
                 # Only set if not already present from JSON body
                 if "connectionRequestError" not in result:
                     result["connectionRequestError"] = reason
+
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            "genieacs_task_create_complete",
+            extra={
+                "event": "genieacs_task_create_complete",
+                "device_id": device_id,
+                "task_name": task_name,
+                "connection_request": connection_request,
+                "status_code": response.status_code,
+                "elapsed_ms": elapsed_ms,
+                "task_id": result.get("_id"),
+                "already_pending": bool(result.get("alreadyPending")),
+                "connection_request_error": result.get("connectionRequestError"),
+            },
+        )
 
         return result
 

@@ -275,6 +275,42 @@ class TestTaskOperations:
 
             assert result == task_result
 
+    def test_create_task_logs_summary_without_parameter_values(
+        self, client, mock_response, caplog
+    ):
+        """Task lifecycle logs should be short and credential-safe."""
+        task_result = {"_id": "task123"}
+        task = {
+            "name": "setParameterValues",
+            "parameterValues": [
+                ["Device.PPP.Interface.1.Password", "secret-value", "xsd:string"]
+            ],
+        }
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=task_result, text=json.dumps(task_result))
+            )
+
+            with caplog.at_level("INFO", logger="app.services.genieacs"):
+                result = client.create_task("device1", task)
+
+        assert result == task_result
+        assert "secret-value" not in caplog.text
+        begin = next(
+            record
+            for record in caplog.records
+            if record.__dict__.get("event") == "genieacs_task_create_begin"
+        )
+        complete = next(
+            record
+            for record in caplog.records
+            if record.__dict__.get("event") == "genieacs_task_create_complete"
+        )
+        assert begin.__dict__["task_name"] == "setParameterValues"
+        assert begin.__dict__["value_count"] == 1
+        assert complete.__dict__["task_id"] == "task123"
+
     def test_create_task_empty_response(self, client, mock_response):
         """Test create_task handles empty response."""
         with patch("httpx.Client") as mock_client:
