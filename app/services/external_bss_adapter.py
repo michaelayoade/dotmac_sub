@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.external import ExternalEntityType
 from app.models.splynx_mapping import SplynxEntityType
 from app.schemas.external import ExternalReferenceSync
+from app.services.adapters import adapter_registry
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,8 @@ class ExternalBssReference:
 
 class ExternalBssAdapter:
     """Adapter for external OSS/BSS references and legacy Splynx IDs."""
+
+    name = "external_bss"
 
     def build_reference_payload(
         self,
@@ -77,4 +80,4 @@ class ExternalBssAdapter:
 
 
 external_bss_adapter = ExternalBssAdapter()
-
+adapter_registry.register(external_bss_adapter)

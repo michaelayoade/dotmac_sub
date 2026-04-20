@@ -118,6 +118,34 @@ def test_adapter_registry_tracks_named_adapters() -> None:
     assert registry.names() == ("fake",)
 
 
+def test_global_adapter_registry_contains_core_singletons() -> None:
+    from app.services import (
+        audit_adapter,
+        billing_adapter,
+        external_bss_adapter,
+        ipam_adapter,
+        olt_profile_adapter,
+        payment_gateway_adapter,
+        queue_adapter,
+        rate_limiter_adapter,
+    )
+    from app.services.adapters import adapter_registry
+
+    expected = {
+        "audit": audit_adapter.audit_adapter,
+        "billing": billing_adapter.billing_adapter,
+        "external_bss": external_bss_adapter.external_bss_adapter,
+        "ipam": ipam_adapter.ipam_adapter,
+        "olt_profile": olt_profile_adapter.olt_profile_adapter,
+        "payment_gateway": payment_gateway_adapter.payment_gateway_adapter,
+        "queue.celery": queue_adapter.queue_adapter,
+        "rate_limiter.memory": rate_limiter_adapter.rate_limiter_adapter,
+    }
+
+    for name, adapter in expected.items():
+        assert adapter_registry.require(name) is adapter
+
+
 def test_operation_result_converts_to_shared_adapter_result() -> None:
     from app.services.adapters.base import AdapterStatus
     from app.services.network.result_adapter import OperationResult, ResultStatus

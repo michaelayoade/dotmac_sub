@@ -7,6 +7,8 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 @dataclass(frozen=True)
 class PaymentGatewayContext:
@@ -28,6 +30,8 @@ class PaymentGatewayTransaction:
 
 class PaymentGatewayAdapter:
     """Normalize Paystack and Flutterwave operations for UI flows."""
+
+    name = "payment_gateway"
 
     def build_context(
         self,
@@ -95,4 +99,4 @@ class PaymentGatewayAdapter:
 
 
 payment_gateway_adapter = PaymentGatewayAdapter()
-
+adapter_registry.register(payment_gateway_adapter)

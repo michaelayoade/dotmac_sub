@@ -5,9 +5,13 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 class IpamAdapter:
     """Keep OLT/UI flows from depending directly on IPAM query details."""
+
+    name = "ipam"
 
     def olt_scope_context(self, db: Session, *, olt: object) -> dict[str, object]:
         from app.models.network import IpPool, Vlan
@@ -89,3 +93,4 @@ class IpamAdapter:
 
 
 ipam_adapter = IpamAdapter()
+adapter_registry.register(ipam_adapter)

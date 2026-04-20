@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
 from app.schemas.audit import AuditEventCreate
+from app.services.adapters import adapter_registry
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,8 @@ class AuditRecord:
 
 class AuditAdapter:
     """Unified audit writer for operations."""
+
+    name = "audit"
 
     def build_payload(self, record: AuditRecord) -> AuditEventCreate:
         return AuditEventCreate(
@@ -68,6 +71,7 @@ class AuditAdapter:
 
 
 audit_adapter = AuditAdapter()
+adapter_registry.register(audit_adapter)
 
 
 def record_audit_event(

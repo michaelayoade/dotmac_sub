@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 
+from app.services.adapters import adapter_registry
+
 
 @dataclass(frozen=True)
 class RateLimitRule:
@@ -32,6 +34,8 @@ class InMemoryRateLimiterAdapter:
     the same ``check`` contract and replace this backend where shared limits are
     required across workers.
     """
+
+    name = "rate_limiter.memory"
 
     def __init__(self) -> None:
         self._hits: dict[str, deque[datetime]] = defaultdict(deque)
@@ -71,6 +75,7 @@ class InMemoryRateLimiterAdapter:
 
 
 rate_limiter_adapter = InMemoryRateLimiterAdapter()
+adapter_registry.register(rate_limiter_adapter)
 
 
 def allow_operation(
@@ -84,4 +89,3 @@ def allow_operation(
         RateLimitRule(key=key, limit=limit, window_seconds=window_seconds),
         now=now,
     )
-

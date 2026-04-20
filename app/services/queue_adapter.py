@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+from app.services.adapters import adapter_registry
+
 
 @dataclass(frozen=True)
 class QueueMessage:
@@ -44,6 +46,8 @@ class QueueBackend(Protocol):
 
 class CeleryQueueAdapter:
     """Queue adapter backed by the existing Celery application."""
+
+    name = "queue.celery"
 
     def __init__(self, enqueue_func: Any | None = None) -> None:
         self._enqueue_func = enqueue_func
@@ -99,6 +103,7 @@ class CeleryQueueAdapter:
 
 
 queue_adapter = CeleryQueueAdapter()
+adapter_registry.register(queue_adapter)
 
 
 def enqueue_task(

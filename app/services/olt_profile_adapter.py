@@ -6,9 +6,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.services.adapters import adapter_registry
+
 
 class OltProfileAdapter:
     """Keep OLT profile UI reads behind the operational OLT boundary."""
+
+    name = "olt_profile"
 
     def line_profiles_context(self, db: Session, olt_id: str) -> dict[str, Any]:
         from app.models.network import OLTDevice
@@ -67,3 +71,4 @@ class OltProfileAdapter:
 
 
 olt_profile_adapter = OltProfileAdapter()
+adapter_registry.register(olt_profile_adapter)

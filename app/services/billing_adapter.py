@@ -18,6 +18,7 @@ from app.schemas.billing import (
     PaymentCreate,
     PaymentProviderEventIngest,
 )
+from app.services.adapters import adapter_registry
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class PaymentIntent:
 
 class BillingAdapter:
     """Adapter around invoices, payments, and payment gateway events."""
+
+    name = "billing"
 
     def __init__(self, billing_service: Any | None = None) -> None:
         self._billing_service = billing_service
@@ -126,3 +129,4 @@ class BillingAdapter:
 
 
 billing_adapter = BillingAdapter()
+adapter_registry.register(billing_adapter)
