@@ -58,6 +58,40 @@ def test_adapter_result_base_supports_domain_results() -> None:
     assert failure.error_code == "RuntimeError"
 
 
+def test_adapter_registry_tracks_named_adapters() -> None:
+    from app.services.adapters import AdapterRegistry
+
+    class FakeAdapter:
+        name = "fake"
+
+    registry = AdapterRegistry()
+    adapter = FakeAdapter()
+
+    assert registry.register(adapter) is adapter
+    assert registry.get("fake") is adapter
+    assert registry.require("fake") is adapter
+    assert registry.names() == ("fake",)
+
+
+def test_operation_result_converts_to_shared_adapter_result() -> None:
+    from app.services.adapters.base import AdapterStatus
+    from app.services.network.result_adapter import OperationResult, ResultStatus
+
+    operation = OperationResult.queued(
+        "queued",
+        data={"operation_id": "op-1"},
+    )
+
+    shared = operation.to_adapter_result()
+    round_trip = OperationResult.from_adapter_result(shared)
+
+    assert shared.success is True
+    assert shared.status == AdapterStatus.queued
+    assert shared.data["operation_id"] == "op-1"
+    assert round_trip.status == ResultStatus.queued
+    assert round_trip.message == "queued"
+
+
 def test_rate_limiter_adapter_blocks_after_limit_until_window_resets() -> None:
     from app.services.rate_limiter_adapter import (
         InMemoryRateLimiterAdapter,

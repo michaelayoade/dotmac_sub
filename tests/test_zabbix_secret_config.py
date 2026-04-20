@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.services import zabbix
 
 
@@ -66,3 +68,31 @@ def test_zabbix_metrics_adapter_uses_shared_secret_resolvers(monkeypatch):
 
     assert adapter.api_url == "http://zabbix/api"
     assert adapter.api_token == "resolved-token"
+
+
+def test_zabbix_device_sync_rolls_back_when_api_unavailable(monkeypatch):
+    from app.tasks import zabbix_ingestion
+    from app.services import zabbix_host_sync
+
+    calls: list[str] = []
+    db = SimpleNamespace(
+        commit=lambda: calls.append("commit"),
+        rollback=lambda: calls.append("rollback"),
+        close=lambda: calls.append("close"),
+    )
+
+    def raise_unavailable(_db):
+        raise zabbix.ZabbixClientError("zabbix down")
+
+    monkeypatch.setattr(zabbix_ingestion, "_zabbix_enabled", lambda: True)
+    monkeypatch.setattr(
+        zabbix_ingestion.db_session_adapter,
+        "create_session",
+        lambda: db,
+    )
+    monkeypatch.setattr(zabbix_host_sync, "sync_all_devices", raise_unavailable)
+
+    result = zabbix_ingestion.sync_devices_to_zabbix.run()
+
+    assert result == {"error": "zabbix_unavailable", "message": "zabbix down"}
+    assert calls == ["rollback", "close"]

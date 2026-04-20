@@ -274,9 +274,15 @@ def ingest_olt_signals_from_zabbix() -> dict[str, Any]:
 
     except SoftTimeLimitExceeded:
         logger.warning("zabbix_signal_ingest_timed_out")
+        db.rollback()
         return {"error": "zabbix_signal_ingest_timed_out"}
+    except ZabbixClientError as exc:
+        logger.warning("zabbix_signal_ingest_zabbix_unavailable: %s", exc)
+        db.rollback()
+        return {"error": "zabbix_unavailable", "message": str(exc)}
     except Exception as exc:
         logger.exception("zabbix_signal_ingest_failed")
+        db.rollback()
         return {"error": str(exc)}
     finally:
         db.close()
@@ -314,9 +320,11 @@ def sync_devices_to_zabbix() -> dict[str, Any]:
 
     except ZabbixClientError as exc:
         logger.warning("zabbix_device_sync_failed: %s", exc)
-        return {"error": "zabbix_unavailable"}
+        db.rollback()
+        return {"error": "zabbix_unavailable", "message": str(exc)}
     except Exception as exc:
         logger.exception("zabbix_device_sync_exception")
+        db.rollback()
         return {"error": str(exc)}
     finally:
         db.close()

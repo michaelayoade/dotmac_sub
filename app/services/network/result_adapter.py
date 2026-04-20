@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 from fastapi import Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from app.services.adapters.base import AdapterResult, AdapterStatus
+
 if TYPE_CHECKING:
     from starlette.requests import Request
 
@@ -65,6 +67,46 @@ class OperationResult:
             ResultStatus.queued: "Queued",
             ResultStatus.pending: "Pending",
         }.get(self.status, "Result")
+
+    def to_adapter_result(self) -> AdapterResult:
+        """Convert UI/API operation result to the shared adapter result shape."""
+        status_map = {
+            ResultStatus.success: AdapterStatus.success,
+            ResultStatus.error: AdapterStatus.error,
+            ResultStatus.warning: AdapterStatus.warning,
+            ResultStatus.queued: AdapterStatus.queued,
+            ResultStatus.pending: AdapterStatus.queued,
+        }
+        return AdapterResult(
+            success=self.success,
+            message=self.message,
+            data=self.data or {},
+            status=status_map[self.status],
+        )
+
+    @classmethod
+    def from_adapter_result(
+        cls,
+        result: AdapterResult,
+        *,
+        title: str | None = None,
+        redirect_url: str | None = None,
+    ) -> OperationResult:
+        """Convert shared adapter results to the response-aware operation result."""
+        status_map = {
+            AdapterStatus.success: ResultStatus.success,
+            AdapterStatus.error: ResultStatus.error,
+            AdapterStatus.warning: ResultStatus.warning,
+            AdapterStatus.queued: ResultStatus.queued,
+            AdapterStatus.skipped: ResultStatus.warning,
+        }
+        return cls(
+            status=status_map.get(result.status, ResultStatus.error),
+            message=result.message,
+            title=title,
+            data=result.data,
+            redirect_url=redirect_url,
+        )
 
     # Factory methods
     @classmethod
