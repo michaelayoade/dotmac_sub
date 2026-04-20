@@ -202,6 +202,52 @@ class TestUpdateManagementIp:
         assert mock_adapter.configure_iphost.call_args.kwargs["vlan"] == 201
         assert "mgmt_vlan_id" not in ont.__dict__
 
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    @patch("app.services.network.cpe.Vlans.get")
+    def test_ssh_timeout_does_not_persist_management_ip(
+        self,
+        mock_vlan_get,
+        mock_get_adapter,
+        mock_get,
+        mock_resolve_context,
+        mock_emit,
+    ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
+        ont = MagicMock(external_id="generic:5")
+        mock_get.return_value = (ont, None)
+        olt = MagicMock()
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+        mock_vlan_get.return_value = MagicMock(tag=203)
+
+        mock_adapter = MagicMock()
+        mock_adapter.configure_iphost.return_value = OltOperationResult(
+            success=False,
+            message="SSH IPHOST configuration failed: timed out",
+            data={},
+            error_code="TimeoutError",
+        )
+        mock_get_adapter.return_value = mock_adapter
+        db = MagicMock()
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+            mgmt_vlan_id=FAKE_UUID,
+        )
+
+        assert result.success is False
+        assert "timed out" in result.message
+        db.commit.assert_not_called()
+        mock_emit.assert_not_called()
+
 
 class TestUpdateServicePort:
     @patch("app.services.network.ont_write._emit_ont_event")
@@ -283,6 +329,49 @@ class TestUpdateServicePort:
         # Verify fsp and ont_id are passed correctly
         assert mock_adapter.create_service_port.call_args.args[0] == "0/1/3"
         assert mock_adapter.create_service_port.call_args.args[1] == 5
+
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    def test_ssh_timeout_does_not_persist_service_port(
+        self,
+        mock_get_adapter,
+        mock_get,
+        mock_resolve_context,
+        mock_emit,
+    ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
+        ont = MagicMock(external_id="generic:5")
+        mock_get.return_value = (ont, None)
+        olt = MagicMock()
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.create_service_port.return_value = OltOperationResult(
+            success=False,
+            message="SSH service port creation failed: timed out",
+            data={},
+            error_code="TimeoutError",
+        )
+        mock_get_adapter.return_value = mock_adapter
+        db = MagicMock()
+
+        result = OntWriteService.update_service_port(
+            db,
+            "ont-1",
+            vlan_id=203,
+            gem_index=1,
+        )
+
+        assert result.success is False
+        assert "timed out" in result.message
+        db.commit.assert_not_called()
+        mock_emit.assert_not_called()
 
 
 class TestOntOltWriteContext:

@@ -78,6 +78,31 @@ def test_adapter_result_base_supports_domain_results() -> None:
     assert failure.error_code == "RuntimeError"
 
 
+def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
+    from app.services.network.olt_protocol_adapters import SshProtocolAdapter
+
+    def timeout(*_args, **_kwargs):
+        raise TimeoutError("OLT SSH timed out")
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.iphost.configure_ont_iphost",
+        timeout,
+    )
+
+    adapter = SshProtocolAdapter(SimpleNamespace(name="OLT 1"))
+    result = adapter.configure_iphost(
+        "0/1/3",
+        5,
+        vlan=203,
+        mode="dhcp",
+    )
+
+    assert result.success is False
+    assert result.error_code == "TimeoutError"
+    assert "SSH IPHOST configuration failed" in result.message
+    assert "OLT SSH timed out" in result.message
+
+
 def test_adapter_registry_tracks_named_adapters() -> None:
     from app.services.adapters import AdapterRegistry
 

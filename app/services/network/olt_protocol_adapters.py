@@ -849,10 +849,10 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
-            logger.exception("SSH configure_iphost failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH IPHOST configuration failed: {exc}",
+            return OltOperationResult.from_exception(
+                exc,
+                operation="SSH IPHOST configuration",
+                logger_=logger,
                 protocol_used=OltProtocol.SSH,
             )
 
