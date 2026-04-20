@@ -269,14 +269,14 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     open_count = 0
     if account_id:
         try:
-            open_count = (
-                db.query(func.count(Ticket.id))
-                .filter(Ticket.is_active.is_(True))
-                .filter(
+            open_count = db.scalar(
+                select(func.count(Ticket.id))
+                .where(Ticket.is_active.is_(True))
+                .where(
                     (Ticket.subscriber_id == account_id)
                     | (Ticket.customer_account_id == account_id)
                 )
-                .filter(
+                .where(
                     Ticket.status.notin_(
                         (
                             TicketStatus.closed,
@@ -285,9 +285,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                         )
                     )
                 )
-                .scalar()
-                or 0
-            )
+            ) or 0
         except Exception:
             open_count = 0
 
@@ -353,12 +351,11 @@ def get_restricted_since(subscriber: Subscriber) -> datetime | None:
 
 def get_total_outstanding_balance(db: Session, account_id: object) -> float:
     """Sum all active positive invoice balances for the account."""
-    total = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .filter(Invoice.account_id == coerce_uuid(account_id))
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.balance_due > 0)
-        .scalar()
+    total = db.scalar(
+        select(func.coalesce(func.sum(Invoice.balance_due), 0))
+        .where(Invoice.account_id == coerce_uuid(account_id))
+        .where(Invoice.is_active.is_(True))
+        .where(Invoice.balance_due > 0)
     )
     return float(total or 0)
 

@@ -35,6 +35,29 @@ def test_queue_adapter_delegates_to_enqueue_function() -> None:
     assert calls[0][1]["correlation_id"] == "corr-1"
 
 
+def test_adapter_result_base_supports_domain_results() -> None:
+    from app.services.adapters.base import AdapterResult, AdapterStatus
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
+    result = OltOperationResult(
+        success=True,
+        message="created",
+        data={"service_port": 401},
+        ont_id=7,
+    )
+    failure = AdapterResult.from_exception(
+        RuntimeError("boom"),
+        operation="unit test adapter",
+    )
+
+    assert result.success is True
+    assert result.data["service_port"] == 401
+    assert result.ont_id == 7
+    assert failure.success is False
+    assert failure.status == AdapterStatus.error
+    assert failure.error_code == "RuntimeError"
+
+
 def test_rate_limiter_adapter_blocks_after_limit_until_window_resets() -> None:
     from app.services.rate_limiter_adapter import (
         InMemoryRateLimiterAdapter,

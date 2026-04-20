@@ -3,6 +3,7 @@
 import logging
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus, Payment, PaymentStatus
@@ -90,7 +91,9 @@ def verify_and_record_payment(
         raise ValueError("Payment metadata missing invoice_id")
 
     # Idempotency: check if a payment with this external reference already exists
-    existing_payment = db.query(Payment).filter(Payment.external_id == tx.external_id).first()
+    existing_payment = db.scalars(
+        select(Payment).where(Payment.external_id == tx.external_id)
+    ).first()
     if existing_payment:
         invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
         return {
@@ -210,7 +213,9 @@ def verify_and_record_topup(
     external_id = tx.external_id
 
     # Idempotency check
-    existing = db.query(Payment).filter(Payment.external_id == external_id).first()
+    existing = db.scalars(
+        select(Payment).where(Payment.external_id == external_id)
+    ).first()
     if existing:
         # Payment already recorded — still attempt service restore in case
         # the prior run failed at the restore step

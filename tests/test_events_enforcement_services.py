@@ -1327,11 +1327,16 @@ class TestProvisioningAdapters:
             payload={"key": "value"},
         )
         assert result.status == "ok"
+        assert result.success is True
+        assert result.message == "test"
+        assert result.data == {"key": "value"}
         assert result.detail == "test"
         assert result.payload == {"key": "value"}
 
     def test_provisioning_result_defaults(self):
         result = ProvisioningResult(status="error")
+        assert result.success is False
+        assert result.message == "error"
         assert result.detail is None
         assert result.payload is None
 

@@ -333,10 +333,47 @@ class ProvisioningCoordinator:
     def _finalize(self, message: str, success: bool = False) -> ProvisioningResult:
         """Finalize the provisioning result."""
         assert self._result is not None
+        if not success:
+            self._compensate_after_failure()
         self._result.success = success
         self._result.message = message
         self._result.completed_at = datetime.now(UTC)
         return self._result
+
+    def _compensate_after_failure(self) -> None:
+        """Run known compensating actions for coordinator-managed side effects."""
+        assert self._result is not None
+        if not self._result.ont_id:
+            return
+        if any(step.phase == ProvisioningPhase.rollback for step in self._result.steps):
+            return
+        step = ProvisioningStep(
+            phase=ProvisioningPhase.rollback,
+            name="Compensate provisioning side effects",
+        )
+        step.start()
+        self._result.steps.append(step)
+        try:
+            from app.services.network.ont_provision_steps import rollback_service_ports
+
+            rollback = rollback_service_ports(self.db, self._result.ont_id)
+            step.complete(
+                rollback.success,
+                rollback.message,
+                {"compensated_step": rollback.step_name},
+            )
+        except Exception as exc:
+            logger.error(
+                "Provisioning compensation failed for ONT %s: %s",
+                self._result.ont_id,
+                exc,
+                exc_info=True,
+                extra={
+                    "event": "provisioning_compensation_failed",
+                    "ont_id": self._result.ont_id,
+                },
+            )
+            step.complete(False, f"Compensation failed: {exc}")
 
     # -----------------------------------------------------------------------
     # Phase Executors

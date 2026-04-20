@@ -13,7 +13,9 @@ The allocator follows the same pattern as IpPool allocation:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy import select
@@ -27,6 +29,8 @@ from app.models.network import (
 )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class AllocationError(Exception):
@@ -405,6 +409,47 @@ def mark_provisioned(db: Session, allocation_id: UUID | str) -> bool:
     db.flush()
 
     return True
+
+
+def with_allocated_service_port(
+    db: Session,
+    olt_id: UUID | str,
+    ont_id: UUID | str,
+    provision: Callable[[ServicePortAllocation], T],
+    *,
+    service_type: str | None = None,
+    vlan_id: int | None = None,
+    gem_index: int | None = None,
+    provisioned: Callable[[T], bool] | None = None,
+) -> T:
+    """Allocate an index and run the OLT write before transaction commit.
+
+    ``allocate_service_port`` locks the pool row with ``SELECT FOR UPDATE``.
+    The row lock is held until this wrapper commits or rolls back, so concurrent
+    service-port creates cannot observe the same available index while the OLT
+    write is still in flight.
+    """
+    allocation = allocate_service_port(
+        db,
+        olt_id,
+        ont_id,
+        service_type=service_type,
+        vlan_id=vlan_id,
+        gem_index=gem_index,
+    )
+    try:
+        result = provision(allocation)
+    except Exception:
+        release_service_port(db, allocation.id)
+        db.rollback()
+        raise
+    is_provisioned = provisioned(result) if provisioned is not None else True
+    if is_provisioned:
+        mark_provisioned(db, allocation.id)
+    else:
+        release_service_port(db, allocation.id)
+    db.commit()
+    return result
 
 
 def sync_allocations_from_olt(

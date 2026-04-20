@@ -11,6 +11,7 @@ import routeros_api
 from ncclient import manager
 
 from app.models.provisioning import ProvisioningVendor
+from app.services.adapters.base import AdapterResult
 from app.services.acs_client import create_acs_client
 from app.services.network.ont_action_common import set_and_verify
 from app.services.response import ListResponseMixin
@@ -18,11 +19,26 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ProvisioningResult(ListResponseMixin):
+@dataclass(init=False)
+class ProvisioningResult(AdapterResult, ListResponseMixin):
     status: str
     detail: str | None = None
     payload: dict | None = None
+
+    def __init__(
+        self,
+        status: str,
+        detail: str | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        super().__init__(
+            success=status == "ok",
+            message=detail or status,
+            data=payload or {},
+        )
+        self.status = status
+        self.detail = detail
+        self.payload = payload
 
 
 class Provisioner(ABC, ListResponseMixin):

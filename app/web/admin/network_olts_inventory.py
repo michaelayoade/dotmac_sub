@@ -1017,6 +1017,7 @@ def olt_authorize_ont(
     olt_id: str,
     fsp: str = Form(""),
     serial_number: str = Form(""),
+    ont_id: str = Form(""),
     return_to: str = Form(""),
     force_reauthorize: str = Form(""),
     db: Session = Depends(get_db),
@@ -1059,6 +1060,33 @@ def olt_authorize_ont(
                 },
             )
         return RedirectResponse(target, status_code=303)
+
+    if isinstance(ont_id, str) and ont_id:
+        from uuid import UUID
+
+        from app.models.network import OntUnit
+
+        try:
+            direct_ont = db.get(OntUnit, UUID(str(ont_id)))
+        except ValueError:
+            direct_ont = None
+        if (
+            direct_ont is None
+            or str(direct_ont.olt_device_id) != str(olt_id)
+            or str(direct_ont.serial_number or "").strip().upper()
+            != str(serial_number or "").strip().upper()
+        ):
+            queue_msg = "ONT authorization scope check failed"
+            if is_htmx:
+                return Response(
+                    status_code=403,
+                    headers=_toast_headers(queue_msg, "error"),
+                )
+            return RedirectResponse(
+                f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status=error"
+                f"&sync_message={quote_plus(queue_msg)}",
+                status_code=303,
+            )
 
     force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
     initiated_by = None

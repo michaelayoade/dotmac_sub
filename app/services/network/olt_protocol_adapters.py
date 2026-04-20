@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from app.services.adapters.base import AdapterResult
+
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
     from app.services.network.olt_batched_auth import BatchedAuthorizationSpec
@@ -52,12 +54,8 @@ class OltProtocol(str, Enum):
 
 
 @dataclass
-class OltOperationResult:
+class OltOperationResult(AdapterResult):
     """Result of an OLT write operation."""
-
-    success: bool
-    message: str
-    data: dict[str, object] = field(default_factory=dict)
 
     # For authorize_ont: the assigned ONT ID
     ont_id: int | None = None

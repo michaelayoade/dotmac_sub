@@ -19,10 +19,9 @@ if TYPE_CHECKING:
     pass  # ServicePortEntry already imported above
 from app.services.network.service_port_allocator import (
     AllocationError,
-    allocate_service_port,
     find_allocation_by_index,
-    mark_provisioned,
     release_service_port,
+    with_allocated_service_port,
 )
 from app.services.network.vlan_chain import validate_chain
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
@@ -276,52 +275,46 @@ def handle_create(
             warning.message,
         )
 
-    # Pre-allocate service-port index from DB
-    allocation = None
     try:
-        allocation = allocate_service_port(
+        def _write_allocated_port(allocation):
+            port_index = allocation.port_index
+            logger.info(
+                "Pre-allocated service-port index %d for ONT %s VLAN %d",
+                port_index,
+                ont_id,
+                vlan_id,
+            )
+            adapter = get_protocol_adapter(olt)
+            result = adapter.create_service_port(
+                fsp,
+                olt_ont_id,
+                gem_index=gem_index,
+                vlan_id=vlan_id,
+                user_vlan=user_vlan,
+                tag_transform=tag_transform,
+                port_index=port_index,
+            )
+            if not result.success:
+                return False, result.message
+            return (
+                True,
+                f"Service-port {port_index} created (VLAN {vlan_id}, GEM {gem_index})",
+            )
+
+        return with_allocated_service_port(
             db,
             olt.id,
             ont_id,
+            _write_allocated_port,
             vlan_id=vlan_id,
             gem_index=gem_index,
             service_type="internet" if vlan_id in (203,) else "management",
-        )
-        port_index = allocation.port_index
-        logger.info(
-            "Pre-allocated service-port index %d for ONT %s VLAN %d",
-            port_index,
-            ont_id,
-            vlan_id,
+            provisioned=lambda result: bool(result[0]),
         )
     except AllocationError as exc:
         logger.error("Failed to allocate service-port index: %s", exc)
+        db.rollback()
         return False, f"Allocation failed: {exc}"
-
-    # Create on OLT with pre-allocated index
-    adapter = get_protocol_adapter(olt)
-    result = adapter.create_service_port(
-        fsp,
-        olt_ont_id,
-        gem_index=gem_index,
-        vlan_id=vlan_id,
-        user_vlan=user_vlan,
-        tag_transform=tag_transform,
-        port_index=port_index,
-    )
-    ok = result.success
-    msg = result.message
-
-    if ok:
-        # Mark allocation as provisioned
-        mark_provisioned(db, allocation.id)
-        db.commit()
-        return True, f"Service-port {port_index} created (VLAN {vlan_id}, GEM {gem_index})"
-    else:
-        # OLT creation failed - release the allocation
-        release_service_port(db, allocation.id)
-        db.commit()
-        return False, msg
 
 
 def handle_delete(

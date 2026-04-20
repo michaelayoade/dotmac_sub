@@ -196,6 +196,7 @@
                           @htmx:before-request="status = 'submitting'"
                           @htmx:after-request="if (!operationId) status = null">
                         {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="ont_id" value="{{ ont.id }}">
                         <input type="hidden" name="fsp" value="{{ fsp }}">
                         <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
                         <template x-if="status === 'succeeded'">

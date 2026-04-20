@@ -748,7 +748,9 @@ services:
     environment:
       POSTGRES_DB: zabbix
       POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
+    secrets:
+    - zabbix_db_password
     volumes:
     - zabbix_db_data:/var/lib/postgresql/data
     healthcheck:
@@ -772,13 +774,15 @@ services:
     environment:
       DB_SERVER_HOST: zabbix-db
       POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
       ZBX_STARTPOLLERS: 10
       ZBX_STARTPINGERS: 5
       ZBX_CACHESIZE: 512M
       ZBX_HISTORYCACHESIZE: 256M
       ZBX_TRENDCACHESIZE: 64M
       ZBX_VALUECACHESIZE: 128M
+    secrets:
+    - zabbix_db_password
     ports:
     - 10051:10051
     volumes:
@@ -804,9 +808,11 @@ services:
     environment:
       DB_SERVER_HOST: zabbix-db
       POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/zabbix_db_password
       ZBX_SERVER_HOST: zabbix-server
       PHP_TZ: Africa/Lagos
+    secrets:
+    - zabbix_db_password
     ports:
     - 8085:8080
 
@@ -858,6 +864,9 @@ volumes:
   minio_data: null
   loki_data: null
   grafana_data: null
+secrets:
+  zabbix_db_password:
+    file: ${ZABBIX_DB_PASSWORD_FILE:-./secrets/zabbix_db_password}
 networks:
   default:
     name: dotmac_sub_default
