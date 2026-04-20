@@ -278,16 +278,30 @@ def _create_wan_service_instances(
     return created
 
 
-def _profile_matches_ont_scope(
+def _profile_scope_mismatch_reason(
+    db: Session,
     profile: OntProvisioningProfile,
     ont: OntUnit,
-) -> bool:
-    """Return true when a profile is scoped to the ONT's OLT."""
+) -> str | None:
+    """Return why a profile cannot apply to an ONT, or None when allowed."""
     profile_olt_id = getattr(profile, "olt_device_id", None)
     ont_olt_id = getattr(ont, "olt_device_id", None)
-    if not profile_olt_id or not ont_olt_id:
-        return profile_olt_id == ont_olt_id
-    return profile_olt_id == ont_olt_id
+    if profile_olt_id != ont_olt_id:
+        return "olt_scope"
+
+    owner_subscriber_id = getattr(profile, "owner_subscriber_id", None)
+    if not owner_subscriber_id:
+        return None
+
+    assignment = db.scalars(
+        select(OntAssignment).where(
+            OntAssignment.ont_unit_id == ont.id,
+            OntAssignment.active.is_(True),
+        )
+    ).first()
+    if not assignment or assignment.subscriber_id != owner_subscriber_id:
+        return "owner_subscriber_scope"
+    return None
 
 
 def resolve_profile_for_ont(
@@ -311,15 +325,23 @@ def resolve_profile_for_ont(
             .where(OntProvisioningProfile.id == ont.provisioning_profile_id)
         )
         profile = db.scalars(stmt).first()
-        if profile and profile.is_active and _profile_matches_ont_scope(profile, ont):
+        if (
+            profile
+            and profile.is_active
+            and _profile_scope_mismatch_reason(db, profile, ont) is None
+        ):
             return profile
         if profile and profile.is_active:
+            reason = _profile_scope_mismatch_reason(db, profile, ont)
             logger.warning(
-                "Ignoring ONT %s profile %s because it is scoped to OLT %s, not %s",
+                "Ignoring ONT %s profile %s because scope does not match "
+                "(reason=%s profile_olt=%s ont_olt=%s profile_owner=%s)",
                 ont.serial_number,
                 profile.name,
+                reason,
                 profile.olt_device_id,
                 ont.olt_device_id,
+                profile.owner_subscriber_id,
             )
 
     return None
@@ -369,12 +391,21 @@ def apply_profile_to_ont(
     profile = db.scalars(stmt).first()
     if not profile:
         return ApplyResult(success=False, message="Provisioning profile not found")
-    if not _profile_matches_ont_scope(profile, ont):
+    mismatch_reason = _profile_scope_mismatch_reason(db, profile, ont)
+    if mismatch_reason == "olt_scope":
         return ApplyResult(
             success=False,
             message=(
                 f"Profile '{profile.name}' is scoped to another OLT and cannot be "
                 "applied to this ONT."
+            ),
+        )
+    if mismatch_reason == "owner_subscriber_scope":
+        return ApplyResult(
+            success=False,
+            message=(
+                f"Profile '{profile.name}' is scoped to another business account "
+                "and cannot be applied to this ONT."
             ),
         )
 
@@ -453,6 +484,8 @@ def detect_drift(db: Session, ont_id: str) -> DriftReport | None:
     )
     profile = db.scalars(stmt).first()
     if not profile:
+        return None
+    if _profile_scope_mismatch_reason(db, profile, ont) is not None:
         return None
 
     drifted: list[DriftField] = []

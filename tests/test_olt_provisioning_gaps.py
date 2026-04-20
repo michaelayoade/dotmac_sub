@@ -39,6 +39,7 @@ from app.models.network import (
     WanServiceType,
 )
 from app.models.ont_autofind import OltAutofindCandidate
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.network import olt_authorization_workflow
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -2074,6 +2075,121 @@ class TestGetProfileTemplates:
         result = apply_profile_to_ont(db_session, str(ont.id), str(profile.id))
         assert result.success is False
         assert "another OLT" in result.message
+
+    def test_apply_profile_rejects_other_business_owner_scope(
+        self, db_session
+    ) -> None:
+        from app.services.network.ont_profile_apply import apply_profile_to_ont
+
+        olt = OLTDevice(name="Owner Scope OLT", vendor="Huawei", model="MA5608T")
+        owner = Subscriber(
+            first_name="Owner",
+            last_name="Business",
+            email="owner-scope@example.test",
+            company_name="Owner Scope Ltd",
+        )
+        owner.category = SubscriberCategory.business
+        other = Subscriber(
+            first_name="Other",
+            last_name="Business",
+            email="other-scope@example.test",
+            company_name="Other Scope Ltd",
+        )
+        other.category = SubscriberCategory.business
+        db_session.add_all([olt, owner, other])
+        db_session.commit()
+
+        ont = OntUnit(serial_number="OWNER-SCOPE-REJECT", olt_device_id=olt.id)
+        profile = OntProvisioningProfile(
+            name="Owner Scoped Profile",
+            olt_device_id=olt.id,
+            owner_subscriber_id=owner.id,
+            is_active=True,
+        )
+        db_session.add_all([ont, profile])
+        db_session.commit()
+        db_session.add(
+            OntAssignment(
+                ont_unit_id=ont.id,
+                subscriber_id=other.id,
+                active=True,
+            )
+        )
+        db_session.commit()
+
+        result = apply_profile_to_ont(db_session, str(ont.id), str(profile.id))
+
+        assert result.success is False
+        assert "another business account" in result.message
+
+    def test_create_profile_rejects_non_business_owner(self, db_session) -> None:
+        from fastapi import HTTPException
+
+        from app.services.network.ont_provisioning_profiles import (
+            ont_provisioning_profiles,
+        )
+
+        olt = OLTDevice(name="Owner Validate OLT", vendor="Huawei", model="MA5608T")
+        subscriber = Subscriber(
+            first_name="Residential",
+            last_name="Owner",
+            email="res-owner@example.test",
+        )
+        db_session.add_all([olt, subscriber])
+        db_session.commit()
+
+        try:
+            ont_provisioning_profiles.create(
+                db_session,
+                name="Bad Owner Profile",
+                olt_device_id=str(olt.id),
+                owner_subscriber_id=str(subscriber.id),
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "business account" in str(exc.detail)
+        else:
+            raise AssertionError("Expected non-business owner to be rejected")
+
+    def test_resolve_profile_accepts_matching_business_owner_scope(
+        self, db_session
+    ) -> None:
+        from app.services.network.ont_profile_apply import resolve_profile_for_ont
+
+        olt = OLTDevice(name="Owner Scope Match OLT", vendor="Huawei", model="MA5608T")
+        owner = Subscriber(
+            first_name="Match",
+            last_name="Business",
+            email="match-scope@example.test",
+            company_name="Match Scope Ltd",
+        )
+        owner.category = SubscriberCategory.business
+        db_session.add_all([olt, owner])
+        db_session.commit()
+
+        ont = OntUnit(serial_number="OWNER-SCOPE-MATCH", olt_device_id=olt.id)
+        profile = OntProvisioningProfile(
+            name="Matching Owner Scoped Profile",
+            olt_device_id=olt.id,
+            owner_subscriber_id=owner.id,
+            is_active=True,
+        )
+        db_session.add_all([ont, profile])
+        db_session.commit()
+        ont.provisioning_profile_id = profile.id
+        db_session.add(
+            OntAssignment(
+                ont_unit_id=ont.id,
+                subscriber_id=owner.id,
+                active=True,
+            )
+        )
+        db_session.commit()
+
+        resolved = resolve_profile_for_ont(db_session, str(ont.id))
+
+        assert resolved is not None
+        assert resolved.id == profile.id
 
 
 # ---------------------------------------------------------------------------

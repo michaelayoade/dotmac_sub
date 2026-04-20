@@ -23,6 +23,7 @@ from app.models.network import (
     WanConnectionType,
     WanServiceType,
 )
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.common import apply_ordering, coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 
@@ -55,6 +56,20 @@ def validate_template_string(template: str, field_name: str) -> None:
 
 class OntProvisioningProfiles:
     """CRUD operations for ONT provisioning profile catalog."""
+
+    @staticmethod
+    def _validate_owner_subscriber(
+        db: Session,
+        owner_subscriber_id: str | None,
+    ) -> None:
+        if not owner_subscriber_id:
+            return
+        owner = db.get(Subscriber, coerce_uuid(owner_subscriber_id))
+        if not owner or owner.category != SubscriberCategory.business:
+            raise HTTPException(
+                status_code=400,
+                detail="Provisioning profile owner must be a business account.",
+            )
 
     @staticmethod
     def _validate_profile_vlan_scope(
@@ -265,6 +280,7 @@ class OntProvisioningProfiles:
         """Create a new provisioning profile."""
         if wifi_ssid_template:
             validate_template_string(wifi_ssid_template, "wifi_ssid_template")
+        OntProvisioningProfiles._validate_owner_subscriber(db, owner_subscriber_id)
         OntProvisioningProfiles._validate_authorization_profile_pair(
             authorization_line_profile_id=authorization_line_profile_id,
             authorization_service_profile_id=authorization_service_profile_id,
@@ -322,6 +338,13 @@ class OntProvisioningProfiles:
         if not profile:
             raise HTTPException(
                 status_code=404, detail="Provisioning profile not found"
+            )
+
+        if "owner_subscriber_id" in kwargs:
+            owner_value = kwargs.get("owner_subscriber_id")
+            OntProvisioningProfiles._validate_owner_subscriber(
+                db,
+                str(owner_value) if owner_value else None,
             )
 
         wifi_ssid = kwargs.get("wifi_ssid_template")
