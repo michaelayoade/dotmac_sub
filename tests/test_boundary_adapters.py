@@ -35,6 +35,26 @@ def test_queue_adapter_delegates_to_enqueue_function() -> None:
     assert calls[0][1]["correlation_id"] == "corr-1"
 
 
+def test_queue_adapter_returns_failure_when_backend_unavailable() -> None:
+    from app.services.queue_adapter import CeleryQueueAdapter, QueueMessage
+
+    def unavailable(_task_name, **_kwargs):
+        raise RuntimeError("broker unavailable")
+
+    adapter = CeleryQueueAdapter(enqueue_func=unavailable)
+    result = adapter.enqueue(
+        QueueMessage(
+            task_name="app.tasks.billing.run",
+            queue="billing",
+        )
+    )
+
+    assert result.queued is False
+    assert result.task_name == "app.tasks.billing.run"
+    assert result.queue == "billing"
+    assert result.error == "broker unavailable"
+
+
 def test_adapter_result_base_supports_domain_results() -> None:
     from app.services.adapters.base import AdapterResult, AdapterStatus
     from app.services.network.olt_protocol_adapters import OltOperationResult

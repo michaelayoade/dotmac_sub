@@ -100,13 +100,25 @@ def _get_allocated_indices(db: Session, pool_id: UUID) -> set[int]:
     return set(db.scalars(stmt).all())
 
 
+def _reserved_indices(pool: OltServicePortPool) -> set[int]:
+    reserved: set[int] = set()
+    for raw_index in pool.reserved_indices or []:
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        if pool.min_index <= index <= pool.max_index:
+            reserved.add(index)
+    return reserved
+
+
 def _find_next_available(
     pool: OltServicePortPool,
     allocated: set[int],
     start_from: int | None = None,
 ) -> int | None:
     """Find the next available index in the pool range."""
-    reserved = set(pool.reserved_indices or [])
+    reserved = _reserved_indices(pool)
     start = start_from if start_from is not None else pool.min_index
 
     for idx in range(start, pool.max_index + 1):
@@ -124,11 +136,25 @@ def _find_next_available(
 def _refresh_pool_cache(db: Session, pool: OltServicePortPool) -> None:
     """Update the pool's cached next_available_index and available_count."""
     allocated = _get_allocated_indices(db, pool.id)
-    reserved = set(pool.reserved_indices or [])
+    reserved = _reserved_indices(pool)
 
     total_range = pool.max_index - pool.min_index + 1
     pool.available_count = total_range - len(allocated) - len(reserved)
     pool.next_available_index = _find_next_available(pool, allocated)
+
+
+def _is_available_index(
+    pool: OltServicePortPool,
+    index: int | None,
+    allocated: set[int],
+) -> bool:
+    if index is None:
+        return False
+    return (
+        pool.min_index <= index <= pool.max_index
+        and index not in allocated
+        and index not in _reserved_indices(pool)
+    )
 
 
 def allocate_service_port(
@@ -197,7 +223,7 @@ def allocate_service_port(
 
     # Try cached index first
     port_index = pool.next_available_index
-    if port_index is not None and port_index in allocated:
+    if not _is_available_index(pool, port_index, allocated):
         # Cache stale, recompute
         port_index = _find_next_available(pool, allocated)
 
@@ -225,7 +251,7 @@ def allocate_service_port(
     # Update cache
     allocated.add(port_index)
     pool.next_available_index = _find_next_available(pool, allocated, port_index + 1)
-    reserved = set(pool.reserved_indices or [])
+    reserved = _reserved_indices(pool)
     total_range = pool.max_index - pool.min_index + 1
     pool.available_count = total_range - len(allocated) - len(reserved)
 
