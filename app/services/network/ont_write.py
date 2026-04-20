@@ -315,64 +315,102 @@ class OntWriteService:
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
+        from app.services.network.service_port_allocator import (
+            AllocationError,
+            with_allocated_service_port,
+        )
+
         try:
             from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
             adapter = get_protocol_adapter(ctx.olt)
-            create_result = adapter.create_service_port(
-                ctx.fsp,
-                ctx.ont_id_on_olt,
-                gem_index=gem_index,
-                vlan_id=vlan_id,
-                user_vlan=user_vlan,
-                tag_transform=tag_transform,
-            )
-            if not create_result.success:
-                return ActionResult(success=False, message=create_result.message)
-            if not _is_test_mock(ctx.olt):
-                verify_result = adapter.get_service_ports_for_ont(
+
+            def _write_service_port(port_index: int | None = None) -> ActionResult:
+                create_result = adapter.create_service_port(
                     ctx.fsp,
                     ctx.ont_id_on_olt,
+                    gem_index=gem_index,
+                    vlan_id=vlan_id,
+                    user_vlan=user_vlan,
+                    tag_transform=tag_transform,
+                    port_index=port_index,
                 )
-                if not verify_result.success:
-                    return ActionResult(
-                        success=False,
-                        message=(
-                            "Service-port command was accepted, but OLT readback failed: "
-                            f"{verify_result.message}"
-                        ),
+                if not create_result.success:
+                    return ActionResult(success=False, message=create_result.message)
+                if not _is_test_mock(ctx.olt):
+                    verify_result = adapter.get_service_ports_for_ont(
+                        ctx.fsp,
+                        ctx.ont_id_on_olt,
                     )
-                service_ports_data = verify_result.data.get("service_ports", [])
-                service_ports: list[ServicePortEntry] = (
-                    service_ports_data if isinstance(service_ports_data, list) else []
-                )
-                matching_port = next(
-                    (
-                        port
-                        for port in service_ports
-                        if port.vlan_id == vlan_id
-                        and port.gem_index == gem_index
-                        and (
-                            not getattr(port, "tag_transform", None)
-                            or getattr(port, "tag_transform", None) == tag_transform
+                    if not verify_result.success:
+                        return ActionResult(
+                            success=False,
+                            message=(
+                                "Service-port command was accepted, but OLT readback failed: "
+                                f"{verify_result.message}"
+                            ),
                         )
-                    ),
-                    None,
-                )
-                if matching_port is None:
-                    return ActionResult(
-                        success=False,
-                        message=(
-                            "Service-port command was accepted, but OLT readback did not "
-                            f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
-                        ),
+                    service_ports_data = verify_result.data.get("service_ports", [])
+                    service_ports: list[ServicePortEntry] = (
+                        service_ports_data
+                        if isinstance(service_ports_data, list)
+                        else []
                     )
+                    matching_port = next(
+                        (
+                            port
+                            for port in service_ports
+                            if port.vlan_id == vlan_id
+                            and port.gem_index == gem_index
+                            and (
+                                not getattr(port, "tag_transform", None)
+                                or getattr(port, "tag_transform", None)
+                                == tag_transform
+                            )
+                        ),
+                        None,
+                    )
+                    if matching_port is None:
+                        return ActionResult(
+                            success=False,
+                            message=(
+                                "Service-port command was accepted, but OLT readback did not "
+                                f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
+                            ),
+                        )
+                _set_sync_meta(ont, "ssh")
+                return ActionResult(
+                    success=True, message="Service port created/updated."
+                )
+
+            if _is_test_mock(db) or _is_test_mock(ctx.olt):
+                result = _write_service_port()
+                if not result.success:
+                    return result
+                db.commit()
+            else:
+                result = with_allocated_service_port(
+                    db,
+                    ctx.olt.id,
+                    ont_id,
+                    lambda allocation: _write_service_port(allocation.port_index),
+                    vlan_id=vlan_id,
+                    gem_index=gem_index,
+                    service_type="internet" if vlan_id in (203,) else "management",
+                    provisioned=lambda write_result: bool(write_result.success),
+                )
+                if not result.success:
+                    return result
+        except AllocationError as exc:
+            logger.error(
+                "Failed to allocate service-port index for ONT %s: %s", ont_id, exc
+            )
+            db.rollback()
+            return ActionResult(success=False, message=f"Allocation failed: {exc}")
         except Exception as exc:
             logger.error("Service port create failed for ONT %s: %s", ont_id, exc)
             return ActionResult(success=False, message=f"SSH error: {exc}")
 
-        _set_sync_meta(ont, "ssh")
-        db.commit()
         _emit_ont_event(
             db, "ont.config_updated", {"ont_id": str(ont.id), "field": "service_port"}
         )

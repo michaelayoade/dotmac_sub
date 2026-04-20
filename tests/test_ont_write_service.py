@@ -373,6 +373,136 @@ class TestUpdateServicePort:
         db.commit.assert_not_called()
         mock_emit.assert_not_called()
 
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    def test_db_backed_path_allocates_index_before_olt_write(
+        self,
+        mock_get_adapter,
+        mock_emit,
+        db_session,
+    ):
+        from sqlalchemy import select
+
+        from app.models.network import (
+            OLTDevice,
+            OntAssignment,
+            OntUnit,
+            PonPort,
+            ServicePortAllocation,
+        )
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
+        olt = OLTDevice(name="Write Service OLT", vendor="Huawei")
+        pon = PonPort(olt=olt, name="0/1/3")
+        ont = OntUnit(
+            serial_number="WRITE-SP-OK",
+            board="0/1",
+            port="3",
+            external_id="5",
+        )
+        db_session.add_all([olt, pon, ont])
+        db_session.flush()
+        db_session.add(
+            OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
+        )
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.create_service_port.return_value = OltOperationResult(
+            success=True, message="created", data={}
+        )
+        mock_adapter.get_service_ports_for_ont.return_value = OltOperationResult(
+            success=True,
+            message="ok",
+            data={
+                "service_ports": [
+                    SimpleNamespace(
+                        vlan_id=203,
+                        gem_index=1,
+                        tag_transform="translate",
+                    )
+                ]
+            },
+        )
+        mock_get_adapter.return_value = mock_adapter
+
+        result = OntWriteService.update_service_port(
+            db_session,
+            str(ont.id),
+            vlan_id=203,
+            gem_index=1,
+        )
+
+        assert result.success is True
+        port_index = mock_adapter.create_service_port.call_args.kwargs["port_index"]
+        assert port_index is not None
+        allocation = db_session.scalars(select(ServicePortAllocation)).one()
+        assert allocation.port_index == port_index
+        assert allocation.vlan_id == 203
+        assert allocation.gem_index == 1
+        assert allocation.is_active is True
+        assert allocation.provisioned_at is not None
+        assert allocation.released_at is None
+        mock_emit.assert_called_once()
+
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    def test_db_backed_path_releases_allocation_when_olt_write_fails(
+        self,
+        mock_get_adapter,
+        mock_emit,
+        db_session,
+    ):
+        from sqlalchemy import select
+
+        from app.models.network import (
+            OLTDevice,
+            OntAssignment,
+            OntUnit,
+            PonPort,
+            ServicePortAllocation,
+        )
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
+        olt = OLTDevice(name="Write Service Fail OLT", vendor="Huawei")
+        pon = PonPort(olt=olt, name="0/1/3")
+        ont = OntUnit(
+            serial_number="WRITE-SP-FAIL",
+            board="0/1",
+            port="3",
+            external_id="5",
+        )
+        db_session.add_all([olt, pon, ont])
+        db_session.flush()
+        db_session.add(
+            OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
+        )
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.create_service_port.return_value = OltOperationResult(
+            success=False,
+            message="SSH service port creation failed: timed out",
+            data={},
+            error_code="TimeoutError",
+        )
+        mock_get_adapter.return_value = mock_adapter
+
+        result = OntWriteService.update_service_port(
+            db_session,
+            str(ont.id),
+            vlan_id=203,
+            gem_index=1,
+        )
+
+        assert result.success is False
+        assert "timed out" in result.message
+        allocation = db_session.scalars(select(ServicePortAllocation)).one()
+        assert allocation.is_active is False
+        assert allocation.provisioned_at is None
+        assert allocation.released_at is not None
+        mock_emit.assert_not_called()
+
 
 class TestOntOltWriteContext:
     def test_requires_scanned_board_port_not_pon_name_fallback(self, db_session):
