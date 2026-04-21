@@ -1,6 +1,7 @@
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 from starlette.requests import Request
 
@@ -116,6 +117,7 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
         serial_number: str,
         force_reauthorize: bool = False,
         initiated_by: str | None = None,
+        request=None,
     ):
         captured.update(
             {
@@ -124,6 +126,7 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
                 "serial_number": serial_number,
                 "force_reauthorize": force_reauthorize,
                 "initiated_by": initiated_by,
+                "request": request,
             }
         )
         return True, "Force authorization queued.", "op-123"
@@ -158,6 +161,12 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
             "query_string": b"",
         }
     )
+    request.state.auth = {
+        "principal_id": str(uuid4()),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": ["network:write"],
+    }
 
     response = network_olts_inventory.olt_authorize_ont(
         request,
@@ -166,7 +175,7 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
         serial_number="4857544328201B9A",
         return_to="/admin/network/onts?view=unconfigured",
         force_reauthorize="true",
-        db=object(),
+        db=SimpleNamespace(rollback=lambda: None),
     )
 
     assert response.status_code == 303
@@ -175,6 +184,7 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
     assert captured["fsp"] == "0/1/6"
     assert captured["serial_number"] == "4857544328201B9A"
     assert captured["initiated_by"] == "Alice Admin"
+    assert captured["request"] is request
 
 
 def test_normal_authorize_route_queues_without_running_foreground_workflow(
@@ -192,6 +202,7 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
         serial_number: str,
         force_reauthorize: bool = False,
         initiated_by: str | None = None,
+        request=None,
     ):
         captured.update(
             {
@@ -200,6 +211,7 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
                 "serial_number": serial_number,
                 "force_reauthorize": force_reauthorize,
                 "initiated_by": initiated_by,
+                "request": request,
             }
         )
         return True, "Authorization queued.", "op-456"
@@ -234,6 +246,12 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
             "query_string": b"",
         }
     )
+    request.state.auth = {
+        "principal_id": str(uuid4()),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": ["network:write"],
+    }
 
     response = network_olts_inventory.olt_authorize_ont(
         request,
@@ -242,7 +260,7 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
         serial_number="4857544328201B9A",
         return_to="/admin/network/onts?view=unconfigured",
         force_reauthorize="",
-        db=object(),
+        db=SimpleNamespace(rollback=lambda: None),
     )
 
     assert response.status_code == 303
@@ -251,74 +269,6 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
     assert captured["fsp"] == "0/1/6"
     assert captured["serial_number"] == "4857544328201B9A"
     assert captured["initiated_by"] == "Alice Admin"
-
-
-def test_olt_detail_authorize_route_queues_without_running_foreground_workflow(
-    monkeypatch,
-) -> None:
-    from app.services.network.olt_api_operations import OltApiWriteResult
-    from app.web.admin import network_olts
-
-    captured: dict[str, object] = {}
-
-    def _fake_queue_authorize_ont(
-        _db,
-        olt_id: str,
-        *,
-        fsp: str,
-        serial_number: str,
-        force_reauthorize: bool = False,
-        request=None,
-    ):
-        captured.update(
-            {
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force_reauthorize,
-                "request": request,
-            }
-        )
-        return OltApiWriteResult(True, "Force authorization queued.", {})
-
-    def _unexpected_foreground_workflow(*_args, **_kwargs):
-        raise AssertionError("OLT detail authorize should not run in the web request")
-
-    monkeypatch.setattr(
-        network_olts.olt_api_operations_service,
-        "queue_authorize_ont",
-        _fake_queue_authorize_ont,
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_authorization_workflow.authorize_autofind_ont_audited",
-        _unexpected_foreground_workflow,
-    )
-
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/admin/network/olts/olt-123/authorize-ont",
-            "headers": [],
-            "query_string": b"",
-        }
-    )
-
-    response = network_olts.olt_authorize_ont(
-        request,
-        "olt-123",
-        fsp="0/1/6",
-        serial_number="4857544328201B9A",
-        return_to="/admin/network/onts?view=unconfigured",
-        force_reauthorize="true",
-        db=object(),
-    )
-
-    assert response.status_code == 303
-    assert "Force+authorization+queued" in response.headers["location"]
-    assert captured["force_reauthorize"] is True
-    assert captured["fsp"] == "0/1/6"
-    assert captured["serial_number"] == "4857544328201B9A"
     assert captured["request"] is request
 
 

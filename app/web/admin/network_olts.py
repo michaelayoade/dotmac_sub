@@ -29,7 +29,6 @@ from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
-from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
 from app.services.olt_detail_adapter import olt_detail_adapter
@@ -698,94 +697,6 @@ def restore_autofind_candidate(
         f"/admin/network/onts?view=unconfigured&status={status}&message={quote_plus(message)}",
         status_code=303,
     )
-
-
-@router.post(
-    "/olts/{olt_id}/authorize-ont",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def olt_authorize_ont(
-    request: Request,
-    olt_id: str,
-    fsp: str = Form(""),
-    serial_number: str = Form(""),
-    ont_id: str = Form(""),
-    return_to: str = Form(""),
-    force_reauthorize: str = Form(""),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Authorize a discovered ONT on the OLT via SSH.
-
-    Uses resilient execution: tries async (Celery) first, falls back to
-    synchronous execution if Celery/Redis is unavailable.
-
-    Args:
-        force_reauthorize: If "true" or "1", delete any existing registration
-            of this serial on the OLT before authorizing on the specified port.
-    """
-    if not fsp or not serial_number:
-        from app.services.network.result_adapter import OperationResult
-
-        result = OperationResult.error("Missing port or serial number")
-        result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
-        result.redirect_tab = "autofind"
-        return result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
-
-    scoped_ont_id = ont_id if isinstance(ont_id, str) else ""
-    if not can_authorize_ont_from_request(request, db, scoped_ont_id):
-        from app.services.network.result_adapter import OperationResult
-
-        result = OperationResult.error("ONT authorization scope check failed")
-        result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
-        result.redirect_tab = "autofind"
-        return result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
-
-    # Parse force_reauthorize checkbox value
-    force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
-    logger.info(
-        "authorize_ont route: serial=%s force_reauthorize_raw=%r force=%s",
-        serial_number,
-        force_reauthorize,
-        force,
-    )
-
-    try:
-        exec_result = olt_operations_service.execute_authorization(
-            db,
-            olt_id,
-            fsp,
-            serial_number,
-            force_reauthorize=force,
-            request=request,
-        )
-        op_result = exec_result.to_operation_result()
-    except Exception as exc:
-        db.rollback()
-        logger.error(
-            "Failed to authorize ONT olt_id=%s fsp=%s serial=%s: %s",
-            olt_id,
-            fsp,
-            serial_number,
-            exc,
-            exc_info=True,
-        )
-        from app.services.network.result_adapter import OperationResult
-
-        op_result = OperationResult.error(f"Authorization failed: {exc}")
-
-    op_result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
-    op_result.redirect_tab = "autofind"
-    return op_result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
-
-
-def _get_authorize_redirect_url(olt_id: str, return_to: str) -> str:
-    """Get redirect URL for authorization result."""
-    if return_to in (
-        "/admin/network/unconfigured-onts",
-        "/admin/network/onts?view=unconfigured",
-    ):
-        return "/admin/network/onts?view=unconfigured"
-    return f"/admin/network/olts/{olt_id}"
 
 
 @router.post(
