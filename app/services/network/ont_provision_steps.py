@@ -252,7 +252,18 @@ def create_service_port(
             message = f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent success)"
 
     ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult("create_service_port", success, message, ms)
+    result_data: dict[str, object] = {}
+    if isinstance(action_result.data, dict):
+        raw_index = action_result.data.get("service_port_index")
+        if isinstance(raw_index, int):
+            result_data["created_service_port_indices"] = [raw_index]
+    result = StepResult(
+        "create_service_port",
+        success,
+        message,
+        ms,
+        data=result_data or None,
+    )
     _record_step(db, ctx.ont, "create_service_port", result)
     return result
 
@@ -1969,6 +1980,80 @@ def rollback_service_ports(
     return result
 
 
+def rollback_service_port_indices(
+    db: Session,
+    ont_id: str,
+    *,
+    port_indices: list[int],
+    expected_olt_id: str | None = None,
+) -> StepResult:
+    """Remove only the specified service-port indices for an ONT.
+
+    This is the safer rollback path for watchdog retries because it deletes only
+    the ports created by the original failed operation and refuses to act if the
+    ONT has moved to another OLT.
+    """
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    t0 = time.monotonic()
+    ctx, err = resolve_olt_context(db, ont_id)
+    if not ctx:
+        return StepResult("rollback_service_ports", False, err)
+
+    if expected_olt_id is not None and str(ctx.olt.id) != str(expected_olt_id):
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult(
+            "rollback_service_ports",
+            False,
+            "ONT placement changed since rollback failure; refusing targeted retry.",
+            ms,
+        )
+
+    normalized_indices = sorted({int(index) for index in port_indices})
+    if not normalized_indices:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult(
+            "rollback_service_ports",
+            False,
+            "No targeted service-port indices recorded for retry.",
+            ms,
+        )
+
+    adapter = get_protocol_adapter(ctx.olt)
+    deleted = 0
+    errors = 0
+    error_messages: list[str] = []
+    for port_index in normalized_indices:
+        delete_result = adapter.delete_service_port(port_index)
+        if delete_result.success:
+            deleted += 1
+        else:
+            errors += 1
+            error_messages.append(f"{port_index}: {delete_result.message}")
+            logger.warning(
+                "Targeted rollback: failed to delete service-port %d: %s",
+                port_index,
+                delete_result.message,
+            )
+
+    ms = int((time.monotonic() - t0) * 1000)
+    message = f"Removed {deleted} targeted service-port(s)"
+    if errors:
+        message += f", {errors} failed"
+    result = StepResult(
+        "rollback_service_ports",
+        errors == 0,
+        message,
+        ms,
+        data={
+            "targeted_port_indices": normalized_indices,
+            "errors": error_messages,
+        },
+    )
+    _record_step(db, ctx.ont, "rollback_service_ports", result)
+    return result
+
+
 # Profile resolution, preflight validation, and command preview live in
 # app.services.network.ont_provisioning.* and are imported above for compatibility.
 
@@ -2250,6 +2335,15 @@ def provision_with_reconciliation(
             ms,
             data={
                 "steps_completed": exec_result.steps_completed,
+                "created_service_port_indices": sorted(
+                    {
+                        int(entry.resource_id)
+                        for entry in exec_result.compensation_log
+                        if entry.step_name.startswith("create_service_port_")
+                        and entry.resource_id is not None
+                        and str(entry.resource_id).isdigit()
+                    }
+                ),
                 **get_delta_summary(delta),
             },
         )

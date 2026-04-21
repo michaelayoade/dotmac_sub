@@ -386,6 +386,7 @@ class TestSagaExecutorCompensation:
                         step_name="create_service_ports",
                         success=True,
                         message="created",
+                        data={"created_service_port_indices": [101, 102]},
                     ),
                     compensate=failing_compensate,
                     critical=True,
@@ -417,6 +418,10 @@ class TestSagaExecutorCompensation:
         assert persisted_rows[0].step_name == "rollback_service_ports"
         assert persisted_rows[0].operation_type == "saga:full_provisioning"
         assert persisted_rows[0].resource_id == "create_service_ports"
+        assert persisted_rows[0].undo_commands == [
+            "service_port_index:101",
+            "service_port_index:102",
+        ]
 
 
 class TestSagaExecutorContext:

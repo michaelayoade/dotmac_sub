@@ -337,6 +337,11 @@ class OntWriteService:
                 )
                 if not create_result.success:
                     return ActionResult(success=False, message=create_result.message)
+                created_port_index = None
+                if isinstance(create_result.data, dict):
+                    raw_index = create_result.data.get("port_index")
+                    if isinstance(raw_index, int):
+                        created_port_index = raw_index
                 if not _is_test_mock(ctx.olt):
                     verify_result = adapter.get_service_ports_for_ont(
                         ctx.fsp,
@@ -378,9 +383,16 @@ class OntWriteService:
                                 f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
                             ),
                         )
+                    created_port_index = matching_port.index
                 _set_sync_meta(ont, "ssh")
                 return ActionResult(
-                    success=True, message="Service port created/updated."
+                    success=True,
+                    message="Service port created/updated.",
+                    data=(
+                        {"service_port_index": created_port_index}
+                        if created_port_index is not None
+                        else None
+                    ),
                 )
 
             if _is_test_mock(db) or _is_test_mock(ctx.olt):
@@ -414,7 +426,11 @@ class OntWriteService:
         _emit_ont_event(
             db, "ont.config_updated", {"ont_id": str(ont.id), "field": "service_port"}
         )
-        return ActionResult(success=True, message="Service port created/updated.")
+        return ActionResult(
+            success=True,
+            message="Service port created/updated.",
+            data=result.data,
+        )
 
     @staticmethod
     def move_ont(

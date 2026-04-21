@@ -515,6 +515,7 @@ class SagaExecutor:
         result.failed_step = failed_step.name
         compensation_records: list[CompensationRecord] = []
         compensation_failures: list[tuple[str, str]] = []
+        persisted_failure_specs: list[tuple[str, StepResult, str]] = []
 
         logger.info(
             "Starting compensation for %d completed steps",
@@ -570,6 +571,9 @@ class SagaExecutor:
                     )
                     record.error = comp_result.message
                     compensation_failures.append((step.name, comp_result.message))
+                    persisted_failure_specs.append(
+                        (step.name, original_result, comp_result.message)
+                    )
 
             except Exception as exc:
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -594,11 +598,12 @@ class SagaExecutor:
                 )
                 compensation_records.append(record)
                 compensation_failures.append((step.name, str(exc)))
+                persisted_failure_specs.append((step.name, original_result, str(exc)))
                 self._mark_step_compensated(step, record)
 
         # Alert operators if there are compensation failures
         if compensation_failures:
-            self._persist_compensation_failures(compensation_failures)
+            self._persist_compensation_failures(persisted_failure_specs)
             self._alert_compensation_failures(failed_step.name, compensation_failures)
 
         return self._build_failure_result(
@@ -611,7 +616,7 @@ class SagaExecutor:
 
     def _persist_compensation_failures(
         self,
-        failures: list[tuple[str, str]],
+        failures: list[tuple[str, StepResult, str]],
     ) -> None:
         """Persist retryable compensation failures for watchdog pickup."""
         from app.models.compensation_failure import (
@@ -631,17 +636,42 @@ class SagaExecutor:
             return
 
         persisted = 0
-        for step_name, error_message in failures:
+        for step_name, original_result, error_message in failures:
             if step_name in _SERVICE_PORT_ROLLBACK_STEPS:
+                recorded_indices: list[int] = []
+                if isinstance(original_result.data, dict):
+                    raw_indices = original_result.data.get("created_service_port_indices")
+                    if isinstance(raw_indices, list):
+                        recorded_indices = [
+                            int(index)
+                            for index in raw_indices
+                            if isinstance(index, int)
+                            or (isinstance(index, str) and index.isdigit())
+                        ]
+                if not recorded_indices:
+                    logger.warning(
+                        "Skipping saga compensation persistence for %s; no targeted service-port indices recorded",
+                        step_name,
+                        extra={
+                            "event": "saga_compensation_persistence_skipped_no_indices",
+                            "saga_name": self.saga.name,
+                            "saga_execution_id": self.context.saga_execution_id,
+                            "step_name": step_name,
+                        },
+                    )
+                    continue
                 failure = CompensationFailure(
                     ont_unit_id=self.context.ont.id,
                     olt_device_id=self.context.olt.id,
                     operation_type=f"saga:{self.saga.name}",
                     step_name="rollback_service_ports",
-                    undo_commands=[],
+                    undo_commands=[
+                        f"service_port_index:{index}"
+                        for index in sorted(set(recorded_indices))
+                    ],
                     description=(
-                        "Retry service-port rollback after saga compensation failure "
-                        f"for step '{step_name}'"
+                        "Retry targeted service-port rollback after saga compensation "
+                        f"failure for step '{step_name}'"
                     ),
                     resource_id=step_name,
                     error_message=error_message,

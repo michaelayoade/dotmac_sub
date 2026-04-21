@@ -107,7 +107,7 @@ def test_retry_due_compensations_retries_only_due_rows(db_session, monkeypatch):
     )
 
 
-def test_retry_compensation_uses_service_layer_handler_when_no_undo_commands(
+def test_retry_compensation_uses_targeted_service_layer_handler(
     db_session, monkeypatch
 ):
     now = datetime.now(UTC)
@@ -117,20 +117,22 @@ def test_retry_compensation_uses_service_layer_handler_when_no_undo_commands(
         last_attempted_at=now - timedelta(minutes=10),
     )
     failure.step_name = "rollback_service_ports"
-    failure.undo_commands = []
+    failure.undo_commands = ["service_port_index:101", "service_port_index:102"]
     db_session.commit()
 
-    def _fake_rollback_service_ports(db, ont_id):
+    def _fake_rollback_service_port_indices(db, ont_id, *, port_indices, expected_olt_id):
         assert ont_id == str(failure.ont_unit_id)
+        assert port_indices == [101, 102]
+        assert expected_olt_id == str(failure.olt_device_id)
         return type(
             "RollbackResult",
             (),
-            {"success": True, "message": "Removed 2 service-port(s)"},
+            {"success": True, "message": "Removed 2 targeted service-port(s)"},
         )()
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.rollback_service_ports",
-        _fake_rollback_service_ports,
+        "app.services.network.ont_provision_steps.rollback_service_port_indices",
+        _fake_rollback_service_port_indices,
     )
 
     success, message = compensation_retry.retry_compensation(
@@ -141,7 +143,7 @@ def test_retry_compensation_uses_service_layer_handler_when_no_undo_commands(
 
     refreshed = db_session.get(CompensationFailure, failure.id)
     assert success is True
-    assert message == "Removed 2 service-port(s)"
+    assert message == "Removed 2 targeted service-port(s)"
     assert refreshed is not None
     assert refreshed.status == CompensationStatus.resolved
     assert refreshed.resolved_by == "system:watchdog"

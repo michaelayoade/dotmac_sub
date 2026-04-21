@@ -161,7 +161,7 @@ def retry_compensation(
     if failure.status != CompensationStatus.pending:
         return False, f"Cannot retry: status is {failure.status.value}"
 
-    if not failure.undo_commands and failure.step_name in _SERVICE_LAYER_RETRY_STEPS:
+    if failure.step_name in _SERVICE_LAYER_RETRY_STEPS:
         return _retry_service_layer_compensation(
             db,
             failure,
@@ -248,7 +248,21 @@ def _retry_service_layer_compensation(
         return False, "ONT unit not found for compensation retry"
 
     if failure.step_name == "rollback_service_ports":
-        result = ont_provision_steps.rollback_service_ports(db, str(failure.ont_unit_id))
+        port_indices = []
+        for entry in failure.undo_commands or []:
+            text = str(entry)
+            if text.startswith("service_port_index:"):
+                _, _, raw_index = text.partition(":")
+                if raw_index.isdigit():
+                    port_indices.append(int(raw_index))
+        result = ont_provision_steps.rollback_service_port_indices(
+            db,
+            str(failure.ont_unit_id),
+            port_indices=port_indices,
+            expected_olt_id=(
+                str(failure.olt_device_id) if failure.olt_device_id is not None else None
+            ),
+        )
         if result.success:
             failure.status = CompensationStatus.resolved
             failure.resolved_at = datetime.now(UTC)
