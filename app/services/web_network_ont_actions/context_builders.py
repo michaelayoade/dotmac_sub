@@ -157,7 +157,7 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     context = {
         "ont": shared["ont"],
         "iphost_config": observed_state["iphost_config"],
-        "iphost_ok": True,
+        "iphost_ok": observed_state["iphost_result"].ok,
         "iphost_msg": observed_state["iphost_result"].message,
         "iphost_freshness": observed_state["iphost_result"].freshness,
         "initial_iphost_form": observed_state["initial_form"],
@@ -240,6 +240,7 @@ def _load_unified_observed_state(db: Session, ont: object) -> dict[str, object]:
         ),
         "initial_form": initial_form,
     }
+
 
 def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
     assignment = db.scalars(
