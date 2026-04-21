@@ -20,6 +20,7 @@ from starlette.requests import Request
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice, OntUnit
 from app.services.credential_crypto import decrypt_credential
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network import olt_ssh_config as olt_ssh_config_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_monitoring_devices import find_linked_network_device
 from app.services.network.olt_web_audit import log_olt_audit_event
@@ -129,6 +130,46 @@ def read_backup_preview(backup: OltConfigBackup, limit_chars: int = 120_000) -> 
 def read_backup_content(backup: OltConfigBackup) -> str:
     path = backup_file_path(backup)
     return path.read_text(errors="replace")
+
+
+def restore_from_backup(
+    db: Session,
+    olt_id: str,
+    backup_id: str,
+    *,
+    persist: bool = True,
+    request: Request | None = None,
+) -> tuple[bool, str]:
+    """Restore an OLT configuration from a stored backup snapshot."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+
+    backup = get_olt_backup_or_none(db, backup_id)
+    if not backup:
+        return False, "Backup not found"
+    if str(backup.olt_device_id) != str(olt.id):
+        return False, "Backup does not belong to this OLT"
+
+    config_text = read_backup_content(backup)
+    ok, message = olt_ssh_config_service.restore_config_from_backup(
+        olt, config_text, persist=persist
+    )
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="restore_backup",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "backup_id": backup_id,
+            "persist": persist,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message
 
 
 def compare_olt_backups(

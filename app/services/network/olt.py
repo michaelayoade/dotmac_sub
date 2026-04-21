@@ -270,7 +270,30 @@ class OLTDevices(CRUDManager[OLTDevice]):
 
     @classmethod
     def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate) -> OLTDevice:
+        existing = cls.get(db, device_id)
+        before_ssh_identity = (
+            existing.mgmt_ip,
+            existing.ssh_port,
+            existing.ssh_username,
+            existing.ssh_password,
+        )
         device = super().update(db, device_id, payload)
+        after_ssh_identity = (
+            device.mgmt_ip,
+            device.ssh_port,
+            device.ssh_username,
+            device.ssh_password,
+        )
+        if before_ssh_identity != after_ssh_identity:
+            try:
+                from app.services.network.olt_ssh_pool import ssh_pool
+
+                ssh_pool.invalidate(str(device.id))
+            except Exception:
+                logger.exception(
+                    "Failed to invalidate SSH pool for OLT %s after credential rotation",
+                    device.id,
+                )
         emit_event(
             db,
             EventType.olt_updated,

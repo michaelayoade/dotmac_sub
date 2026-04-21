@@ -416,6 +416,21 @@ def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectRespon
     )
 
 
+@router.post(
+    "/olts/{olt_id}/backups/{backup_id}/restore",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_backup_restore(
+    olt_id: str, backup_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    ok, message = olt_operations_service.restore_from_backup(db, olt_id, backup_id)
+    status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
 @router.get(
     "/olts/backups/compare",
     response_class=HTMLResponse,

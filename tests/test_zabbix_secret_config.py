@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+import httpx
 from app.services import zabbix
 
 
@@ -70,6 +72,60 @@ def test_zabbix_availability_missing_token(monkeypatch):
     assert health["available"] is False
     assert health["status"] == "not_configured"
     assert "token" in health["message"].lower()
+
+
+def test_zabbix_auth_error_emits_alert_and_opens_circuit(monkeypatch):
+    zabbix._AUTH_CIRCUIT.close()
+    emitted: list[tuple[object, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        "app.services.db_session_adapter.db_session_adapter.create_session",
+        lambda: SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(
+        "app.services.events.emit_event",
+        lambda db, event_type, payload, actor=None: emitted.append((event_type, payload)),
+    )
+
+    response = Mock(status_code=401)
+    request = httpx.Request("POST", "http://zabbix/api")
+    response.request = request
+    auth_exc = httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            raise auth_exc
+
+    monkeypatch.setattr(zabbix.httpx, "Client", FakeClient)
+
+    client = zabbix.ZabbixClient(api_url="http://zabbix/api", api_token="token")
+    try:
+        client.get_hosts(limit=1)
+    except zabbix.ZabbixAuthError as exc:
+        assert "HTTP 401" in str(exc)
+    else:
+        raise AssertionError("Expected ZabbixAuthError")
+
+    assert emitted
+    assert emitted[0][1]["alert_type"] == "zabbix_auth_failure"
+
+    try:
+        client.get_hosts(limit=1)
+    except zabbix.ZabbixAuthError as exc:
+        assert "circuit open" in str(exc).lower()
+    else:
+        raise AssertionError("Expected auth circuit to block follow-up request")
+
+    zabbix._AUTH_CIRCUIT.close()
 
 
 def test_zabbix_metrics_adapter_uses_shared_secret_resolvers(monkeypatch):

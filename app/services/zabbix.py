@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -50,7 +53,113 @@ class ZabbixConfigurationError(ZabbixClientError):
     pass
 
 
+class ZabbixAuthError(ZabbixClientError):
+    pass
+
+
 DEFAULT_ZABBIX_API_URL = "http://zabbix-web:8080/api_jsonrpc.php"
+DEFAULT_ZABBIX_AUTH_CIRCUIT_SECONDS = 300
+
+
+@dataclass
+class _ZabbixAuthCircuitBreaker:
+    opened_until: datetime | None = None
+    last_error: str | None = None
+
+    def __post_init__(self) -> None:
+        self._lock = threading.RLock()
+
+    def check(self) -> str | None:
+        with self._lock:
+            now = datetime.now(UTC)
+            if self.opened_until and self.opened_until > now:
+                remaining = int((self.opened_until - now).total_seconds())
+                error = self.last_error or "Zabbix authentication failed"
+                return f"Zabbix auth circuit open for {remaining}s: {error}"
+            if self.opened_until:
+                self.opened_until = None
+                self.last_error = None
+            return None
+
+    def open(self, error: str) -> bool:
+        with self._lock:
+            now = datetime.now(UTC)
+            already_open = bool(self.opened_until and self.opened_until > now)
+            cooldown_seconds = int(
+                os.getenv(
+                    "ZABBIX_AUTH_CIRCUIT_SECONDS",
+                    str(DEFAULT_ZABBIX_AUTH_CIRCUIT_SECONDS),
+                )
+            )
+            self.opened_until = now + timedelta(seconds=max(cooldown_seconds, 1))
+            self.last_error = error
+            return not already_open
+
+    def close(self) -> None:
+        with self._lock:
+            self.opened_until = None
+            self.last_error = None
+
+
+_AUTH_CIRCUIT = _ZabbixAuthCircuitBreaker()
+
+
+def _looks_like_auth_error(message: str) -> bool:
+    normalized = str(message or "").lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "401",
+            "403",
+            "unauthorized",
+            "not authorized",
+            "permission denied",
+            "invalid token",
+            "invalid auth",
+            "authentication failed",
+            "session terminated",
+        )
+    )
+
+
+def _emit_auth_alert_once(error: str) -> None:
+    if not _AUTH_CIRCUIT.open(error):
+        return
+
+    try:
+        from app.services.db_session_adapter import db_session_adapter
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        db = db_session_adapter.create_session()
+        try:
+            emit_event(
+                db,
+                EventType.network_alert,
+                {
+                    "alert_type": "zabbix_auth_failure",
+                    "integration": "zabbix",
+                    "severity": "error",
+                    "message": error,
+                },
+                actor="system",
+            )
+        finally:
+            db.close()
+    except Exception:
+        logger.exception(
+            "zabbix_auth_alert_emit_failed",
+            extra={"event": "zabbix_auth_alert_emit_failed"},
+        )
+
+
+def _raise_auth_error(message: str) -> None:
+    logger.error(
+        "zabbix_auth_failure",
+        extra={"event": "zabbix_auth_failure", "error": message},
+    )
+    _emit_auth_alert_once(message)
+    raise ZabbixAuthError(message)
 
 
 def _read_secret_file(path: str | None) -> str:
@@ -174,6 +283,9 @@ class ZabbixClient:
         expected: str,
     ) -> list[dict[str, Any]]:
         self._ensure_allowed(payload, expected)
+        circuit_error = _AUTH_CIRCUIT.check()
+        if circuit_error:
+            raise ZabbixAuthError(circuit_error)
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
@@ -187,6 +299,10 @@ class ZabbixClient:
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in {401, 403}:
+                _raise_auth_error(
+                    f"Zabbix API authentication failed with HTTP {exc.response.status_code}"
+                )
             logger.info(
                 "zabbix_request_failure",
                 extra={
@@ -206,6 +322,12 @@ class ZabbixClient:
         if not isinstance(data, dict):
             raise ZabbixClientError("Invalid Zabbix API response")
         if data.get("error"):
+            error_info = data.get("error") or {}
+            error_message = str(
+                error_info.get("data") or error_info.get("message") or "Unknown"
+            )
+            if _looks_like_auth_error(error_message):
+                _raise_auth_error(f"Zabbix API authentication failed: {error_message}")
             logger.info(
                 "zabbix_request_failure",
                 extra={"event": "zabbix_request_failure", "method": expected},
@@ -219,6 +341,7 @@ class ZabbixClient:
             "zabbix_request_success",
             extra={"event": "zabbix_request_success", "method": expected},
         )
+        _AUTH_CIRCUIT.close()
         return [item for item in result if isinstance(item, dict)]
 
     def _submit_write_payload(
@@ -228,6 +351,9 @@ class ZabbixClient:
     ) -> dict[str, Any]:
         """Submit a write payload and return the result (dict or scalar)."""
         self._ensure_allowed(payload, expected)
+        circuit_error = _AUTH_CIRCUIT.check()
+        if circuit_error:
+            raise ZabbixAuthError(circuit_error)
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 response = client.post(
@@ -241,6 +367,10 @@ class ZabbixClient:
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in {401, 403}:
+                _raise_auth_error(
+                    f"Zabbix API authentication failed with HTTP {exc.response.status_code}"
+                )
             logger.info(
                 "zabbix_request_failure",
                 extra={
@@ -261,6 +391,11 @@ class ZabbixClient:
             raise ZabbixClientError("Invalid Zabbix API response")
         if data.get("error"):
             error_info = data.get("error", {})
+            error_message = str(
+                error_info.get("data") or error_info.get("message") or "Unknown"
+            )
+            if _looks_like_auth_error(error_message):
+                _raise_auth_error(f"Zabbix API authentication failed: {error_message}")
             logger.warning(
                 "zabbix_request_error",
                 extra={
@@ -277,6 +412,7 @@ class ZabbixClient:
             "zabbix_request_success",
             extra={"event": "zabbix_request_success", "method": expected},
         )
+        _AUTH_CIRCUIT.close()
         result = data.get("result")
         if isinstance(result, dict):
             return result

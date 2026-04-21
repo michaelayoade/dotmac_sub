@@ -3572,6 +3572,129 @@ def test_test_olt_connection_handles_missing_ip(db_session):
     assert "management ip" in message.lower()
 
 
+def test_restore_olt_backup_replays_saved_configuration(
+    db_session, monkeypatch, tmp_path: Path
+):
+    monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
+    olt = OLTDevice(name="OLT Restore", mgmt_ip="198.51.100.51")
+    db_session.add(olt)
+    db_session.commit()
+
+    backup_dir = tmp_path / str(olt.id)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / "restore.txt"
+    backup_path.write_text(
+        "# header\n"
+        "sysname Restored-OLT\n"
+        "display version\n"
+        "interface gpon 0/1\n"
+        "port 0 ont-auto-find enable\n"
+        "return\n",
+        encoding="utf-8",
+    )
+    backup = OltConfigBackup(
+        olt_device_id=olt.id,
+        backup_type=OltConfigBackupType.manual,
+        file_path=str(backup_path.relative_to(tmp_path)),
+        file_size_bytes=backup_path.stat().st_size,
+    )
+    db_session.add(backup)
+    db_session.commit()
+
+    captured: dict[str, object] = {}
+
+    def fake_restore(_olt, config_text, *, persist=True):
+        captured["olt_id"] = str(_olt.id)
+        captured["config_text"] = config_text
+        captured["persist"] = persist
+        return True, "Restored 3 configuration commands from backup and saved startup config"
+
+    monkeypatch.setattr(
+        "app.services.network.olt_operations.olt_ssh_config_service.restore_config_from_backup",
+        fake_restore,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_operations.log_olt_audit_event",
+        lambda *args, **kwargs: captured.setdefault("audit_called", True),
+    )
+
+    ok, message = web_network_olts_service.restore_from_backup(
+        db_session, str(olt.id), str(backup.id)
+    )
+
+    assert ok is True
+    assert "restored" in message.lower()
+    assert captured["olt_id"] == str(olt.id)
+    assert "sysname Restored-OLT" in str(captured["config_text"])
+    assert captured["persist"] is True
+    assert captured["audit_called"] is True
+
+
+def test_olt_backups_page_renders_restore_action(db_session, monkeypatch):
+    from app.web.admin import network_olts_profiles as network_olts_profiles_web
+
+    olt_id = uuid4()
+    backup_id = uuid4()
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": f"/admin/network/olts/{olt_id}/backups",
+            "headers": [],
+        }
+    )
+
+    monkeypatch.setattr(
+        network_olts_profiles_web,
+        "_base_context",
+        lambda _request, _db, active_page: {
+            "request": _request,
+            "active_page": active_page,
+            "active_menu": "network",
+            "current_user": SimpleNamespace(
+                name="Admin User", email="admin@example.com", initials="AU"
+            ),
+            "sidebar_stats": SimpleNamespace(
+                notifications_unread=0,
+                sidebar_logo_url="",
+                sidebar_logo_dark_url="",
+                app_name="DotMac Subs",
+                module_states={},
+                feature_states={},
+            ),
+            "csrf_token": "test-token",
+        },
+    )
+    monkeypatch.setattr(
+        network_olts_profiles_web,
+        "get_olt_or_none",
+        lambda *_args: SimpleNamespace(id=olt_id, name="Restore OLT"),
+    )
+    monkeypatch.setattr(
+        network_olts_profiles_web.olt_operations_service,
+        "list_olt_backups",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(
+                id=backup_id,
+                backup_type=SimpleNamespace(value="manual"),
+                file_path="restore.cfg",
+                file_size_bytes=1024,
+                created_at=datetime(2026, 4, 21, 12, 0, tzinfo=UTC),
+            )
+        ],
+    )
+
+    response = network_olts_profiles_web.olt_backups_list(
+        request=request, olt_id=str(olt_id), db=db_session
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert f"/admin/network/olts/{olt_id}/backups/{backup_id}/restore" in body
+    assert "Restore" in body
+    assert "save it as startup config" in body
+
+
 def test_olt_form_values_parse_access_fields():
     values = web_network_olts_service.parse_form_values(
         {

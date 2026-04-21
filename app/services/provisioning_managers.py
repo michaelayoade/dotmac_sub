@@ -840,6 +840,14 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                     result = execute_create_olt_service_port(
                         db, step_context, step.config
                     )
+                elif step.step_type == ProvisioningStepType.restore_olt_from_backup:
+                    from app.services.provisioning_step_executors import (
+                        execute_restore_olt_from_backup,
+                    )
+
+                    result = execute_restore_olt_from_backup(
+                        db, step_context, step.config
+                    )
                 elif step.step_type == ProvisioningStepType.ensure_nas_vlan:
                     from app.services.provisioning_step_executors import (
                         execute_ensure_nas_vlan,

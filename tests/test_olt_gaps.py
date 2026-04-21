@@ -24,6 +24,7 @@ from app.services.network.olt_polling import (
     _parse_signal_value,
     classify_signal,
 )
+from app.services.network.olt_ssh_config import restore_config_from_backup
 from app.services.network.olt_ssh_ont._common import OntStatusEntry, RegisteredOntEntry
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,59 @@ class TestOltCliValidation:
 
     def test_dangerous_command_after_allowed_prefix_is_rejected(self) -> None:
         assert validate_cli_command("display version reboot") is not None
+
+
+def test_restore_from_backup_persists_startup_config(monkeypatch) -> None:
+    sent: list[str] = []
+    commands: list[str] = []
+
+    class FakeChannel:
+        def send(self, chars: str) -> None:
+            sent.append(chars)
+
+    class FakeTransport:
+        def close(self) -> None:
+            sent.append("closed")
+
+    def fake_open_shell(_olt):
+        return FakeTransport(), FakeChannel(), SimpleNamespace(prompt_regex=r"#\s*$")
+
+    def fake_read_until_prompt(_channel, _prompt, timeout_sec=5):
+        return "saved successfully\nOLT#"
+
+    def fake_run_huawei_cmd(_channel, command, prompt=r"#\s*$"):
+        commands.append(command)
+        if command == "save":
+            return "Are you sure to save? [Y/N]"
+        return ""
+
+    monkeypatch.setattr("app.services.network.olt_ssh._open_shell", fake_open_shell)
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._read_until_prompt", fake_read_until_prompt
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._run_huawei_cmd", fake_run_huawei_cmd
+    )
+    monkeypatch.setattr("app.services.network.olt_ssh.is_error_output", lambda _out: False)
+
+    ok, message = restore_config_from_backup(
+        SimpleNamespace(name="OLT-A"),
+        "sysname Restored-OLT\ninterface gpon 0/1\nport 0 ont-auto-find enable\n",
+    )
+
+    assert ok is True
+    assert "saved startup config" in message
+    assert commands == [
+        "system-view",
+        "sysname Restored-OLT",
+        "interface gpon 0/1",
+        "port 0 ont-auto-find enable",
+        "quit",
+        "save",
+    ]
+    assert "enable\n" in sent
+    assert "screen-length 0 temporary\n" in sent
+    assert "y\n" in sent
 
 
 class TestOltOntStatusBySerial:
@@ -258,6 +312,25 @@ class TestOltCrudEvents:
             )
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][1] == EventType.olt_updated
+
+    def test_update_olt_invalidates_ssh_pool_on_credential_change(self, db_session) -> None:
+        from app.services.network.olt import OLTDevices
+
+        device = OLTDevices.create(
+            db_session,
+            OLTDeviceCreate(name="Pool Reset OLT", ssh_username="old-user"),
+        )
+        with (
+            patch("app.services.network.olt.emit_event"),
+            patch("app.services.network.olt_ssh_pool.ssh_pool.invalidate") as mock_invalidate,
+        ):
+            OLTDevices.update(
+                db_session,
+                str(device.id),
+                OLTDeviceUpdate(ssh_username="new-user"),
+            )
+
+        mock_invalidate.assert_called_once_with(str(device.id))
 
     def test_delete_olt_emits_event(self, db_session) -> None:
         from app.services.network.olt import OLTDevices

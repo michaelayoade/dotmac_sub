@@ -254,6 +254,12 @@ def run_test_backup(db: Session, olt_id: str):
     return _call_operations_helper(olt_operations_service.run_test_backup, db, olt_id)
 
 
+def restore_from_backup(db: Session, olt_id: str, backup_id: str):
+    return _call_operations_helper(
+        olt_operations_service.restore_from_backup, db, olt_id, backup_id
+    )
+
+
 def execute_cli_command(
     db: Session, olt_id: str, command: str
 ) -> tuple[bool, str, str]:

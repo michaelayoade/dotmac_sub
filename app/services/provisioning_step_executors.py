@@ -208,6 +208,50 @@ def execute_ensure_nas_vlan(
         )
 
 
+def execute_restore_olt_from_backup(
+    db: Session,
+    context: dict[str, Any],
+    config: dict[str, Any] | None,
+) -> ProvisioningResult:
+    """Restore an OLT configuration backup through the provisioning workflow."""
+    config = config or {}
+    olt_id = config.get("olt_id") or context.get("olt_id")
+    backup_id = config.get("backup_id") or context.get("backup_id")
+
+    if not olt_id:
+        return ProvisioningResult(
+            status="failed",
+            detail="OLT ID is required in step config or context.",
+        )
+    if not backup_id:
+        return ProvisioningResult(
+            status="failed",
+            detail="Backup ID is required in step config or context.",
+        )
+
+    try:
+        from app.services.network.olt_operations import restore_from_backup
+
+        ok, message = restore_from_backup(db, str(olt_id), str(backup_id))
+        if ok:
+            return ProvisioningResult(
+                status="ok",
+                detail=message,
+                payload={
+                    "olt_backup_restored": True,
+                    "olt_id": str(olt_id),
+                    "backup_id": str(backup_id),
+                },
+            )
+        return ProvisioningResult(status="failed", detail=message)
+    except Exception as exc:
+        logger.error("OLT backup restore failed: %s", exc)
+        return ProvisioningResult(
+            status="failed",
+            detail=f"OLT backup restore failed: {exc}",
+        )
+
+
 def execute_push_tr069_wan_config(
     db: Session,
     context: dict[str, Any],

@@ -101,9 +101,18 @@
                         <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ backup.file_path }}</td>
                         <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ (backup.file_size_bytes / 1024) | round(1) if backup.file_size_bytes else '-' }}{% if backup.file_size_bytes %} KB{% endif %}</td>
                         <td class="px-4 py-3 text-right text-sm">
-                            <a href="/admin/network/olts/backups/{{ backup.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">View</a>
-                            <span class="mx-2 text-slate-300 dark:text-slate-600">|</span>
-                            <a href="/admin/network/olts/backups/{{ backup.id }}/download" class="text-slate-600 hover:text-slate-900 dark:text-slate-300">Download</a>
+                            <div class="inline-flex items-center gap-2">
+                                <a href="/admin/network/olts/backups/{{ backup.id }}" class="text-blue-600 hover:text-blue-700 dark:text-blue-400">View</a>
+                                <span class="text-slate-300 dark:text-slate-600">|</span>
+                                <a href="/admin/network/olts/backups/{{ backup.id }}/download" class="text-slate-600 hover:text-slate-900 dark:text-slate-300">Download</a>
+                                <span class="text-slate-300 dark:text-slate-600">|</span>
+                                <form method="POST" action="/admin/network/olts/{{ olt.id }}/backups/{{ backup.id }}/restore" class="inline" onsubmit="return confirm('Restore this backup to {{ olt.name }} and save it as startup config?');">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                                        Restore
+                                    </button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                     {% else %}
