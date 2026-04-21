@@ -16,6 +16,7 @@ from app.services import web_network_olt_profiles as web_network_olt_profiles_se
 from app.services.auth_dependencies import require_permission
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.services.network.result_adapter import OperationResult
 from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
 
@@ -110,7 +111,8 @@ async def olt_tr069_rebind(
     except (TypeError, ValueError):
         target_profile_id = 0
     ont_ids = [value for value in form.getlist("ont_ids") if isinstance(value, str)]
-    if not ont_ids or not target_profile_id:
+    scoped_ont_ids = filter_manageable_ont_ids_from_request(request, db, list(ont_ids))
+    if not scoped_ont_ids or not target_profile_id:
         result = OperationResult.error("Missing ONT selection or target profile")
         result.redirect_url = f"/admin/network/olts/{olt_id}"
         result.redirect_tab = "tr069"
@@ -119,7 +121,7 @@ async def olt_tr069_rebind(
     stats = olt_tr069_admin_service.handle_rebind_tr069_profiles_audited(
         db,
         olt_id,
-        list(ont_ids),
+        scoped_ont_ids,
         target_profile_id,
         request=request,
     )
@@ -128,12 +130,20 @@ async def olt_tr069_rebind(
     rebound = rebound_raw if isinstance(rebound_raw, int) else 0
     failed = failed_raw if isinstance(failed_raw, int) else 0
     errors = stats.get("errors", [])
+    skipped_out_of_scope = max(len(ont_ids) - len(scoped_ont_ids), 0)
     message = f"Rebound {rebound} ONT(s) to profile {target_profile_id}"
     if failed:
         message += f", {failed} failed"
+    if skipped_out_of_scope:
+        message += f", {skipped_out_of_scope} out of scope"
     ok = rebound > 0
 
-    result_data = {"rebound": rebound, "failed": failed, "errors": errors}
+    result_data = {
+        "rebound": rebound,
+        "failed": failed,
+        "errors": errors,
+        "skipped_out_of_scope": skipped_out_of_scope,
+    }
     result = (
         OperationResult.ok(message, data=result_data)
         if ok

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from sqlalchemy import select
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.models.subscriber import Subscriber, UserType
+
+logger = logging.getLogger(__name__)
 
 
 def _uuid_or_none(value: object) -> UUID | None:
@@ -22,6 +25,10 @@ def _auth_from_request(request: object | None) -> dict | None:
     state = getattr(request, "state", None)
     auth = getattr(state, "auth", None) if state is not None else None
     return auth if isinstance(auth, dict) else None
+
+
+def _request_path(request: object | None) -> str:
+    return str(getattr(getattr(request, "url", None), "path", "") or "")
 
 
 def can_manage_ont(auth: dict | None, db: Session, ont: OntUnit | None) -> bool:
@@ -93,6 +100,74 @@ def can_manage_ont_id(auth: dict | None, db: Session, ont_id: object) -> bool:
 
 
 def can_manage_ont_from_request(
-    request: object | None, db: Session, ont_id: object
+    request: object | None,
+    db: Session,
+    ont_id: object,
+    *,
+    allow_missing_auth: bool = False,
 ) -> bool:
-    return can_manage_ont_id(_auth_from_request(request), db, ont_id)
+    auth = _auth_from_request(request)
+    if auth is None and not allow_missing_auth:
+        logger.warning(
+            "Denied ONT scope check due to missing request auth: path=%s ont_id=%s",
+            _request_path(request),
+            ont_id,
+        )
+        return False
+    return can_manage_ont_id(auth, db, ont_id)
+
+
+def is_internal_operator_from_request(
+    request: object | None,
+    db: Session,
+    *,
+    allow_missing_auth: bool = False,
+) -> bool:
+    auth = _auth_from_request(request)
+    if auth is None and not allow_missing_auth:
+        logger.warning(
+            "Denied internal-operator check due to missing request auth: path=%s",
+            _request_path(request),
+        )
+        return False
+    return is_internal_operator(auth, db)
+
+
+def can_authorize_ont_from_request(
+    request: object | None,
+    db: Session,
+    ont_id: object,
+    *,
+    allow_missing_auth: bool = False,
+) -> bool:
+    ont_id_text = str(ont_id or "").strip()
+    if ont_id_text:
+        return can_manage_ont_from_request(
+            request,
+            db,
+            ont_id_text,
+            allow_missing_auth=allow_missing_auth,
+        )
+    return is_internal_operator_from_request(
+        request,
+        db,
+        allow_missing_auth=allow_missing_auth,
+    )
+
+
+def filter_manageable_ont_ids_from_request(
+    request: object | None,
+    db: Session,
+    ont_ids: list[str],
+    *,
+    allow_missing_auth: bool = False,
+) -> list[str]:
+    auth = _auth_from_request(request)
+    if auth is None and not allow_missing_auth:
+        logger.warning(
+            "Denied bulk ONT scope check due to missing request auth: path=%s count=%s",
+            _request_path(request),
+            len(ont_ids),
+        )
+        return []
+    return [ont_id for ont_id in ont_ids if can_manage_ont_id(auth, db, ont_id)]

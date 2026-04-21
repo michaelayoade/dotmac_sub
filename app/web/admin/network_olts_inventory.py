@@ -30,7 +30,7 @@ from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
-from app.services.network.ont_scope import can_manage_ont_id, is_internal_operator
+from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
 from app.services.olt_detail_adapter import olt_detail_adapter
 from app.web.request_parsing import parse_form_data_sync
@@ -1089,14 +1089,8 @@ def olt_authorize_ont(
                 status_code=303,
             )
 
-    auth = getattr(getattr(request, "state", None), "auth", None)
     scoped_ont_id = ont_id if isinstance(ont_id, str) else ""
-    scope_ok = (
-        can_manage_ont_id(auth, db, scoped_ont_id)
-        if scoped_ont_id
-        else is_internal_operator(auth, db)
-    )
-    if auth is not None and not scope_ok:
+    if not can_authorize_ont_from_request(request, db, scoped_ont_id):
         queue_msg = "ONT authorization scope check failed"
         if is_htmx:
             return Response(

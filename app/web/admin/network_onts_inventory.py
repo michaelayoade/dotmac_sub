@@ -26,6 +26,7 @@ from app.services import web_network_operations as web_network_operations_servic
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
+from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -209,15 +210,19 @@ def onts_bulk_action(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Execute a bulk action on selected ONTs."""
+    scoped_ont_ids = filter_manageable_ont_ids_from_request(request, db, list(ont_ids))
     context = {
         "request": request,
         **web_network_onts_service.bulk_action_summary_context(
             db,
-            ont_ids,
+            scoped_ont_ids,
             action,
             firmware_image_id=firmware_image_id or None,
         ),
     }
+    skipped_out_of_scope = max(len(ont_ids) - len(scoped_ont_ids), 0)
+    if skipped_out_of_scope:
+        context["stats"]["skipped_out_of_scope"] = skipped_out_of_scope
     return templates.TemplateResponse(
         "admin/network/onts/_bulk_action_summary.html",
         context,

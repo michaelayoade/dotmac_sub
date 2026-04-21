@@ -97,3 +97,42 @@ def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
 
     assert response.status_code == 303
     assert "authorization+scope+check+failed" in response.headers["location"].lower()
+
+
+def test_authorize_without_request_auth_is_rejected(monkeypatch) -> None:
+    from app.web.admin import network_olts_inventory
+
+    def _unexpected_queue(*_args, **_kwargs):
+        raise AssertionError("missing-auth authorization must not queue")
+
+    monkeypatch.setattr(
+        network_olts_inventory.olt_operations_service,
+        "queue_authorize_autofind_ont",
+        _unexpected_queue,
+    )
+
+    response = network_olts_inventory.olt_authorize_ont(
+        _request(),
+        str(uuid4()),
+        fsp="0/1/1",
+        serial_number="HWTC12345678",
+        ont_id=str(uuid4()),
+        db=SimpleNamespace(get=lambda *_args, **_kwargs: None),
+    )
+
+    assert response.status_code == 303
+    assert "authorization+scope+check+failed" in response.headers["location"].lower()
+
+
+def test_filter_manageable_ont_ids_requires_request_auth() -> None:
+    from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
+
+    request = _request()
+
+    scoped = filter_manageable_ont_ids_from_request(
+        request,
+        db=SimpleNamespace(),
+        ont_ids=[str(uuid4()), str(uuid4())],
+    )
+
+    assert scoped == []
