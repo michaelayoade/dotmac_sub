@@ -13,9 +13,11 @@ from app.models.network import OntProvisioningProfile
 from app.services.network import olt as olt_service
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
+    OltCommandSet,
     OntProvisioningContext,
     build_spec_from_profile,
 )
+from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.olt_profile_adapter import olt_profile_adapter
 from app.services.web_network_service_ports import _resolve_ont_olt_context
@@ -184,7 +186,17 @@ def command_preview_context(
     spec = build_spec_from_profile(
         profile, prov_context, tr069_profile_id=tr069_olt_profile_id
     )
-    command_sets = HuaweiCommandGenerator.generate_full_provisioning(spec, prov_context)
+    command_sets = [
+        OltCommandSet(
+            step=item.step,
+            commands=[mask_credentials(command) for command in item.commands],
+            description=item.description,
+            requires_config_mode=item.requires_config_mode,
+        )
+        for item in HuaweiCommandGenerator.generate_full_provisioning(
+            spec, prov_context
+        )
+    ]
 
     context["command_sets"] = command_sets
     context["spec"] = spec

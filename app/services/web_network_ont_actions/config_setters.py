@@ -16,6 +16,7 @@ from app.services import network as network_service
 from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
+from app.services.network.ont_scope import can_manage_ont_from_request
 from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
@@ -262,6 +263,13 @@ def configure_wan_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WAN mode, VLAN, and static IP fields via GenieACS TR-069."""
+    if request is not None and not can_manage_ont_from_request(request, db, ont_id):
+        return ActionResult(
+            success=False,
+            message="ONT WAN configuration scope check failed.",
+            waiting=False,
+        )
+
     result = _acs_config_writer().configure_wan_config(
         db,
         ont_id,

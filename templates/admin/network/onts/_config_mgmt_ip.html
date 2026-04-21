@@ -6,7 +6,12 @@
 <div class="mb-5">
     <div class="flex items-center justify-between mb-3">
         <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Configuration from OLT</h4>
-        {% if iphost_ok %}
+        {% if iphost_freshness %}
+        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if iphost_freshness.stale %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% elif iphost_freshness.source == 'live' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+            {{ 'Cached' if iphost_freshness.stale else 'Live' if iphost_freshness.source == 'live' else iphost_freshness.source|title }}
+            {% if iphost_freshness.fetched_at %} &middot; {{ iphost_freshness.fetched_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+        </span>
+        {% elif iphost_ok %}
         <span class="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
             <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
             Live
@@ -62,6 +67,9 @@
     {% else %}
     <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-900/20">
         <p class="text-sm text-amber-700 dark:text-amber-300">{{ iphost_msg or 'Unable to retrieve current configuration from OLT.' }}</p>
+        {% if iphost_freshness and iphost_freshness.stale and iphost_freshness.message %}
+        <p class="mt-2 text-xs text-amber-700 dark:text-amber-300">{{ iphost_freshness.message }}</p>
+        {% endif %}
     </div>
     {% endif %}
 </div>

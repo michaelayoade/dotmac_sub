@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.web_network_ont_actions._common import _log_action_audit
+
+IPHOST_CONFIG_TTL_SECONDS = 120
 
 
 def run_ping_diagnostic(
@@ -84,9 +88,26 @@ def fetch_iphost_config_with_meta(db: Session, ont_id: str):
             data={},
             source="none",
         )
+
+    cached = _read_iphost_cache(str(ont.id))
+    if cached is not None:
+        return ObservedReadResult(
+            ok=True,
+            message="Using recently fetched IPHOST configuration.",
+            data=cached["config"],
+            source="cache",
+            fetched_at=cached["fetched_at"],
+            stale=False,
+        )
+
     ok, message, config = get_ont_iphost_config(olt, fsp, olt_ont_id)
     if ok:
         persist_iphost_config(db, ont, config)
+        _write_iphost_cache(
+            str(ont.id),
+            config,
+            fetched_at=getattr(ont, "olt_observed_snapshot_at", None),
+        )
         return ObservedReadResult(
             ok=True,
             message=message,
@@ -110,6 +131,49 @@ def fetch_iphost_config_with_meta(db: Session, ont_id: str):
         message=message,
         data={},
         source="live",
+    )
+
+
+def _iphost_cache_key(ont_id: str) -> str:
+    return f"ont:{ont_id}:iphost_config"
+
+
+def _read_iphost_cache(ont_id: str) -> dict[str, object] | None:
+    from app.services.olt_observed_state_adapter import _parse_datetime
+    from app.services.redis_client import safe_get
+
+    raw = safe_get(_iphost_cache_key(ont_id))
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("config"), dict):
+        return None
+    return {
+        "config": {str(key): str(value) for key, value in payload["config"].items()},
+        "fetched_at": _parse_datetime(payload.get("fetched_at")),
+    }
+
+
+def _write_iphost_cache(
+    ont_id: str, config: dict[str, str], *, fetched_at: object
+) -> None:
+    from app.services.redis_client import safe_set
+
+    payload = {
+        "config": dict(config),
+        "fetched_at": (
+            fetched_at.isoformat() if hasattr(fetched_at, "isoformat") else None
+        ),
+    }
+    safe_set(
+        _iphost_cache_key(ont_id),
+        json.dumps(payload),
+        ttl=IPHOST_CONFIG_TTL_SECONDS,
     )
 
 

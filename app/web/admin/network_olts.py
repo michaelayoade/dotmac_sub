@@ -29,6 +29,7 @@ from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
+from app.services.network.ont_scope import can_manage_ont_id, is_internal_operator
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
 from app.services.olt_detail_adapter import olt_detail_adapter
@@ -708,6 +709,7 @@ def olt_authorize_ont(
     olt_id: str,
     fsp: str = Form(""),
     serial_number: str = Form(""),
+    ont_id: str = Form(""),
     return_to: str = Form(""),
     force_reauthorize: str = Form(""),
     db: Session = Depends(get_db),
@@ -725,6 +727,21 @@ def olt_authorize_ont(
         from app.services.network.result_adapter import OperationResult
 
         result = OperationResult.error("Missing port or serial number")
+        result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
+        result.redirect_tab = "autofind"
+        return result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
+
+    auth = getattr(getattr(request, "state", None), "auth", None)
+    scoped_ont_id = ont_id if isinstance(ont_id, str) else ""
+    scope_ok = (
+        can_manage_ont_id(auth, db, scoped_ont_id)
+        if scoped_ont_id
+        else is_internal_operator(auth, db)
+    )
+    if auth is not None and not scope_ok:
+        from app.services.network.result_adapter import OperationResult
+
+        result = OperationResult.error("ONT authorization scope check failed")
         result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
         result.redirect_tab = "autofind"
         return result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
