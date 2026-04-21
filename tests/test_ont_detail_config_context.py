@@ -103,3 +103,74 @@ def test_unified_config_context_does_not_perform_live_reads(
     assert context["desired_wifi_config"]["ssid"] == "CustomerWiFi"
     assert context["desired_lan_config"]["lan_ip"] == "192.168.44.1"
     assert context["iphost_freshness"]["source"] == "db"
+
+
+def test_unified_config_context_preserves_cached_freshness_and_summaries(
+    db_session, monkeypatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from app.models.network import OLTDevice, OntUnit
+    from app.services import service_intent_ui_adapter
+    from app.services.olt_observed_state_adapter import ObservedReadResult
+    from app.services.web_network_ont_actions import context_builders
+
+    fetched_at = datetime(2026, 4, 21, 10, 30, tzinfo=UTC)
+    olt = OLTDevice(name="OLT-A")
+    ont = OntUnit(
+        serial_number="CTX-SUMMARY-001",
+        olt_device=olt,
+        pppoe_username="db-user",
+        wifi_ssid="DB-SSID",
+        mgmt_ip_address="10.30.0.44",
+        observed_wan_ip="41.0.0.10",
+        observed_pppoe_status="connected",
+    )
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.olt_observed_state_adapter.get_cached_iphost_config",
+        lambda _ont: ObservedReadResult(
+            ok=True,
+            message="Using cached IPHOST configuration.",
+            data={"mode": "static"},
+            source="db",
+            fetched_at=fetched_at,
+            stale=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.olt_observed_state_adapter.get_cached_tr069_profiles_for_olt",
+        lambda _olt: ObservedReadResult(
+            ok=True,
+            message="Using cached TR-069 profile list.",
+            data=[SimpleNamespace(profile_id=7, name="ACS Primary")],
+            source="db",
+            fetched_at=fetched_at,
+            stale=True,
+        ),
+    )
+    monkeypatch.setattr(
+        service_intent_ui_adapter.service_intent_ui_adapter,
+        "load_ont_plan_for_ont",
+        lambda *_args, **_kwargs: {
+            "configure_management_ip": {
+                "ip_mode": "static",
+                "vlan_id": 300,
+                "ip_address": "10.30.0.44",
+            },
+            "configure_wan_tr069": {"wan_mode": "pppoe"},
+        },
+    )
+
+    context = context_builders.unified_config_context(db_session, str(ont.id))
+
+    assert context["iphost_freshness"]["stale"] is True
+    assert context["iphost_freshness"]["fetched_at"] == fetched_at
+    assert context["tr069_profiles_freshness"]["stale"] is True
+    assert context["mgmt_ip_summary"]["ip"] == "10.30.0.44"
+    assert context["wan_summary"]["pppoe_user"] == "db-user"
+    assert context["wan_summary"]["wan_ip"] == "41.0.0.10"
+    assert context["wan_summary"]["status"] == "connected"
+    assert context["wifi_summary"]["ssid"] == "DB-SSID"

@@ -197,18 +197,21 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     return context
 
 
-def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    """Build context for the unified ONT configuration partial from DB state."""
-    from app.services import web_network_onts as web_network_onts_service
-    from app.services.network import ont_web_forms as ont_web_forms_service
-    from app.services.olt_observed_state_adapter import (
-        ObservedReadResult,
-        get_cached_iphost_config,
-        get_cached_tr069_profiles_for_olt,
+def _empty_observed_read_result(*, message: str, data: object) -> object:
+    from app.services.olt_observed_state_adapter import ObservedReadResult
+
+    return ObservedReadResult(
+        ok=True,
+        message=message,
+        data=data,
+        source="db",
+        fetched_at=None,
+        stale=True,
     )
 
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    linked_tr069 = (
+
+def _resolve_linked_tr069_device(db: Session, ont: object) -> object | None:
+    return (
         db.execute(
             select(Tr069CpeDevice)
             .where(Tr069CpeDevice.ont_unit_id == ont.id)
@@ -219,15 +222,21 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         .scalars()
         .first()
     )
-    iphost_result = get_cached_iphost_config(ont) or ObservedReadResult(
-        ok=True,
+
+
+def _load_unified_observed_state(db: Session, ont: object) -> dict[str, object]:
+    from app.services import web_network_onts as web_network_onts_service
+    from app.services.network import ont_web_forms as ont_web_forms_service
+    from app.services.olt_observed_state_adapter import (
+        get_cached_iphost_config,
+        get_cached_tr069_profiles_for_olt,
+    )
+
+    iphost_result = get_cached_iphost_config(ont) or _empty_observed_read_result(
         message="No cached IPHOST configuration.",
         data={},
-        source="db",
-        fetched_at=getattr(ont, "olt_observed_snapshot_at", None),
-        stale=True,
     )
-    ok, msg, iphost_config = True, iphost_result.message, dict(iphost_result.data or {})
+    iphost_config = dict(getattr(iphost_result, "data", {}) or {})
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
     olt = getattr(ont, "olt_device", None)
     if olt is None and getattr(ont, "olt_device_id", None):
@@ -235,53 +244,56 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     profiles_result = (
         get_cached_tr069_profiles_for_olt(olt)
         if olt is not None
-        else ObservedReadResult(
-            ok=True,
+        else _empty_observed_read_result(
             message="No OLT is assigned to this ONT.",
             data=[],
-            source="db",
-            fetched_at=None,
-            stale=True,
         )
     )
-    tr069_profiles = list(profiles_result.data or [])
-    tr069_profiles_error = (
-        profiles_result.message
-        if (not profiles_result.ok or profiles_result.stale)
-        else None
-    )
     initial_form = ont_web_forms_service.initial_iphost_form(ont, iphost_config)
+    return {
+        "iphost_result": iphost_result,
+        "iphost_config": iphost_config,
+        "vlans": vlans,
+        "profiles_result": profiles_result,
+        "tr069_profiles": list(getattr(profiles_result, "data", []) or []),
+        "tr069_profiles_error": (
+            profiles_result.message
+            if (not profiles_result.ok or profiles_result.stale)
+            else None
+        ),
+        "initial_form": initial_form,
+    }
 
+
+def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
     assignment = db.scalars(
         select(OntAssignment)
         .where(OntAssignment.ont_unit_id == ont.id)
         .where(OntAssignment.active.is_(True))
         .limit(1)
     ).first()
-    subscription = None
-    subscriber_info: dict[str, object] = {}
-    if assignment and assignment.subscriber_id:
-        subscription = db.scalars(
-            select(Subscription)
-            .where(Subscription.subscriber_id == assignment.subscriber_id)
-            .where(Subscription.status == SubscriptionStatus.active)
-            .order_by(Subscription.created_at.desc())
-            .limit(1)
-        ).first()
-        if assignment.subscriber:
-            subscriber_info["name"] = str(
+    if not assignment or not assignment.subscriber_id:
+        return {}
+    db.scalars(
+        select(Subscription)
+        .where(Subscription.subscriber_id == assignment.subscriber_id)
+        .where(Subscription.status == SubscriptionStatus.active)
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+    ).first()
+    if assignment.subscriber:
+        return {
+            "name": str(
                 getattr(assignment.subscriber, "display_name", "")
                 or getattr(assignment.subscriber, "full_name", "")
                 or ""
             ).strip()
-    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
-    service_intent = service_intent_ui_adapter.build_ont_service_intent(
-        ont,
-        db=db,
-        subscriber_info=subscriber_info,
-        ont_plan=ont_plan,
-    )
-    acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+        }
+    return {}
+
+
+def _build_db_observed_service_intent(linked_tr069: object, ont: object) -> dict[str, object]:
+    return service_intent_ui_adapter.build_acs_observed_service_intent(
         SimpleNamespace(
             available=bool(linked_tr069),
             source="db",
@@ -314,6 +326,14 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         )
     )
 
+
+def _unified_summary_context(
+    *,
+    desired_mgmt: dict[str, object],
+    desired_wan: dict[str, object],
+    desired_wifi: dict[str, object],
+    acs_observed_intent: dict[str, object],
+) -> dict[str, object]:
     observed = acs_observed_intent.get("observed", {})
     observed_wan = observed.get("wan", {}) if isinstance(observed, dict) else {}
     observed_wifi = observed.get("wifi", {}) if isinstance(observed, dict) else {}
@@ -322,21 +342,68 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         if isinstance(observed_wan, dict)
         else ""
     )
+    return {
+        "mgmt_ip_summary": {
+            "mode": desired_mgmt.get("ip_mode"),
+            "vlan": desired_mgmt.get("vlan_id"),
+            "ip": (
+                desired_mgmt.get("ip_address")
+                if desired_mgmt.get("ip_mode") == "static"
+                else None
+            ),
+        },
+        "wan_summary": {
+            "pppoe_user": (
+                observed_wan.get("pppoe_username")
+                if isinstance(observed_wan, dict)
+                else None
+            )
+            or desired_wan.get("pppoe_username"),
+            "wan_ip": (
+                observed_wan.get("wan_ip")
+                if isinstance(observed_wan, dict)
+                else None
+            ),
+            "status": wan_status or None,
+        },
+        "wifi_summary": {
+            "ssid": (
+                observed_wifi.get("ssid") if isinstance(observed_wifi, dict) else None
+            )
+            or desired_wifi.get("ssid")
+        },
+    }
+
+
+def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    """Build context for the unified ONT configuration partial from DB state."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    linked_tr069 = _resolve_linked_tr069_device(db, ont)
+    observed_state = _load_unified_observed_state(db, ont)
+    subscriber_info = _load_subscriber_info(db, ont)
+    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    service_intent = service_intent_ui_adapter.build_ont_service_intent(
+        ont,
+        db=db,
+        subscriber_info=subscriber_info,
+        ont_plan=ont_plan,
+    )
+    acs_observed_intent = _build_db_observed_service_intent(linked_tr069, ont)
 
     context = {
         "ont": ont,
         "service_intent": service_intent,
         "acs_observed_intent": acs_observed_intent,
         "ont_plan": ont_plan,
-        "iphost_config": iphost_config,
-        "iphost_ok": ok,
-        "iphost_msg": msg,
-        "iphost_freshness": iphost_result.freshness,
-        "initial_iphost_form": initial_form,
-        "vlans": vlans,
-        "tr069_profiles": tr069_profiles,
-        "tr069_profiles_error": tr069_profiles_error,
-        "tr069_profiles_freshness": profiles_result.freshness,
+        "iphost_config": observed_state["iphost_config"],
+        "iphost_ok": True,
+        "iphost_msg": observed_state["iphost_result"].message,
+        "iphost_freshness": observed_state["iphost_result"].freshness,
+        "initial_iphost_form": observed_state["initial_form"],
+        "vlans": observed_state["vlans"],
+        "tr069_profiles": observed_state["tr069_profiles"],
+        "tr069_profiles_error": observed_state["tr069_profiles_error"],
+        "tr069_profiles_freshness": observed_state["profiles_result"].freshness,
         "has_tr069": bool(
             linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
         ),
@@ -345,40 +412,16 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         _desired_config_context(
             ont,
             ont_plan=ont_plan,
-            initial_iphost_form=initial_form,
+            initial_iphost_form=observed_state["initial_form"],
         )
     )
-    desired_mgmt = context["desired_mgmt_config"]
-    desired_wan = context["desired_wan_config"]
-    desired_wifi = context["desired_wifi_config"]
     context.update(
-        {
-            "mgmt_ip_summary": {
-                "mode": desired_mgmt.get("ip_mode"),
-                "vlan": desired_mgmt.get("vlan_id"),
-                "ip": desired_mgmt.get("ip_address")
-                if desired_mgmt.get("ip_mode") == "static"
-                else None,
-            },
-            "wan_summary": {
-                "pppoe_user": (
-                    observed_wan.get("pppoe_username")
-                    if isinstance(observed_wan, dict)
-                    else None
-                )
-                or desired_wan.get("pppoe_username"),
-                "wan_ip": observed_wan.get("wan_ip")
-                if isinstance(observed_wan, dict)
-                else None,
-                "status": wan_status or None,
-            },
-            "wifi_summary": {
-                "ssid": (
-                    observed_wifi.get("ssid") if isinstance(observed_wifi, dict) else None
-                )
-                or desired_wifi.get("ssid")
-            },
-        }
+        _unified_summary_context(
+            desired_mgmt=context["desired_mgmt_config"],
+            desired_wan=context["desired_wan_config"],
+            desired_wifi=context["desired_wifi_config"],
+            acs_observed_intent=acs_observed_intent,
+        )
     )
     return context
 
