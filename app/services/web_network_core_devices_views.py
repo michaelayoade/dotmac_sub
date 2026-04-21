@@ -2301,20 +2301,21 @@ def _safe_int(value: object) -> int | None:
 def _acs_observed_runtime_summary(
     acs_observed_intent: dict[str, object], *, ont: object
 ) -> dict[str, object]:
+    tracked_index = acs_observed_intent.get("tracked_point_index", {})
+    tracked_index = tracked_index if isinstance(tracked_index, dict) else {}
+
+    def tracked_raw(key: str) -> object | None:
+        point = tracked_index.get(key)
+        if not isinstance(point, dict):
+            return None
+        return point.get("raw_value")
+
     observed = acs_observed_intent.get("observed", {})
     observed = observed if isinstance(observed, dict) else {}
-    system = observed.get("system", {})
-    system = system if isinstance(system, dict) else {}
-    wan = observed.get("wan", {})
-    wan = wan if isinstance(wan, dict) else {}
-    lan = observed.get("lan", {})
-    lan = lan if isinstance(lan, dict) else {}
-    wifi = observed.get("wifi", {})
-    wifi = wifi if isinstance(wifi, dict) else {}
     lan_hosts = observed.get("lan_hosts", [])
     lan_hosts = lan_hosts if isinstance(lan_hosts, list) else []
 
-    wifi_clients = _safe_int(wifi.get("connected_clients"))
+    wifi_clients = _safe_int(tracked_raw("wifi.connected_clients"))
     if wifi_clients is None:
         wifi_clients = _safe_int(getattr(ont, "observed_wifi_clients", None))
 
@@ -2322,7 +2323,7 @@ def _acs_observed_runtime_summary(
     if lan_hosts:
         customer_devices = _lan_host_connected_count(lan_hosts)
     if customer_devices is None:
-        customer_devices = _safe_int(lan.get("connected_hosts"))
+        customer_devices = _safe_int(tracked_raw("lan.connected_hosts"))
     if customer_devices is None:
         customer_devices = _safe_int(getattr(ont, "observed_lan_hosts", None))
     if customer_devices is None:
@@ -2335,11 +2336,11 @@ def _acs_observed_runtime_summary(
         updated_at_display = str(fetched_at)
     has_runtime = bool(
         acs_observed_intent.get("available")
-        or system.get("mac_address")
-        or wan.get("wan_ip")
-        or wan.get("pppoe_username")
-        or wan.get("status")
-        or lan.get("lan_ip")
+        or tracked_raw("system.mac_address")
+        or tracked_raw("wan.wan_ip")
+        or tracked_raw("wan.pppoe_username")
+        or tracked_raw("wan.status")
+        or tracked_raw("lan.lan_ip")
         or wifi_clients is not None
         or customer_devices is not None
         or fetched_at
@@ -2347,14 +2348,15 @@ def _acs_observed_runtime_summary(
 
     return {
         "has_runtime": has_runtime,
-        "mac_address": system.get("mac_address") or getattr(ont, "mac_address", None),
-        "wan_ip": wan.get("wan_ip"),
-        "pppoe_user": wan.get("pppoe_username") or getattr(ont, "pppoe_username", None),
-        "pppoe_status": wan.get("status"),
+        "mac_address": tracked_raw("system.mac_address") or getattr(ont, "mac_address", None),
+        "wan_ip": tracked_raw("wan.wan_ip"),
+        "pppoe_user": tracked_raw("wan.pppoe_username")
+        or getattr(ont, "pppoe_username", None),
+        "pppoe_status": tracked_raw("wan.status"),
         "wan_mode": getattr(getattr(ont, "wan_mode", None), "value", None)
         or getattr(ont, "wan_mode", None),
-        "lan_mode": lan.get("dhcp_enabled"),
-        "lan_ip": lan.get("lan_ip"),
+        "lan_mode": tracked_raw("lan.dhcp_enabled"),
+        "lan_ip": tracked_raw("lan.lan_ip"),
         "wifi_clients": wifi_clients,
         "customer_devices": customer_devices,
         "updated_at": fetched_at,
@@ -2449,16 +2451,17 @@ def _ont_last_config_summary(
         "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
         "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
     }
+    tracked_index = acs_observed_intent.get("tracked_point_index", {})
+    tracked_index = tracked_index if isinstance(tracked_index, dict) else {}
+
+    def tracked_raw(key: str) -> object | None:
+        point = tracked_index.get(key)
+        if not isinstance(point, dict):
+            return None
+        return point.get("raw_value")
+
     observed = acs_observed_intent.get("observed", {})
     observed = observed if isinstance(observed, dict) else {}
-    system = observed.get("system", {})
-    system = system if isinstance(system, dict) else {}
-    wan = observed.get("wan", {})
-    wan = wan if isinstance(wan, dict) else {}
-    lan = observed.get("lan", {})
-    lan = lan if isinstance(lan, dict) else {}
-    wifi = observed.get("wifi", {})
-    wifi = wifi if isinstance(wifi, dict) else {}
     ethernet_ports = observed.get("ethernet_ports", [])
     lan_hosts = observed.get("lan_hosts", [])
 
@@ -2466,28 +2469,25 @@ def _ont_last_config_summary(
     has_snapshot = bool(
         acs_observed_intent.get("available")
         or fetched_at
-        or system
-        or wan
-        or lan
-        or wifi
+        or tracked_index
         or ethernet_ports
         or lan_hosts
     )
     if not has_snapshot:
         return empty_summary
 
-    wifi_clients = _safe_int(wifi.get("connected_clients"))
+    wifi_clients = _safe_int(tracked_raw("wifi.connected_clients"))
     lan_host_count = _lan_host_connected_count(lan_hosts)
     if lan_host_count is None:
-        lan_host_count = _safe_int(lan.get("connected_hosts"))
+        lan_host_count = _safe_int(tracked_raw("lan.connected_hosts"))
     active_ports, port_count = _active_ethernet_port_count(ethernet_ports)
 
-    wan_ip = str(wan.get("wan_ip") or "").strip()
-    wan_status = str(wan.get("status") or "").strip()
-    pppoe_user = str(wan.get("pppoe_username") or "").strip()
-    lan_ip = str(lan.get("lan_ip") or "").strip()
-    dhcp_enabled = _display_bool(lan.get("dhcp_enabled"))
-    ssid = str(wifi.get("ssid") or "").strip()
+    wan_ip = str(tracked_raw("wan.wan_ip") or "").strip()
+    wan_status = str(tracked_raw("wan.status") or "").strip()
+    pppoe_user = str(tracked_raw("wan.pppoe_username") or "").strip()
+    lan_ip = str(tracked_raw("lan.lan_ip") or "").strip()
+    dhcp_enabled = _display_bool(tracked_raw("lan.dhcp_enabled"))
+    ssid = str(tracked_raw("wifi.ssid") or "").strip()
     metrics = [
         {
             "label": "WAN IP",
@@ -2551,8 +2551,8 @@ def _ont_last_config_summary(
         "fetched_at": fetched_at if isinstance(fetched_at, datetime) else None,
         "fetched_at_display": _format_observed_time(fetched_at),
         "source": str(acs_observed_intent.get("source") or "TR-069 cache"),
-        "manufacturer": system.get("manufacturer") or "",
-        "firmware": system.get("firmware") or "",
+        "manufacturer": str(tracked_raw("system.manufacturer") or ""),
+        "firmware": str(tracked_raw("system.firmware") or ""),
         "wan_ip": wan_ip,
         "wan_status": wan_status,
         "pppoe_user": pppoe_user,

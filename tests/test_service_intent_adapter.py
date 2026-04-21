@@ -356,6 +356,13 @@ def test_acs_service_intent_adapter_maps_observed_summary_without_secrets() -> N
     assert observed["lan_hosts"][0]["ip_address"] == "192.168.1.10"
     assert observed["lan_hosts"][0]["active"] is True
     assert observed["lan_hosts"][0]["active_display"] == "Active"
+    tracked = intent["tracked_point_index"]
+    assert tracked["system.hardware"]["raw_value"] == "VER.A"
+    assert tracked["system.cpu_usage"]["raw_value"] == "12"
+    assert tracked["wan.wan_instance"]["raw_value"] == "1.1"
+    assert tracked["wan.wan_service"]["raw_value"] == "INTERNET"
+    assert tracked["clients.ethernet_ports_total"]["raw_value"] == 1
+    assert tracked["clients.lan_hosts_active"]["raw_value"] == 1
     assert "super-secret-password" not in repr(intent)
 
 
@@ -394,6 +401,55 @@ def test_acs_service_intent_adapter_hides_metadata_only_wan_nodes() -> None:
     assert wan["gateway"] is None
     assert wan["dns_servers"] is None
     assert "{'_object'" not in repr(intent)
+
+
+def test_acs_service_intent_adapter_preserves_tracked_points_for_partial_unavailable_data() -> None:
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+        SimpleNamespace(
+            available=False,
+            source="cache",
+            fetched_at=None,
+            error="Connection request failed.",
+            system={"Manufacturer": "Huawei"},
+            wan={"WAN IP": "100.64.1.20", "Status": "Connected"},
+            lan={},
+            wireless={},
+            ethernet_ports=[],
+            lan_hosts=[],
+        )
+    )
+
+    assert intent["available"] is False
+    assert intent["sections"]
+    assert intent["tracked_point_index"]["system.manufacturer"]["raw_value"] == "Huawei"
+    assert intent["tracked_point_index"]["wan.wan_ip"]["raw_value"] == "100.64.1.20"
+
+
+def test_acs_service_intent_adapter_counts_active_ethernet_ports_by_link_status() -> None:
+    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+
+    intent = service_intent_ui_adapter.build_acs_observed_service_intent(
+        SimpleNamespace(
+            available=True,
+            source="live",
+            fetched_at=None,
+            error=None,
+            system={},
+            wan={},
+            lan={},
+            wireless={},
+            ethernet_ports=[
+                {"index": 1, "Enable": "1", "Status": "Up"},
+                {"index": 2, "Enable": "1", "Status": "Down"},
+            ],
+            lan_hosts=[],
+        )
+    )
+
+    assert intent["tracked_point_index"]["clients.ethernet_ports_total"]["raw_value"] == 2
+    assert intent["tracked_point_index"]["clients.ethernet_ports_active"]["raw_value"] == 1
 
 
 def test_cached_tr069_snapshot_hides_metadata_only_parameter_nodes() -> None:

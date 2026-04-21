@@ -91,6 +91,18 @@ def _missing_count(*groups: Mapping[str, object]) -> int:
     return count
 
 
+def _count_active(values: list[dict[str, object]], key: str = "active") -> int:
+    return sum(1 for value in values if value.get(key) is True)
+
+
+def _count_link_up_ports(values: list[dict[str, object]]) -> int:
+    return sum(
+        1
+        for value in values
+        if str(value.get("link_status") or "").strip().lower() == "up"
+    )
+
+
 class AcsServiceIntentAdapter:
     """Normalize ACS observed state into service-intent-shaped UI data."""
 
@@ -122,71 +134,38 @@ class AcsServiceIntentAdapter:
         wan_group = _as_mapping(_summary_attr(summary, "wan", {}))
         lan_group = _as_mapping(_summary_attr(summary, "lan", {}))
         wireless_group = _as_mapping(_summary_attr(summary, "wireless", {}))
+        raw_ethernet_ports = list(_summary_attr(summary, "ethernet_ports", []) or [])
+        raw_lan_hosts = list(_summary_attr(summary, "lan_hosts", []) or [])
 
         system = self._map_system(system_group)
         wan = self._map_wan(wan_group)
         lan = self._map_lan(lan_group)
         wifi = self._map_wifi(wireless_group)
         ethernet_ports = self._map_ethernet_ports(
-            list(_summary_attr(summary, "ethernet_ports", []) or [])
+            raw_ethernet_ports
         )
         lan_hosts = self._map_lan_hosts(
-            list(_summary_attr(summary, "lan_hosts", []) or [])
+            raw_lan_hosts
         )
-
-        sections = [
-            {
-                "title": "ACS System",
-                "rows": [
-                    _row("Manufacturer", system["manufacturer"]),
-                    _row("Model", system["model"]),
-                    _row("Firmware", system["firmware"]),
-                    _row("Serial", system["serial"]),
-                    _row("Uptime", system["uptime"]),
-                ],
-            },
-            {
-                "title": "ACS WAN",
-                "rows": [
-                    _row("Connection", wan["connection_type"]),
-                    _row("Status", wan["status"]),
-                    _row("WAN IP", wan["wan_ip"]),
-                    _row("PPPoE User", wan["pppoe_username"]),
-                    _row("Gateway", wan["gateway"]),
-                    _row("DNS", wan["dns_servers"]),
-                ],
-            },
-            {
-                "title": "ACS LAN",
-                "rows": [
-                    _row("LAN IP", lan["lan_ip"]),
-                    _row("Subnet", lan["subnet_mask"]),
-                    _row("DHCP", lan["dhcp_enabled"]),
-                    _row("DHCP Start", lan["dhcp_start"]),
-                    _row("DHCP End", lan["dhcp_end"]),
-                    _row("Hosts", lan["connected_hosts"]),
-                ],
-            },
-            {
-                "title": "ACS WiFi",
-                "rows": [
-                    _row("Enabled", wifi["enabled"]),
-                    _row("SSID", wifi["ssid"]),
-                    _row("Channel", wifi["channel"]),
-                    _row("Standard", wifi["standard"]),
-                    _row("Security", wifi["security_mode"]),
-                    _row("Clients", wifi["connected_clients"]),
-                    _row("Password", "Set" if wifi["password_present"] else None),
-                ],
-            },
-            {
-                "title": "ACS Clients",
-                "rows": [
-                    _row("Ethernet Ports", len(ethernet_ports)),
-                    _row("LAN Hosts", len(lan_hosts)),
-                ],
-            },
+        sections = self._tracked_sections(
+            system=system,
+            wan=wan,
+            lan=lan,
+            wifi=wifi,
+            ethernet_ports=ethernet_ports,
+            lan_hosts=lan_hosts,
+        )
+        tracked_points = [
+            dict(point)
+            for section in sections
+            for point in section.get("rows", [])
+            if isinstance(point, Mapping)
         ]
+        tracked_point_index = {
+            str(point["key"]): dict(point)
+            for point in tracked_points
+            if point.get("key")
+        }
 
         observed = {
             "system": system,
@@ -197,6 +176,20 @@ class AcsServiceIntentAdapter:
             "lan_hosts": lan_hosts,
         }
         missing_count = _missing_count(system, wan, lan, wifi)
+        has_observed_data = bool(
+            system_group
+            or wan_group
+            or lan_group
+            or wireless_group
+            or raw_ethernet_ports
+            or raw_lan_hosts
+            or fetched_at
+        )
+        sections_payload = sections if (available or has_observed_data) else []
+        tracked_points_payload = tracked_points if (available or has_observed_data) else []
+        tracked_point_index_payload = (
+            tracked_point_index if (available or has_observed_data) else {}
+        )
 
         return {
             "available": available,
@@ -204,9 +197,11 @@ class AcsServiceIntentAdapter:
             "fetched_at": fetched_at,
             "error": _text(error),
             "observed": observed,
-            "sections": sections if available else [],
+            "sections": sections_payload,
+            "tracked_points": tracked_points_payload,
+            "tracked_point_index": tracked_point_index_payload,
             "missing_count": missing_count,
-            "is_complete": available and missing_count == 0,
+            "is_complete": (available or has_observed_data) and missing_count == 0,
         }
 
     def _unavailable(self, *, error: str | None = None) -> dict[str, object]:
@@ -224,9 +219,108 @@ class AcsServiceIntentAdapter:
                 "lan_hosts": [],
             },
             "sections": [],
+            "tracked_points": [],
+            "tracked_point_index": {},
             "missing_count": 0,
             "is_complete": False,
         }
+
+    def _tracked_sections(
+        self,
+        *,
+        system: Mapping[str, object],
+        wan: Mapping[str, object],
+        lan: Mapping[str, object],
+        wifi: Mapping[str, object],
+        ethernet_ports: list[dict[str, object]],
+        lan_hosts: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        def tracked_row(
+            section_key: str,
+            key: str,
+            label: str,
+            value: object,
+        ) -> dict[str, object]:
+            return {
+                "section_key": section_key,
+                "key": key,
+                "label": label,
+                "raw_value": value,
+                "value": _display(value),
+                "observed": value not in (None, ""),
+            }
+
+        return [
+            {
+                "key": "system",
+                "title": "ACS System",
+                "rows": [
+                    tracked_row("system", "system.manufacturer", "Manufacturer", system["manufacturer"]),
+                    tracked_row("system", "system.model", "Model", system["model"]),
+                    tracked_row("system", "system.firmware", "Firmware", system["firmware"]),
+                    tracked_row("system", "system.hardware", "Hardware", system["hardware"]),
+                    tracked_row("system", "system.serial", "Serial", system["serial"]),
+                    tracked_row("system", "system.uptime", "Uptime", system["uptime"]),
+                    tracked_row("system", "system.cpu_usage", "CPU Usage", system["cpu_usage"]),
+                    tracked_row("system", "system.memory_total", "Memory Total", system["memory_total"]),
+                    tracked_row("system", "system.memory_free", "Memory Free", system["memory_free"]),
+                    tracked_row("system", "system.memory_usage", "Memory Usage", system["memory_usage"]),
+                    tracked_row("system", "system.mac_address", "MAC Address", system["mac_address"]),
+                ],
+            },
+            {
+                "key": "wan",
+                "title": "ACS WAN",
+                "rows": [
+                    tracked_row("wan", "wan.connection_type", "Connection", wan["connection_type"]),
+                    tracked_row("wan", "wan.status", "Status", wan["status"]),
+                    tracked_row("wan", "wan.wan_ip", "WAN IP", wan["wan_ip"]),
+                    tracked_row("wan", "wan.pppoe_username", "PPPoE User", wan["pppoe_username"]),
+                    tracked_row("wan", "wan.gateway", "Gateway", wan["gateway"]),
+                    tracked_row("wan", "wan.dns_servers", "DNS", wan["dns_servers"]),
+                    tracked_row("wan", "wan.uptime", "Uptime", wan["uptime"]),
+                    tracked_row("wan", "wan.wan_instance", "WAN Instance", wan["wan_instance"]),
+                    tracked_row("wan", "wan.wan_service", "WAN Service", wan["wan_service"]),
+                    tracked_row("wan", "wan.management_wan_ip", "Management WAN IP", wan["management_wan_ip"]),
+                    tracked_row("wan", "wan.management_wan_status", "Management WAN Status", wan["management_wan_status"]),
+                ],
+            },
+            {
+                "key": "lan",
+                "title": "ACS LAN",
+                "rows": [
+                    tracked_row("lan", "lan.lan_ip", "LAN IP", lan["lan_ip"]),
+                    tracked_row("lan", "lan.subnet_mask", "Subnet", lan["subnet_mask"]),
+                    tracked_row("lan", "lan.dhcp_enabled", "DHCP", lan["dhcp_enabled"]),
+                    tracked_row("lan", "lan.dhcp_start", "DHCP Start", lan["dhcp_start"]),
+                    tracked_row("lan", "lan.dhcp_end", "DHCP End", lan["dhcp_end"]),
+                    tracked_row("lan", "lan.connected_hosts", "Hosts", lan["connected_hosts"]),
+                ],
+            },
+            {
+                "key": "wifi",
+                "title": "ACS WiFi",
+                "rows": [
+                    tracked_row("wifi", "wifi.enabled", "Enabled", wifi["enabled"]),
+                    tracked_row("wifi", "wifi.ssid", "SSID", wifi["ssid"]),
+                    tracked_row("wifi", "wifi.channel", "Channel", wifi["channel"]),
+                    tracked_row("wifi", "wifi.standard", "Standard", wifi["standard"]),
+                    tracked_row("wifi", "wifi.security_mode", "Security", wifi["security_mode"]),
+                    tracked_row("wifi", "wifi.connected_clients", "Clients", wifi["connected_clients"]),
+                    tracked_row("wifi", "wifi.password_present", "Password", "Set" if wifi["password_present"] else None),
+                ],
+            },
+            {
+                "key": "clients",
+                "title": "ACS Clients",
+                "rows": [
+                    tracked_row("clients", "clients.ethernet_ports_total", "Ethernet Ports", len(ethernet_ports)),
+                    tracked_row("clients", "clients.ethernet_ports_active", "Active Ethernet Ports", _count_link_up_ports(ethernet_ports)),
+                    tracked_row("clients", "clients.lan_hosts_total", "LAN Hosts", len(lan_hosts)),
+                    tracked_row("clients", "clients.lan_hosts_active", "Active LAN Hosts", _count_active(lan_hosts)),
+                ],
+            },
+        ]
 
     def _map_system(self, group: Mapping[str, Any]) -> dict[str, object]:
         return {
