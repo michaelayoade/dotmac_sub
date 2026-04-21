@@ -162,6 +162,24 @@ def test_ont_detail_page_data_hides_synthetic_serial(db_session):
     assert payload["display_serial_label"] == "-"
 
 
+def test_ont_detail_page_data_sanitizes_impossible_optical_values(db_session):
+    ont = OntUnit(
+        serial_number="ONT-BAD-OPTICAL-001",
+        is_active=True,
+        olt_rx_signal_dbm=21474836.47,
+        onu_rx_signal_dbm=-21.5,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["signal_info"]["olt_rx_dbm"] is None
+    assert payload["signal_info"]["olt_quality"] == "unknown"
+    assert payload["signal_info"]["onu_rx_dbm"] == -21.5
+
+
 def test_ont_detail_page_data_exposes_connected_customer_device_count_from_snapshot(
     db_session,
 ):

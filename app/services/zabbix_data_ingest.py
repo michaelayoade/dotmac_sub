@@ -241,6 +241,7 @@ def ingest_olt_signal_data(
                 ont_data[key] = {}
 
             if metric_type == "olt_rx":
+                ont_data[key]["_saw_olt_rx"] = True
                 # Signal values are in 0.01 dBm units, convert to dBm
                 dbm_value = value / 100.0
                 # Filter out invalid values (0x7FFFFFFF/100 = 21474836.47 means no signal)
@@ -275,6 +276,10 @@ def ingest_olt_signal_data(
 
         # Update signal fields
         changed = False
+        if metrics.get("_saw_olt_rx") and "olt_rx" not in metrics:
+            if ont.olt_rx_signal_dbm is not None:
+                ont.olt_rx_signal_dbm = None
+                changed = True
         if "olt_rx" in metrics:
             ont.olt_rx_signal_dbm = metrics["olt_rx"]
             changed = True

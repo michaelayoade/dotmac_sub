@@ -27,6 +27,27 @@ SIGNAL_QUALITY_WARNING = "warning"
 SIGNAL_QUALITY_CRITICAL = "critical"
 SIGNAL_QUALITY_UNKNOWN = "unknown"
 
+OPTICAL_SIGNAL_MIN_DBM = -50.0
+OPTICAL_SIGNAL_MAX_DBM = 10.0
+
+
+def normalize_optical_signal_dbm(dbm: float | None) -> float | None:
+    """Return a sane optical signal value or ``None``.
+
+    Some legacy ingest paths persisted sentinel or overflow values such as
+    ``21474836.47`` into the DB. Treat anything outside the physically
+    plausible range as missing data.
+    """
+    if dbm is None:
+        return None
+    try:
+        value = float(dbm)
+    except (TypeError, ValueError):
+        return None
+    if value < OPTICAL_SIGNAL_MIN_DBM or value > OPTICAL_SIGNAL_MAX_DBM:
+        return None
+    return value
+
 
 def classify_signal(
     dbm: float | None,
@@ -44,6 +65,7 @@ def classify_signal(
     Returns:
         One of: "good", "warning", "critical", "unknown"
     """
+    dbm = normalize_optical_signal_dbm(dbm)
     if dbm is None:
         return SIGNAL_QUALITY_UNKNOWN
     if dbm < crit_threshold:

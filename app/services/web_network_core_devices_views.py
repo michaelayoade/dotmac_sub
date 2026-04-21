@@ -1945,11 +1945,12 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     from app.services.network.signal_thresholds import (
         classify_signal,
         get_signal_thresholds,
+        normalize_optical_signal_dbm,
     )
 
     warn, crit = get_signal_thresholds(db)
-    olt_rx = getattr(ont, "olt_rx_signal_dbm", None)
-    onu_rx = getattr(ont, "onu_rx_signal_dbm", None)
+    olt_rx = normalize_optical_signal_dbm(getattr(ont, "olt_rx_signal_dbm", None))
+    onu_rx = normalize_optical_signal_dbm(getattr(ont, "onu_rx_signal_dbm", None))
     olt_quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
     onu_quality = classify_signal(onu_rx, warn_threshold=warn, crit_threshold=crit)
     acs_last_inform_at = _recent_acs_inform_by_ont_id(db, [ont.id]).get(
