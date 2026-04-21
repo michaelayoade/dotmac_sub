@@ -52,6 +52,13 @@ if TYPE_CHECKING:
     from app.models.subscriber import Subscriber
 
 
+def _inventory_subscriber_model():
+    """Soft-import the subscriber model for standalone inventory fallback."""
+    from app.models.subscriber import Subscriber, SubscriberStatus, UserType
+
+    return Subscriber, SubscriberStatus, UserType
+
+
 def _normalize_cpe_device_type(
     device_type: DeviceType | str | None,
 ) -> DeviceType | None:
@@ -169,7 +176,35 @@ def _subscriber_bridge():
 def _get_or_create_inventory_subscriber(db: Session) -> "Subscriber":
     bridge = _subscriber_bridge()
     if bridge is None:
-        raise RuntimeError("Subscriber bridge unavailable for inventory subscriber sync")
+        Subscriber, SubscriberStatus, UserType = _inventory_subscriber_model()
+        inventory_email = "network-inventory@dotmac.local"
+        subscriber = db.scalars(
+            select(Subscriber).where(Subscriber.email == inventory_email).limit(1)
+        ).first()
+        if subscriber is not None:
+            return cast("Subscriber", subscriber)
+        subscriber = Subscriber(
+            first_name="Network",
+            last_name="Inventory",
+            display_name="Network Inventory",
+            email=inventory_email,
+            status=SubscriberStatus.active,
+            user_type=UserType.system_user,
+            is_active=True,
+            billing_enabled=False,
+        )
+        try:
+            with db.begin_nested():
+                db.add(subscriber)
+                db.flush()
+            return cast("Subscriber", subscriber)
+        except IntegrityError:
+            subscriber = db.scalars(
+                select(Subscriber).where(Subscriber.email == inventory_email).limit(1)
+            ).first()
+            if subscriber is not None:
+                return cast("Subscriber", subscriber)
+            raise
     try:
         return cast("Subscriber", bridge.get_or_create_inventory_subscriber(db))
     except IntegrityError:
@@ -182,7 +217,11 @@ def _get_or_create_inventory_subscriber(db: Session) -> "Subscriber":
 def get_inventory_subscriber(db: Session) -> "Subscriber | None":
     bridge = _subscriber_bridge()
     if bridge is None:
-        return None
+        Subscriber, _, _ = _inventory_subscriber_model()
+        return cast(
+            "Subscriber | None",
+            db.scalars(select(Subscriber).where(Subscriber.email == "network-inventory@dotmac.local").limit(1)).first(),
+        )
     return cast("Subscriber | None", bridge.get_inventory_subscriber(db))
 
 

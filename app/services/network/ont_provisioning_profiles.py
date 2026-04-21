@@ -77,7 +77,10 @@ class OntProvisioningProfiles:
         if not owner_subscriber_id:
             return
         if _owner_validator is None:
-            return
+            raise HTTPException(
+                status_code=503,
+                detail="Owner-scoped provisioning profiles are unavailable in this deployment.",
+            )
         _owner_validator.validate_business_owner(
             db, owner_subscriber_id=coerce_uuid(owner_subscriber_id)
         )
