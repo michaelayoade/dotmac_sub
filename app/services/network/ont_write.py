@@ -19,6 +19,9 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
+from app.services.network.provisioning_events import (
+    current_provisioning_correlation_key,
+)
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
@@ -317,6 +320,7 @@ class OntWriteService:
 
         from app.services.network.service_port_allocator import (
             AllocationError,
+            build_service_port_correlation_key,
             with_allocated_service_port,
         )
 
@@ -401,6 +405,14 @@ class OntWriteService:
                     return result
                 db.commit()
             else:
+                correlation_key = build_service_port_correlation_key(
+                    current_provisioning_correlation_key(),
+                    ont_id=ont_id,
+                    vlan_id=vlan_id,
+                    gem_index=gem_index,
+                    tag_transform=tag_transform,
+                    user_vlan=user_vlan,
+                )
                 result = with_allocated_service_port(
                     db,
                     ctx.olt.id,
@@ -409,7 +421,24 @@ class OntWriteService:
                     vlan_id=vlan_id,
                     gem_index=gem_index,
                     service_type="internet" if vlan_id in (203,) else "management",
+                    correlation_key=correlation_key,
                     provisioned=lambda write_result: bool(write_result.success),
+                    serialize_result=lambda write_result: {
+                        "success": bool(write_result.success),
+                        "message": str(write_result.message),
+                        "data": dict(write_result.data or {}),
+                        "waiting": bool(write_result.waiting),
+                    },
+                    deserialize_result=lambda payload: ActionResult(
+                        success=bool(payload.get("success")),
+                        message=str(payload.get("message") or ""),
+                        data=(
+                            dict(payload.get("data"))
+                            if isinstance(payload.get("data"), dict)
+                            else None
+                        ),
+                        waiting=bool(payload.get("waiting")),
+                    ),
                 )
                 if not result.success:
                     return result

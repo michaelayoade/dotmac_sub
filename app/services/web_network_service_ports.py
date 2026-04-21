@@ -19,10 +19,12 @@ if TYPE_CHECKING:
     pass  # ServicePortEntry already imported above
 from app.services.network.service_port_allocator import (
     AllocationError,
+    build_service_port_correlation_key,
     find_allocation_by_index,
     release_service_port,
     with_allocated_service_port,
 )
+from app.services.network.provisioning_events import current_provisioning_correlation_key
 from app.services.network.vlan_chain import validate_chain
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
@@ -309,7 +311,23 @@ def handle_create(
             vlan_id=vlan_id,
             gem_index=gem_index,
             service_type="internet" if vlan_id in (203,) else "management",
+            correlation_key=build_service_port_correlation_key(
+                current_provisioning_correlation_key(),
+                ont_id=ont_id,
+                vlan_id=vlan_id,
+                gem_index=gem_index,
+                tag_transform=tag_transform,
+                user_vlan=user_vlan,
+            ),
             provisioned=lambda result: bool(result[0]),
+            serialize_result=lambda result: {
+                "success": bool(result[0]),
+                "message": str(result[1]),
+            },
+            deserialize_result=lambda payload: (
+                bool(payload.get("success")),
+                str(payload.get("message") or ""),
+            ),
         )
     except AllocationError as exc:
         logger.error("Failed to allocate service-port index: %s", exc)

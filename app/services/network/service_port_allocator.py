@@ -15,10 +15,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -35,6 +37,34 @@ T = TypeVar("T")
 
 class AllocationError(Exception):
     """Raised when service-port allocation fails."""
+
+
+def build_service_port_correlation_key(
+    base_correlation_key: str | None,
+    *,
+    ont_id: UUID | str,
+    vlan_id: int | None,
+    gem_index: int | None,
+    tag_transform: str | None = None,
+    user_vlan: int | str | None = None,
+) -> str | None:
+    """Build an operation-scoped correlation key for one service-port mutation."""
+    if not base_correlation_key:
+        return None
+    user_vlan_part = "" if user_vlan is None else str(user_vlan)
+    tag_transform_part = tag_transform or ""
+    return (
+        f"{base_correlation_key}:service-port:{ont_id}:"
+        f"{vlan_id}:{gem_index}:{tag_transform_part}:{user_vlan_part}"
+    )
+
+
+def _is_replayable_allocation(allocation: ServicePortAllocation | None) -> bool:
+    return bool(
+        allocation is not None
+        and allocation.provisioned_at is not None
+        and isinstance(allocation.result_payload, dict)
+    )
 
 
 def get_or_create_pool(
@@ -165,6 +195,7 @@ def allocate_service_port(
     service_type: str | None = None,
     vlan_id: int | None = None,
     gem_index: int | None = None,
+    correlation_key: str | None = None,
 ) -> ServicePortAllocation:
     """Allocate a service-port index for an ONT.
 
@@ -187,6 +218,11 @@ def allocate_service_port(
     """
     olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
     ont_uuid = UUID(str(ont_id)) if isinstance(ont_id, str) else ont_id
+
+    if correlation_key:
+        existing = find_allocation_by_correlation_key(db, correlation_key)
+        if _is_replayable_allocation(existing):
+            return existing
 
     # Lock pool row for update
     stmt = (
@@ -244,6 +280,7 @@ def allocate_service_port(
         vlan_id=vlan_id,
         gem_index=gem_index,
         service_type=service_type,
+        correlation_key=correlation_key,
         is_active=True,
     )
     db.add(allocation)
@@ -255,7 +292,19 @@ def allocate_service_port(
     total_range = pool.max_index - pool.min_index + 1
     pool.available_count = total_range - len(allocated) - len(reserved)
 
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        if correlation_key:
+            db.rollback()
+            existing = find_allocation_by_correlation_key(db, correlation_key)
+            if _is_replayable_allocation(existing):
+                logger.info(
+                    "Reusing service-port allocation for replayed correlation key %s",
+                    correlation_key,
+                )
+                return existing
+        raise AllocationError(f"Service-port allocation failed: {exc}") from exc
 
     logger.info(
         "Allocated service-port %d for ONT %s on pool %s (type=%s, vlan=%s, gem=%s)",
@@ -268,6 +317,20 @@ def allocate_service_port(
     )
 
     return allocation
+
+
+def find_allocation_by_correlation_key(
+    db: Session,
+    correlation_key: str,
+) -> ServicePortAllocation | None:
+    """Find the latest allocation row for a correlation key."""
+    stmt = (
+        select(ServicePortAllocation)
+        .where(ServicePortAllocation.correlation_key == correlation_key)
+        .order_by(ServicePortAllocation.created_at.desc())
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
 
 
 def release_service_port(db: Session, allocation_id: UUID | str) -> bool:
@@ -446,7 +509,10 @@ def with_allocated_service_port(
     service_type: str | None = None,
     vlan_id: int | None = None,
     gem_index: int | None = None,
+    correlation_key: str | None = None,
     provisioned: Callable[[T], bool] | None = None,
+    serialize_result: Callable[[T], dict[str, Any] | None] | None = None,
+    deserialize_result: Callable[[dict[str, Any]], T] | None = None,
 ) -> T:
     """Allocate an index and run the OLT write before transaction commit.
 
@@ -455,6 +521,15 @@ def with_allocated_service_port(
     service-port creates cannot observe the same available index while the OLT
     write is still in flight.
     """
+    if correlation_key and deserialize_result is not None:
+        existing = find_allocation_by_correlation_key(db, correlation_key)
+        if _is_replayable_allocation(existing):
+            logger.info(
+                "Returning cached service-port allocation result for correlation key %s",
+                correlation_key,
+            )
+            return deserialize_result(existing.result_payload)
+
     allocation = allocate_service_port(
         db,
         olt_id,
@@ -462,17 +537,24 @@ def with_allocated_service_port(
         service_type=service_type,
         vlan_id=vlan_id,
         gem_index=gem_index,
+        correlation_key=correlation_key,
     )
     try:
         result = provision(allocation)
     except Exception:
+        allocation.result_payload = None
+        allocation.correlation_key = None
         release_service_port(db, allocation.id)
         db.rollback()
         raise
     is_provisioned = provisioned(result) if provisioned is not None else True
+    if is_provisioned and serialize_result is not None:
+        allocation.result_payload = serialize_result(result)
     if is_provisioned:
         mark_provisioned(db, allocation.id)
     else:
+        allocation.result_payload = None
+        allocation.correlation_key = None
         release_service_port(db, allocation.id)
     db.commit()
     return result

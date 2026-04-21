@@ -2781,6 +2781,10 @@ class ServicePortAllocation(Base):
         UniqueConstraint(
             "pool_id", "port_index", name="uq_service_port_allocations_pool_index"
         ),
+        UniqueConstraint(
+            "correlation_key",
+            name="uq_service_port_allocations_correlation_key",
+        ),
         Index("ix_service_port_allocations_ont", "ont_unit_id"),
         Index("ix_service_port_allocations_active", "is_active"),
     )
@@ -2804,6 +2808,8 @@ class ServicePortAllocation(Base):
     service_type: Mapped[str | None] = mapped_column(
         String(40), doc="internet, management, tr069, iptv, voip"
     )
+    correlation_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    result_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

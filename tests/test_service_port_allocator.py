@@ -69,3 +69,135 @@ def test_with_allocated_service_port_releases_failed_write(db_session) -> None:
     assert allocation.port_index == result.port_index
     assert allocation.is_active is False
     assert allocation.released_at is not None
+
+
+def test_with_allocated_service_port_replays_cached_result_by_correlation_key(
+    db_session,
+) -> None:
+    from app.services.network.service_port_allocator import (
+        build_service_port_correlation_key,
+        with_allocated_service_port,
+    )
+
+    olt, ont = _create_olt_and_ont(db_session)
+    calls: list[int] = []
+    correlation_key = build_service_port_correlation_key(
+        "alloc:test:1",
+        ont_id=ont.id,
+        vlan_id=203,
+        gem_index=1,
+        tag_transform="translate",
+    )
+
+    def _provision(allocation):
+        calls.append(allocation.port_index)
+        return SimpleNamespace(success=True, port_index=allocation.port_index)
+
+    serializer = lambda result: {
+        "success": bool(result.success),
+        "port_index": int(result.port_index),
+    }
+    deserializer = lambda payload: SimpleNamespace(
+        success=bool(payload["success"]),
+        port_index=int(payload["port_index"]),
+    )
+
+    first = with_allocated_service_port(
+        db_session,
+        olt.id,
+        ont.id,
+        _provision,
+        vlan_id=203,
+        gem_index=1,
+        correlation_key=correlation_key,
+        provisioned=lambda result: bool(result.success),
+        serialize_result=serializer,
+        deserialize_result=deserializer,
+    )
+    second = with_allocated_service_port(
+        db_session,
+        olt.id,
+        ont.id,
+        _provision,
+        vlan_id=203,
+        gem_index=1,
+        correlation_key=correlation_key,
+        provisioned=lambda result: bool(result.success),
+        serialize_result=serializer,
+        deserialize_result=deserializer,
+    )
+
+    assert first.success is True
+    assert second.success is True
+    assert first.port_index == second.port_index
+    assert calls == [first.port_index]
+
+
+def test_with_allocated_service_port_does_not_cache_failed_result(
+    db_session,
+) -> None:
+    from app.models.network import ServicePortAllocation
+    from app.services.network.service_port_allocator import (
+        build_service_port_correlation_key,
+        with_allocated_service_port,
+    )
+
+    olt, ont = _create_olt_and_ont(db_session)
+    calls: list[int] = []
+    correlation_key = build_service_port_correlation_key(
+        "alloc:test:retry",
+        ont_id=ont.id,
+        vlan_id=203,
+        gem_index=1,
+        tag_transform="translate",
+    )
+
+    def _provision(allocation):
+        calls.append(allocation.port_index)
+        if len(calls) == 1:
+            return SimpleNamespace(success=False, port_index=allocation.port_index)
+        return SimpleNamespace(success=True, port_index=allocation.port_index)
+
+    serializer = lambda result: {
+        "success": bool(result.success),
+        "port_index": int(result.port_index),
+    }
+    deserializer = lambda payload: SimpleNamespace(
+        success=bool(payload["success"]),
+        port_index=int(payload["port_index"]),
+    )
+
+    first = with_allocated_service_port(
+        db_session,
+        olt.id,
+        ont.id,
+        _provision,
+        vlan_id=203,
+        gem_index=1,
+        correlation_key=correlation_key,
+        provisioned=lambda result: bool(result.success),
+        serialize_result=serializer,
+        deserialize_result=deserializer,
+    )
+    second = with_allocated_service_port(
+        db_session,
+        olt.id,
+        ont.id,
+        _provision,
+        vlan_id=203,
+        gem_index=1,
+        correlation_key=correlation_key,
+        provisioned=lambda result: bool(result.success),
+        serialize_result=serializer,
+        deserialize_result=deserializer,
+    )
+
+    allocations = db_session.query(ServicePortAllocation).all()
+    released = next(allocation for allocation in allocations if allocation.is_active is False)
+
+    assert first.success is False
+    assert second.success is True
+    assert calls == [first.port_index, second.port_index]
+    assert len(allocations) == 2
+    assert released.correlation_key is None
+    assert released.result_payload is None
