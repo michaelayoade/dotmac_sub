@@ -1,6 +1,6 @@
 {% set intent = service_intent if service_intent is defined else none %}
 {% if intent %}
-<div class="group relative overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+<div class="group relative overflow-hidden rounded-xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
     {# Subtle gradient accent at top #}
     <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
 
@@ -121,7 +121,7 @@
 
             <div class="space-y-2">
                 {% for svc in intent.wan_service_instances %}
-                <div class="rounded-lg border border-slate-200/80 bg-slate-50/50 p-2.5 dark:border-slate-600/50 dark:bg-slate-700/30">
+                <div class="rounded-lg border border-slate-200/60 bg-slate-50/50 p-2.5 dark:border-slate-600/50 dark:bg-slate-700/30">
                     <div class="mb-2 flex items-center justify-between">
                         <div class="flex items-center gap-2">
                             {% set type_colors = {
@@ -138,7 +138,10 @@
                             'provisioned': 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/30',
                             'failed': 'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/30'
                         } %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset {{ status_colors.get(svc.provisioning_status, status_colors.pending) }}">{{ svc.provisioning_status|title }}</span>
+                        <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset {{ status_colors.get(svc.provisioning_status, status_colors.pending) }}">
+                            <span class="h-1.5 w-1.5 rounded-full {% if svc.provisioning_status == 'provisioned' %}bg-emerald-500{% elif svc.provisioning_status == 'failed' %}bg-rose-500{% else %}bg-amber-500{% endif %}"></span>
+                            {{ svc.provisioning_status|title }}
+                        </span>
                     </div>
                     <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-4">
                         <div>

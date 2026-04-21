@@ -16,7 +16,15 @@
 {# Current WAN Status - Formatted Display #}
 {% if wan_info %}
 <div class="mb-4">
-    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Current WAN Status</h4>
+    <div class="mb-3 flex items-center justify-between gap-2">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current WAN Status</h4>
+        {% if observed_config_freshness %}
+        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if observed_config_freshness.stale %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% elif observed_config_freshness.source == 'live' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+            {{ 'Cached' if observed_config_freshness.stale else 'Live' if observed_config_freshness.source == 'live' else observed_config_freshness.source|title }}
+            {% if observed_config_freshness.fetched_at %} &middot; {{ observed_config_freshness.fetched_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+        </span>
+        {% endif %}
+    </div>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {# Connection Status - Highlight #}
         {% set conn_status = wan_info.get('status') %}
@@ -29,7 +37,7 @@
         {# Connection Type #}
         {% set conn_type = wan_info.get('connection_type') %}
         {% if conn_type %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Connection Type</dt>
             <dd class="mt-0.5 text-sm font-medium text-slate-900 dark:text-white">{{ conn_type }}</dd>
         </div>
@@ -37,7 +45,7 @@
         {# WAN IP #}
         {% set wan_ip = wan_info.get('wan_ip') %}
         {% if wan_ip %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WAN IP Address</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ wan_ip }}</dd>
         </div>
@@ -45,7 +53,7 @@
         {# PPPoE User #}
         {% set pppoe_user = wan_info.get('pppoe_username') %}
         {% if pppoe_user %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">PPPoE Username</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ pppoe_user }}</dd>
         </div>
@@ -53,7 +61,7 @@
         {# Gateway #}
         {% set gateway = wan_info.get('gateway') %}
         {% if gateway %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Default Gateway</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ gateway }}</dd>
         </div>
@@ -61,7 +69,7 @@
         {# DNS #}
         {% set dns = wan_info.get('dns_servers') %}
         {% if dns %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">DNS Servers</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ dns }}</dd>
         </div>
@@ -69,12 +77,18 @@
         {# Uptime #}
         {% set uptime = wan_info.get('uptime') %}
         {% if uptime %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Connection Uptime</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ uptime }}</dd>
         </div>
         {% endif %}
     </div>
+</div>
+{% endif %}
+{% if not wan_info %}
+<div class="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-slate-700 dark:bg-slate-800/50">
+    <p class="text-sm text-slate-600 dark:text-slate-400">No WAN status snapshot is available.</p>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-500">Save WAN settings below to define the desired state for this ONT.</p>
 </div>
 {% endif %}
 
@@ -123,7 +137,9 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                    Internet VLAN <span class="text-red-500" aria-hidden="true">*</span>
+                </label>
                 <select name="wan_vlan" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
 	                    <option value="">Leave unchanged</option>
 	                    {% for vlan in vlans or [] %}
@@ -164,12 +180,16 @@
         </div>
         <div x-show="wanMode === 'pppoe'" x-transition x-cloak class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE Username</label>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                    PPPoE Username <span class="text-red-500" aria-hidden="true">*</span>
+                </label>
                 <input type="text" name="pppoe_username" value="{{ current_pppoe_user or '' }}" placeholder="e.g. 100014919"
                        class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE Password</label>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                    PPPoE Password <span class="text-red-500" aria-hidden="true">*</span>
+                </label>
                 <input type="password" name="pppoe_password" autocomplete="new-password" placeholder="Required for credential push"
                        class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
@@ -243,7 +263,7 @@
 	          hx-swap="none"
 	          hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
 	          data-network-action
-	          data-loading-label="Pushing..."
+	          data-loading-label="Pushing PPPoE credentials..."
 	          class="space-y-4">
 	        {% include "components/forms/csrf_input.html" %}
 	        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">

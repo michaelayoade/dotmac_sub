@@ -106,13 +106,15 @@
             <button type="button"
                     x-show="!confirming"
                     @click="confirming = true"
-                    class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900">
+                    class="inline-flex items-center gap-2 rounded-lg border border-rose-300 bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:border-rose-800 dark:bg-rose-700 dark:hover:bg-rose-800 dark:focus:ring-offset-slate-900">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-7 4h14a2 2 0 001.8-2.9l-7-14a2 2 0 00-3.6 0l-7 14A2 2 0 005 19z"/></svg>
                 Delete OLT
             </button>
             <div x-show="confirming" x-cloak class="flex items-center gap-2">
                 <span class="text-sm text-slate-600 dark:text-slate-400">Are you sure?</span>
                 <button type="submit"
-                        class="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700">
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 dark:border-rose-800 dark:bg-rose-700 dark:hover:bg-rose-800">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-7 4h14a2 2 0 001.8-2.9l-7-14a2 2 0 00-3.6 0l-7 14A2 2 0 005 19z"/></svg>
                     Yes, Delete
                 </button>
                 <button type="button"

@@ -16,7 +16,15 @@
 {# Current WiFi Status - Formatted Display #}
 {% if wireless_info %}
 <div class="mb-4">
-    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Current WiFi Settings</h4>
+    <div class="mb-3 flex items-center justify-between gap-2">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current WiFi Settings</h4>
+        {% if observed_config_freshness %}
+        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if observed_config_freshness.stale %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% elif observed_config_freshness.source == 'live' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+            {{ 'Cached' if observed_config_freshness.stale else 'Live' if observed_config_freshness.source == 'live' else observed_config_freshness.source|title }}
+            {% if observed_config_freshness.fetched_at %} &middot; {{ observed_config_freshness.fetched_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+        </span>
+        {% endif %}
+    </div>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {# SSID - Highlight #}
         {% set ssid = wireless_info.get('ssid') %}
@@ -29,7 +37,7 @@
         {# Enabled Status #}
         {% set enabled = wireless_info.get('enabled') %}
         {% if enabled is not none %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Enabled</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
                 {% if enabled == true or enabled == '1' or enabled == 'true' or enabled == 'Yes' %}
@@ -46,7 +54,7 @@
         {# Channel #}
         {% set channel = wireless_info.get('channel') %}
         {% if channel %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Channel</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ channel }}</dd>
         </div>
@@ -54,14 +62,14 @@
         {# Security Mode #}
         {% set security = wireless_info.get('security_mode') %}
         {% if security %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Security Mode</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ security }}</dd>
         </div>
         {% endif %}
         {% set password_present = wireless_info.get('password_present') %}
         {% if password_present %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Password</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">
                 Set
@@ -71,12 +79,18 @@
         {# Bandwidth/Standard #}
         {% set standard = wireless_info.get('standard') %}
         {% if standard %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Standard</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ standard }}</dd>
         </div>
         {% endif %}
     </div>
+</div>
+{% endif %}
+{% if not wireless_info %}
+<div class="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-slate-700 dark:bg-slate-800/50">
+    <p class="text-sm text-slate-600 dark:text-slate-400">No WiFi status snapshot is available.</p>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-500">Save an SSID and password below to define the desired wireless state.</p>
 </div>
 {% endif %}
 
@@ -157,7 +171,7 @@
               hx-swap="none"
               hx-confirm="Update the WiFi SSID on this ONT via TR-069?"
               data-network-action
-              data-loading-label="Updating..."
+              data-loading-label="Updating WiFi name..."
               class="space-y-3">
             {% include "components/forms/csrf_input.html" %}
             <div>
@@ -185,7 +199,7 @@
               hx-swap="none"
               hx-confirm="Update the WiFi password on this ONT via TR-069?"
               data-network-action
-              data-loading-label="Updating..."
+              data-loading-label="Updating WiFi password..."
               class="space-y-3">
             {% include "components/forms/csrf_input.html" %}
             <div>

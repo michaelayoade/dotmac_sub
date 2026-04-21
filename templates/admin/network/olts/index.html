@@ -124,7 +124,11 @@
                 <td class="px-6 py-3 whitespace-nowrap text-center">{{ health_dot(olt.runtime_ping_state, "Ping") }}</td>
                 <td class="px-6 py-3 whitespace-nowrap text-center">{{ health_dot(olt.runtime_snmp_state, "SNMP") }}</td>
                 <td class="px-6 py-3 whitespace-nowrap text-center">
-                    <a href="{{ olt.detail_url }}" class="text-violet-600 hover:text-violet-700 dark:text-violet-400" onclick="event.stopPropagation()">{{ icon_view() }}</a>
+                    <a href="{{ olt.detail_url }}"
+                       aria-label="View OLT details for {{ olt.name }}"
+                       title="View OLT details"
+                       class="text-violet-600 hover:text-violet-700 dark:text-violet-400"
+                       onclick="event.stopPropagation()">{{ icon_view() }}</a>
                 </td>
             </tr>
             {% else %}

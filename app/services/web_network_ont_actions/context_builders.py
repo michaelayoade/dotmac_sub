@@ -376,6 +376,18 @@ def _unified_summary_context(
     }
 
 
+def _observed_config_freshness(observed_intent: dict[str, object]) -> dict[str, object] | None:
+    if not observed_intent:
+        return None
+    fetched_at = observed_intent.get("fetched_at")
+    source = str(observed_intent.get("source") or "db")
+    return {
+        "source": source,
+        "fetched_at": fetched_at,
+        "stale": source != "live",
+    }
+
+
 def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build context for the unified ONT configuration partial from DB state."""
     shared = _load_ont_detail_config_state(db, ont_id)
@@ -445,6 +457,7 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "wan_info": wan,
         "current_pppoe_user": (wan or {}).get("pppoe_username"),
         "vlans": observed_state["vlans"],
+        "observed_config_freshness": _observed_config_freshness(observed_intent),
     }
     context.update(_desired_config_context(ont, ont_plan=ont_plan))
     desired_wan = context["desired_wan_config"]
@@ -468,6 +481,7 @@ def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "ont_plan": ont_plan,
         "wireless_info": wireless,
         "current_ssid": (wireless or {}).get("ssid"),
+        "observed_config_freshness": _observed_config_freshness(observed_intent),
     }
     context.update(_desired_config_context(ont, ont_plan=ont_plan))
     desired_wifi = context["desired_wifi_config"]
@@ -511,6 +525,7 @@ def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "lan_info": observed.get("lan", {}),
         "ethernet_ports": observed.get("ethernet_ports", []),
         "lan_hosts": observed.get("lan_hosts", []),
+        "observed_config_freshness": _observed_config_freshness(observed_intent),
     }
     context.update(_desired_config_context(ont, ont_plan=ont_plan))
     return context

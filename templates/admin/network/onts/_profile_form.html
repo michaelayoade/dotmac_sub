@@ -4,16 +4,21 @@
       hx-swap="none"
       hx-confirm="Apply this profile template to the ONT now?"
       data-network-action
-      data-loading-label="Applying..."
+      data-loading-label="Applying profile..."
       class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
     {% include "components/forms/csrf_input.html" %}
-    <select name="profile_id" required
-        class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-        <option value="">Select profile...</option>
-        {% for p in available_profile_templates %}
-        <option value="{{ p.id }}" {% if current_profile_id and current_profile_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
-        {% endfor %}
-    </select>
+    <div class="flex-1">
+        <label class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
+            Profile <span class="text-red-500" aria-hidden="true">*</span>
+        </label>
+        <select name="profile_id" required
+            class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="">Select profile...</option>
+            {% for p in available_profile_templates %}
+            <option value="{{ p.id }}" {% if current_profile_id and current_profile_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
     <button type="submit"
         class="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>

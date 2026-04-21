@@ -1,6 +1,6 @@
 {# Optical link summary for ONT Overview tab #}
     {% if signal_info %}
-    <div class="relative overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+    <div class="relative overflow-hidden rounded-xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
         {# Top accent line indicating link status #}
         <div class="absolute inset-x-0 top-0 h-0.5 {{ 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-500' if signal_info.online_status == 'online' else 'bg-gradient-to-r from-rose-500 via-red-500 to-rose-500' if signal_info.online_status == 'offline' else 'bg-slate-300 dark:bg-slate-600' }}"></div>
 
@@ -165,4 +165,3 @@
         }
     </style>
     {% endif %}
-

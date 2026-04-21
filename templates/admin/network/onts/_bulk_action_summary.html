@@ -3,10 +3,42 @@
     {{ error }}
 </div>
 {% else %}
-<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400">
-    Bulk <strong>{{ action }}</strong>: {{ stats.succeeded }} succeeded, {{ stats.failed }} failed{{ skipped_text }}.
-    {% if stats.skipped_out_of_scope %}
-    {{ stats.skipped_out_of_scope }} out of scope.
+<div class="bulk-action-summary space-y-3 rounded-lg border {% if stats.failed %}border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20{% else %}border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20{% endif %} px-4 py-3 text-sm {% if stats.failed %}text-amber-800 dark:text-amber-300{% else %}text-emerald-700 dark:text-emerald-400{% endif %}">
+    <div>
+        Bulk <strong>{{ action }}</strong>: {{ stats.succeeded }} succeeded, {{ stats.failed }} failed{{ skipped_text }}.
+        {% if stats.skipped_out_of_scope %}
+        {{ stats.skipped_out_of_scope }} out of scope.
+        {% endif %}
+    </div>
+    {% if failed_results %}
+    <div class="rounded-md border border-amber-200/80 bg-white/70 p-3 dark:border-amber-800/60 dark:bg-slate-900/30">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <p class="text-xs font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">Failed ONTs</p>
+            <form hx-post="{{ request.url.path }}" hx-target="closest .bulk-action-summary" hx-swap="outerHTML" class="inline">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="action" value="{{ action }}">
+                {% if firmware_image_id %}
+                <input type="hidden" name="firmware_image_id" value="{{ firmware_image_id }}">
+                {% endif %}
+                {% for item in failed_results %}
+                <input type="hidden" name="ont_ids" value="{{ item.ont_id }}">
+                {% endfor %}
+                <button type="submit"
+                        class="text-xs font-medium text-amber-700 underline decoration-amber-400 underline-offset-2 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100">
+                    Re-run failed
+                </button>
+            </form>
+        </div>
+        <ul class="mt-2 space-y-1.5">
+            {% for item in failed_results %}
+            <li class="flex flex-wrap items-start gap-x-2 gap-y-1 text-xs text-slate-700 dark:text-slate-200">
+                <span class="font-mono font-semibold text-slate-900 dark:text-white">{{ item.serial_number }}</span>
+                <span class="text-slate-400 dark:text-slate-500">-</span>
+                <span>{{ item.message or 'Operation failed.' }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
     {% endif %}
 </div>
 {% endif %}

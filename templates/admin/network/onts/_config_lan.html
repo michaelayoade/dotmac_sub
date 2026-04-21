@@ -22,7 +22,15 @@
 {% set dhcp_end = lan_intent.get('dhcp_end') or (lan_info.get('dhcp_end') if lan_info else '') %}
 {% if lan_info %}
 <div class="mb-4">
-    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">LAN Configuration</h4>
+    <div class="mb-3 flex items-center justify-between gap-2">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">LAN Configuration</h4>
+        {% if observed_config_freshness %}
+        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if observed_config_freshness.stale %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% elif observed_config_freshness.source == 'live' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200{% endif %}">
+            {{ 'Cached' if observed_config_freshness.stale else 'Live' if observed_config_freshness.source == 'live' else observed_config_freshness.source|title }}
+            {% if observed_config_freshness.fetched_at %} &middot; {{ observed_config_freshness.fetched_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+        </span>
+        {% endif %}
+    </div>
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {% for label, value in [
             ('LAN IP', lan_info.get('lan_ip')),
@@ -33,7 +41,7 @@
             ('Connected Hosts', lan_info.get('connected_hosts'))
         ] %}
         {% if value is not none and value != '' %}
-        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">{{ label }}</dt>
             <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">
                 {% if value == true %}Yes{% elif value == false %}No{% else %}{{ value }}{% endif %}
@@ -42,6 +50,12 @@
         {% endif %}
         {% endfor %}
     </div>
+</div>
+{% endif %}
+{% if not lan_info %}
+<div class="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-slate-700 dark:bg-slate-800/50">
+    <p class="text-sm text-slate-600 dark:text-slate-400">No LAN status snapshot is available.</p>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-500">Save LAN gateway and DHCP intent below to define the desired local network state.</p>
 </div>
 {% endif %}
 
@@ -123,16 +137,16 @@
                     <td class="px-4 py-2 text-sm font-medium text-slate-900 dark:text-white">ETH {{ port_num }}</td>
                     <td class="px-4 py-2 text-sm">
                         {% if admin_enabled == true or admin_enabled == '1' or admin_enabled == 'true' %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Yes</span>
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200"><span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Enabled</span>
                         {% else %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">No</span>
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200"><span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-slate-400"></span>Disabled</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-2 text-sm">
                         {% if link_status == 'Up' or link_status == 'up' %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Up</span>
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200"><span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Link Up</span>
                         {% else %}
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">{{ link_status or 'Down' }}</span>
+                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200"><span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-slate-400"></span>{{ link_status or 'Link Down' }}</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-2 text-sm font-mono text-slate-600 dark:text-slate-300">{{ speed or '&mdash;' }}</td>

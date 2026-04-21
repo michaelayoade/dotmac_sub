@@ -801,11 +801,26 @@ def bulk_action_summary_context(
     )
     error = stats.get("error")
     skipped = int(stats.get("skipped", 0) or 0)
+    result_rows = list(stats.get("results", []) or [])
+    ont_uuid_map = {
+        str(ont.id): ont.serial_number or str(ont.id)
+        for ont in db.scalars(select(OntUnit).where(OntUnit.id.in_(ont_ids))).all()
+    }
+    failed_results: list[dict[str, Any]] = []
+    for row in result_rows:
+        row["serial_number"] = ont_uuid_map.get(
+            str(row.get("ont_id") or ""),
+            str(row.get("ont_id") or "Unknown ONT"),
+        )
+        if not row.get("success"):
+            failed_results.append(row)
     return {
         "stats": stats,
         "action": action,
         "error": error,
         "skipped_text": f", {skipped} skipped (max 50)" if skipped else "",
+        "failed_results": failed_results,
+        "firmware_image_id": firmware_image_id,
     }
 
 

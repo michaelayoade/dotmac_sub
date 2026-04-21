@@ -38,12 +38,14 @@
           hx-swap="none"
           hx-confirm="Apply this management IP configuration through the OLT/SSH path?"
           data-network-action
-          data-loading-label="Applying..."
+          data-loading-label="Applying management IP..."
           class="space-y-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">VLAN ID</label>
-                <select name="vlan_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <label for="legacy-mgmt-vlan-id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    VLAN ID <span class="text-red-500" aria-hidden="true">*</span>
+                </label>
+                <select id="legacy-mgmt-vlan-id" name="vlan_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">Select management VLAN</option>
                     {% for vlan in vlans %}
                     <option value="{{ vlan.tag }}" {% if initial_iphost_form and initial_iphost_form.vlan_id == vlan.tag|string %}selected{% endif %}>
@@ -56,8 +58,8 @@
                 {% endif %}
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Mode</label>
-                <select name="ip_mode" x-model="ipMode" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <label for="legacy-mgmt-ip-mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Mode</label>
+                <select id="legacy-mgmt-ip-mode" name="ip_mode" x-model="ipMode" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="dhcp" {% if initial_iphost_form and initial_iphost_form.ip_mode == 'dhcp' %}selected{% endif %}>DHCP</option>
                     <option value="static" {% if initial_iphost_form and initial_iphost_form.ip_mode == 'static' %}selected{% endif %}>Static</option>
                 </select>
@@ -65,16 +67,16 @@
         </div>
         <div x-show="ipMode === 'static'" x-transition class="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
-                <input type="text" name="ip_address" value="{{ initial_iphost_form.ip_address if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}" placeholder="192.168.1.100" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <label for="legacy-mgmt-ip-address" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
+                <input id="legacy-mgmt-ip-address" type="text" name="ip_address" value="{{ initial_iphost_form.ip_address if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}" placeholder="192.168.1.100" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subnet Mask</label>
-                <input type="text" name="subnet" value="{{ initial_iphost_form.subnet if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}" placeholder="255.255.255.0" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <label for="legacy-mgmt-subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subnet Mask</label>
+                <input id="legacy-mgmt-subnet" type="text" name="subnet" value="{{ initial_iphost_form.subnet if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}" placeholder="255.255.255.0" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
             <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Gateway</label>
-                <input type="text" name="gateway" value="{{ initial_iphost_form.gateway if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}" placeholder="192.168.1.1" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <label for="legacy-mgmt-gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Gateway</label>
+                <input id="legacy-mgmt-gateway" type="text" name="gateway" value="{{ initial_iphost_form.gateway if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}" placeholder="192.168.1.1" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
         </div>
         <button type="submit" {% if not vlans %}disabled{% endif %} class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">
@@ -102,7 +104,9 @@
           data-loading-label="Binding..."
           class="flex flex-wrap items-end gap-4">
         <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Profile</label>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Profile <span class="text-red-500" aria-hidden="true">*</span>
+            </label>
             <select name="profile_id" required class="min-w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">Select TR-069 server profile</option>
                 {% for profile in tr069_profiles %}

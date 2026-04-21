@@ -105,15 +105,17 @@
           hx-swap="none"
           hx-confirm="Apply this management IP configuration through the OLT/SSH path?"
           data-network-action
-          data-loading-label="Applying..."
+          data-loading-label="Applying management IP..."
           class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="ip_mode" :value="ipMode">
 
         {# VLAN Selection - Always visible #}
         <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Management VLAN</label>
-            <select name="vlan_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <label for="mgmt-vlan-id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Management VLAN <span class="text-red-500" aria-hidden="true">*</span>
+            </label>
+            <select id="mgmt-vlan-id" name="vlan_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">Select VLAN for management traffic</option>
                 {% for vlan in vlans %}
                 <option value="{{ vlan.tag }}" {% if mgmt_form and mgmt_form.vlan_id == vlan.tag|string %}selected{% endif %}>
@@ -132,8 +134,9 @@
         <div x-show="ipMode === 'static'" x-transition x-cloak class="space-y-4">
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
+                    <label for="mgmt-ip-address" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
                     <input type="text"
+                           id="mgmt-ip-address"
                            name="ip_address"
                            value="{{ mgmt_form.ip_address if mgmt_form and mgmt_form.ip_mode == 'static' else '' }}"
                            placeholder="192.168.1.100"
@@ -142,8 +145,9 @@
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">IPv4 address for ONT management</p>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subnet Mask</label>
+                    <label for="mgmt-subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subnet Mask</label>
                     <input type="text"
+                           id="mgmt-subnet"
                            name="subnet"
                            value="{{ mgmt_form.subnet if mgmt_form and mgmt_form.ip_mode == 'static' else '' }}"
                            placeholder="255.255.255.0"
@@ -151,8 +155,9 @@
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Network subnet mask</p>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Gateway</label>
+                    <label for="mgmt-gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Gateway</label>
                     <input type="text"
+                           id="mgmt-gateway"
                            name="gateway"
                            value="{{ mgmt_form.gateway if mgmt_form and mgmt_form.ip_mode == 'static' else '' }}"
                            placeholder="192.168.1.1"

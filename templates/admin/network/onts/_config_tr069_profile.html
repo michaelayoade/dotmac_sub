@@ -37,7 +37,9 @@
           data-loading-label="Binding..."
           class="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
         <div class="flex-1 min-w-64">
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">TR-069 Server Profile</label>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                TR-069 Server Profile <span class="text-red-500" aria-hidden="true">*</span>
+            </label>
             <select name="profile_id"
                     required
                     {% if not tr069_profiles %}disabled{% endif %}

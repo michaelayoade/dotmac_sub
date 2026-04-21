@@ -62,6 +62,7 @@
                     <form method="POST" action="/admin/network/olts/{{ olt_id }}/authorize-ont"
                           hx-post="/admin/network/olts/{{ olt_id }}/authorize-ont"
                           hx-swap="none"
+                          hx-disabled-elt="button[type='submit']"
                           class="inline-flex items-center gap-2"
                           x-data="{ force: false, submitting: false }"
                           @htmx:before-request="submitting = true"
