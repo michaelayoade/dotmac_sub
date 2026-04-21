@@ -571,21 +571,11 @@ def get_tr069_profiles_for_ont_with_meta(
             ok=True, message="", data=[], source="none", fetched_at=None
         )
 
-    olt_device_id = getattr(ont, "olt_device_id", None)
-    if not olt_device_id:
-        return ObservedReadResult(
-            ok=False,
-            message="No OLT is assigned to this ONT",
-            data=[],
-            source="none",
-            fetched_at=None,
-        )
-
-    olt = db.get(OLTDevice, olt_device_id)
+    olt = resolve_ont_connected_olt(db, ont)
     if not olt:
         return ObservedReadResult(
             ok=False,
-            message="OLT not found",
+            message="No OLT is assigned to this ONT",
             data=[],
             source="none",
             fetched_at=None,

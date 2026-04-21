@@ -2,23 +2,19 @@
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import OLTDevice, OntAssignment
+from app.models.network import OntAssignment
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
 )
-from app.services.web_network_ont_actions.diagnostics import fetch_iphost_config_with_meta
-
-logger = logging.getLogger(__name__)
 
 
 def _enum_value(value: object) -> str | None:
@@ -155,41 +151,24 @@ def _desired_config_context(
 
 def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build management IP config context for the ONT detail partial."""
-    from app.services import web_network_onts as web_network_onts_service
-    from app.services.network import ont_web_forms as ont_web_forms_service
+    shared = _load_ont_detail_config_state(db, ont_id)
+    observed_state = shared["observed_state"]
 
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    iphost_result = fetch_iphost_config_with_meta(db, ont_id)
-    ok, msg, config = (
-        iphost_result.ok,
-        iphost_result.message,
-        dict(iphost_result.data or {}),
-    )
-    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    profiles_result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
-        db, ont
-    )
-    tr069_profiles = list(profiles_result.data or [])
-    tr069_profiles_error = (
-        profiles_result.message
-        if (not profiles_result.ok or profiles_result.stale)
-        else None
-    )
     context = {
-        "ont": ont,
-        "iphost_config": config,
-        "iphost_ok": ok,
-        "iphost_msg": msg,
-        "iphost_freshness": iphost_result.freshness,
-        "initial_iphost_form": ont_web_forms_service.initial_iphost_form(ont, config),
-        "vlans": vlans,
-        "tr069_profiles": tr069_profiles,
-        "tr069_profiles_error": tr069_profiles_error,
-        "tr069_profiles_freshness": profiles_result.freshness,
+        "ont": shared["ont"],
+        "iphost_config": observed_state["iphost_config"],
+        "iphost_ok": True,
+        "iphost_msg": observed_state["iphost_result"].message,
+        "iphost_freshness": observed_state["iphost_result"].freshness,
+        "initial_iphost_form": observed_state["initial_form"],
+        "vlans": observed_state["vlans"],
+        "tr069_profiles": observed_state["tr069_profiles"],
+        "tr069_profiles_error": observed_state["tr069_profiles_error"],
+        "tr069_profiles_freshness": observed_state["profiles_result"].freshness,
     }
     context.update(
         _desired_config_context(
-            ont,
+            shared["ont"],
             ont_plan={},
             initial_iphost_form=context["initial_iphost_form"],
         )
@@ -238,9 +217,7 @@ def _load_unified_observed_state(db: Session, ont: object) -> dict[str, object]:
     )
     iphost_config = dict(getattr(iphost_result, "data", {}) or {})
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    olt = getattr(ont, "olt_device", None)
-    if olt is None and getattr(ont, "olt_device_id", None):
-        olt = db.get(OLTDevice, getattr(ont, "olt_device_id"))
+    olt = web_network_onts_service.resolve_ont_connected_olt(db, ont)
     profiles_result = (
         get_cached_tr069_profiles_for_olt(olt)
         if olt is not None
@@ -263,7 +240,6 @@ def _load_unified_observed_state(db: Session, ont: object) -> dict[str, object]:
         ),
         "initial_form": initial_form,
     }
-
 
 def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
     assignment = db.scalars(
@@ -290,6 +266,30 @@ def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
             ).strip()
         }
     return {}
+
+
+def _load_ont_detail_config_state(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services import web_network_core_devices_views as core_devices_views
+
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    linked_tr069 = _resolve_linked_tr069_device(db, ont)
+    observed_state = _load_unified_observed_state(db, ont)
+    detail_payload = core_devices_views.ont_detail_page_data(db, ont_id)
+    detail_payload = detail_payload if isinstance(detail_payload, dict) else {}
+    subscriber_info = detail_payload.get("subscriber_info", {})
+    if not isinstance(subscriber_info, dict) or not subscriber_info:
+        subscriber_info = _load_subscriber_info(db, ont)
+    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    acs_observed_intent = _build_db_observed_service_intent(linked_tr069, ont)
+    return {
+        "ont": ont,
+        "linked_tr069": linked_tr069,
+        "observed_state": observed_state,
+        "detail_payload": detail_payload,
+        "subscriber_info": subscriber_info,
+        "ont_plan": ont_plan,
+        "acs_observed_intent": acs_observed_intent,
+    }
 
 
 def _build_db_observed_service_intent(linked_tr069: object, ont: object) -> dict[str, object]:
@@ -377,18 +377,19 @@ def _unified_summary_context(
 
 def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build context for the unified ONT configuration partial from DB state."""
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    linked_tr069 = _resolve_linked_tr069_device(db, ont)
-    observed_state = _load_unified_observed_state(db, ont)
-    subscriber_info = _load_subscriber_info(db, ont)
-    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
+    shared = _load_ont_detail_config_state(db, ont_id)
+    ont = shared["ont"]
+    linked_tr069 = shared["linked_tr069"]
+    observed_state = shared["observed_state"]
+    subscriber_info = shared["subscriber_info"]
+    ont_plan = shared["ont_plan"]
     service_intent = service_intent_ui_adapter.build_ont_service_intent(
         ont,
         db=db,
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )
-    acs_observed_intent = _build_db_observed_service_intent(linked_tr069, ont)
+    acs_observed_intent = shared["acs_observed_intent"]
 
     context = {
         "ont": ont,
@@ -427,13 +428,11 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_onts as web_network_onts_service
-
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
-    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-        db, ont_id=ont_id
-    )
+    shared = _load_ont_detail_config_state(db, ont_id)
+    ont = shared["ont"]
+    ont_plan = shared["ont_plan"]
+    observed_intent = shared["acs_observed_intent"]
+    observed_state = shared["observed_state"]
     observed = observed_intent.get("observed", {})
     wan = observed.get("wan", {}) if isinstance(observed, dict) else {}
     context = {
@@ -444,7 +443,7 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "acs_observed_intent": observed_intent,
         "wan_info": wan,
         "current_pppoe_user": (wan or {}).get("pppoe_username"),
-        "vlans": web_network_onts_service.get_vlans_for_ont(db, ont),
+        "vlans": observed_state["vlans"],
     }
     context.update(_desired_config_context(ont, ont_plan=ont_plan))
     desired_wan = context["desired_wan_config"]
@@ -455,11 +454,10 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
-    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-        db, ont_id=ont_id
-    )
+    shared = _load_ont_detail_config_state(db, ont_id)
+    ont = shared["ont"]
+    ont_plan = shared["ont_plan"]
+    observed_intent = shared["acs_observed_intent"]
     observed = observed_intent.get("observed", {})
     wireless = observed.get("wifi", {}) if isinstance(observed, dict) else {}
     context = {
@@ -477,25 +475,19 @@ def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_onts as web_network_onts_service
-
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    profiles_result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
-        db, ont
-    )
-    tr069_profiles = list(profiles_result.data or [])
-    tr069_profiles_error = (
-        profiles_result.message
-        if (not profiles_result.ok or profiles_result.stale)
-        else None
-    )
+    shared = _load_ont_detail_config_state(db, ont_id)
+    ont = shared["ont"]
+    observed_state = shared["observed_state"]
+    profiles_result = observed_state["profiles_result"]
     current_profile, current_profile_error = (
         service_intent_ui_adapter.resolve_effective_tr069_profile(db, ont=ont)
     )
     return {
         "ont_id": ont_id,
-        "tr069_profiles": tr069_profiles,
-        "tr069_profiles_error": tr069_profiles_error or current_profile_error,
+        "tr069_profiles": observed_state["tr069_profiles"],
+        "tr069_profiles_error": (
+            observed_state["tr069_profiles_error"] or current_profile_error
+        ),
         "tr069_profiles_freshness": profiles_result.freshness,
         "current_profile": getattr(current_profile, "profile_name", None)
         or getattr(current_profile, "name", None),
@@ -504,11 +496,10 @@ def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    ont_plan = service_intent_ui_adapter.load_ont_plan_for_ont(db, ont_id=ont_id)
-    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-        db, ont_id=ont_id
-    )
+    shared = _load_ont_detail_config_state(db, ont_id)
+    ont = shared["ont"]
+    ont_plan = shared["ont_plan"]
+    observed_intent = shared["acs_observed_intent"]
     observed = observed_intent.get("observed", {})
     observed = observed if isinstance(observed, dict) else {}
     context = {

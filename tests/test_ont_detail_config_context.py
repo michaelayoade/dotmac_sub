@@ -85,7 +85,6 @@ def test_unified_config_context_does_not_perform_live_reads(
     def fail_live_read(*_args, **_kwargs):
         raise AssertionError("unified config overview must not perform live reads")
 
-    monkeypatch.setattr(context_builders, "fetch_iphost_config_with_meta", fail_live_read)
     monkeypatch.setattr(
         web_network_onts_service,
         "get_tr069_profiles_for_ont_with_meta",
@@ -174,3 +173,126 @@ def test_unified_config_context_preserves_cached_freshness_and_summaries(
     assert context["wan_summary"]["wan_ip"] == "41.0.0.10"
     assert context["wan_summary"]["status"] == "connected"
     assert context["wifi_summary"]["ssid"] == "DB-SSID"
+
+
+def test_detail_tab_contexts_share_db_observed_state(db_session, monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from app.models.network import OLTDevice, OntUnit
+    from app.services import service_intent_ui_adapter
+    from app.services.olt_observed_state_adapter import ObservedReadResult
+    from app.services.web_network_ont_actions import context_builders
+
+    fetched_at = datetime(2026, 4, 21, 11, 0, tzinfo=UTC)
+    olt = OLTDevice(name="CTX-TABS-OLT")
+    ont = OntUnit(
+        serial_number="CTX-TABS-001",
+        olt_device=olt,
+        pppoe_username="shared-user",
+        wifi_ssid="Shared-SSID",
+        lan_gateway_ip="192.168.55.1",
+        lan_subnet_mask="255.255.255.0",
+        observed_wan_ip="41.0.0.20",
+        observed_pppoe_status="connected",
+    )
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    def fail_live_read(*_args, **_kwargs):
+        raise AssertionError("detail tabs must use shared DB/cached observed state")
+
+    monkeypatch.setattr(
+        service_intent_ui_adapter.service_intent_ui_adapter,
+        "load_acs_observed_service_intent",
+        fail_live_read,
+    )
+    monkeypatch.setattr(
+        "app.services.olt_observed_state_adapter.get_cached_iphost_config",
+        lambda _ont: ObservedReadResult(
+            ok=True,
+            message="Using cached IPHOST configuration.",
+            data={"mode": "static", "ip_address": "10.30.0.44"},
+            source="db",
+            fetched_at=fetched_at,
+            stale=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.olt_observed_state_adapter.get_cached_tr069_profiles_for_olt",
+        lambda _olt: ObservedReadResult(
+            ok=True,
+            message="Using cached TR-069 profile list.",
+            data=[SimpleNamespace(profile_id=7, name="ACS Primary")],
+            source="db",
+            fetched_at=fetched_at,
+            stale=True,
+        ),
+    )
+    monkeypatch.setattr(
+        service_intent_ui_adapter.service_intent_ui_adapter,
+        "resolve_effective_tr069_profile",
+        lambda *_args, **_kwargs: (None, None),
+    )
+
+    wan_context = context_builders.wan_config_context(db_session, str(ont.id))
+    wifi_context = context_builders.wifi_config_context(db_session, str(ont.id))
+    lan_context = context_builders.lan_config_context(db_session, str(ont.id))
+    tr069_context = context_builders.tr069_profile_config_context(
+        db_session, str(ont.id)
+    )
+    iphost_context = context_builders.iphost_config_context(db_session, str(ont.id))
+
+    assert wan_context["wan_info"]["pppoe_username"] == "shared-user"
+    assert wan_context["wan_info"]["wan_ip"] == "41.0.0.20"
+    assert wifi_context["wireless_info"]["ssid"] == "Shared-SSID"
+    assert lan_context["lan_info"]["lan_ip"] == "192.168.55.1"
+    assert tr069_context["tr069_profiles"][0].name == "ACS Primary"
+    assert tr069_context["tr069_profiles_freshness"]["fetched_at"] == fetched_at
+    assert iphost_context["iphost_config"]["ip_address"] == "10.30.0.44"
+    assert iphost_context["iphost_freshness"]["stale"] is True
+
+
+def test_tr069_profiles_resolve_olt_from_active_assignment(db_session, monkeypatch) -> None:
+    from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+    from app.services import web_network_onts as web_network_onts_service
+    from app.services.olt_observed_state_adapter import ObservedReadResult
+
+    olt = OLTDevice(name="OLT-ASSIGNMENT-ONLY", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(olt_id=olt.id, name="0/1/7", is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(serial_number="ASSIGNMENT-ONLY-ONT", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.olt_observed_state_adapter.get_tr069_profiles_for_olt",
+        lambda _db, resolved_olt: ObservedReadResult(
+            ok=True,
+            message="Using resolved assignment OLT.",
+            data=[SimpleNamespace(profile_id=11, name=resolved_olt.name)],
+            source="db",
+            fetched_at=None,
+            stale=False,
+        ),
+    )
+
+    result = web_network_onts_service.get_tr069_profiles_for_ont_with_meta(
+        db_session, ont
+    )
+
+    assert result.ok is True
+    assert result.data[0].name == "OLT-ASSIGNMENT-ONLY"
