@@ -108,6 +108,8 @@ def execute_saga_task(
             item = session.get(BulkProvisioningItem, bulk_item_id)
             if item is not None:
                 effective_correlation_key = item.correlation_key
+        if effective_correlation_key is None:
+            effective_correlation_key = f"saga:{saga_name}:{ont_id}"
 
         # Build context
         context = SagaContext(
@@ -311,10 +313,7 @@ def queue_saga_execution(
     Returns:
         Dictionary with queued task info.
     """
-    from app.services.network.ont_provisioning.saga import generate_saga_execution_id
-
-    execution_id = generate_saga_execution_id()
-    correlation_key = f"saga:{saga_name}:{ont_id}:{execution_id}"
+    correlation_key = f"saga:{saga_name}:{ont_id}"
 
     result = enqueue_task(
         "app.tasks.saga.execute_saga",

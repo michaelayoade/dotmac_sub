@@ -141,6 +141,7 @@ class SagaStep:
         action: Function to execute the step.
         compensate: Optional function to undo the step on rollback.
         critical: If True, failure triggers compensation of prior steps.
+        resumable: If True, a prior durable success can skip re-execution.
         description: Human-readable description of what the step does.
     """
 
@@ -148,6 +149,7 @@ class SagaStep:
     action: StepAction
     compensate: CompensateAction | None = None
     critical: bool = True
+    resumable: bool = False
     description: str = ""
 
 

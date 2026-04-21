@@ -9,8 +9,18 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -25,6 +35,17 @@ class SagaExecutionStatus(str, enum.Enum):
     failed = "failed"
     compensating = "compensating"
     compensation_failed = "compensation_failed"
+
+
+class ProvisioningStepExecutionStatus(str, enum.Enum):
+    """Status of an individual saga step execution."""
+
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    skipped = "skipped"
+    compensated = "compensated"
 
 
 class SagaExecution(Base):
@@ -138,10 +159,89 @@ class SagaExecution(Base):
     # Relationships
     ont_unit = relationship("OntUnit", foreign_keys=[ont_unit_id])
     olt_device = relationship("OLTDevice", foreign_keys=[olt_device_id])
+    step_executions = relationship(
+        "ProvisioningStepExecution",
+        back_populates="saga_execution",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         return (
             f"<SagaExecution {self.saga_name} "
             f"status={self.status.value} "
             f"id={self.id}>"
+        )
+
+
+class ProvisioningStepExecution(Base):
+    """Durable checkpoint for a single saga step attempt."""
+
+    __tablename__ = "provisioning_step_executions"
+    __table_args__ = (
+        UniqueConstraint(
+            "saga_execution_id",
+            "step_name",
+            name="uq_provisioning_step_execution_per_attempt",
+        ),
+        Index(
+            "ix_provisioning_step_executions_correlation_step",
+            "correlation_key",
+            "saga_name",
+            "step_name",
+        ),
+        Index(
+            "ix_provisioning_step_executions_status",
+            "status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    saga_execution_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("saga_executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    saga_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    correlation_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    step_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[ProvisioningStepExecutionStatus] = mapped_column(
+        Enum(
+            ProvisioningStepExecutionStatus,
+            name="provisioningstepexecutionstatus",
+            create_constraint=False,
+        ),
+        nullable=False,
+        default=ProvisioningStepExecutionStatus.pending,
+    )
+    result_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    saga_execution = relationship("SagaExecution", back_populates="step_executions")
+
+    def __repr__(self) -> str:
+        return (
+            f"<ProvisioningStepExecution {self.step_name} "
+            f"status={self.status.value} "
+            f"execution_id={self.saga_execution_id}>"
         )

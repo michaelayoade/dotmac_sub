@@ -17,11 +17,18 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.saga_execution import SagaExecution, SagaExecutionStatus
+from app.models.saga_execution import (
+    ProvisioningStepExecution,
+    ProvisioningStepExecutionStatus,
+    SagaExecution,
+    SagaExecutionStatus,
+)
 from app.services.network.ont_provisioning.saga.types import (
+    CompensationRecord,
     SagaContext,
     SagaDefinition,
     SagaResult,
+    StepExecutionRecord,
 )
 
 if TYPE_CHECKING:
@@ -63,7 +70,7 @@ class SagaExecutionRepository:
             pass
 
         if context.olt is not None:
-            olt_device_id = context.olt.id
+            olt_device_id = getattr(context.olt, "id", None)
 
         execution = SagaExecution(
             id=UUID(context.saga_execution_id),
@@ -360,5 +367,182 @@ class SagaExecutionRepository:
         return {status.value: count for status, count in results}
 
 
+class SagaStepExecutionRepository:
+    """Repository for durable per-step saga checkpoints."""
+
+    def mark_running(
+        self,
+        db: Session,
+        *,
+        execution_id: str | UUID,
+        saga_name: str,
+        correlation_key: str | None,
+        step_name: str,
+        step_order: int,
+    ) -> ProvisioningStepExecution:
+        step_execution = self._get_or_create(
+            db,
+            execution_id=execution_id,
+            saga_name=saga_name,
+            correlation_key=correlation_key,
+            step_name=step_name,
+            step_order=step_order,
+        )
+        step_execution.status = ProvisioningStepExecutionStatus.running
+        step_execution.started_at = datetime.now(UTC)
+        step_execution.completed_at = None
+        step_execution.duration_ms = None
+        step_execution.error_message = None
+        step_execution.result_data = None
+        db.flush()
+        return step_execution
+
+    def mark_completed(
+        self,
+        db: Session,
+        *,
+        execution_id: str | UUID,
+        saga_name: str,
+        correlation_key: str | None,
+        step_name: str,
+        step_order: int,
+        record: StepExecutionRecord,
+    ) -> ProvisioningStepExecution:
+        step_execution = self._get_or_create(
+            db,
+            execution_id=execution_id,
+            saga_name=saga_name,
+            correlation_key=correlation_key,
+            step_name=step_name,
+            step_order=step_order,
+        )
+        if record.skipped:
+            step_execution.status = ProvisioningStepExecutionStatus.skipped
+        elif record.success:
+            step_execution.status = ProvisioningStepExecutionStatus.succeeded
+        else:
+            step_execution.status = ProvisioningStepExecutionStatus.failed
+        step_execution.completed_at = record.executed_at
+        if step_execution.started_at is None:
+            step_execution.started_at = record.executed_at
+        step_execution.duration_ms = record.duration_ms
+        step_execution.result_data = record.to_dict()
+        step_execution.error_message = None if record.success or record.skipped else record.message
+        db.flush()
+        return step_execution
+
+    def mark_compensated(
+        self,
+        db: Session,
+        *,
+        execution_id: str | UUID,
+        saga_name: str,
+        correlation_key: str | None,
+        step_name: str,
+        step_order: int,
+        record: CompensationRecord,
+    ) -> ProvisioningStepExecution:
+        step_execution = self._get_or_create(
+            db,
+            execution_id=execution_id,
+            saga_name=saga_name,
+            correlation_key=correlation_key,
+            step_name=step_name,
+            step_order=step_order,
+        )
+        step_execution.status = (
+            ProvisioningStepExecutionStatus.compensated
+            if record.success
+            else ProvisioningStepExecutionStatus.failed
+        )
+        step_execution.completed_at = datetime.now(UTC)
+        if step_execution.started_at is None:
+            step_execution.started_at = step_execution.completed_at
+        step_execution.duration_ms = record.duration_ms
+        step_execution.result_data = record.to_dict()
+        step_execution.error_message = record.error or (
+            None if record.success else record.message
+        )
+        db.flush()
+        return step_execution
+
+    def get_resumable_steps(
+        self,
+        db: Session,
+        *,
+        correlation_key: str | None,
+        saga_name: str,
+    ) -> dict[str, ProvisioningStepExecution]:
+        """Return latest durable successful/skipped steps for resume."""
+        if not correlation_key:
+            return {}
+
+        stmt = (
+            select(ProvisioningStepExecution)
+            .where(
+                ProvisioningStepExecution.correlation_key == correlation_key,
+                ProvisioningStepExecution.saga_name == saga_name,
+            )
+            .order_by(
+                ProvisioningStepExecution.step_name.asc(),
+                ProvisioningStepExecution.completed_at.desc().nullslast(),
+                ProvisioningStepExecution.updated_at.desc(),
+            )
+        )
+
+        latest_by_step: dict[str, ProvisioningStepExecution] = {}
+        for row in db.scalars(stmt):
+            if row.step_name in latest_by_step:
+                continue
+            latest_by_step[row.step_name] = row
+
+        resumable_statuses = {
+            ProvisioningStepExecutionStatus.succeeded,
+            ProvisioningStepExecutionStatus.skipped,
+        }
+        return {
+            step_name: row
+            for step_name, row in latest_by_step.items()
+            if row.status in resumable_statuses
+        }
+
+    def _get_or_create(
+        self,
+        db: Session,
+        *,
+        execution_id: str | UUID,
+        saga_name: str,
+        correlation_key: str | None,
+        step_name: str,
+        step_order: int,
+    ) -> ProvisioningStepExecution:
+        execution_uuid = UUID(execution_id) if isinstance(execution_id, str) else execution_id
+        if db.get(SagaExecution, execution_uuid) is None:
+            raise LookupError(f"Saga execution {execution_uuid} does not exist")
+        stmt = select(ProvisioningStepExecution).where(
+            ProvisioningStepExecution.saga_execution_id == execution_uuid,
+            ProvisioningStepExecution.step_name == step_name,
+        )
+        step_execution = db.scalars(stmt).first()
+        if step_execution is not None:
+            step_execution.step_order = step_order
+            step_execution.correlation_key = correlation_key
+            step_execution.saga_name = saga_name
+            return step_execution
+
+        step_execution = ProvisioningStepExecution(
+            saga_execution_id=execution_uuid,
+            saga_name=saga_name,
+            correlation_key=correlation_key,
+            step_name=step_name,
+            step_order=step_order,
+            status=ProvisioningStepExecutionStatus.pending,
+        )
+        db.add(step_execution)
+        db.flush()
+        return step_execution
+
+
 # Singleton instance
 saga_executions = SagaExecutionRepository()
+saga_step_executions = SagaStepExecutionRepository()

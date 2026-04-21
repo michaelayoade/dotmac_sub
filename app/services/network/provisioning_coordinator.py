@@ -379,6 +379,7 @@ class ProvisioningCoordinator:
             SagaExecutor,
             SagaStep,
             generate_saga_execution_id,
+            saga_executions,
         )
 
         def _step_result(name: str, ok: bool, *, critical: bool = False) -> StepResult:
@@ -422,18 +423,21 @@ class ProvisioningCoordinator:
                 action=_verify_service_ports,
                 compensate=_compensate_service_ports,
                 critical=False,
+                resumable=True,
                 description="Verify service ports after OLT registration",
             ),
             SagaStep(
                 name="management_ip",
                 action=_management_ip,
                 critical=False,
+                resumable=True,
                 description="Verify or configure management IP",
             ),
             SagaStep(
                 name="tr069_binding",
                 action=_tr069_binding,
                 critical=False,
+                resumable=True,
                 description="Bind TR-069 server profile",
             ),
         ]
@@ -444,12 +448,14 @@ class ProvisioningCoordinator:
                         name="acs_discovery",
                         action=_acs_discovery,
                         critical=False,
+                        resumable=True,
                         description="Queue ACS discovery wait",
                     ),
                     SagaStep(
                         name="acs_config_push",
                         action=_acs_config_push,
                         critical=False,
+                        resumable=True,
                         description="Queue ACS config push",
                     ),
                 ]
@@ -468,8 +474,19 @@ class ProvisioningCoordinator:
             ont=self._get_ont(self._result.ont_id),
             olt=self._get_olt(olt_id),
             initiated_by=self.initiated_by,
+            correlation_key=(
+                f"saga:coordinated_post_registration:{self._result.ont_id}"
+            ),
         )
+        saga_executions.create(self.db, saga, context)
+        saga_executions.mark_running(self.db, context.saga_execution_id)
         saga_result = SagaExecutor(saga, context).execute()
+        if hasattr(saga_result, "status"):
+            saga_executions.mark_completed(
+                self.db,
+                context.saga_execution_id,
+                saga_result,
+            )
         if saga_result.compensation_failures:
             self._result.add_step(
                 ProvisioningPhase.rollback,

@@ -182,6 +182,12 @@ from app.models.lifecycle import (  # noqa: F401
     SubscriptionLifecycleEvent,
 )
 from app.models.mrr_snapshot import MrrSnapshot  # noqa: F401
+from app.models.saga_execution import (  # noqa: F401
+    ProvisioningStepExecution,
+    ProvisioningStepExecutionStatus,
+    SagaExecution,
+    SagaExecutionStatus,
+)
 from app.models.network import (  # noqa: F401
     BulkProvisioningItem,
     BulkProvisioningItemStatus,

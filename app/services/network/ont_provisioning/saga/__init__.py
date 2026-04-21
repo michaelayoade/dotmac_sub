@@ -43,7 +43,9 @@ from app.services.network.ont_provisioning.saga.executor import (
 )
 from app.services.network.ont_provisioning.saga.persistence import (
     SagaExecutionRepository,
+    SagaStepExecutionRepository,
     saga_executions,
+    saga_step_executions,
 )
 from app.services.network.ont_provisioning.saga.types import (
     CompensationRecord,
@@ -81,7 +83,9 @@ __all__ = [
     "execute_saga",
     # Persistence
     "SagaExecutionRepository",
+    "SagaStepExecutionRepository",
     "saga_executions",
+    "saga_step_executions",
     # Pre-built Sagas
     "FULL_PROVISIONING_SAGA",
     "WIFI_SETUP_SAGA",

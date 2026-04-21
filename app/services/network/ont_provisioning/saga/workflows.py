@@ -415,6 +415,7 @@ def build_internet_provisioning_saga(
             action=_create_service_ports,
             compensate=_compensate_service_ports,
             critical=True,
+            resumable=True,
             description="Create internet service ports on OLT",
         ),
     ]
@@ -426,6 +427,7 @@ def build_internet_provisioning_saga(
                 action=_configure_management_ip,
                 compensate=None,  # Management IP removal is safe
                 critical=False,
+                resumable=True,
                 description="Configure management IP for TR-069",
             )
         )
@@ -437,6 +439,7 @@ def build_internet_provisioning_saga(
                 action=_bind_tr069,
                 compensate=None,  # TR-069 rebind is idempotent
                 critical=False,
+                resumable=True,
                 description="Bind TR-069 server profile",
             )
         )
@@ -447,6 +450,7 @@ def build_internet_provisioning_saga(
             action=_wait_tr069_bootstrap,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Queue wait for ACS discovery",
         ),
         SagaStep(
@@ -454,6 +458,7 @@ def build_internet_provisioning_saga(
             action=_apply_saved_service_config,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Apply saved WAN/WiFi/LAN config",
         ),
     ])
@@ -480,6 +485,7 @@ WIFI_SETUP_SAGA = SagaDefinition(
             action=_configure_wifi,
             compensate=None,  # WiFi config is easily re-pushed
             critical=False,
+            resumable=True,
             description="Configure WiFi SSID and password",
         ),
     ],
@@ -496,6 +502,7 @@ FULL_PROVISIONING_SAGA = SagaDefinition(
             action=_provision_with_reconciliation,
             compensate=_compensate_service_ports,  # Rollback via service port deletion
             critical=True,
+            resumable=True,
             description="Full provisioning via state reconciliation",
         ),
         SagaStep(
@@ -503,6 +510,7 @@ FULL_PROVISIONING_SAGA = SagaDefinition(
             action=_wait_tr069_bootstrap,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Queue wait for ACS discovery",
         ),
         SagaStep(
@@ -510,6 +518,7 @@ FULL_PROVISIONING_SAGA = SagaDefinition(
             action=_apply_saved_service_config,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Apply saved WAN/WiFi/LAN config",
         ),
     ],
@@ -526,6 +535,7 @@ ACS_CONFIG_SAGA = SagaDefinition(
             action=_push_pppoe_tr069,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Push PPPoE credentials via TR-069",
         ),
         SagaStep(
@@ -533,6 +543,7 @@ ACS_CONFIG_SAGA = SagaDefinition(
             action=_configure_wifi,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Configure WiFi",
         ),
         SagaStep(
@@ -540,6 +551,7 @@ ACS_CONFIG_SAGA = SagaDefinition(
             action=_configure_lan,
             compensate=None,
             critical=False,
+            resumable=True,
             description="Configure LAN/DHCP",
         ),
     ],
@@ -556,6 +568,7 @@ FIRMWARE_DOWNLOAD_SAGA = SagaDefinition(
             action=_download_firmware,
             compensate=None,
             critical=True,
+            resumable=True,
             description="Trigger ONT firmware download",
         ),
     ],
