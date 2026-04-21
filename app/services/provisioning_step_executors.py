@@ -268,6 +268,8 @@ def execute_push_tr069_wan_config(
     Config keys:
         wan_mode: WAN mode (pppoe, dhcp, bridge). Default: pppoe
         wan_vlan: WAN VLAN ID (optional)
+        wan_instance: WANConnectionDevice / PPP.Interface index (IGD / TR-181).
+            When unset, auto-discovered from the device snapshot; falls back to 1.
     """
     config = config or {}
     ont_unit_id = context.get("ont_unit_id")
@@ -315,19 +317,27 @@ def execute_push_tr069_wan_config(
         from app.services.genieacs import GenieACSError
         from app.services.network.ont_action_common import (
             build_tr069_params,
+            resolve_wan_ppp_instance,
             set_and_verify,
         )
+
+        wan_instance = config.get("wan_instance")
+        if wan_instance is None:
+            wan_instance = resolve_wan_ppp_instance(client, device_id, root)
+        wan_instance = max(1, int(wan_instance))
 
         params: dict[str, str] = {}
         if wan_mode == "pppoe":
             if root == "Device":
-                params["PPP.Interface.1.Enable"] = "true"
+                params[f"PPP.Interface.{wan_instance}.Enable"] = "true"
             else:
                 params[
-                    "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Enable"
+                    f"WANDevice.1.WANConnectionDevice.{wan_instance}"
+                    ".WANPPPConnection.1.Enable"
                 ] = "1"
                 params[
-                    "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType"
+                    f"WANDevice.1.WANConnectionDevice.{wan_instance}"
+                    ".WANPPPConnection.1.ConnectionType"
                 ] = "IP_Routed"
 
         wan_vlan = config.get("wan_vlan")
@@ -336,18 +346,28 @@ def execute_push_tr069_wan_config(
                 params["Ethernet.VLANTermination.1.VLANID"] = str(wan_vlan)
             else:
                 params[
-                    "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.X_HW_VLAN"
+                    f"WANDevice.1.WANConnectionDevice.{wan_instance}"
+                    ".WANPPPConnection.1.X_HW_VLAN"
                 ] = str(wan_vlan)
 
         if params:
             tr069_params = build_tr069_params(root, params)
             set_and_verify(client, device_id, tr069_params)
 
-        logger.info("TR-069 WAN config pushed: mode=%s, vlan=%s", wan_mode, wan_vlan)
+        logger.info(
+            "TR-069 WAN config pushed: mode=%s, vlan=%s, wan_instance=%s",
+            wan_mode,
+            wan_vlan,
+            wan_instance,
+        )
         return ProvisioningResult(
             status="ok",
             detail=f"WAN config pushed via TR-069 (mode={wan_mode}).",
-            payload={"tr069_wan_configured": True, "wan_mode": wan_mode},
+            payload={
+                "tr069_wan_configured": True,
+                "wan_mode": wan_mode,
+                "wan_instance": wan_instance,
+            },
         )
     except GenieACSError as exc:
         logger.error("TR-069 WAN config push failed: %s", exc)
@@ -378,6 +398,10 @@ def execute_push_tr069_pppoe_credentials(
     Config keys:
         pppoe_username: Override username (optional)
         pppoe_password: Override password (optional)
+        wan_instance: WANConnectionDevice index (IGD) / PPP.Interface index (TR-181).
+            When unset, auto-discovered from the device snapshot; falls back to 1.
+        wan_vlan: VLAN tag for the PPP WAN service. Required when creating a new
+            WANPPPConnection instance; ignored when the instance already exists.
     """
     config = config or {}
     ont_unit_id = context.get("ont_unit_id")
@@ -418,8 +442,16 @@ def execute_push_tr069_pppoe_credentials(
         if ont_unit_id:
             from app.services.acs_client import create_acs_config_writer
 
+            writer_kwargs: dict[str, Any] = {}
+            cfg_instance = config.get("wan_instance")
+            if cfg_instance is not None:
+                writer_kwargs["instance_index"] = max(1, int(cfg_instance))
+            cfg_vlan = config.get("wan_vlan")
+            if cfg_vlan is not None:
+                writer_kwargs["wan_vlan"] = int(cfg_vlan)
+
             result = create_acs_config_writer().set_pppoe_credentials(
-                db, ont_unit_id, username, password
+                db, ont_unit_id, username, password, **writer_kwargs
             )
         elif cpe_device_id:
             # CPE doesn't handle PPPoE — it's behind the ONT. Skip gracefully.
@@ -436,11 +468,18 @@ def execute_push_tr069_pppoe_credentials(
 
         if result.success:
             masked = username[:3] + "***" if len(username) > 3 else "***"
-            logger.info("PPPoE credentials pushed via TR-069 for user %s", masked)
+            logger.info(
+                "PPPoE credentials pushed via TR-069 for user %s (wan_instance=%s)",
+                masked,
+                writer_kwargs.get("instance_index", 1),
+            )
+            payload: dict[str, Any] = {"tr069_pppoe_pushed": True}
+            if "instance_index" in writer_kwargs:
+                payload["wan_instance"] = writer_kwargs["instance_index"]
             return ProvisioningResult(
                 status="ok",
                 detail=result.message,
-                payload={"tr069_pppoe_pushed": True},
+                payload=payload,
             )
         return ProvisioningResult(status="failed", detail=result.message)
     except Exception as exc:

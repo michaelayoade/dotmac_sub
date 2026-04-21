@@ -168,6 +168,65 @@ def read_param_from_cache(
     return node.get("_value"), node.get("_timestamp")
 
 
+def resolve_wan_ppp_instance(
+    client: Any,
+    device_id: str,
+    root: str,
+    *,
+    max_scan: int = 8,
+    default: int = 1,
+) -> int:
+    """Return the WANConnectionDevice index hosting an existing WANPPPConnection.
+
+    Scans ``WANDevice.1.WANConnectionDevice.{idx}.WANPPPConnectionNumberOfEntries``
+    for the IGD data model and returns the first index with ``>= 1`` PPP instance.
+    Falls back to ``default`` when none are found or the device cannot be fetched.
+    For the ``Device`` (TR-181) root, returns ``default`` — callers handle that
+    data model through ``PPP.Interface.{i}`` semantics separately.
+    """
+    if root != TR069_ROOT_IGD:
+        return default
+
+    from app.services.genieacs import GenieACSError  # local import avoids cycle
+
+    try:
+        device = client.get_device(device_id)
+    except (GenieACSError, Exception) as exc:  # noqa: BLE001 — best-effort
+        logger.debug(
+            "WAN PPP instance resolution: device fetch failed for %s: %s",
+            device_id,
+            exc,
+        )
+        return default
+
+    def _count(path: str) -> int:
+        node: Any = device
+        for part in path.split("."):
+            if not isinstance(node, dict):
+                return 0
+            node = node.get(part)
+            if node is None:
+                return 0
+        value = node.get("_value") if isinstance(node, dict) else node
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    declared = _count(f"{root}.WANDevice.1.WANConnectionDeviceNumberOfEntries")
+    upper = max(declared, max_scan)
+    for idx in range(1, upper + 1):
+        if (
+            _count(
+                f"{root}.WANDevice.1.WANConnectionDevice.{idx}."
+                "WANPPPConnectionNumberOfEntries"
+            )
+            >= 1
+        ):
+            return idx
+    return default
+
+
 def values_equal(cache_value: Any, requested: str) -> bool:
     """Compare a cached TR-069 value to the requested string, tolerating bools/ints.
 
