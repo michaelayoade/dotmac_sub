@@ -23,9 +23,9 @@ from app.models.network import (
     WanConnectionType,
     WanServiceType,
 )
-from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.common import apply_ordering, coerce_uuid
 from app.services.credential_crypto import encrypt_credential
+from app.services.network._common import SubscriberOwnerValidator
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,18 @@ _ALLOWED_VARS = {
     "offer_name",
     "ont_id_short",
 }
+
+
+def _default_subscriber_owner_validator() -> SubscriberOwnerValidator | None:
+    """Soft-import the subscriber bridge owner validator."""
+    try:
+        from app.services.network_subscriber_bridge import default_subscriber_validator
+    except ImportError:  # pragma: no cover - standalone deployments
+        return None
+    return default_subscriber_validator
+
+
+_owner_validator = _default_subscriber_owner_validator()
 
 
 def validate_template_string(template: str, field_name: str) -> None:
@@ -64,12 +76,11 @@ class OntProvisioningProfiles:
     ) -> None:
         if not owner_subscriber_id:
             return
-        owner = db.get(Subscriber, coerce_uuid(owner_subscriber_id))
-        if not owner or owner.category != SubscriberCategory.business:
-            raise HTTPException(
-                status_code=400,
-                detail="Provisioning profile owner must be a business account.",
-            )
+        if _owner_validator is None:
+            return
+        _owner_validator.validate_business_owner(
+            db, owner_subscriber_id=coerce_uuid(owner_subscriber_id)
+        )
 
     @staticmethod
     def _validate_profile_vlan_scope(

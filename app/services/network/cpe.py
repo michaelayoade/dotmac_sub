@@ -1,6 +1,7 @@
 """CPE device and port services."""
 
 import logging
+from typing import TYPE_CHECKING
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -24,7 +25,6 @@ from app.models.network import (
     PortVlan,
     Vlan,
 )
-from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import (
     CPEDeviceCreate,
@@ -48,8 +48,8 @@ from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
 
-_INVENTORY_SUBSCRIBER_EMAIL = "network-inventory@dotmac.local"
-_INVENTORY_SUBSCRIBER_NAME = "Network Inventory"
+if TYPE_CHECKING:
+    from app.models.subscriber import Subscriber
 
 
 def _normalize_cpe_device_type(
@@ -157,52 +157,41 @@ def _auto_register_tr069_device(
         db.flush()
 
 
-def _get_or_create_inventory_subscriber(db: Session) -> Subscriber:
-    subscriber = db.scalars(
-        select(Subscriber)
-        .where(Subscriber.email == _INVENTORY_SUBSCRIBER_EMAIL)
-        .limit(1)
-    ).first()
-    if subscriber is not None:
-        return subscriber
-
-    subscriber = Subscriber(
-        first_name="Network",
-        last_name="Inventory",
-        display_name=_INVENTORY_SUBSCRIBER_NAME,
-        email=_INVENTORY_SUBSCRIBER_EMAIL,
-        status=SubscriberStatus.active,
-        user_type=UserType.system_user,
-        is_active=True,
-        billing_enabled=False,
-    )
+def _subscriber_bridge():
+    """Soft-import the subscriber bridge for inventory-owned CPE operations."""
     try:
-        with db.begin_nested():
-            db.add(subscriber)
-            db.flush()
-        return subscriber
+        from app.services.network_subscriber_bridge import default_subscriber_validator
+    except ImportError:  # pragma: no cover - standalone deployments
+        return None
+    return default_subscriber_validator
+
+
+def _get_or_create_inventory_subscriber(db: Session) -> "Subscriber":
+    bridge = _subscriber_bridge()
+    if bridge is None:
+        raise RuntimeError("Subscriber bridge unavailable for inventory subscriber sync")
+    try:
+        return cast("Subscriber", bridge.get_or_create_inventory_subscriber(db))
     except IntegrityError:
-        subscriber = db.scalars(
-            select(Subscriber)
-            .where(Subscriber.email == _INVENTORY_SUBSCRIBER_EMAIL)
-            .limit(1)
-        ).first()
+        subscriber = bridge.get_inventory_subscriber(db)
         if subscriber is not None:
-            return subscriber
+            return cast("Subscriber", subscriber)
         raise
 
 
-def get_inventory_subscriber(db: Session) -> Subscriber | None:
-    return db.scalars(
-        select(Subscriber)
-        .where(Subscriber.email == _INVENTORY_SUBSCRIBER_EMAIL)
-        .limit(1)
-    ).first()
+def get_inventory_subscriber(db: Session) -> "Subscriber | None":
+    bridge = _subscriber_bridge()
+    if bridge is None:
+        return None
+    return cast("Subscriber | None", bridge.get_inventory_subscriber(db))
 
 
 def get_inventory_subscriber_id(db: Session) -> UUID | None:
-    subscriber = get_inventory_subscriber(db)
-    return subscriber.id if subscriber is not None else None
+    bridge = _subscriber_bridge()
+    if bridge is None:
+        return None
+    subscriber_id = bridge.get_inventory_subscriber_id(db)
+    return cast("UUID | None", subscriber_id)
 
 
 def _record_ont_inventory_alert(

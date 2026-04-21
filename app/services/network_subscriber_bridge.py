@@ -17,10 +17,12 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session, aliased
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import Select
 
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus, UserType
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,22 @@ class DefaultSubscriberValidator:
             str(subscriber_id),
             str(service_address_id) if service_address_id is not None else None,
         )
+
+    def validate_business_owner(
+        self,
+        db: Session,
+        *,
+        owner_subscriber_id: object | None,
+    ) -> None:
+        """Validate that a network owner reference points to a business account."""
+        if owner_subscriber_id is None:
+            return
+        owner = db.get(Subscriber, owner_subscriber_id)
+        if not owner or owner.category != SubscriberCategory.business:
+            raise HTTPException(
+                status_code=400,
+                detail="Provisioning profile owner must be a business account.",
+            )
 
     def augment_ont_search(
         self,
@@ -97,6 +115,59 @@ class DefaultSubscriberValidator:
             "subscriber_code": getattr(subscriber, "external_code", "") or "",
             "subscriber_name": getattr(subscriber, "name", "") or "",
         }
+
+    def get_or_create_inventory_subscriber(self, db: Session) -> Subscriber:
+        """Return the synthetic subscriber used for inventory-owned CPE records."""
+        inventory_email = "network-inventory@dotmac.local"
+        subscriber = (
+            db.query(Subscriber)
+            .filter(Subscriber.email == inventory_email)
+            .limit(1)
+            .first()
+        )
+        if subscriber is not None:
+            return subscriber
+
+        subscriber = Subscriber(
+            first_name="Network",
+            last_name="Inventory",
+            display_name="Network Inventory",
+            email=inventory_email,
+            status=SubscriberStatus.active,
+            user_type=UserType.system_user,
+            is_active=True,
+            billing_enabled=False,
+        )
+        try:
+            with db.begin_nested():
+                db.add(subscriber)
+                db.flush()
+            return subscriber
+        except IntegrityError:
+            subscriber = (
+                db.query(Subscriber)
+                .filter(Subscriber.email == inventory_email)
+                .limit(1)
+                .first()
+            )
+            if subscriber is not None:
+                return subscriber
+            raise
+
+    def get_inventory_subscriber(self, db: Session) -> Subscriber | None:
+        """Return the synthetic inventory subscriber when it already exists."""
+        inventory_email = "network-inventory@dotmac.local"
+        return (
+            db.query(Subscriber)
+            .filter(Subscriber.email == inventory_email)
+            .limit(1)
+            .first()
+        )
+
+    def get_inventory_subscriber_id(self, db: Session) -> object | None:
+        """Return the synthetic inventory subscriber identifier when present."""
+        subscriber = self.get_inventory_subscriber(db)
+        return subscriber.id if subscriber is not None else None
 
 
 default_subscriber_validator = DefaultSubscriberValidator()

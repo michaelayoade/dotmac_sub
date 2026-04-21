@@ -32,6 +32,7 @@ __all__ = [
     "_apply_pagination",
     "_validate_enum",
     "NasTarget",
+    "SubscriberOwnerValidator",
     "SubscriberTemplateContextProvider",
     "SubscriberValidator",
     "decode_huawei_hex_serial",
@@ -79,6 +80,19 @@ class SubscriberValidator(Protocol):
         Implementations that don't support subscriber search may return the
         statement unchanged and an empty sequence.
         """
+        ...
+
+
+class SubscriberOwnerValidator(Protocol):
+    """Bridge for network services that need business-owner subscriber checks."""
+
+    def validate_business_owner(
+        self,
+        db: Session,
+        *,
+        owner_subscriber_id: object | None,
+    ) -> None:
+        """Validate that the supplied owner is a valid business subscriber."""
         ...
 
 
