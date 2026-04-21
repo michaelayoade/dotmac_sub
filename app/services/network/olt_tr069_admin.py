@@ -1,9 +1,9 @@
 """TR-069 admin helpers for OLT web flows.
 
 This module owns ACS resolution, TR-069 profile matching/creation, ACS
-propagation, and TR-069 profile admin actions. `web_network_olts.py` keeps
-thin wrappers for compatibility so existing routes and tests can continue to
-patch the same public names.
+propagation, and TR-069 profile admin actions. The active web entrypoints live
+in the split OLT admin routers, while tests and services patch these public
+helpers directly.
 """
 
 from __future__ import annotations

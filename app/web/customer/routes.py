@@ -991,9 +991,16 @@ def customer_contacts(
 @router.post("/contacts", response_class=HTMLResponse)
 def customer_contacts_create(
     request: Request,
-    full_name: str = Form(...),
+    full_name: str | None = Form(None),
     phone: str | None = Form(None),
     email: str | None = Form(None),
+    whatsapp: str | None = Form(None),
+    facebook: str | None = Form(None),
+    instagram: str | None = Form(None),
+    x_handle: str | None = Form(None),
+    telegram: str | None = Form(None),
+    linkedin: str | None = Form(None),
+    other_social: str | None = Form(None),
     relationship: str | None = Form(None),
     contact_type: str | None = Form("general"),
     is_authorized: bool = Form(False),
@@ -1011,6 +1018,13 @@ def customer_contacts_create(
         full_name=full_name,
         phone=phone,
         email=email,
+        whatsapp=whatsapp,
+        facebook=facebook,
+        instagram=instagram,
+        x_handle=x_handle,
+        telegram=telegram,
+        linkedin=linkedin,
+        other_social=other_social,
         relationship=relationship,
         contact_type=contact_type,
         is_authorized=is_authorized,
@@ -1051,9 +1065,17 @@ def customer_contacts_create(
 def customer_contacts_update(
     request: Request,
     contact_id: str,
-    full_name: str = Form(...),
+    intent: str | None = Form(None),
+    full_name: str | None = Form(None),
     phone: str | None = Form(None),
     email: str | None = Form(None),
+    whatsapp: str | None = Form(None),
+    facebook: str | None = Form(None),
+    instagram: str | None = Form(None),
+    x_handle: str | None = Form(None),
+    telegram: str | None = Form(None),
+    linkedin: str | None = Form(None),
+    other_social: str | None = Form(None),
     relationship: str | None = Form(None),
     contact_type: str | None = Form("general"),
     is_authorized: bool = Form(False),
@@ -1067,10 +1089,44 @@ def customer_contacts_update(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
+    if intent == "delete":
+        try:
+            customer_portal_contacts_service.delete_contact(db, customer, contact_id)
+        except ValueError as exc:
+            return templates.TemplateResponse(
+                "customer/contacts/index.html",
+                {
+                    "request": request,
+                    "customer": customer,
+                    **customer_portal_contacts_service.get_contacts_page(db, customer),
+                    "error": str(exc),
+                    "active_page": "contacts",
+                },
+                status_code=400,
+            )
+
+        return templates.TemplateResponse(
+            "customer/contacts/index.html",
+            {
+                "request": request,
+                "customer": customer,
+                **customer_portal_contacts_service.get_contacts_page(db, customer),
+                "success": "Contact deleted.",
+                "active_page": "contacts",
+            },
+        )
+
     form = customer_portal_contacts_service.normalize_contact_form(
         full_name=full_name,
         phone=phone,
         email=email,
+        whatsapp=whatsapp,
+        facebook=facebook,
+        instagram=instagram,
+        x_handle=x_handle,
+        telegram=telegram,
+        linkedin=linkedin,
+        other_social=other_social,
         relationship=relationship,
         contact_type=contact_type,
         is_authorized=is_authorized,

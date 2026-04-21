@@ -45,6 +45,24 @@ def _normalize_timestamp(value: datetime | None) -> datetime | None:
     return value.replace(tzinfo=UTC)
 
 
+def resolve_effective_last_seen_at(
+    ont: OntUnit | object,
+    *,
+    acs_last_inform_at: datetime | None = None,
+) -> datetime | None:
+    effective_inform = (
+        acs_last_inform_at
+        if acs_last_inform_at is not None
+        else getattr(ont, "acs_last_inform_at", None)
+    )
+    candidates = [
+        _normalize_timestamp(getattr(ont, "last_seen_at", None)),
+        _normalize_timestamp(effective_inform),
+    ]
+    present = [value for value in candidates if value is not None]
+    return max(present) if present else None
+
+
 def _normalize_olt_status(value: OnuOnlineStatus | str | None) -> OnuOnlineStatus:
     if isinstance(value, OnuOnlineStatus):
         return value

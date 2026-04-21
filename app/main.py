@@ -275,7 +275,7 @@ def _log_zabbix_startup_health() -> None:
             "configured": health.get("configured"),
             "available": health.get("available"),
             "api_url": health.get("api_url"),
-            "message": health.get("message"),
+            "status_message": health.get("message"),
         },
     )
 

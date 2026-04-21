@@ -1,9 +1,9 @@
 """SNMP-driven OLT/ONU telemetry sync helpers.
 
 This module owns vendor-aware SNMP walks and ONT row reconciliation logic for
-bulk OLT telemetry sync and targeted post-authorization sync. `web_network_olts.py`
-keeps thin wrappers so existing callers and tests continue to use the same
-public entrypoints while the heavy sync implementation lives here.
+bulk OLT telemetry sync and targeted post-authorization sync. The active web
+entrypoints live in the split OLT admin routers while the heavy sync
+implementation stays here.
 """
 
 from __future__ import annotations

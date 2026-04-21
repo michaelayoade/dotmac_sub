@@ -310,6 +310,7 @@ def test_ont_detail_page_data_uses_recent_acs_inform_for_effective_online_status
     assert payload["signal_info"]["online_status_source"] == "acs"
     assert payload["signal_info"]["olt_status"] == "offline"
     assert payload["signal_info"]["acs_status"] == "online"
+    assert payload["signal_info"]["last_seen_at"] == payload["signal_info"]["acs_last_inform_at"]
 
 
 def test_ont_detail_page_data_blanks_unknown_online_status(db_session):

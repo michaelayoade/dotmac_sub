@@ -9,16 +9,26 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber, SubscriberContact
-from app.services.customer_portal_context import resolve_customer_account
+from app.services.customer_portal_context import (
+    resolve_allowed_subscriber_ids,
+    resolve_customer_account,
+)
 
 CONTACT_TYPES = ("general", "billing", "technical", "installation", "emergency")
 
 
 @dataclass(frozen=True)
 class ContactForm:
-    full_name: str
+    full_name: str | None
     phone: str | None
     email: str | None
+    whatsapp: str | None
+    facebook: str | None
+    instagram: str | None
+    x_handle: str | None
+    telegram: str | None
+    linkedin: str | None
+    other_social: str | None
     relationship: str | None
     contact_type: str
     is_authorized: bool
@@ -36,9 +46,16 @@ def _clean(value: str | None) -> str | None:
 
 def normalize_contact_form(
     *,
-    full_name: str,
+    full_name: str | None,
     phone: str | None,
     email: str | None,
+    whatsapp: str | None,
+    facebook: str | None,
+    instagram: str | None,
+    x_handle: str | None,
+    telegram: str | None,
+    linkedin: str | None,
+    other_social: str | None,
     relationship: str | None,
     contact_type: str | None,
     is_authorized: bool,
@@ -50,9 +67,16 @@ def normalize_contact_form(
     if normalized_type not in CONTACT_TYPES:
         normalized_type = "general"
     return ContactForm(
-        full_name=(full_name or "").strip(),
+        full_name=_clean(full_name),
         phone=_clean(phone),
         email=_clean(email.lower() if email else None),
+        whatsapp=_clean(whatsapp),
+        facebook=_clean(facebook),
+        instagram=_clean(instagram),
+        x_handle=_clean(x_handle),
+        telegram=_clean(telegram),
+        linkedin=_clean(linkedin),
+        other_social=_clean(other_social),
         relationship=_clean(relationship),
         contact_type=normalized_type,
         is_authorized=bool(is_authorized),
@@ -68,6 +92,40 @@ def _require_subscriber_id(customer: dict, db: Session) -> str:
     if not subscriber_id:
         raise ValueError("Unable to resolve customer account.")
     return str(subscriber_id)
+
+
+def _target_subscriber_id(customer: dict, db: Session) -> str:
+    target_id = _require_subscriber_id(customer, db)
+    allowed_ids = set(_allowed_subscriber_ids(customer, db))
+    if allowed_ids and target_id not in allowed_ids:
+        raise ValueError("Unable to resolve customer account.")
+    return target_id
+
+
+def _allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
+    allowed_ids = [
+        subscriber_id
+        for subscriber_id in resolve_allowed_subscriber_ids(customer, db)
+        if subscriber_id
+    ]
+    if allowed_ids:
+        return allowed_ids
+    return [_require_subscriber_id(customer, db)]
+
+
+def _allowed_subscriber_uuids(customer: dict, db: Session) -> list[UUID]:
+    uuids: list[UUID] = []
+    seen: set[UUID] = set()
+    for raw_id in _allowed_subscriber_ids(customer, db):
+        try:
+            subscriber_uuid = UUID(str(raw_id))
+        except ValueError:
+            continue
+        if subscriber_uuid in seen:
+            continue
+        seen.add(subscriber_uuid)
+        uuids.append(subscriber_uuid)
+    return uuids
 
 
 def _subscriber(db: Session, subscriber_id: str) -> Subscriber | None:
@@ -131,11 +189,12 @@ def duplicate_warnings(
 
 
 def get_contacts_page(db: Session, customer: dict) -> dict:
-    subscriber_id = _require_subscriber_id(customer, db)
-    subscriber = _subscriber(db, subscriber_id)
+    allowed_subscriber_ids = _allowed_subscriber_ids(customer, db)
+    subscriber = _subscriber(db, allowed_subscriber_ids[0]) if allowed_subscriber_ids else None
+    allowed_subscriber_uuids = _allowed_subscriber_uuids(customer, db)
     contacts = db.scalars(
         select(SubscriberContact)
-        .where(SubscriberContact.subscriber_id == UUID(str(subscriber_id)))
+        .where(SubscriberContact.subscriber_id.in_(allowed_subscriber_uuids))
         .order_by(SubscriberContact.created_at.desc())
     ).all()
     return {
@@ -145,10 +204,26 @@ def get_contacts_page(db: Session, customer: dict) -> dict:
     }
 
 
+def _has_contact_channel(form: ContactForm) -> bool:
+    return any(
+        (
+            form.phone,
+            form.email,
+            form.whatsapp,
+            form.facebook,
+            form.instagram,
+            form.x_handle,
+            form.telegram,
+            form.linkedin,
+            form.other_social,
+        )
+    )
+
+
 def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
-    if not form.full_name:
-        raise ValueError("Full name is required.")
-    subscriber_id = _require_subscriber_id(customer, db)
+    if not _has_contact_channel(form):
+        raise ValueError("Enter at least one phone, email, or social media contact.")
+    subscriber_id = _target_subscriber_id(customer, db)
     warnings = duplicate_warnings(
         db,
         subscriber_id=subscriber_id,
@@ -160,6 +235,13 @@ def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
         full_name=form.full_name,
         phone=form.phone,
         email=form.email,
+        whatsapp=form.whatsapp,
+        facebook=form.facebook,
+        instagram=form.instagram,
+        x_handle=form.x_handle,
+        telegram=form.telegram,
+        linkedin=form.linkedin,
+        other_social=form.other_social,
         relationship=form.relationship,
         contact_type=form.contact_type,
         is_authorized=form.is_authorized,
@@ -175,20 +257,23 @@ def create_contact(db: Session, customer: dict, form: ContactForm) -> list[str]:
 def update_contact(
     db: Session, customer: dict, contact_id: str, form: ContactForm
 ) -> list[str]:
-    if not form.full_name:
-        raise ValueError("Full name is required.")
-    subscriber_id = _require_subscriber_id(customer, db)
+    if not _has_contact_channel(form):
+        raise ValueError("Enter at least one phone, email, or social media contact.")
+    try:
+        contact_uuid = UUID(str(contact_id))
+    except ValueError as exc:
+        raise ValueError("Contact not found.") from exc
     contact = db.scalar(
         select(SubscriberContact).where(
-            SubscriberContact.id == UUID(str(contact_id)),
-            SubscriberContact.subscriber_id == UUID(str(subscriber_id)),
+            SubscriberContact.id == contact_uuid,
+            SubscriberContact.subscriber_id.in_(_allowed_subscriber_uuids(customer, db)),
         )
     )
     if not contact:
         raise ValueError("Contact not found.")
     warnings = duplicate_warnings(
         db,
-        subscriber_id=subscriber_id,
+        subscriber_id=str(contact.subscriber_id),
         email=form.email,
         phone=form.phone,
         exclude_contact_id=contact_id,
@@ -196,6 +281,13 @@ def update_contact(
     contact.full_name = form.full_name
     contact.phone = form.phone
     contact.email = form.email
+    contact.whatsapp = form.whatsapp
+    contact.facebook = form.facebook
+    contact.instagram = form.instagram
+    contact.x_handle = form.x_handle
+    contact.telegram = form.telegram
+    contact.linkedin = form.linkedin
+    contact.other_social = form.other_social
     contact.relationship = form.relationship
     contact.contact_type = form.contact_type
     contact.is_authorized = form.is_authorized
@@ -204,3 +296,22 @@ def update_contact(
     contact.notes = form.notes
     db.commit()
     return warnings
+
+
+def delete_contact(db: Session, customer: dict, contact_id: str) -> None:
+    try:
+        contact_uuid = UUID(str(contact_id))
+    except ValueError as exc:
+        raise ValueError("Contact not found.") from exc
+
+    contact = db.scalar(
+        select(SubscriberContact).where(
+            SubscriberContact.id == contact_uuid,
+            SubscriberContact.subscriber_id.in_(_allowed_subscriber_uuids(customer, db)),
+        )
+    )
+    if not contact:
+        raise ValueError("Contact not found.")
+
+    db.delete(contact)
+    db.commit()

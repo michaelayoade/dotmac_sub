@@ -432,9 +432,16 @@ class SubscriberContact(Base):
         ForeignKey("subscribers.id", ondelete="CASCADE"),
         nullable=False,
     )
-    full_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(160))
     phone: Mapped[str | None] = mapped_column(String(40))
     email: Mapped[str | None] = mapped_column(String(255))
+    whatsapp: Mapped[str | None] = mapped_column(String(80))
+    facebook: Mapped[str | None] = mapped_column(String(160))
+    instagram: Mapped[str | None] = mapped_column(String(160))
+    x_handle: Mapped[str | None] = mapped_column(String(160))
+    telegram: Mapped[str | None] = mapped_column(String(160))
+    linkedin: Mapped[str | None] = mapped_column(String(160))
+    other_social: Mapped[str | None] = mapped_column(Text)
     relationship: Mapped[str | None] = mapped_column(String(80))
     contact_type: Mapped[str] = mapped_column(String(40), default="general")
     is_billing_contact: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -39,7 +39,10 @@ from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
-from app.services.network.ont_status import resolve_ont_status_for_model
+from app.services.network.ont_status import (
+    resolve_effective_last_seen_at,
+    resolve_ont_status_for_model,
+)
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
@@ -1968,8 +1971,12 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     olt_status_val = status_snapshot.olt_status.value
     olt_status_display_val = None if olt_status_val == "unknown" else olt_status_val
     acs_status_val = status_snapshot.acs_status.value
+    normalized_acs_last_inform_at = status_snapshot.acs_last_inform_at
     reason = getattr(ont, "offline_reason", None)
     reason_val = reason.value if reason else None
+    effective_last_seen_at = resolve_effective_last_seen_at(
+        ont, acs_last_inform_at=normalized_acs_last_inform_at
+    )
 
     signal_info = {
         "olt_rx_dbm": olt_rx,
@@ -2005,8 +2012,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "acs_status_class": ACS_STATUS_CLASSES.get(
             acs_status_val, ACS_STATUS_CLASSES["unknown"]
         ),
-        "last_seen_at": getattr(ont, "last_seen_at", None),
-        "acs_last_inform_at": acs_last_inform_at,
+        "last_seen_at": effective_last_seen_at,
+        "acs_last_inform_at": normalized_acs_last_inform_at,
         "connection_request_status": connection_request_info.get(
             "connection_request_status", "unavailable"
         ),

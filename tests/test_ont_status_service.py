@@ -9,6 +9,7 @@ from app.services.network.ont_status import (
     apply_status_snapshot,
     ont_has_acs_management,
     reconcile_device_state,
+    resolve_effective_last_seen_at,
     resolve_acs_online_window_minutes_for_model,
     resolve_ont_status_for_model,
     resolve_ont_status_snapshot,
@@ -179,6 +180,16 @@ def test_reconcile_device_state_prefers_olt_online_over_stale_acs(
     assert result.recommended_action == "send_connection_request"
     assert ont.effective_status == OnuOnlineStatus.online
     assert ont.effective_status_source == OntStatusSource.olt
+
+
+def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:
+    now = datetime.now(UTC)
+    ont = SimpleNamespace(
+        last_seen_at=now - timedelta(days=2),
+        acs_last_inform_at=now - timedelta(minutes=1),
+    )
+
+    assert resolve_effective_last_seen_at(ont) == now - timedelta(minutes=1)
 
 
 def test_list_advanced_filters_by_persisted_effective_status(db_session) -> None:
