@@ -2147,6 +2147,37 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             if isinstance(maybe_ont_plan, dict):
                 ont_plan = maybe_ont_plan
 
+    from app.models.compensation_failure import CompensationFailure
+    from app.services.network.compensation_retry import is_retry_due, next_retry_at
+
+    compensation_stmt = (
+        select(CompensationFailure)
+        .where(CompensationFailure.ont_unit_id == ont.id)
+        .order_by(CompensationFailure.created_at.desc())
+        .limit(10)
+    )
+    compensation_failures = []
+    for failure in db.scalars(compensation_stmt).all():
+        next_attempt_at = next_retry_at(failure)
+        compensation_failures.append(
+            {
+                "id": str(failure.id),
+                "status": failure.status.value,
+                "step_name": failure.step_name,
+                "operation_type": failure.operation_type,
+                "description": failure.description,
+                "error_message": failure.error_message,
+                "failure_count": failure.failure_count,
+                "created_at": failure.created_at,
+                "last_attempted_at": failure.last_attempted_at,
+                "next_retry_at": next_attempt_at,
+                "retry_due": is_retry_due(failure),
+                "resolved_at": failure.resolved_at,
+                "resolved_by": failure.resolved_by,
+                "resource_id": failure.resource_id,
+            }
+        )
+
     # Manual profile state shown on the ONT detail screen
     profile_state: dict[str, object] = {}
     if ont.provisioning_profile_id:
@@ -2230,6 +2261,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "network_path": network_path,
         "subscriber_info": subscriber_info,
         "provisioning_runs": provisioning_runs,
+        "compensation_failures": compensation_failures,
         "ont_plan": ont_plan,
         "service_intent": service_intent,
         "acs_observed_intent": acs_observed_intent,

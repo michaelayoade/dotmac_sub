@@ -69,7 +69,11 @@ from app.tasks.ont_verification import (
     verify_ont_provisioning_state,
     verify_single_ont,
 )
-from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
+from app.tasks.provisioning import (
+    retry_pending_compensation_failures,
+    run_bulk_activation_job,
+    run_service_migration_job,
+)
 from app.tasks.provisioning_enforcement import run_enforcement
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.saga import (
@@ -168,6 +172,7 @@ __all__ = [
     "discover_single_olt_onts",
     "run_bulk_activation_job",
     "run_service_migration_job",
+    "retry_pending_compensation_failures",
     "run_incremental_sync",
     "run_customer_accounts_details_sync",
     "discover_snmp_interfaces",

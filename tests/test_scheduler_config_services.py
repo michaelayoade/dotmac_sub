@@ -723,3 +723,33 @@ class TestBuildBeatSchedule:
 
         # Should return empty schedule without crashing
         assert schedule == {}
+
+    def test_builds_compensation_retry_watchdog_schedule(self, monkeypatch):
+        """Test compensation retry watchdog scheduled task is synced."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("COMPENSATION_RETRY_ENABLED", "true")
+        monkeypatch.setenv("COMPENSATION_RETRY_INTERVAL_SECONDS", "120")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                schedule = scheduler_config.build_beat_schedule()
+
+        scheduled_calls = mock_session.add.call_args_list
+        assert schedule.get("gis_sync") is None
+        assert any(
+            getattr(call.args[0], "task_name", None)
+            == "app.tasks.provisioning.retry_pending_compensation_failures"
+            and getattr(call.args[0], "interval_seconds", None) == 120
+            for call in scheduled_calls
+        )

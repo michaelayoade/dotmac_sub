@@ -1095,6 +1095,56 @@
             {% include "admin/network/_operations_history.html" %}
             {% endcall %}
 
+            {% call card("Rollback Cleanup", color="amber") %}
+            {% if compensation_failures %}
+            <div class="space-y-3">
+                {% for failure in compensation_failures %}
+                <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-800/60">
+                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div class="min-w-0 space-y-2">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ failure.step_name | replace('_', ' ') | title }}</p>
+                                {% set status_classes = {
+                                    'pending': 'bg-amber-100 text-amber-800 ring-amber-600/20 dark:bg-amber-500/15 dark:text-amber-200',
+                                    'resolved': 'bg-emerald-100 text-emerald-800 ring-emerald-600/20 dark:bg-emerald-500/15 dark:text-emerald-200',
+                                    'abandoned': 'bg-slate-100 text-slate-700 ring-slate-600/20 dark:bg-slate-500/15 dark:text-slate-200'
+                                } %}
+                                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset {{ status_classes.get(failure.status, status_classes['pending']) }}">{{ failure.status | replace('_', ' ') | title }}</span>
+                                {% if failure.retry_due and failure.status == 'pending' %}
+                                <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800 ring-1 ring-inset ring-red-600/20 dark:bg-red-500/15 dark:text-red-200">Retry Due</span>
+                                {% endif %}
+                            </div>
+                            <p class="text-sm text-slate-600 dark:text-slate-300">{{ failure.description }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ failure.error_message }}</p>
+                            <dl class="grid grid-cols-1 gap-2 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-2 xl:grid-cols-4">
+                                <div><dt class="font-medium uppercase tracking-wide">Attempts</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.failure_count }}</dd></div>
+                                <div><dt class="font-medium uppercase tracking-wide">Last Attempt</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.last_attempted_at.strftime('%b %d, %Y %H:%M') if failure.last_attempted_at else '—' }}</dd></div>
+                                <div><dt class="font-medium uppercase tracking-wide">Next Retry</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.next_retry_at.strftime('%b %d, %Y %H:%M') if failure.next_retry_at else '—' }}</dd></div>
+                                <div><dt class="font-medium uppercase tracking-wide">Resolved By</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.resolved_by or '—' }}</dd></div>
+                            </dl>
+                        </div>
+                        {% if failure.status == 'pending' %}
+                        <div class="flex flex-wrap gap-2 lg:justify-end">
+                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/retry">
+                                <button type="submit" class="inline-flex items-center justify-center rounded-md bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900">Retry Now</button>
+                            </form>
+                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/resolve">
+                                <button type="submit" class="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700 dark:focus:ring-offset-slate-900">Mark Resolved</button>
+                            </form>
+                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/abandon">
+                                <button type="submit" class="inline-flex items-center justify-center rounded-md border border-rose-300 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:border-rose-700 dark:text-rose-200 dark:hover:bg-rose-900/30 dark:focus:ring-offset-slate-900">Abandon</button>
+                            </form>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            {{ empty_state("No rollback cleanup pending", "Automatic compensation retries are healthy for this ONT.") }}
+            {% endif %}
+            {% endcall %}
+
             {# Activity Log #}
             {% call card("Recent Activity", color="slate") %}
             {% if activities %}

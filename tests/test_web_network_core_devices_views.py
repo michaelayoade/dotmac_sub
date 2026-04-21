@@ -10,6 +10,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.compensation_failure import CompensationFailure, CompensationStatus
 from app.models.network import (
     OLTDevice,
     OntAcsStatus,
@@ -730,3 +731,35 @@ def test_ont_detail_page_data_includes_recent_provisioning_runs(db_session):
     assert payload["provisioning_runs"][0]["workflow_name"] == "13-Step OLT Flow"
     assert payload["provisioning_runs"][0]["step_count"] == 2
     assert payload["provisioning_runs"][0]["success_count"] == 2
+
+
+def test_ont_detail_page_data_includes_compensation_failures(db_session):
+    olt = OLTDevice(name="OLT-COMP", mgmt_ip="198.51.100.212")
+    db_session.add(olt)
+    db_session.flush()
+
+    ont = OntUnit(serial_number="ONT-COMP-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    failure = CompensationFailure(
+        ont_unit_id=ont.id,
+        olt_device_id=olt.id,
+        operation_type="provisioning",
+        step_name="create_service_port",
+        undo_commands=["undo service-port 100"],
+        description="Remove partially created service-port",
+        error_message="timeout waiting for SSH response",
+        failure_count=2,
+        status=CompensationStatus.pending,
+    )
+    db_session.add(failure)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["compensation_failures"][0]["step_name"] == "create_service_port"
+    assert payload["compensation_failures"][0]["status"] == "pending"
+    assert payload["compensation_failures"][0]["failure_count"] == 2
+    assert payload["compensation_failures"][0]["next_retry_at"] is not None

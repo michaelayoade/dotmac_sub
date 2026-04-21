@@ -25,6 +25,7 @@ from app.services.network import ont_provision_steps as steps
 from app.services.network.action_logging import log_network_action_result
 from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.ont_provisioning.result import StepResult
+from app.services.network.ont_scope import can_manage_ont_from_request
 
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["masked_credentials"] = mask_credentials
@@ -53,6 +54,20 @@ def _toast_headers(message: str, toast_type: str = "success") -> dict[str, str]:
             ensure_ascii=True,
         )
     }
+
+
+def _redirect_to_request_target(
+    request: Request,
+    fallback_path: str,
+    *,
+    message: str,
+    toast_type: str,
+) -> RedirectResponse:
+    target = request.headers.get("referer") or fallback_path
+    response = RedirectResponse(target, status_code=303)
+    for key, value in _toast_headers(message, toast_type).items():
+        response.headers[key] = value
+    return response
 
 
 def _step_response(
@@ -909,3 +924,108 @@ def list_sagas(request: Request) -> JSONResponse:
     from app.services.network.ont_provisioning.saga import list_available_sagas
 
     return JSONResponse(content={"sagas": list_available_sagas()})
+
+
+@router.post(
+    "/onts/{ont_id}/compensation-failures/{failure_id}/retry",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def retry_ont_compensation_failure(
+    request: Request,
+    ont_id: str,
+    failure_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Retry a pending compensation failure for an ONT."""
+    from app.services.network.compensation_retry import retry_compensation
+
+    if not can_manage_ont_from_request(request, db, ont_id):
+        return _redirect_to_request_target(
+            request,
+            f"/admin/network/onts/{ont_id}",
+            message="ONT scope check failed",
+            toast_type="error",
+        )
+
+    success, message = retry_compensation(
+        db,
+        failure_id,
+        resolved_by=web_admin_service.actor_label(request),
+    )
+    db.commit()
+    return _redirect_to_request_target(
+        request,
+        f"/admin/network/onts/{ont_id}?tab=history",
+        message=message,
+        toast_type="success" if success else "error",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/compensation-failures/{failure_id}/resolve",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def resolve_ont_compensation_failure(
+    request: Request,
+    ont_id: str,
+    failure_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Mark a compensation failure resolved from the ONT history view."""
+    from app.services.network.compensation_retry import mark_resolved
+
+    if not can_manage_ont_from_request(request, db, ont_id):
+        return _redirect_to_request_target(
+            request,
+            f"/admin/network/onts/{ont_id}",
+            message="ONT scope check failed",
+            toast_type="error",
+        )
+
+    success, message = mark_resolved(
+        db,
+        failure_id,
+        resolved_by=web_admin_service.actor_label(request),
+    )
+    db.commit()
+    return _redirect_to_request_target(
+        request,
+        f"/admin/network/onts/{ont_id}?tab=history",
+        message=message,
+        toast_type="success" if success else "error",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/compensation-failures/{failure_id}/abandon",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def abandon_ont_compensation_failure(
+    request: Request,
+    ont_id: str,
+    failure_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Mark a compensation failure abandoned from the ONT history view."""
+    from app.services.network.compensation_retry import mark_abandoned
+
+    if not can_manage_ont_from_request(request, db, ont_id):
+        return _redirect_to_request_target(
+            request,
+            f"/admin/network/onts/{ont_id}",
+            message="ONT scope check failed",
+            toast_type="error",
+        )
+
+    success, message = mark_abandoned(
+        db,
+        failure_id,
+        resolved_by=web_admin_service.actor_label(request),
+    )
+    db.commit()
+    return _redirect_to_request_target(
+        request,
+        f"/admin/network/onts/{ont_id}?tab=history",
+        message=message,
+        toast_type="success" if success else "error",
+    )

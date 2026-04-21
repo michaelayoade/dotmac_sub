@@ -435,6 +435,31 @@ def build_beat_schedule() -> dict:
             enabled=billing_enabled,
             interval_seconds=billing_interval_seconds,
         )
+        compensation_retry_enabled = _effective_bool(
+            session,
+            SettingDomain.provisioning,
+            "compensation_retry_enabled",
+            "COMPENSATION_RETRY_ENABLED",
+            True,
+        )
+        compensation_retry_interval_seconds = _effective_int(
+            session,
+            SettingDomain.provisioning,
+            "compensation_retry_interval_seconds",
+            "COMPENSATION_RETRY_INTERVAL_SECONDS",
+            300,
+        )
+        compensation_retry_interval_seconds = max(
+            compensation_retry_interval_seconds,
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="compensation_retry_watchdog",
+            task_name="app.tasks.provisioning.retry_pending_compensation_failures",
+            enabled=compensation_retry_enabled,
+            interval_seconds=compensation_retry_interval_seconds,
+        )
         # Overdue invoice detection — independent of billing cycle
         overdue_enabled = _effective_bool(
             session,
