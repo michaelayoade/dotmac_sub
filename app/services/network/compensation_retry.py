@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RETRY_BASE_SECONDS = 300
 _DEFAULT_RETRY_MAX_SECONDS = 21600
+_SERVICE_LAYER_RETRY_STEPS = {"rollback_service_ports"}
 
 
 def retry_backoff_seconds(
@@ -160,6 +161,13 @@ def retry_compensation(
     if failure.status != CompensationStatus.pending:
         return False, f"Cannot retry: status is {failure.status.value}"
 
+    if not failure.undo_commands and failure.step_name in _SERVICE_LAYER_RETRY_STEPS:
+        return _retry_service_layer_compensation(
+            db,
+            failure,
+            resolved_by=resolved_by,
+        )
+
     olt = db.get(OLTDevice, failure.olt_device_id)
     if olt is None:
         return False, "OLT device not found"
@@ -225,6 +233,37 @@ def retry_compensation(
         failure.error_message = str(exc)
         db.flush()
         return False, f"Retry error: {exc}"
+
+
+def _retry_service_layer_compensation(
+    db: Session,
+    failure: CompensationFailure,
+    *,
+    resolved_by: str | None = None,
+) -> tuple[bool, str]:
+    """Retry compensation through a domain service when no raw undo commands exist."""
+    from app.services.network import ont_provision_steps
+
+    if failure.ont_unit_id is None:
+        return False, "ONT unit not found for compensation retry"
+
+    if failure.step_name == "rollback_service_ports":
+        result = ont_provision_steps.rollback_service_ports(db, str(failure.ont_unit_id))
+        if result.success:
+            failure.status = CompensationStatus.resolved
+            failure.resolved_at = datetime.now(UTC)
+            failure.resolved_by = resolved_by
+            failure.resolution_notes = "Successfully retried via service layer"
+            db.flush()
+            return True, result.message
+
+        failure.failure_count += 1
+        failure.last_attempted_at = datetime.now(UTC)
+        failure.error_message = result.message
+        db.flush()
+        return False, result.message
+
+    return False, f"No service-layer retry handler for step {failure.step_name}"
 
 
 def mark_abandoned(

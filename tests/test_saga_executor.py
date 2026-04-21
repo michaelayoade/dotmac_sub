@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.compensation_failure import CompensationFailure
+from app.models.saga_execution import ProvisioningStepExecutionStatus
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_provisioning.saga.executor import (
     SagaExecutor,
@@ -362,6 +364,60 @@ class TestSagaExecutorCompensation:
         assert result.compensation_failures[0][0] == "step1"
         assert "step1" in result.steps_needing_manual_cleanup
 
+    def test_retryable_saga_compensation_failure_is_persisted(
+        self, mock_db, sample_ont_id, sample_execution_id
+    ):
+        """Mapped saga compensation failures should create CompensationFailure rows."""
+
+        def failing_compensate(ctx, original):
+            return StepResult(
+                step_name="rollback_service_ports",
+                success=False,
+                message="service-port rollback failed",
+            )
+
+        saga = SagaDefinition(
+            name="full_provisioning",
+            description="Test persistence of retryable compensation failures",
+            steps=[
+                SagaStep(
+                    name="create_service_ports",
+                    action=lambda ctx: StepResult(
+                        step_name="create_service_ports",
+                        success=True,
+                        message="created",
+                    ),
+                    compensate=failing_compensate,
+                    critical=True,
+                ),
+                make_failure_step("step2", critical=True),
+            ],
+        )
+
+        context = SagaContext(
+            db=mock_db,
+            ont_id=sample_ont_id,
+            saga_execution_id=sample_execution_id,
+        )
+        context.ont = MagicMock(id=uuid.uuid4())
+        context.olt = MagicMock(id=uuid.uuid4())
+
+        with patch.object(SagaExecutor, "_load_context_models", return_value=True):
+            with patch("app.services.notification_adapter.notify"):
+                executor = SagaExecutor(saga, context)
+                result = executor.execute()
+
+        persisted_rows = [
+            call.args[0]
+            for call in mock_db.add.call_args_list
+            if isinstance(call.args[0], CompensationFailure)
+        ]
+        assert result.status == SagaExecutionStatus.compensation_failed
+        assert len(persisted_rows) == 1
+        assert persisted_rows[0].step_name == "rollback_service_ports"
+        assert persisted_rows[0].operation_type == "saga:full_provisioning"
+        assert persisted_rows[0].resource_id == "create_service_ports"
+
 
 class TestSagaExecutorContext:
     """Test context handling."""
@@ -575,3 +631,164 @@ class TestSagaResult:
         assert isinstance(result_dict["steps_executed"], list)
         assert len(result_dict["steps_executed"]) == 2
         assert isinstance(result_dict["duration_ms"], int)
+
+
+class TestSagaExecutorResume:
+    """Test durable saga step resume behavior."""
+
+    def test_resumable_step_skips_reexecution_on_retry(
+        self, mock_db, sample_ont_id, sample_execution_id, monkeypatch
+    ):
+        """A resumable step with a durable success checkpoint should be skipped."""
+
+        step1_calls: list[str] = []
+        step2_calls: list[str] = []
+        persisted_statuses: list[tuple[str, bool]] = []
+
+        saga = SagaDefinition(
+            name="resume_test",
+            description="Resume from step checkpoint",
+            steps=[
+                SagaStep(
+                    name="step1",
+                    action=lambda ctx: step1_calls.append("step1")
+                    or StepResult(
+                        step_name="step1",
+                        success=True,
+                        message="step1 completed",
+                    ),
+                    critical=True,
+                    resumable=True,
+                ),
+                SagaStep(
+                    name="step2",
+                    action=lambda ctx: step2_calls.append("step2")
+                    or StepResult(
+                        step_name="step2",
+                        success=True,
+                        message="step2 completed",
+                    ),
+                    critical=True,
+                    resumable=True,
+                ),
+            ],
+        )
+
+        context = SagaContext(
+            db=mock_db,
+            ont_id=sample_ont_id,
+            saga_execution_id=sample_execution_id,
+            correlation_key="saga:resume_test:ont-1",
+        )
+
+        checkpoint = MagicMock()
+        checkpoint.saga_execution_id = uuid.uuid4()
+        checkpoint.status = ProvisioningStepExecutionStatus.succeeded
+        checkpoint.result_data = {
+            "step_name": "step1",
+            "success": True,
+            "message": "step1 completed",
+            "data": {"service_port_id": "sp-1"},
+        }
+
+        from app.services.network.ont_provisioning.saga import persistence
+
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "get_resumable_steps",
+            lambda *args, **kwargs: {"step1": checkpoint},
+        )
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "mark_running",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "mark_completed",
+            lambda *args, **kwargs: persisted_statuses.append(
+                (kwargs["step_name"], kwargs["record"].skipped)
+            ),
+        )
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "mark_compensated",
+            lambda *args, **kwargs: None,
+        )
+
+        with patch.object(SagaExecutor, "_load_context_models", return_value=True):
+            result = SagaExecutor(saga, context).execute()
+
+        assert result.success is True
+        assert step1_calls == []
+        assert step2_calls == ["step2"]
+        assert result.steps_executed[0].step_name == "step1"
+        assert result.steps_executed[0].skipped is True
+        assert context.step_data["resumed_steps"]["step1"]["service_port_id"] == "sp-1"
+        assert persisted_statuses == [("step1", True), ("step2", False)]
+
+    def test_non_resumable_step_still_executes(
+        self, mock_db, sample_ont_id, sample_execution_id, monkeypatch
+    ):
+        """A checkpoint must not skip a step that did not opt into resume."""
+
+        step_calls: list[str] = []
+
+        saga = SagaDefinition(
+            name="resume_test",
+            description="Resume only when enabled",
+            steps=[
+                SagaStep(
+                    name="step1",
+                    action=lambda ctx: step_calls.append("step1")
+                    or StepResult(
+                        step_name="step1",
+                        success=True,
+                        message="step1 completed",
+                    ),
+                    critical=True,
+                    resumable=False,
+                ),
+            ],
+        )
+
+        context = SagaContext(
+            db=mock_db,
+            ont_id=sample_ont_id,
+            saga_execution_id=sample_execution_id,
+            correlation_key="saga:resume_test:ont-1",
+        )
+
+        checkpoint = MagicMock()
+        checkpoint.saga_execution_id = uuid.uuid4()
+        checkpoint.status = ProvisioningStepExecutionStatus.succeeded
+        checkpoint.result_data = {}
+
+        from app.services.network.ont_provisioning.saga import persistence
+
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "get_resumable_steps",
+            lambda *args, **kwargs: {"step1": checkpoint},
+        )
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "mark_running",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "mark_completed",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            persistence.saga_step_executions,
+            "mark_compensated",
+            lambda *args, **kwargs: None,
+        )
+
+        with patch.object(SagaExecutor, "_load_context_models", return_value=True):
+            result = SagaExecutor(saga, context).execute()
+
+        assert result.success is True
+        assert step_calls == ["step1"]

@@ -105,3 +105,43 @@ def test_retry_due_compensations_retries_only_due_rows(db_session, monkeypatch):
         db_session.get(CompensationFailure, not_due.id).status
         == CompensationStatus.pending
     )
+
+
+def test_retry_compensation_uses_service_layer_handler_when_no_undo_commands(
+    db_session, monkeypatch
+):
+    now = datetime.now(UTC)
+    failure = _create_failure(
+        db_session,
+        failure_count=1,
+        last_attempted_at=now - timedelta(minutes=10),
+    )
+    failure.step_name = "rollback_service_ports"
+    failure.undo_commands = []
+    db_session.commit()
+
+    def _fake_rollback_service_ports(db, ont_id):
+        assert ont_id == str(failure.ont_unit_id)
+        return type(
+            "RollbackResult",
+            (),
+            {"success": True, "message": "Removed 2 service-port(s)"},
+        )()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.rollback_service_ports",
+        _fake_rollback_service_ports,
+    )
+
+    success, message = compensation_retry.retry_compensation(
+        db_session,
+        failure.id,
+        resolved_by="system:watchdog",
+    )
+
+    refreshed = db_session.get(CompensationFailure, failure.id)
+    assert success is True
+    assert message == "Removed 2 service-port(s)"
+    assert refreshed is not None
+    assert refreshed.status == CompensationStatus.resolved
+    assert refreshed.resolved_by == "system:watchdog"

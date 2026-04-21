@@ -33,6 +33,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SERVICE_PORT_ROLLBACK_STEPS = {
+    "create_service_ports",
+    "provision_with_reconciliation",
+}
+
 
 class SagaTimeoutError(TimeoutError):
     """Raised when a saga exceeds its configured deadline."""
@@ -67,6 +72,7 @@ class SagaExecutor:
         self.context = context
         self._completed_steps: list[tuple[SagaStep, StepResult]] = []
         self._step_records: list[StepExecutionRecord] = []
+        self._resumable_steps: dict[str, Any] = {}
         self._start_time: datetime | None = None
         self._deadline_monotonic: float | None = None
 
@@ -119,19 +125,32 @@ class SagaExecutor:
                     failed_step="context_load",
                 )
 
+            self._resumable_steps = self._load_resumable_steps()
+
             # Execute each step in order
-            for step in self.saga.steps:
+            for index, step in enumerate(self.saga.steps):
                 timeout_result = self._timeout_result_if_expired(step.name)
                 if timeout_result is not None:
                     self._step_records.append(
                         StepExecutionRecord.from_step_result(timeout_result)
                     )
+                    self._persist_step_result(index, step, self._step_records[-1])
                     return self._rollback_and_fail(result, step, timeout_result)
 
+                resumed_result = self._build_resumed_step_result(step)
+                if resumed_result is not None:
+                    self._record_step_event(step.name, resumed_result)
+                    record = StepExecutionRecord.from_step_result(resumed_result)
+                    self._step_records.append(record)
+                    self._persist_step_result(index, step, record)
+                    continue
+
+                self._mark_step_running(index, step)
                 step_result = self._execute_step(step)
                 self._record_step_event(step.name, step_result)
                 record = StepExecutionRecord.from_step_result(step_result)
                 self._step_records.append(record)
+                self._persist_step_result(index, step, record)
 
                 if not step_result.success and not step_result.skipped:
                     if step.critical:
@@ -223,6 +242,99 @@ class SagaExecutor:
             self.context.olt = olt
 
         return True
+
+    def _load_resumable_steps(self) -> dict[str, Any]:
+        if not self.context.correlation_key:
+            return {}
+        try:
+            from app.services.network.ont_provisioning.saga.persistence import (
+                saga_step_executions,
+            )
+
+            return saga_step_executions.get_resumable_steps(
+                self.context.db,
+                correlation_key=self.context.correlation_key,
+                saga_name=self.saga.name,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load resumable saga checkpoints",
+                exc_info=True,
+                extra={
+                    "event": "saga_resume_load_failed",
+                    "saga_name": self.saga.name,
+                    "saga_execution_id": self.context.saga_execution_id,
+                },
+            )
+            return {}
+
+    def _build_resumed_step_result(self, step: SagaStep) -> StepResult | None:
+        if not step.resumable:
+            return None
+        checkpoint = self._resumable_steps.get(step.name)
+        if checkpoint is None:
+            return None
+        checkpoint_data = dict(checkpoint.result_data or {})
+        step_data = checkpoint_data.get("data")
+        if isinstance(step_data, dict):
+            self.context.step_data.setdefault("resumed_steps", {})[step.name] = step_data
+        return StepResult(
+            step_name=step.name,
+            success=True,
+            skipped=True,
+            critical=step.critical,
+            duration_ms=0,
+            message=f"Resumed from checkpoint created by {checkpoint.saga_execution_id}",
+            data=step_data if isinstance(step_data, dict) else None,
+        )
+
+    def _mark_step_running(self, step_order: int, step: SagaStep) -> None:
+        try:
+            from app.services.network.ont_provisioning.saga.persistence import (
+                saga_step_executions,
+            )
+
+            saga_step_executions.mark_running(
+                self.context.db,
+                execution_id=self.context.saga_execution_id,
+                saga_name=self.saga.name,
+                correlation_key=self.context.correlation_key,
+                step_name=step.name,
+                step_order=step_order,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist running saga step: %s",
+                step.name,
+                exc_info=True,
+            )
+
+    def _persist_step_result(
+        self,
+        step_order: int,
+        step: SagaStep,
+        record: StepExecutionRecord,
+    ) -> None:
+        try:
+            from app.services.network.ont_provisioning.saga.persistence import (
+                saga_step_executions,
+            )
+
+            saga_step_executions.mark_completed(
+                self.context.db,
+                execution_id=self.context.saga_execution_id,
+                saga_name=self.saga.name,
+                correlation_key=self.context.correlation_key,
+                step_name=step.name,
+                step_order=step_order,
+                record=record,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist saga step result: %s",
+                step.name,
+                exc_info=True,
+            )
 
     def _execute_step(self, step: SagaStep) -> StepResult:
         """Execute a single step with timing and error handling.
@@ -434,6 +546,7 @@ class SagaExecutor:
                 compensation_records.append(record)
 
                 if comp_result.success:
+                    self._mark_step_compensated(step, record)
                     logger.info(
                         "Compensation succeeded: %s",
                         step.name,
@@ -444,6 +557,7 @@ class SagaExecutor:
                         },
                     )
                 else:
+                    self._mark_step_compensated(step, record)
                     logger.error(
                         "Compensation failed: %s - %s",
                         step.name,
@@ -480,9 +594,11 @@ class SagaExecutor:
                 )
                 compensation_records.append(record)
                 compensation_failures.append((step.name, str(exc)))
+                self._mark_step_compensated(step, record)
 
         # Alert operators if there are compensation failures
         if compensation_failures:
+            self._persist_compensation_failures(compensation_failures)
             self._alert_compensation_failures(failed_step.name, compensation_failures)
 
         return self._build_failure_result(
@@ -492,6 +608,111 @@ class SagaExecutor:
             compensation_records=compensation_records,
             compensation_failures=compensation_failures,
         )
+
+    def _persist_compensation_failures(
+        self,
+        failures: list[tuple[str, str]],
+    ) -> None:
+        """Persist retryable compensation failures for watchdog pickup."""
+        from app.models.compensation_failure import (
+            CompensationFailure,
+            CompensationStatus,
+        )
+
+        if self.context.ont is None or self.context.olt is None:
+            logger.warning(
+                "Skipping compensation failure persistence due to missing saga context models",
+                extra={
+                    "event": "saga_compensation_persistence_skipped",
+                    "saga_name": self.saga.name,
+                    "saga_execution_id": self.context.saga_execution_id,
+                },
+            )
+            return
+
+        persisted = 0
+        for step_name, error_message in failures:
+            if step_name in _SERVICE_PORT_ROLLBACK_STEPS:
+                failure = CompensationFailure(
+                    ont_unit_id=self.context.ont.id,
+                    olt_device_id=self.context.olt.id,
+                    operation_type=f"saga:{self.saga.name}",
+                    step_name="rollback_service_ports",
+                    undo_commands=[],
+                    description=(
+                        "Retry service-port rollback after saga compensation failure "
+                        f"for step '{step_name}'"
+                    ),
+                    resource_id=step_name,
+                    error_message=error_message,
+                    status=CompensationStatus.pending,
+                )
+                self.context.db.add(failure)
+                persisted += 1
+
+        if persisted == 0:
+            logger.info(
+                "No retryable compensation failure persistence mappings for saga %s",
+                self.saga.name,
+                extra={
+                    "event": "saga_compensation_persistence_noop",
+                    "saga_execution_id": self.context.saga_execution_id,
+                    "failure_count": len(failures),
+                },
+            )
+            return
+
+        try:
+            self.context.db.flush()
+            logger.info(
+                "Persisted %d saga compensation failure record(s)",
+                persisted,
+                extra={
+                    "event": "saga_compensation_persisted",
+                    "saga_name": self.saga.name,
+                    "saga_execution_id": self.context.saga_execution_id,
+                    "persisted": persisted,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist saga compensation failures",
+                extra={
+                    "event": "saga_compensation_persistence_error",
+                    "saga_name": self.saga.name,
+                    "saga_execution_id": self.context.saga_execution_id,
+                },
+            )
+
+    def _mark_step_compensated(
+        self,
+        step: SagaStep,
+        record: CompensationRecord,
+    ) -> None:
+        try:
+            from app.services.network.ont_provisioning.saga.persistence import (
+                saga_step_executions,
+            )
+
+            step_order = next(
+                (index for index, candidate in enumerate(self.saga.steps) if candidate.name == step.name),
+                0,
+            )
+            saga_step_executions.mark_compensated(
+                self.context.db,
+                execution_id=self.context.saga_execution_id,
+                saga_name=self.saga.name,
+                correlation_key=self.context.correlation_key,
+                step_name=step.name,
+                step_order=step_order,
+                record=record,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to persist compensated saga step: %s",
+                step.name,
+                exc_info=True,
+            )
 
     def _alert_compensation_failures(
         self,
