@@ -622,3 +622,45 @@ class TestMoveOnt:
         assert error is None
         assert resolved_assignment is assignment
         assert olt is assignment_olt
+    def test_queries_locked_assignment_instead_of_relationship_cache(self):
+        from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+        from app.services.network.ont_olt_context import resolve_ont_olt_write_context
+
+        ont = OntUnit(
+            id=uuid.uuid4(),
+            serial_number="STRICT-CONTEXT-LOCK",
+            board="0/1",
+            port="3",
+            external_id="huawei:4194320640.5",
+        )
+        ont.assignments = []
+        assignment = OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=uuid.uuid4(),
+            active=True,
+        )
+        pon = PonPort(id=assignment.pon_port_id, olt_id=uuid.uuid4(), name="0/1/3")
+        olt = OLTDevice(id=pon.olt_id, name="Strict Context OLT", vendor="Huawei")
+
+        db = MagicMock()
+
+        def _get(model, value):
+            if model is OntUnit:
+                return ont
+            if model is PonPort:
+                return pon
+            if model is OLTDevice:
+                return olt
+            return None
+
+        db.get.side_effect = _get
+        db.scalars.return_value.first.return_value = assignment
+
+        ctx, message = resolve_ont_olt_write_context(db, str(ont.id))
+
+        assert message is None
+        assert ctx is not None
+        assert ctx.assignment is assignment
+        statement = db.scalars.call_args.args[0]
+        assert getattr(statement, "_for_update_arg", None) is not None
+

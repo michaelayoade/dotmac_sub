@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
@@ -35,6 +36,27 @@ def _scanned_fsp_from_ont(ont: OntUnit) -> str | None:
     return fsp if _FSP_RE.fullmatch(fsp) else None
 
 
+def _load_active_assignment_for_update(
+    db: Session,
+    *,
+    ont_id: object,
+) -> OntAssignment | None:
+    """Load and row-lock the active assignment used for OLT writes."""
+    stmt = (
+        select(OntAssignment)
+        .where(
+            OntAssignment.ont_unit_id == ont_id,
+            OntAssignment.active.is_(True),
+        )
+        .order_by(
+            OntAssignment.assigned_at.desc(),
+            OntAssignment.created_at.desc(),
+        )
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
 def resolve_ont_olt_write_context(
     db: Session,
     ont_id: str,
@@ -48,10 +70,7 @@ def resolve_ont_olt_write_context(
     if ont is None:
         return None, "ONT not found."
 
-    assignment = next(
-        (item for item in getattr(ont, "assignments", []) if item.active),
-        None,
-    )
+    assignment = _load_active_assignment_for_update(db, ont_id=ont.id)
     if assignment is None:
         return None, "ONT has no active assignment."
     if not assignment.pon_port_id:

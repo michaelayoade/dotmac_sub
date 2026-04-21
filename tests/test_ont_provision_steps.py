@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 class TestResolveOltContext:
@@ -36,6 +36,48 @@ class TestResolveOltContext:
         ctx, err = resolve_olt_context(db_session, str(ont.id))
         assert ctx is None
         assert "assignment" in err.lower()
+
+    def test_queries_locked_assignment_instead_of_stale_relationship(self) -> None:
+        from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+        from app.services.network.ont_provisioning.context import resolve_olt_context
+
+        ont = OntUnit(
+            id=uuid.uuid4(),
+            serial_number="LOCK-CTX-001",
+            board="0/1",
+            port="3",
+            external_id="5",
+        )
+        ont.assignments = []
+        assignment = OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=uuid.uuid4(),
+            active=True,
+        )
+        pon = PonPort(id=assignment.pon_port_id, olt_id=uuid.uuid4(), name="0/1/3")
+        olt = OLTDevice(id=pon.olt_id, name="Lock OLT", vendor="Huawei")
+
+        db = MagicMock()
+
+        def _get(model, value):
+            if model is OntUnit:
+                return ont
+            if model is PonPort:
+                return pon
+            if model is OLTDevice:
+                return olt
+            return None
+
+        db.get.side_effect = _get
+        db.scalars.return_value.first.return_value = assignment
+
+        ctx, err = resolve_olt_context(db, str(ont.id))
+
+        assert err == ""
+        assert ctx is not None
+        assert ctx.assignment is assignment
+        statement = db.scalars.call_args.args[0]
+        assert getattr(statement, "_for_update_arg", None) is not None
 
 
 class TestCreateServicePort:
@@ -91,7 +133,11 @@ class TestCreateServicePort:
         db_session.add(assignment)
         db_session.commit()
 
-        mock_action = SimpleNamespace(success=True, message="Service-port 100 created")
+        mock_action = SimpleNamespace(
+            success=True,
+            message="Service-port 100 created",
+            data={},
+        )
         with patch(
             "app.services.network.ont_write.OntWriteService.update_service_port",
             return_value=mock_action,

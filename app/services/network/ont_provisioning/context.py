@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
@@ -21,17 +22,34 @@ class OltContext:
     assignment: OntAssignment | None = None
 
 
+def _load_active_assignment_for_update(
+    db: Session,
+    *,
+    ont_id: object,
+) -> OntAssignment | None:
+    """Load and row-lock the active assignment used for OLT writes."""
+    stmt = (
+        select(OntAssignment)
+        .where(
+            OntAssignment.ont_unit_id == ont_id,
+            OntAssignment.active.is_(True),
+        )
+        .order_by(
+            OntAssignment.assigned_at.desc(),
+            OntAssignment.created_at.desc(),
+        )
+        .with_for_update()
+    )
+    return db.scalars(stmt).first()
+
+
 def resolve_olt_context(db: Session, ont_id: str) -> tuple[OltContext | None, str]:
     """Resolve ONT -> OLT + F/S/P + ONT-ID for SSH operations."""
     ont = db.get(OntUnit, ont_id)
     if not ont:
         return None, "ONT not found"
 
-    assignment: OntAssignment | None = None
-    for item in getattr(ont, "assignments", []):
-        if item.active:
-            assignment = item
-            break
+    assignment = _load_active_assignment_for_update(db, ont_id=ont.id)
     if not assignment:
         return None, "ONT has no active assignment"
     if not assignment.pon_port_id:
