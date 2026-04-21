@@ -23,7 +23,7 @@
             {% if cs.description %}
             <p class="mb-2 text-xs text-slate-500 dark:text-slate-400">{{ cs.description }}</p>
             {% endif %}
-            <pre class="overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-green-400 font-mono"><code>{% for cmd in cs.commands %}{{ cmd }}
+            <pre class="overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-green-400 font-mono"><code>{% for cmd in cs.commands %}{{ cmd | masked_credentials }}
 {% endfor %}</code></pre>
         </div>
     </div>

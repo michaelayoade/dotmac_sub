@@ -57,3 +57,29 @@ def test_command_preview_context_masks_generated_credentials(monkeypatch) -> Non
         "snmp-agent community read cipher ********",
     ]
 
+
+def test_provisioning_preview_template_masks_raw_credentials_at_render_time() -> None:
+    from app.web.admin import network_onts_provisioning
+
+    template = network_onts_provisioning.templates.env.get_template(
+        "admin/network/onts/_provisioning_preview.html"
+    )
+    rendered = template.render(
+        error=None,
+        profile=SimpleNamespace(name="Profile"),
+        command_sets=[
+            SimpleNamespace(
+                step="WAN",
+                description="Apply WAN settings",
+                commands=[
+                    "ont wan pppoe password cipher ppp-secret",
+                    "snmp-agent community read cipher public123",
+                ],
+            )
+        ],
+    )
+
+    assert "ppp-secret" not in rendered
+    assert "public123" not in rendered
+    assert "password cipher ********" in rendered
+    assert "community read cipher ********" in rendered

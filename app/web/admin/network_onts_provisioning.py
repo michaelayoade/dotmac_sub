@@ -23,9 +23,11 @@ from app.services import (
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_provision_steps as steps
 from app.services.network.action_logging import log_network_action_result
+from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.ont_provisioning.result import StepResult
 
 templates = Jinja2Templates(directory="templates")
+templates.env.filters["masked_credentials"] = mask_credentials
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-provisioning"])
 
 
