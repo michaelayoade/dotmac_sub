@@ -349,12 +349,12 @@ class GenieAcsConfigWriter:
         username: str,
         password: str,
         *,
-        instance_index: int = 1,
+        instance_index: int | None = None,
         wan_vlan: int | None = None,
         **metadata: Any,
     ) -> AcsConfigQueueResult:
         kwargs: dict[str, object] = {}
-        if instance_index != 1:
+        if instance_index is not None:
             kwargs["instance_index"] = instance_index
         if wan_vlan is not None:
             kwargs["wan_vlan"] = wan_vlan
@@ -374,13 +374,13 @@ class GenieAcsConfigWriter:
         username: str,
         password: str,
         *,
-        instance_index: int = 1,
+        instance_index: int | None = None,
         wan_vlan: int | None = None,
     ) -> ActionResult:
         from app.services.network.ont_action_network import set_pppoe_credentials
 
         kwargs: dict[str, object] = {}
-        if instance_index != 1:
+        if instance_index is not None:
             kwargs["instance_index"] = instance_index
         if wan_vlan is not None:
             kwargs["wan_vlan"] = wan_vlan

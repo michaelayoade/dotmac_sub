@@ -236,7 +236,7 @@ class AcsConfigWriter(Protocol):
         username: str,
         password: str,
         *,
-        instance_index: int = 1,
+        instance_index: int | None = None,
         wan_vlan: int | None = None,
     ) -> Any: ...
 

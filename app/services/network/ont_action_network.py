@@ -25,6 +25,7 @@ from app.services.network.ont_action_common import (
     get_ont_client_or_error,
     persist_data_model_root,
     read_param_from_cache,
+    resolve_wan_ppp_instance,
     set_and_verify,
 )
 from app.services.settings_spec import resolve_value
@@ -1350,10 +1351,16 @@ def set_pppoe_credentials(
     username: str,
     password: str,
     *,
-    instance_index: int = 1,
+    instance_index: int | None = None,
     wan_vlan: int | None = None,
 ) -> ActionResult:
-    """Push PPPoE credentials to ONT via TR-069."""
+    """Push PPPoE credentials to ONT via TR-069.
+
+    When ``instance_index`` is omitted, the WANConnectionDevice hosting an
+    existing WANPPPConnection is auto-discovered from the cached device
+    snapshot. Pass an explicit index to target a specific slot (e.g. when
+    creating a second WAN service with a different VLAN).
+    """
     if not username:
         return ActionResult(success=False, message="PPPoE username is required.")
     if not password:
@@ -1367,6 +1374,8 @@ def set_pppoe_credentials(
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     persist_data_model_root(ont, root)
+    if instance_index is None:
+        instance_index = resolve_wan_ppp_instance(client, device_id, root)
     instance_index = max(1, instance_index)
     wan_vlan = _resolve_wan_vlan_tag(db, ont, wan_vlan)
     if root == "Device":

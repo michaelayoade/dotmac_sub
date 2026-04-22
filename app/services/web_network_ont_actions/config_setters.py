@@ -406,12 +406,17 @@ def set_pppoe_credentials(
     username: str,
     password: str,
     *,
-    instance_index: int = 1,
+    instance_index: int | None = None,
     wan_vlan: int | None = None,
     initiated_by: str | None = None,
     request: Request | None = None,
 ) -> ActionResult:
-    """Push PPPoE credentials to ONT via TR-069 with operation tracking."""
+    """Push PPPoE credentials to ONT via TR-069 with operation tracking.
+
+    When ``instance_index`` is omitted, the underlying network call
+    auto-discovers the WANConnectionDevice hosting an existing
+    WANPPPConnection.
+    """
     initiated_by = initiated_by or actor_name_from_request(request)
     if wan_vlan is None:
         try:
