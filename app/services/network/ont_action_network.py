@@ -1452,17 +1452,16 @@ def enable_ipv6_on_wan(
     db: Session,
     ont_id: str,
     *,
-    wan_instance: int = 1,
+    wan_instance: int | None = None,
 ) -> ActionResult:
     """Enable IPv6 dual-stack on the ONT WAN interface via TR-069.
 
     Configures DHCPv6 client for prefix delegation and enables IPv6 on the WAN.
     The ONT will request a /64 prefix from the NAS via DHCPv6-PD.
 
-    Args:
-        db: Database session.
-        ont_id: OntUnit ID.
-        wan_instance: WAN connection instance index (default 1).
+    When ``wan_instance`` is omitted, the WANConnectionDevice hosting an
+    existing WANPPPConnection is auto-discovered from the cached device
+    snapshot. Pass an explicit index to target a specific slot.
     """
     resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
@@ -1472,6 +1471,9 @@ def enable_ipv6_on_wan(
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     persist_data_model_root(ont, root)
+    if wan_instance is None:
+        wan_instance = resolve_wan_ppp_instance(client, device_id, root)
+    wan_instance = max(1, wan_instance)
 
     if root == "Device":
         params = {

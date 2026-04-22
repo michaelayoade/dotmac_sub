@@ -685,7 +685,7 @@ def step_configure_wan_tr069(
 def step_enable_ipv6(
     request: Request,
     ont_id: str,
-    wan_instance: int = Form(default=1),
+    wan_instance: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Enable IPv6 dual-stack via TR-069."""

@@ -1764,21 +1764,23 @@ def enable_ipv6(
     db: Session,
     ont_id: str,
     *,
-    wan_instance: int = 1,
+    wan_instance: int | None = None,
 ) -> StepResult:
     """Enable IPv6 dual-stack on the ONT WAN interface via TR-069.
 
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        wan_instance: WAN instance index (default 1).
+    When ``wan_instance`` is omitted, the underlying network call
+    auto-discovers the WANConnectionDevice hosting an existing
+    WANPPPConnection.
     """
     t0 = time.monotonic()
     try:
+        writer_kwargs: dict[str, object] = {}
+        if wan_instance is not None:
+            writer_kwargs["wan_instance"] = wan_instance
         v6_result = _acs_config_writer().enable_ipv6_on_wan(
             db,
             ont_id,
-            wan_instance=wan_instance,
+            **writer_kwargs,
         )
         ms = int((time.monotonic() - t0) * 1000)
         result = StepResult(

@@ -278,7 +278,7 @@ class AcsConfigWriter(Protocol):
     ) -> Any: ...
 
     def enable_ipv6_on_wan(
-        self, db: Session, ont_id: str, *, wan_instance: int = 1
+        self, db: Session, ont_id: str, *, wan_instance: int | None = None
     ) -> Any: ...
 
 

@@ -664,14 +664,17 @@ class GenieAcsConfigWriter:
         db: Session,
         ont_id: str,
         *,
-        wan_instance: int = 1,
+        wan_instance: int | None = None,
         **metadata: Any,
     ) -> AcsConfigQueueResult:
+        kwargs: dict[str, object] = {}
+        if wan_instance is not None:
+            kwargs["wan_instance"] = wan_instance
         return self.queue_config_action(
             db,
             "enable_ipv6_on_wan",
             ont_id,
-            kwargs={"wan_instance": wan_instance},
+            kwargs=kwargs,
             **metadata,
         )
 
@@ -680,11 +683,14 @@ class GenieAcsConfigWriter:
         db: Session,
         ont_id: str,
         *,
-        wan_instance: int = 1,
+        wan_instance: int | None = None,
     ) -> ActionResult:
         from app.services.network.ont_action_network import enable_ipv6_on_wan
 
-        return enable_ipv6_on_wan(db, ont_id, wan_instance=wan_instance)
+        kwargs: dict[str, object] = {}
+        if wan_instance is not None:
+            kwargs["wan_instance"] = wan_instance
+        return enable_ipv6_on_wan(db, ont_id, **kwargs)
 
 
 AcsConfigAdapter = GenieAcsConfigWriter
