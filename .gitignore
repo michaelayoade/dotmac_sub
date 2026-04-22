@@ -52,6 +52,7 @@ htmlcov/
 .coverage
 .pytest_cache/
 .claude/
+test-results/.last-run.json
 
 # Migration runtime data
 scripts/migration/.rebind_checkpoints/
