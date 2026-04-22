@@ -22,6 +22,7 @@ from app.models.network import (
 )
 from app.models.tr069 import Tr069AcsServer
 from app.services.common import coerce_uuid
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.onu_types import onu_types
 from app.services.network.speed_profiles import speed_profiles
 from app.services.network.zones import network_zones
@@ -298,40 +299,18 @@ def get_vlans_for_olt(
     olt_device_id: str | None,
     *,
     include_vlan_ids: list[str] | None = None,
-    include_global: bool = True,
+    include_global: bool = False,
 ) -> list[Vlan]:
-    """Fetch VLANs scoped for an OLT, optionally including global records."""
+    """Fetch VLANs scoped for an OLT."""
     include_ids = [v for v in (include_vlan_ids or []) if v]
-    if not include_global and not olt_device_id and not include_ids:
+    if not olt_device_id and not include_ids:
         return []
 
     stmt = select(Vlan)
-    if olt_device_id and include_ids and include_global:
-        stmt = stmt.where(
-            or_(
-                Vlan.olt_device_id == olt_device_id,
-                Vlan.olt_device_id.is_(None),
-                Vlan.id.in_(include_ids),
-            )
-        )
-    elif olt_device_id and include_ids:
-        stmt = stmt.where(
-            or_(Vlan.olt_device_id == olt_device_id, Vlan.id.in_(include_ids))
-        )
-    elif olt_device_id:
-        if include_global:
-            stmt = stmt.where(
-                or_(Vlan.olt_device_id == olt_device_id, Vlan.olt_device_id.is_(None))
-            )
-        else:
-            stmt = stmt.where(Vlan.olt_device_id == olt_device_id)
+    if olt_device_id:
+        stmt = stmt.where(Vlan.olt_device_id == olt_device_id)
     elif include_ids:
-        if include_global:
-            stmt = stmt.where(
-                or_(Vlan.olt_device_id.is_(None), Vlan.id.in_(include_ids))
-            )
-        else:
-            stmt = stmt.where(Vlan.id.in_(include_ids))
+        stmt = stmt.where(Vlan.id.in_(include_ids))
     else:
         stmt = stmt.where(Vlan.is_active.is_(True))
 
@@ -495,7 +474,11 @@ def management_ip_choices_for_ont(
 
     choices: list[dict[str, Any]] = []
     per_pool_limit = max(1, min(limit, max(10, limit // max(len(pools), 1))))
-    selected_ip = getattr(ont, "mgmt_ip_address", None)
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    selected_ip = effective_values.get("mgmt_ip_address") or getattr(
+        ont, "mgmt_ip_address", None
+    )
     for candidate_pool in pools:
         pool_version = getattr(
             getattr(candidate_pool, "ip_version", None),
@@ -910,55 +893,53 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     wifi_intent_from_order = (
         wifi_plan_value if isinstance(wifi_plan_value, dict) else {}
     )
+    effective_config = resolve_effective_ont_config(db, ont)
+    effective_values = (
+        effective_config.get("values", {}) if isinstance(effective_config, dict) else {}
+    )
     wifi_intent = {
         "enabled": (
-            getattr(ont, "wifi_enabled", None)
-            if getattr(ont, "wifi_enabled", None) is not None
+            effective_values.get("wifi_enabled")
+            if effective_values.get("wifi_enabled") is not None
             else wifi_intent_from_order.get(
                 "enabled",
                 getattr(profile, "wifi_enabled", None) if profile else None,
             )
         ),
         "ssid": (
-            getattr(ont, "wifi_ssid", None)
+            effective_values.get("wifi_ssid")
             or wifi_intent_from_order.get("ssid")
             or (getattr(profile, "wifi_ssid_template", None) if profile else None)
         ),
         "channel": (
-            getattr(ont, "wifi_channel", None)
+            effective_values.get("wifi_channel")
             or wifi_intent_from_order.get("channel")
             or (getattr(profile, "wifi_channel", None) if profile else None)
         ),
         "security_mode": (
-            getattr(ont, "wifi_security_mode", None)
+            effective_values.get("wifi_security_mode")
             or wifi_intent_from_order.get("security_mode")
             or (getattr(profile, "wifi_security_mode", None) if profile else None)
         ),
     }
-    mgmt_mode = (
-        ont.mgmt_ip_mode.value
-        if getattr(ont, "mgmt_ip_mode", None) is not None
-        else "dhcp"
-    )
-    wan_protocol = (
-        ont.wan_mode.value if getattr(ont, "wan_mode", None) is not None else "pppoe"
-    )
+    mgmt_mode = str(effective_values.get("mgmt_ip_mode") or "dhcp")
+    wan_protocol = str(effective_values.get("wan_mode") or "pppoe")
     if wan_protocol == "static_ip":
         wan_protocol = "static"
     elif wan_protocol == "bridge":
         wan_protocol = "bridged"
 
     provision_gate_issues = validate_provision_form_fields(
-        profile_id=str(profile.id) if profile else None,
-        onu_mode=ont.onu_mode.value if ont.onu_mode else "routing",
+        bundle_id=str(profile.id) if profile else None,
+        onu_mode=str(effective_values.get("onu_mode") or "routing"),
         mgmt_vlan_id=str(ont.mgmt_vlan_id) if ont.mgmt_vlan_id else None,
         mgmt_ip_mode=mgmt_mode,
-        mgmt_ip_address=ont.mgmt_ip_address,
+        mgmt_ip_address=str(effective_values.get("mgmt_ip_address") or "") or None,
         mgmt_subnet=None,
         mgmt_gateway=None,
         wan_protocol=wan_protocol,
         wan_vlan_id=str(ont.wan_vlan_id) if ont.wan_vlan_id else None,
-        pppoe_username=ont.pppoe_username,
+        pppoe_username=str(effective_values.get("pppoe_username") or "") or None,
         static_ip_pool_id=None,
         static_ip=None,
         static_subnet=None,
@@ -984,7 +965,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     provision_preflight = preflight_result(
         db,
         ont_id=ont_id,
-        profile_id=str(profile.id) if profile else None,
+        bundle_id=str(profile.id) if profile else None,
         tr069_profile_id=getattr(tr069_profile, "profile_id", None),
     )
 
@@ -999,7 +980,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "provisioning_profile": profile,
         "tr069_profile": tr069_profile,
         "tr069_profile_error": tr069_error,
-        "selected_profile_id": str(profile.id) if profile else "",
+        "selected_bundle_id": str(profile.id) if profile else "",
         "selected_tr069_profile_id": getattr(tr069_profile, "profile_id", None),
         "selected_tr069_profile_name": getattr(tr069_profile, "name", None)
         or getattr(tr069_profile, "profile_name", None),
@@ -1039,7 +1020,8 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "operational_acs_server_name": getattr(
             getattr(olt, "tr069_acs_server", None), "name", None
         ),
-        "pppoe_username": getattr(ont, "pppoe_username", None),
+        "pppoe_username": effective_values.get("pppoe_username")
+        or getattr(ont, "pppoe_username", None),
         "ont_plan": ont_plan,
         "provision_gate_issues": provision_gate_issues,
         "provision_preflight": provision_preflight,
@@ -1052,16 +1034,12 @@ def resolve_effective_provisioning_profile(
 ) -> Any | None:
     """Resolve the provisioning profile for an ONT.
 
-    Checks ONT-level override, then OLT default, then returns None.
+    Prefers the explicit bundle assignment, then falls back to the legacy
+    ONT-level field and finally the OLT default profile.
     """
-    from app.models.network import OntProvisioningProfile
+    from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 
-    profile_id = getattr(ont, "provisioning_profile_id", None)
-    if not profile_id and olt:
-        profile_id = getattr(olt, "default_provisioning_profile_id", None)
-    if profile_id:
-        return db.get(OntProvisioningProfile, str(profile_id))
-    return None
+    return resolve_assigned_bundle(db, ont, olt=olt)
 
 
 def resolve_effective_tr069_profile_for_ont(

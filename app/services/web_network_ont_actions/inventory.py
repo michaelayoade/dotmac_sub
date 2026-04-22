@@ -16,6 +16,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult
+from app.services.network.ont_inventory import reset_ont_service_state
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
     _resolve_return_olt_context,
@@ -203,30 +204,8 @@ def return_to_inventory(
     ont.olt_device_id = None
     ont.board = None
     ont.port = None
-    ont.provisioning_profile_id = None
-    ont.provisioning_status = OntProvisioningStatus.unprovisioned
-    ont.authorization_status = None
-    ont.last_provisioned_at = None
     ont.external_id = None
-    ont.wan_vlan_id = None
-    ont.wan_mode = None
-    ont.config_method = None
-    ont.ip_protocol = None
-    ont.pppoe_username = None
-    ont.pppoe_password = None
-    ont.wan_remote_access = False
-    ont.tr069_acs_server_id = None
-    ont.mgmt_ip_mode = None
-    ont.mgmt_vlan_id = None
-    ont.mgmt_ip_address = None
-    ont.mgmt_remote_access = False
-    ont.voip_enabled = False
-    # Clear LAN configuration
-    ont.lan_gateway_ip = None
-    ont.lan_subnet_mask = None
-    ont.lan_dhcp_enabled = None
-    ont.lan_dhcp_start = None
-    ont.lan_dhcp_end = None
+    reset_ont_service_state(db, ont)
     db.flush()
     ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
 
@@ -282,26 +261,26 @@ def return_to_inventory(
     return result
 
 
-def apply_profile(
-    db: Session, ont_id: str, profile_id: str, *, request: Request | None = None
+def apply_bundle(
+    db: Session, ont_id: str, bundle_id: str, *, request: Request | None = None
 ) -> Any:
-    """Apply a profile template and audit the explicit admin action."""
-    from app.services.network.ont_profile_apply import apply_profile_to_ont
+    """Apply a bundle template and audit the explicit admin action."""
+    from app.services.network.ont_profile_apply import apply_bundle_to_ont
     from app.services.network_subscriber_bridge import default_subscriber_validator
 
-    result = apply_profile_to_ont(
+    result = apply_bundle_to_ont(
         db,
         ont_id,
-        profile_id,
+        bundle_id,
         subscriber_context_provider=default_subscriber_validator,
     )
     _log_action_audit(
         db,
         request=request,
-        action="apply_profile",
+        action="apply_bundle",
         ont_id=ont_id,
         metadata={
-            "profile_id": profile_id,
+            "bundle_id": bundle_id,
             "success": result.success,
             "fields_updated": result.fields_updated,
         },

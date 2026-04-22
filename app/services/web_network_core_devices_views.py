@@ -38,6 +38,8 @@ from app.models.subscriber import SubscriberCategory
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
+from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
 from app.services.network.ont_status import (
     resolve_effective_last_seen_at,
@@ -1872,6 +1874,42 @@ def onts_list_page_data(
         .order_by(OntUnit.vendor)
     ).all()
 
+    # Build profile info lookup for displayed ONTs
+    from app.models.network import OntProvisioningProfile
+
+    profile_info: dict[str, dict[str, str]] = {}
+    active_assignments = {
+        str(getattr(ont, "id", "")): get_active_bundle_assignment(db, ont)
+        for ont in displayed_onts
+        if getattr(ont, "id", None)
+    }
+    profile_ids = {
+        assignment.bundle_id
+        for assignment in active_assignments.values()
+        if assignment and getattr(assignment, "bundle_id", None)
+    }
+    profile_by_id: dict[str, OntProvisioningProfile] = {}
+    if profile_ids:
+        profile_rows = db.scalars(
+            select(OntProvisioningProfile).where(
+                OntProvisioningProfile.id.in_(profile_ids)
+            )
+        ).all()
+        profile_by_id = {str(p.id): p for p in profile_rows}
+    for ont in displayed_onts:
+        ont_key = str(getattr(ont, "id", ""))
+        if not ont_key:
+            continue
+        assignment = active_assignments.get(ont_key)
+        profile_id = getattr(assignment, "bundle_id", None)
+        if profile_id and str(profile_id) in profile_by_id:
+            profile = profile_by_id[str(profile_id)]
+            profile_info[ont_key] = {
+                "profile_id": str(profile.id),
+                "profile_name": profile.name or "",
+                "profile_type": profile.profile_type.value if profile.profile_type else "",
+            }
+
     return {
         "onts": onts,
         "diagnostics_onts": diagnostics_onts,
@@ -1879,6 +1917,7 @@ def onts_list_page_data(
         "status_filter": status_filter,
         "signal_data": signal_data,
         "assignment_info": assignment_info,
+        "profile_info": profile_info,
         "serial_display_by_ont_id": serial_display_by_ont_id,
         "hex_serial_by_ont_id": hex_serial_by_ont_id,
         "olts": olts,
@@ -2187,14 +2226,17 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     # Manual profile state shown on the ONT detail screen
     profile_state: dict[str, object] = {}
-    if ont.provisioning_profile_id:
-        profile_state["profile_id"] = str(ont.provisioning_profile_id)
+    active_assignment = get_active_bundle_assignment(db, ont)
+    active_profile_id = getattr(active_assignment, "bundle_id", None)
+    if active_profile_id:
+        profile_state["profile_id"] = str(active_profile_id)
         profile_state["status"] = (
             ont.provisioning_status.value if ont.provisioning_status else None
         )
         profile_state["last_provisioned_at"] = ont.last_provisioned_at
-        if ont.provisioning_profile:
-            profile_state["profile_name"] = ont.provisioning_profile.name
+        bundle = getattr(active_assignment, "bundle", None)
+        if bundle is not None:
+            profile_state["profile_name"] = bundle.name
 
         # Check for drift
         from app.services.network.ont_profile_apply import detect_drift
@@ -2239,13 +2281,14 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         )
     observed_runtime_summary = _acs_observed_runtime_summary(
         acs_observed_intent,
+        db=db,
         ont=ont,
     )
     last_config_summary = _ont_last_config_summary(
         ont,
         acs_observed_intent=acs_observed_intent,
     )
-    desired_config_summary = _ont_desired_config_summary(ont, ont_plan=ont_plan)
+    desired_config_summary = _ont_desired_config_summary(db, ont, ont_plan=ont_plan)
     connected_wifi_clients = observed_runtime_summary.get("wifi_clients")
     connected_customer_devices = observed_runtime_summary.get("customer_devices")
 
@@ -2299,8 +2342,10 @@ def _safe_int(value: object) -> int | None:
 
 
 def _acs_observed_runtime_summary(
-    acs_observed_intent: dict[str, object], *, ont: object
+    acs_observed_intent: dict[str, object], *, db: Session, ont: object
 ) -> dict[str, object]:
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective["values"]
     tracked_index = acs_observed_intent.get("tracked_point_index", {})
     tracked_index = tracked_index if isinstance(tracked_index, dict) else {}
 
@@ -2350,11 +2395,9 @@ def _acs_observed_runtime_summary(
         "has_runtime": has_runtime,
         "mac_address": tracked_raw("system.mac_address") or getattr(ont, "mac_address", None),
         "wan_ip": tracked_raw("wan.wan_ip"),
-        "pppoe_user": tracked_raw("wan.pppoe_username")
-        or getattr(ont, "pppoe_username", None),
+        "pppoe_user": tracked_raw("wan.pppoe_username") or values.get("pppoe_username"),
         "pppoe_status": tracked_raw("wan.status"),
-        "wan_mode": getattr(getattr(ont, "wan_mode", None), "value", None)
-        or getattr(ont, "wan_mode", None),
+        "wan_mode": values.get("wan_mode"),
         "lan_mode": tracked_raw("lan.dhcp_enabled"),
         "lan_ip": tracked_raw("lan.lan_ip"),
         "wifi_clients": wifi_clients,
@@ -2587,6 +2630,7 @@ def _enum_or_text(value: object) -> str:
 
 
 def _ont_desired_config_summary(
+    db: Session,
     ont: object,
     *,
     ont_plan: dict[str, object],
@@ -2607,15 +2651,16 @@ def _ont_desired_config_summary(
     olt_snapshot = olt_snapshot if isinstance(olt_snapshot, dict) else {}
     iphost = olt_snapshot.get("iphost_config")
     iphost = iphost if isinstance(iphost, dict) else {}
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective["values"]
 
-    mgmt_vlan = getattr(getattr(ont, "mgmt_vlan", None), "tag", None)
-    wan_vlan = getattr(getattr(ont, "wan_vlan", None), "tag", None)
+    mgmt_vlan = values.get("mgmt_vlan")
+    wan_vlan = values.get("wan_vlan")
     rows = [
         {
             "label": "Mgmt mode",
             "value": _display_config_value(
-                _enum_or_text(getattr(ont, "mgmt_ip_mode", None))
-                or mgmt.get("ip_mode")
+                values.get("mgmt_ip_mode") or mgmt.get("ip_mode")
             ),
             "value_class": "",
         },
@@ -2627,7 +2672,7 @@ def _ont_desired_config_summary(
         {
             "label": "Mgmt IP",
             "value": _display_config_value(
-                getattr(ont, "mgmt_ip_address", None) or mgmt.get("ip_address")
+                values.get("mgmt_ip_address") or mgmt.get("ip_address")
             ),
             "value_class": "font-mono",
         },
@@ -2648,7 +2693,7 @@ def _ont_desired_config_summary(
         {
             "label": "WAN mode",
             "value": _display_config_value(
-                _enum_or_text(getattr(ont, "wan_mode", None)) or wan.get("wan_mode")
+                values.get("wan_mode") or wan.get("wan_mode")
             ),
             "value_class": "",
         },
@@ -2662,7 +2707,7 @@ def _ont_desired_config_summary(
         {
             "label": "PPPoE user",
             "value": _display_config_value(
-                getattr(ont, "pppoe_username", None) or pppoe.get("username")
+                values.get("pppoe_username") or pppoe.get("username")
             ),
             "value_class": "font-mono",
         },
@@ -2688,17 +2733,15 @@ def _ont_desired_config_summary(
         {
             "label": "WiFi enabled",
             "value": _display_config_value(
-                getattr(ont, "wifi_enabled", None)
-                if getattr(ont, "wifi_enabled", None) is not None
+                values.get("wifi_enabled")
+                if values.get("wifi_enabled") is not None
                 else wifi.get("enabled")
             ),
             "value_class": "",
         },
         {
             "label": "SSID",
-            "value": _display_config_value(
-                getattr(ont, "wifi_ssid", None) or wifi.get("ssid")
-            ),
+            "value": _display_config_value(values.get("wifi_ssid") or wifi.get("ssid")),
             "value_class": "font-mono",
         },
         {
@@ -2709,7 +2752,7 @@ def _ont_desired_config_summary(
         {
             "label": "WiFi channel",
             "value": _display_config_value(
-                getattr(ont, "wifi_channel", None) or wifi.get("channel")
+                values.get("wifi_channel") or wifi.get("channel")
             ),
             "value_class": "",
         },

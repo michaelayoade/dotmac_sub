@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/forms/speed_select.html" import speed_pair_fields %}
 
 {% block title %}{{ 'Edit' if item else 'New' }} Provisioning Profile - Admin{% endblock %}
 
@@ -178,28 +179,13 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OLT-level bandwidth enforcement</p>
             </div>
             <div class="p-6">
-                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                    <div>
-                        <label for="download_speed_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download Profile</label>
-                        <select name="download_speed_profile_id" id="download_speed_profile_id"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">None</option>
-                            {% for sp in download_speed_profiles %}
-                            <option value="{{ sp.id }}" {% if item and item.download_speed_profile_id and item.download_speed_profile_id|string == sp.id|string %}selected{% endif %}>{{ sp.name }} ({{ sp.speed_kbps // 1000 }} Mbps)</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label for="upload_speed_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Profile</label>
-                        <select name="upload_speed_profile_id" id="upload_speed_profile_id"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">None</option>
-                            {% for sp in upload_speed_profiles %}
-                            <option value="{{ sp.id }}" {% if item and item.upload_speed_profile_id and item.upload_speed_profile_id|string == sp.id|string %}selected{% endif %}>{{ sp.name }} ({{ sp.speed_kbps // 1000 }} Mbps)</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
+                {% set download_selected = form_values.download_speed_profile_id if form_values is defined and form_values else (item.download_speed_profile_id|string if item and item.download_speed_profile_id else none) %}
+                {% set upload_selected = form_values.upload_speed_profile_id if form_values is defined and form_values else (item.upload_speed_profile_id|string if item and item.upload_speed_profile_id else none) %}
+                {{ speed_pair_fields(
+                    profiles=download_speed_profiles + upload_speed_profiles,
+                    download_selected=download_selected,
+                    upload_selected=upload_selected
+                ) }}
             </div>
         </div>
 

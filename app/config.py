@@ -75,6 +75,8 @@ class Settings:
     s3_secret_key: str = os.getenv("S3_SECRET_KEY", "")
     s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "dotmac-private")
     s3_region: str = os.getenv("S3_REGION", "us-east-1")
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    REDIS_URL: str = redis_url
 
     # Router Management
     router_sync_interval_hours: int = int(os.getenv("ROUTER_SYNC_INTERVAL_HOURS", "6"))

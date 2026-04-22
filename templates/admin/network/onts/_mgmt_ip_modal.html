@@ -50,7 +50,7 @@
                         <option value="">-- None --</option>
                         {% for vlan in vlans %}
                         <option value="{{ vlan.id }}" {% if ont.mgmt_vlan_id and (ont.mgmt_vlan_id | string) == (vlan.id | string) %}selected{% endif %}>
-                            VLAN {{ vlan.tag }}{% if vlan.name %} - {{ vlan.name }}{% endif %}
+                            {{ vlan | vlan_label }}
                         </option>
                         {% endfor %}
                     </select>

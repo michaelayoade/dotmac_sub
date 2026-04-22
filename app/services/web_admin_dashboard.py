@@ -103,6 +103,55 @@ def _build_pon_interface_summary(db: Session) -> dict[str, int]:
     return {"up": up, "down": down, "unknown": unknown, "total": total}
 
 
+def _build_pon_outages(db: Session, limit: int = 10) -> list[dict]:
+    """Return list of PON interfaces that are currently down.
+
+    Returns up to `limit` interfaces with OLT name and last updated time.
+    """
+    pon_pattern = or_(
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%pon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%gpon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%epon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgpon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgs%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%pon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%gpon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%epon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgpon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgs%"),
+    )
+
+    rows = (
+        db.query(
+            DeviceInterface.id,
+            DeviceInterface.name,
+            DeviceInterface.description,
+            DeviceInterface.updated_at,
+            NetworkDevice.id.label("device_id"),
+            NetworkDevice.name.label("device_name"),
+        )
+        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .filter(pon_pattern)
+        .filter(DeviceInterface.status == InterfaceStatus.down)
+        .order_by(DeviceInterface.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    outages = []
+    for row in rows:
+        outages.append({
+            "id": str(row.id),
+            "name": row.name,
+            "description": row.description or "",
+            "olt_id": str(row.device_id),
+            "olt_name": row.device_name or "Unknown OLT",
+            "down_since": row.updated_at,
+        })
+    return outages
+
+
 def _build_health_thresholds(db: Session) -> dict:
     """Resolve network/server health thresholds from settings."""
     return {
@@ -494,6 +543,13 @@ def dashboard(request: Request, db: Session):
         )
         pon_interface_summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
 
+    # --- PON outages (interfaces currently down) ---
+    pon_outages: list[dict] = []
+    try:
+        pon_outages = _build_pon_outages(db, limit=10)
+    except Exception:
+        logger.debug("Failed to load PON outages for dashboard", exc_info=True)
+
     # --- VPN tunnel status ---
     vpn_tunnels = []
     try:
@@ -613,6 +669,7 @@ def dashboard(request: Request, db: Session):
             "ont_service_summary": ont_service_summary,
             "ont_olt_link_summary": ont_olt_link_summary,
             "pon_interface_summary": pon_interface_summary,
+            "pon_outages": pon_outages,
             "vpn_tunnels": vpn_tunnels,
         },
     )

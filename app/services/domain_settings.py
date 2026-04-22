@@ -1,5 +1,4 @@
 import builtins
-import logging
 from typing import Any
 
 from fastapi import HTTPException
@@ -14,14 +13,82 @@ from app.services.common import (
     coerce_uuid,
 )
 from app.services.response import ListResponseMixin
+from app.services.secrets import (
+    is_openbao_available,
+    is_openbao_ref,
+    read_secret_fields,
+    write_secret,
+)
 from app.services.settings_cache import SettingsCache
-
-logger = logging.getLogger(__name__)
 
 
 class DomainSettings(ListResponseMixin):
     def __init__(self, domain: SettingDomain | None = None) -> None:
         self.domain = domain
+
+    def _openbao_secret_path(self) -> str:
+        if not self.domain:
+            raise HTTPException(status_code=400, detail="Setting domain is required")
+        return f"settings/{self.domain.value}"
+
+    def _openbao_secret_ref(self, key: str) -> str:
+        return f"bao://secret/{self._openbao_secret_path()}#{key}"
+
+    def _write_secret_ref(
+        self,
+        *,
+        key: str,
+        value_text: str | None,
+        is_secret: bool,
+    ) -> str | None:
+        if not is_secret or value_text is None:
+            return value_text
+        normalized = value_text.strip()
+        if not normalized:
+            return value_text
+        if is_openbao_ref(normalized):
+            return normalized
+        if not is_openbao_available():
+            raise HTTPException(
+                status_code=500,
+                detail="OpenBao is not configured or reachable for secret settings",
+            )
+        path = self._openbao_secret_path()
+        payload = dict(read_secret_fields(path))
+        payload[key] = normalized
+        if not write_secret(path, payload):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to persist secret setting to OpenBao",
+            )
+        return self._openbao_secret_ref(key)
+
+    def _prepare_create_payload(
+        self, key: str, payload: DomainSettingCreate
+    ) -> DomainSettingCreate:
+        resolved = self._write_secret_ref(
+            key=key,
+            value_text=payload.value_text,
+            is_secret=payload.is_secret,
+        )
+        if resolved == payload.value_text:
+            return payload
+        data = payload.model_dump()
+        data["value_text"] = resolved
+        return DomainSettingCreate(**data)
+
+    def _prepare_update_payload(
+        self, key: str, payload: DomainSettingUpdate
+    ) -> DomainSettingUpdate:
+        data = payload.model_dump(exclude_unset=True)
+        resolved = self._write_secret_ref(
+            key=key,
+            value_text=data.get("value_text"),
+            is_secret=bool(data.get("is_secret")),
+        )
+        if resolved is not None:
+            data["value_text"] = resolved
+        return DomainSettingUpdate(**data)
 
     def _resolve_domain(self, payload_domain: SettingDomain | None) -> SettingDomain:
         if self.domain and payload_domain and payload_domain != self.domain:
@@ -33,6 +100,7 @@ class DomainSettings(ListResponseMixin):
         raise HTTPException(status_code=400, detail="Setting domain is required")
 
     def create(self, db: Session, payload: DomainSettingCreate):
+        payload = self._prepare_create_payload(payload.key, payload)
         data = payload.model_dump()
         data["domain"] = self._resolve_domain(payload.domain)
         setting = DomainSetting(**data)
@@ -79,6 +147,7 @@ class DomainSettings(ListResponseMixin):
         setting = db.get(DomainSetting, coerce_uuid(setting_id))
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
+        payload = self._prepare_update_payload(setting.key, payload)
         data = payload.model_dump(exclude_unset=True)
         if "domain" in data and data["domain"] != setting.domain:
             raise HTTPException(status_code=400, detail="Setting domain mismatch")
@@ -106,6 +175,7 @@ class DomainSettings(ListResponseMixin):
     def upsert_by_key(self, db: Session, key: str, payload: DomainSettingUpdate):
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
+        payload = self._prepare_update_payload(key, payload)
         setting = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)

@@ -197,6 +197,7 @@ def _verify_single_ont(db, olt, ont) -> bool:
         True if drift detected, False if verified
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.serial_utils import parse_ont_id_on_olt
     from app.services.network.service_port_allocator import get_allocations_for_ont
 
     # Get expected allocations from DB
@@ -226,11 +227,15 @@ def _verify_single_ont(db, olt, ont) -> bool:
         # Can't verify without PON port
         return False
 
-    # Derive FSP from PON port name (e.g., "0/1/0")
-    fsp = assignment.pon_port.name
-    ont_id = int(ont.external_id) if ont.external_id else None
+    # Prefer normalized board/port data, then fall back to the stored PON label.
+    fsp = None
+    if ont.board and ont.port:
+        fsp = f"{ont.board}/{ont.port}"
+    elif assignment.pon_port.name:
+        fsp = assignment.pon_port.name.removeprefix("pon-").strip()
+    ont_id = parse_ont_id_on_olt(ont.external_id)
 
-    if ont_id is None:
+    if not fsp or ont_id is None:
         return False
 
     # Get actual service ports from OLT

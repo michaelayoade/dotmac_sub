@@ -30,6 +30,7 @@ from app.services import network as network_service
 from app.services import web_network_onts as web_onts_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.credential_crypto import encrypt_credential
+from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
 from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
 
 _LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
@@ -676,9 +677,10 @@ def profile_form_context(db: Session, ont_id: str) -> dict[str, object]:
         olt_device_id=str(ont.olt_device_id) if ont.olt_device_id else None,
         limit=50,
     )
+    active_assignment = get_active_bundle_assignment(db, ont) if ont else None
     current_profile_id = (
-        str(ont.provisioning_profile_id)
-        if ont and ont.provisioning_profile_id
+        str(active_assignment.bundle_id)
+        if active_assignment and getattr(active_assignment, "bundle_id", None)
         else None
     )
     return {

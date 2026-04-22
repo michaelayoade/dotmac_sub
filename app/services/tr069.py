@@ -36,6 +36,7 @@ from app.services.common import (
 from app.services.credential_crypto import encrypt_credential
 from app.services.genieacs import GenieACSError, normalize_tr069_serial
 from app.services.network import cpe as cpe_service
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_status import (
     apply_status_snapshot,
     ont_has_acs_management,
@@ -295,19 +296,24 @@ def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
     ont = db.get(OntUnit, ont_id)
     if ont is None or not ont.is_active:
         return False
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
+    effective_bundle = effective.get("bundle") if isinstance(effective, dict) else None
     if (
-        ont.provisioning_profile_id
+        effective_bundle is not None
         or ont.tr069_last_snapshot
-        or ont.pppoe_username
+        or effective_values.get("pppoe_username")
         or ont.pppoe_password
-        or ont.wifi_ssid
+        or effective_values.get("wifi_ssid")
         or ont.wifi_password
         or ont.lan_gateway_ip
         or ont.lan_subnet_mask
         or ont.lan_dhcp_start
         or ont.lan_dhcp_end
-        or ont.wan_mode
-        or ont.wan_vlan_id
+        or effective_values.get("wan_mode")
+        or effective_values.get("wan_vlan")
     ):
         return True
     return bool(

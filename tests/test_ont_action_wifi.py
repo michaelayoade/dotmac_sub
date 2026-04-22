@@ -30,12 +30,12 @@ def test_set_wifi_config_translates_security_mode_for_tr098_device(monkeypatch) 
     cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(self, _device_id, params, *, connection_request=True):
+        def set_parameter_values(self, _device_id, params):
             calls.append(dict(params))
             cache.update(params)
             return {"queued": True}
 
-        def get_parameter_values(self, _device_id, _paths, *, connection_request=True):
+        def get_parameter_values(self, _device_id, _paths):
             return {"queued": True}
 
         def get_device(self, _device_id):
@@ -101,13 +101,7 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
                 return {"device_id": device_id, "path": path}
             raise GenieACSError("invalid parameter name")
 
-        def get_parameter_values(
-            self,
-            _device_id: str,
-            _paths: list[str],
-            *,
-            connection_request: bool = True,
-        ):
+        def get_parameter_values(self, _device_id: str, _paths: list[str]):
             return {"queued": True}
 
         def get_device(self, _device_id: str):
@@ -122,14 +116,8 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
                 node[parts[-1]] = {"_value": value, "_timestamp": "now"}
             return doc
 
-        def refresh_object(
-            self,
-            device_id: str,
-            path: str,
-            *,
-            connection_request: bool = False,
-        ):
-            refresh_calls.append((device_id, path, connection_request))
+        def refresh_object(self, device_id: str, path: str):
+            refresh_calls.append((device_id, path))
             return {"refreshed": path}
 
     monkeypatch.setattr(
@@ -154,7 +142,7 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
         "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
     ]
     assert refresh_calls == [
-        ("device-1", "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.", True)
+        ("device-1", "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.")
     ]
 
 

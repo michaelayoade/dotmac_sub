@@ -124,7 +124,7 @@ def _queue_bulk_provision_saga(
         result = bulk_provision_onts(
             db,
             ont_ids,
-            profile_id=params.get("profile_id"),
+            bundle_id=params.get("bundle_id") or params.get("profile_id"),
             saga_name=saga_name,
             tr069_olt_profile_id=params.get("tr069_olt_profile_id"),
             max_workers=int(params.get("max_parallel") or 10),

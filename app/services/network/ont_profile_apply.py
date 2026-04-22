@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import (
     OntAssignment,
+    OntBundleAssignmentStatus,
     OntProvisioningProfile,
     OntProvisioningStatus,
     OntUnit,
@@ -33,6 +34,15 @@ from app.models.network import (
 )
 from app.services.common import coerce_uuid
 from app.services.network._common import SubscriberTemplateContextProvider
+from app.services.network.ont_bundle_assignments import (
+    assign_bundle_to_ont,
+    get_active_bundle_assignment,
+    resolve_assigned_bundle,
+)
+from app.services.network.ont_config_overrides import (
+    clear_bundle_managed_legacy_projection,
+)
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +137,9 @@ def _resolve_vlan_by_tag(
         Vlan.is_active.is_(True),
     )
     if olt_device_id:
-        stmt = stmt.where(
-            (Vlan.olt_device_id == olt_device_id) | (Vlan.olt_device_id.is_(None))
-        )
+        stmt = stmt.where(Vlan.olt_device_id == olt_device_id)
+    else:
+        return None
     return db.scalars(stmt).first()
 
 
@@ -199,6 +209,8 @@ def _create_wan_service_instances(
         return 0
 
     created = 0
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
     for profile_service in active_services:
         # Resolve PPPoE username from template
         pppoe_username = _resolve_pppoe_username_template(
@@ -208,9 +220,9 @@ def _create_wan_service_instances(
         if (
             profile_service.connection_type.value == "pppoe"
             and not pppoe_username
-            and getattr(ont, "pppoe_username", None)
+            and effective_values.get("pppoe_username")
         ):
-            pppoe_username = ont.pppoe_username
+            pppoe_username = str(effective_values.get("pppoe_username"))
 
         # Resolve PPPoE password based on mode
         pppoe_password: str | None = None
@@ -311,52 +323,46 @@ def resolve_profile_for_ont(
     """Resolve the best provisioning profile for an ONT.
 
     Resolution chain:
-    1. Directly assigned profile on OntUnit.provisioning_profile_id
+    1. Active explicit bundle assignment
     2. None
     """
     ont = db.get(OntUnit, coerce_uuid(ont_id))
     if not ont:
         return None
 
-    if ont.provisioning_profile_id:
-        stmt = (
-            select(OntProvisioningProfile)
-            .options(selectinload(OntProvisioningProfile.wan_services))
-            .where(OntProvisioningProfile.id == ont.provisioning_profile_id)
+    profile = resolve_assigned_bundle(db, ont)
+    if (
+        profile
+        and profile.is_active
+        and _profile_scope_mismatch_reason(db, profile, ont) is None
+    ):
+        return profile
+    if profile and profile.is_active:
+        reason = _profile_scope_mismatch_reason(db, profile, ont)
+        logger.warning(
+            "Ignoring ONT %s profile %s because scope does not match "
+            "(reason=%s profile_olt=%s ont_olt=%s profile_owner=%s)",
+            ont.serial_number,
+            profile.name,
+            reason,
+            profile.olt_device_id,
+            ont.olt_device_id,
+            profile.owner_subscriber_id,
         )
-        profile = db.scalars(stmt).first()
-        if (
-            profile
-            and profile.is_active
-            and _profile_scope_mismatch_reason(db, profile, ont) is None
-        ):
-            return profile
-        if profile and profile.is_active:
-            reason = _profile_scope_mismatch_reason(db, profile, ont)
-            logger.warning(
-                "Ignoring ONT %s profile %s because scope does not match "
-                "(reason=%s profile_olt=%s ont_olt=%s profile_owner=%s)",
-                ont.serial_number,
-                profile.name,
-                reason,
-                profile.olt_device_id,
-                ont.olt_device_id,
-                profile.owner_subscriber_id,
-            )
 
     return None
 
 
-def apply_profile_to_ont(
+def apply_bundle_to_ont(
     db: Session,
     ont_id: str,
-    profile_id: str,
+    bundle_id: str,
     *,
     create_wan_instances: bool = True,
     push_to_device: bool = False,
     subscriber_context_provider: SubscriberTemplateContextProvider | None = None,
 ) -> ApplyResult:
-    """Apply a provisioning profile's desired state to an ONT.
+    """Apply a provisioning bundle's desired state to an ONT.
 
     Updates the OntUnit's config fields to match the profile, sets the
     provisioning_profile_id FK, and marks provisioning_status as provisioned.
@@ -371,9 +377,9 @@ def apply_profile_to_ont(
 
     Args:
         db: Database session.
-        ont_id: UUID of the ONT to apply the profile to.
-        profile_id: UUID of the provisioning profile.
-        create_wan_instances: If True, create WAN service instances from profile.
+        ont_id: UUID of the ONT to apply the bundle to.
+        bundle_id: UUID of the provisioning bundle.
+        create_wan_instances: If True, create WAN service instances from bundle.
         push_to_device: If True, push changes to the device after DB update.
 
     Returns:
@@ -386,11 +392,11 @@ def apply_profile_to_ont(
     stmt = (
         select(OntProvisioningProfile)
         .options(selectinload(OntProvisioningProfile.wan_services))
-        .where(OntProvisioningProfile.id == coerce_uuid(profile_id))
+        .where(OntProvisioningProfile.id == coerce_uuid(bundle_id))
     )
     profile = db.scalars(stmt).first()
     if not profile:
-        return ApplyResult(success=False, message="Provisioning profile not found")
+        return ApplyResult(success=False, message="Provisioning bundle not found")
     mismatch_reason = _profile_scope_mismatch_reason(db, profile, ont)
     if mismatch_reason == "olt_scope":
         return ApplyResult(
@@ -410,15 +416,15 @@ def apply_profile_to_ont(
         )
 
     fields_updated = 0
-    for profile_field, ont_field in _PROFILE_TO_ONT_FIELDS.items():
-        desired = getattr(profile, profile_field, None)
-        current = getattr(ont, ont_field, None)
-        if desired is not None and desired != current:
-            setattr(ont, ont_field, desired)
-            fields_updated += 1
 
-    # Link profile and update status
-    ont.provisioning_profile_id = profile.id
+    assign_bundle_to_ont(
+        db,
+        ont=ont,
+        bundle=profile,
+        status=OntBundleAssignmentStatus.applied,
+        assigned_reason="bundle_apply_service",
+    )
+    clear_bundle_managed_legacy_projection(ont)
     ont.provisioning_status = OntProvisioningStatus.provisioned
     ont.last_provisioned_at = datetime.now(UTC)
 
@@ -437,14 +443,17 @@ def apply_profile_to_ont(
     db.flush()
 
     logger.info(
-        "Applied profile %s (%s) to ONT %s: %d fields updated, %d WAN instances created",
+        "Applied bundle %s (%s) to ONT %s: %d legacy fields projected, %d WAN instances created",
         profile.id,
         profile.name,
         ont_id,
         fields_updated,
         wan_instances_created,
     )
-    message = f"Profile '{profile.name}' applied successfully. {fields_updated} fields updated"
+    message = (
+        f"Bundle '{profile.name}' applied successfully. "
+        f"{fields_updated} legacy fields projected"
+    )
     if wan_instances_created:
         message += f", {wan_instances_created} WAN service instances created"
     message += "."
@@ -457,7 +466,7 @@ def apply_profile_to_ont(
         if not push_result.success:
             return ApplyResult(
                 success=False,
-                message=f"Profile applied to DB but device push failed: {push_result.message}",
+                message=f"Bundle applied to DB but device push failed: {push_result.message}",
                 fields_updated=fields_updated,
             )
         message += f" Device push: {len(push_result.fields_pushed)} field(s) pushed."
@@ -468,7 +477,6 @@ def apply_profile_to_ont(
         fields_updated=fields_updated,
     )
 
-
 def detect_drift(db: Session, ont_id: str) -> DriftReport | None:
     """Compare an ONT's current config against its assigned profile.
 
@@ -476,28 +484,32 @@ def detect_drift(db: Session, ont_id: str) -> DriftReport | None:
     no profile is assigned.
     """
     ont = db.get(OntUnit, coerce_uuid(ont_id))
-    if not ont or not ont.provisioning_profile_id:
+    if not ont:
         return None
-
-    stmt = select(OntProvisioningProfile).where(
-        OntProvisioningProfile.id == ont.provisioning_profile_id
-    )
-    profile = db.scalars(stmt).first()
+    profile = resolve_assigned_bundle(db, ont)
     if not profile:
         return None
     if _profile_scope_mismatch_reason(db, profile, ont) is not None:
         return None
 
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+
     drifted: list[DriftField] = []
     for profile_field, ont_field in _PROFILE_TO_ONT_FIELDS.items():
         desired = getattr(profile, profile_field, None)
-        observed = getattr(ont, ont_field, None)
-        if desired is not None and desired != observed:
+        if ont_field in {"config_method", "onu_mode", "ip_protocol", "mgmt_ip_mode"}:
+            observed = values.get(ont_field)
+        else:
+            observed = getattr(ont, ont_field, None)
+        desired_cmp = getattr(desired, "value", desired)
+        observed_cmp = getattr(observed, "value", observed)
+        if desired is not None and desired_cmp != observed_cmp:
             drifted.append(
                 DriftField(
                     field_name=ont_field,
-                    desired=desired,
-                    observed=observed,
+                    desired=desired_cmp,
+                    observed=observed_cmp,
                 )
             )
 
@@ -521,14 +533,7 @@ def detect_drift_batch(
 
     Returns list of DriftReports for ONTs where drift is detected.
     """
-    stmt = (
-        select(OntUnit)
-        .where(
-            OntUnit.provisioning_profile_id.isnot(None),
-            OntUnit.is_active.is_(True),
-        )
-        .limit(limit)
-    )
+    stmt = select(OntUnit).where(OntUnit.is_active.is_(True)).limit(limit)
 
     # Filter by business account if provided. This is applied after loading
     # because the assignment/subscriber join is not part of the base query.
@@ -549,6 +554,8 @@ def detect_drift_batch(
                 owner_subscriber_id
             ):
                 continue
+        if get_active_bundle_assignment(db, ont) is None:
+            continue
         report = detect_drift(db, str(ont.id))
         if report and report.has_drift:
             # Mark drift on the ONT

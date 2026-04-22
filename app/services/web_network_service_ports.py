@@ -179,6 +179,7 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
     context["service_port_intent"] = (
         service_intent_ui_adapter.profile_service_port_defaults(
             ont,
+            db=db,
             service_ports=ports,
         )
         if ont

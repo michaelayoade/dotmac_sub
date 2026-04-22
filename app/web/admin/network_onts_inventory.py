@@ -20,6 +20,7 @@ from app.services import web_network_core_devices as web_network_core_devices_se
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
 )
+from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
@@ -281,7 +282,9 @@ def ont_detail(
     tab: str = Query(default="overview"),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    logger.warning("ont_detail_start", extra={"ont_id": ont_id})
     page_data = web_network_core_devices_service.ont_detail_page_data(db, ont_id)
+    logger.warning("ont_detail_page_data_loaded", extra={"ont_id": ont_id})
     if not page_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -306,7 +309,7 @@ def ont_detail(
         "charts": "diagnostics",
     }
     tab = tab_aliases.get(tab, tab)
-    active_tab = tab if tab in allowed_tabs else "overview"
+    active_tab = tab if tab in allowed_tabs else "device-config"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
     try:
@@ -329,6 +332,7 @@ def ont_detail(
     context.update(
         {
             **page_data,
+            **web_network_ont_actions_service.unified_config_context(db, ont_id),
             "activities": activities,
             "operations": operations,
             "ont_active_tab": active_tab,
@@ -339,6 +343,7 @@ def ont_detail(
             "ont_feedback": _ont_feedback_from_request(request),
         }
     )
+    logger.warning("ont_detail_context_ready", extra={"ont_id": ont_id})
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
 
 

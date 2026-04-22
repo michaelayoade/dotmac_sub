@@ -1,0 +1,90 @@
+services:
+  app:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - /etc/wireguard:/etc/wireguard
+      - ./uploads:/app/uploads
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+      - --no-access-log
+      - --workers
+      - ${WEB_CONCURRENCY:-2}
+
+  celery-worker:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-worker-nin:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-worker-tr069:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-worker-acs:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-worker-bandwidth:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-worker-ingestion:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes:
+      - ./uploads:/app/uploads
+
+  celery-beat:
+    image: ${APP_IMAGE:-dotmac_sub:latest}
+    pull_policy: always
+    environment:
+      APP_ENV: production
+      APP_RELEASE: ${APP_RELEASE:-unknown}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes: []

@@ -48,7 +48,7 @@ def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
     if not callable(refresh):
         return
     try:
-        refresh(device_id, f"{root}.", connection_request=True)
+        refresh(device_id, f"{root}.")
     except Exception:
         logger.debug(
             "Runtime refresh request failed for device %s after WiFi update",

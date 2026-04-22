@@ -1,20 +1,167 @@
-{# Unified ONT Configuration Page - All config in one view with lazy-loaded accordion sections #}
+{# Unified ONT Configuration Page - All config in one view #}
 
-<div class="space-y-4" x-data="{
-    openSection: 'mgmt-ip',
-    loadedSections: { 'mgmt-ip': true },
-    loadSection(section, url, target) {
-        if (!this.loadedSections[section]) {
-            this.loadedSections[section] = true;
-            htmx.ajax('GET', url, { target: target, swap: 'innerHTML' });
-        }
-    }
-}">
+{% set unified_context_ready = operator_summary is defined and desired_mgmt_config is defined and tr069_available is defined %}
+{% if not unified_context_ready %}
+<div class="rounded-xl border border-slate-200 bg-white px-5 py-6 dark:border-slate-700 dark:bg-slate-800"
+     hx-get="/admin/network/onts/{{ ont.id }}/unified-config"
+     hx-trigger="load"
+     hx-target="this"
+     hx-swap="outerHTML">
+    <div class="flex items-center justify-center gap-3 py-8 text-sm text-slate-500 dark:text-slate-400">
+        <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+        <span>Loading ONT configuration…</span>
+    </div>
+</div>
+{% else %}
+{% set operator_summary = operator_summary | default({}) %}
+{% set mgmt_ip_summary = mgmt_ip_summary | default({}) %}
+{% set wan_summary = wan_summary | default({}) %}
+{% set wifi_summary = wifi_summary | default({}) %}
+{% set service_ports_count = operator_summary.get('service_ports_count', 0) %}
+{% set service_ports_up_count = operator_summary.get('service_ports_up_count', 0) %}
+{% set operator_blockers = operator_summary.get('blockers', []) %}
+{% set operator_olt_status_rows = operator_summary.get('olt_status_rows', []) %}
+{% set observed_service_ports = operator_summary.get('service_ports', []) %}
+{% set observed_vlans = operator_summary.get('observed_vlans', []) %}
+{% set service_ports_error = operator_summary.get('service_ports_error') %}
+
+<div class="space-y-4" x-data="{ openSection: 'mgmt-ip' }">
     <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
         <div class="flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
             <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-            <span>ONT configuration</span>
+            <span>All config</span>
             <span class="font-mono text-slate-900 dark:text-white">{{ ont.serial_number }}</span>
+        </div>
+    </div>
+
+    {# ==================== SERVICE PROFILE SELECTOR ==================== #}
+    {% if provisioning_profiles is defined and provisioning_profiles %}
+    <div class="rounded-xl border border-indigo-200 bg-indigo-50/50 p-5 dark:border-indigo-800/40 dark:bg-indigo-900/10">
+        <div class="flex items-start gap-4">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
+                <svg class="h-5 w-5 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                </svg>
+            </div>
+            <div class="flex-1">
+                <div class="flex items-center justify-between mb-1">
+                    <label for="unified_profile_id" class="block text-sm font-semibold text-slate-900 dark:text-white">
+                        Service Profile
+                    </label>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Quick apply</span>
+                </div>
+                <p class="text-xs text-slate-600 dark:text-slate-400 mb-3">
+                    Select a profile to apply pre-configured settings (WAN, WiFi, speed, ACS).
+                </p>
+                <select id="unified_profile_id" name="bundle_id"
+                        hx-get="/admin/network/onts/{{ ont.id }}/profile-preview"
+                        hx-include="#unified_profile_id"
+                        hx-target="#unified-profile-preview"
+                        hx-trigger="change"
+                        hx-swap="innerHTML"
+                        class="w-full rounded-lg border border-indigo-300 bg-white px-3 py-2 text-sm dark:border-indigo-700 dark:bg-slate-800 dark:text-white">
+                    <option value="">Select a profile to preview...</option>
+                    {% for profile in provisioning_profiles %}
+                    <option value="{{ profile.id }}" {% if selected_bundle_id and selected_bundle_id|string == profile.id|string %}selected{% endif %}>
+                        {{ profile.name }}
+                        {% if profile.profile_type %} ({{ profile.profile_type.value|title }}){% endif %}
+                        {% if profile.download_speed_profile and profile.upload_speed_profile %}
+                        - {{ profile.download_speed_profile.speed_kbps|format_speed }}/{{ profile.upload_speed_profile.speed_kbps|format_speed }}
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div id="unified-profile-preview" class="mt-3">
+                    {# Profile preview loads here via HTMX #}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">OLT / Service Path</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Operator view of observed provisioning state, OLT registration, and service transport.</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                    {{ service_ports_count }} service-port{{ '' if service_ports_count == 1 else 's' }}
+                </span>
+                {% if service_ports_count %}
+                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                    {{ service_ports_up_count }} up
+                </span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if operator_blockers %}
+        <div class="mt-4 space-y-2">
+            {% for blocker in operator_blockers %}
+            <div class="rounded-lg border px-3 py-2 text-sm {% if blocker.severity == 'critical' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/50 dark:bg-rose-900/20 dark:text-rose-300{% else %}border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300{% endif %}">
+                {{ blocker.message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="mt-4 grid gap-4 lg:grid-cols-2">
+            <div class="rounded-lg border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/30">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">OLT Status</h3>
+                <dl class="mt-3 space-y-2">
+                    {% for label, value in operator_olt_status_rows %}
+                    <div class="flex items-start justify-between gap-4 text-sm">
+                        <dt class="text-slate-500 dark:text-slate-400">{{ label }}</dt>
+                        <dd class="text-right font-mono text-slate-900 dark:text-white">{{ value }}</dd>
+                    </div>
+                    {% endfor %}
+                </dl>
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/30">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Observed Service Ports</h3>
+                    {% if observed_vlans %}
+                    <span class="text-xs text-slate-500 dark:text-slate-400">VLANs: {{ observed_vlans | join(', ') }}</span>
+                    {% endif %}
+                </div>
+                {% if service_ports_error %}
+                <p class="mt-3 text-sm text-amber-700 dark:text-amber-300">{{ service_ports_error }}</p>
+                {% elif observed_service_ports %}
+                <div class="mt-3 overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                        <thead>
+                            <tr class="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                <th class="pb-2 pr-4">Index</th>
+                                <th class="pb-2 pr-4">VLAN</th>
+                                <th class="pb-2 pr-4">GEM</th>
+                                <th class="pb-2 pr-4">Flow</th>
+                                <th class="pb-2">State</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for sp in observed_service_ports %}
+                            <tr>
+                                <td class="py-2 pr-4 font-mono text-slate-900 dark:text-white">{{ sp.index }}</td>
+                                <td class="py-2 pr-4 font-mono text-slate-900 dark:text-white">{{ sp.vlan_id }}</td>
+                                <td class="py-2 pr-4 font-mono text-slate-600 dark:text-slate-300">{{ sp.gem_index }}</td>
+                                <td class="py-2 pr-4 text-slate-600 dark:text-slate-300">{{ sp.flow_label }}</td>
+                                <td class="py-2">
+                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if sp.state == 'up' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300{% endif %}">
+                                        {{ sp.state | title }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">No service-ports were returned from the OLT for this ONT.</p>
+                {% endif %}
+            </div>
         </div>
     </div>
 
@@ -56,10 +203,46 @@
         </div>
     </div>
 
+    {# ==================== SERVICE PORTS SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'service-ports' ? '' : 'service-ports'"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
+                    <svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9h8M8 13h6m-9 8h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Service Ports</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {% if service_ports_count %}
+                        {{ service_ports_count }} observed on the OLT{% if observed_vlans %} &middot; VLANs {{ observed_vlans | join(', ') }}{% endif %}
+                        {% else %}
+                        Read, diagnose, create, delete, and clone OLT service-ports
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if service_ports_count %}
+                <span class="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">
+                    {{ service_ports_count }}
+                </span>
+                {% endif %}
+                <svg :class="openSection === 'service-ports' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'service-ports'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="service-ports-content">
+                {% include "admin/network/onts/_service_ports_embedded.html" %}
+            </div>
+        </div>
+    </div>
+
     {# ==================== WAN / PPPoE SECTION ==================== #}
     <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         <button type="button"
-                @click="openSection = openSection === 'wan' ? '' : 'wan'; loadSection('wan', '/admin/network/onts/{{ ont.id }}/config/wan', '#wan-section-content')"
+                @click="openSection = openSection === 'wan' ? '' : 'wan'"
                 class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
             <div class="flex items-center gap-3">
                 <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
@@ -87,10 +270,7 @@
         </button>
         <div x-show="openSection === 'wan'" x-collapse x-cloak>
             <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="wan-section-content">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-500">Loading WAN configuration...</span>
-                </div>
+                {% include "admin/network/onts/_config_wan.html" %}
             </div>
         </div>
     </div>
@@ -98,7 +278,7 @@
     {# ==================== WIFI SECTION ==================== #}
     <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         <button type="button"
-                @click="openSection = openSection === 'wifi' ? '' : 'wifi'; loadSection('wifi', '/admin/network/onts/{{ ont.id }}/config/wifi', '#wifi-section-content')"
+                @click="openSection = openSection === 'wifi' ? '' : 'wifi'"
                 class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
             <div class="flex items-center gap-3">
                 <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
@@ -126,10 +306,7 @@
         </button>
         <div x-show="openSection === 'wifi'" x-collapse x-cloak>
             <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="wifi-section-content">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-500">Loading WiFi settings...</span>
-                </div>
+                {% include "admin/network/onts/_config_wifi.html" %}
             </div>
         </div>
     </div>
@@ -137,7 +314,7 @@
     {# ==================== TR-069 PROFILE SECTION ==================== #}
     <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         <button type="button"
-                @click="openSection = openSection === 'tr069-profile' ? '' : 'tr069-profile'; loadSection('tr069-profile', '/admin/network/onts/{{ ont.id }}/config/tr069-profile', '#tr069-profile-section-content')"
+                @click="openSection = openSection === 'tr069-profile' ? '' : 'tr069-profile'"
                 class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
             <div class="flex items-center gap-3">
                 <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
@@ -156,10 +333,7 @@
         </button>
         <div x-show="openSection === 'tr069-profile'" x-collapse x-cloak>
             <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="tr069-profile-section-content">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-500">Loading TR-069 profiles...</span>
-                </div>
+                {% include "admin/network/onts/_config_tr069_profile.html" %}
             </div>
         </div>
     </div>
@@ -167,7 +341,7 @@
     {# ==================== LAN / ETHERNET SECTION ==================== #}
     <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
         <button type="button"
-                @click="openSection = openSection === 'lan' ? '' : 'lan'; loadSection('lan', '/admin/network/onts/{{ ont.id }}/config/lan', '#lan-section-content')"
+                @click="openSection = openSection === 'lan' ? '' : 'lan'"
                 class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
             <div class="flex items-center gap-3">
                 <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
@@ -186,12 +360,40 @@
         </button>
         <div x-show="openSection === 'lan'" x-collapse x-cloak>
             <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="lan-section-content">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-500">Loading LAN information...</span>
+                {% include "admin/network/onts/_config_lan.html" %}
+            </div>
+        </div>
+    </div>
+
+    {# ==================== VOIP SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'voip' ? '' : 'voip'"
+                class="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-4">
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
+                    <svg class="h-5 w-5 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+                    </svg>
                 </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">VoIP</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Voice over IP service configuration
+                        {% if ont.voip_enabled %}<span class="ml-1 text-emerald-600 dark:text-emerald-400">&bull; Enabled</span>{% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <svg :class="openSection === 'voip' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'voip'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="voip-section-content">
+                {% include "admin/network/onts/_config_voip.html" %}
             </div>
         </div>
     </div>
 
 </div>
+{% endif %}

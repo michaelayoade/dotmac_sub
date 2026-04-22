@@ -2,6 +2,9 @@
 {# This form saves configuration to the OntUnit model, optionally pushing to device #}
 {# Expected context: ont (OntUnit object), vlans (list of VLANs), ont_id (string) #}
 
+{% from "components/forms/vlan_select.html" import vlan_select %}
+{% from "components/forms/collapsible_section.html" import collapsible %}
+
 {% if config_result is defined %}
 <div class="mb-4 rounded-lg border px-4 py-3 {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-800/50 dark:bg-emerald-900/20' if config_result.success else 'border-rose-200 bg-rose-50 dark:border-rose-800/50 dark:bg-rose-900/20' }}">
     <div class="flex items-start gap-2">
@@ -26,6 +29,10 @@
 {% set mgmt_ip_pool = mgmt_ip_pool if mgmt_ip_pool is defined else none %}
 {% set mgmt_ip_choice_message = mgmt_ip_choice_message if mgmt_ip_choice_message is defined else '' %}
 
+{# Determine if advanced sections have content to show indicator badges #}
+{% set has_mgmt_config = mgmt_ip_mode_val or mgmt_vlan_id_str or ont.mgmt_ip_address %}
+{% set has_lan_config = ont.lan_gateway_ip or ont.lan_subnet_mask or ont.lan_dhcp_enabled is not none %}
+
 <div class="space-y-6">
     <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -46,7 +53,7 @@
     <form hx-post="/admin/network/onts/{{ ont_id }}/configure"
           hx-target="#configure-content"
           hx-swap="innerHTML"
-          class="space-y-6"
+          class="space-y-4"
           x-data="{
               wanMode: '{{ wan_mode_val }}',
               mgmtIpMode: '{{ mgmt_ip_mode_val }}',
@@ -54,7 +61,67 @@
           }">
         {% include "components/forms/csrf_input.html" %}
 
-        {# ==================== WAN CONFIGURATION ==================== #}
+        {# ==================== CONFIG BUNDLE (Optional Quick-Apply) ==================== #}
+        {% if provisioning_profiles is defined and provisioning_profiles %}
+        <div class="rounded-lg border border-indigo-200 bg-indigo-50/50 p-4 dark:border-indigo-800/40 dark:bg-indigo-900/10">
+            <div class="flex items-start gap-4">
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
+                    <svg class="h-5 w-5 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                    </svg>
+                </div>
+                <div class="flex-1">
+                    <label for="bundle_id" class="block text-sm font-semibold text-slate-900 dark:text-white mb-1">
+                        Config Bundle
+                        <span class="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">(Optional)</span>
+                    </label>
+                    <p class="text-xs text-slate-600 dark:text-slate-400 mb-3">
+                        Assign an OLT-scoped bundle to apply pre-configured settings, or configure manually below.
+                    </p>
+                    {% if active_bundle_assignment %}
+                    <p class="mb-3 text-xs text-indigo-700 dark:text-indigo-300">
+                        Active assignment: {{ active_bundle_assignment.status.value|replace('_', ' ')|title }}
+                    </p>
+                    {% endif %}
+                    <select id="bundle_id" name="bundle_id"
+                            hx-get="/admin/network/onts/{{ ont_id }}/profile-preview"
+                            hx-include="#bundle_id"
+                            hx-target="#profile-preview"
+                            hx-trigger="change"
+                            hx-swap="innerHTML"
+                            class="w-full rounded-lg border border-indigo-300 bg-white px-3 py-2 text-sm dark:border-indigo-700 dark:bg-slate-800 dark:text-white">
+                        <option value="">Manual configuration</option>
+                        {% for profile in provisioning_profiles %}
+                        <option value="{{ profile.id }}" {% if selected_bundle_id == profile.id|string %}selected{% endif %}>
+                            {{ profile.name }}
+                            {% if profile.profile_type %} ({{ profile.profile_type.value|title }}){% endif %}
+                            {% if profile.download_speed_profile and profile.upload_speed_profile %}
+                            - {{ profile.download_speed_profile.speed_kbps|format_speed }}/{{ profile.upload_speed_profile.speed_kbps|format_speed }}
+                            {% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <div id="profile-preview" class="mt-3">
+                        {% if profile_preview %}
+                            {% with
+                                profile=profile_preview.profile,
+                                primary_wan=profile_preview.primary_wan,
+                                wan_services=profile_preview.wan_services,
+                                wan_service_count=profile_preview.wan_service_count,
+                                download_speed=profile_preview.download_speed,
+                                upload_speed=profile_preview.upload_speed,
+                                error=profile_preview.error
+                            %}
+                                {% include "admin/network/onts/_profile_preview.html" %}
+                            {% endwith %}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {# ==================== WAN CONFIGURATION (Essential - Always Visible) ==================== #}
         <fieldset class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
             <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">WAN Configuration</legend>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -71,15 +138,7 @@
                 </div>
                 <div>
                     <label for="wan_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WAN VLAN</label>
-                    <select id="wan_vlan_id" name="wan_vlan_id"
-                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">None</option>
-                        {% for vlan in vlans %}
-                        <option value="{{ vlan.id }}" {% if wan_vlan_id_str == vlan.id|string %}selected{% endif %}>
-                            {{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}
-                        </option>
-                        {% endfor %}
-                    </select>
+                    {{ vlan_select(name="wan_vlan_id", vlans=vlans, selected_id=wan_vlan_id_str) }}
                 </div>
                 <div>
                     <label for="config_method" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Config Method</label>
@@ -102,7 +161,7 @@
             </div>
         </fieldset>
 
-        {# ==================== PPPoE CREDENTIALS ==================== #}
+        {# ==================== PPPoE CREDENTIALS (Conditional - Shows when WAN=PPPoE) ==================== #}
         <fieldset x-show="wanMode === 'pppoe'" x-transition x-cloak
                   class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
             <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">PPPoE Credentials</legend>
@@ -123,9 +182,75 @@
             </div>
         </fieldset>
 
-        {# ==================== MANAGEMENT IP ==================== #}
-        <fieldset class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">Management IP</legend>
+        {# ==================== WiFi (Essential - Always Visible) ==================== #}
+        <fieldset class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
+                  x-data="{ showWifiPassword: false }">
+            <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">WiFi Configuration</legend>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div class="flex items-end">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="wifi_enabled" value="true" {% if ont.wifi_enabled %}checked{% endif %}
+                               class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
+                        <span class="text-sm text-slate-700 dark:text-slate-300">WiFi Enabled</span>
+                    </label>
+                </div>
+                <div>
+                    <label for="wifi_ssid" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SSID</label>
+                    <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ ont.wifi_ssid or '' }}"
+                           maxlength="32" placeholder="Network name"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="wifi_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WiFi Password</label>
+                    <div class="relative">
+                        <input :type="showWifiPassword ? 'text' : 'password'" id="wifi_password" name="wifi_password"
+                               minlength="8" placeholder="Leave blank to keep current"
+                               class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <button type="button" @click="showWifiPassword = !showWifiPassword"
+                                class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600">
+                            <svg x-show="!showWifiPassword" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                            <svg x-show="showWifiPassword" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                        </button>
+                    </div>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Min 8 characters</p>
+                </div>
+                <div>
+                    <label for="wifi_security_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Security Mode</label>
+                    <select id="wifi_security_mode" name="wifi_security_mode"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="" {% if not ont.wifi_security_mode %}selected{% endif %}>Not set</option>
+                        <option value="WPA2-Personal" {% if ont.wifi_security_mode == 'WPA2-Personal' %}selected{% endif %}>WPA2-Personal</option>
+                        <option value="WPA-WPA2-Personal" {% if ont.wifi_security_mode == 'WPA-WPA2-Personal' %}selected{% endif %}>WPA-WPA2-Personal</option>
+                        <option value="WPA3-Personal" {% if ont.wifi_security_mode == 'WPA3-Personal' %}selected{% endif %}>WPA3-Personal</option>
+                        <option value="Basic" {% if ont.wifi_security_mode == 'Basic' %}selected{% endif %}>Basic</option>
+                        <option value="None" {% if ont.wifi_security_mode == 'None' %}selected{% endif %}>None</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="wifi_channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Channel</label>
+                    <select id="wifi_channel" name="wifi_channel"
+                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="" {% if not ont.wifi_channel %}selected{% endif %}>Leave unchanged</option>
+                        <option value="0" {% if ont.wifi_channel == '0' %}selected{% endif %}>Auto</option>
+                        {% for channel in range(1, 14) %}
+                        <option value="{{ channel }}" {% if ont.wifi_channel|string == channel|string %}selected{% endif %}>Channel {{ channel }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </fieldset>
+
+        {# ==================== ADVANCED OPTIONS (Collapsible) ==================== #}
+        <div class="space-y-3">
+            <h4 class="text-sm font-medium text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+                </svg>
+                Advanced Options
+            </h4>
+
+            {# Management IP - Collapsible #}
+            {% call collapsible(title="Management IP", id="mgmt-ip", icon="server", open=has_mgmt_config, badge="Configured" if has_mgmt_config else none) %}
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                     <label for="mgmt_ip_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Mode</label>
@@ -139,15 +264,7 @@
                 </div>
                 <div>
                     <label for="mgmt_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Management VLAN</label>
-                    <select id="mgmt_vlan_id" name="mgmt_vlan_id"
-                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">None</option>
-                        {% for vlan in vlans %}
-                        <option value="{{ vlan.id }}" {% if mgmt_vlan_id_str == vlan.id|string %}selected{% endif %}>
-                            {{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}
-                        </option>
-                        {% endfor %}
-                    </select>
+                    {{ vlan_select(name="mgmt_vlan_id", vlans=vlans, selected_id=mgmt_vlan_id_str) }}
                 </div>
                 <div x-show="mgmtIpMode === 'static_ip'" x-transition x-cloak>
                     <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
@@ -187,11 +304,10 @@
                     </label>
                 </div>
             </div>
-        </fieldset>
+            {% endcall %}
 
-        {# ==================== LAN / DHCP ==================== #}
-        <fieldset class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">LAN / DHCP Server</legend>
+            {# LAN / DHCP - Collapsible #}
+            {% call collapsible(title="LAN / DHCP Server", id="lan-dhcp", icon="network", open=has_lan_config, badge="Configured" if has_lan_config else none) %}
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div>
                     <label for="lan_gateway_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">LAN Gateway IP</label>
@@ -233,75 +349,18 @@
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>
-        </fieldset>
+            {% endcall %}
 
-        {# ==================== WiFi ==================== #}
-        <fieldset class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
-                  x-data="{ showWifiPassword: false }">
-            <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">WiFi Configuration</legend>
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <div class="flex items-end">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="wifi_enabled" value="true" {% if ont.wifi_enabled %}checked{% endif %}
-                               class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
-                        <span class="text-sm text-slate-700 dark:text-slate-300">WiFi Enabled</span>
-                    </label>
-                </div>
-                <div>
-                    <label for="wifi_ssid" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SSID</label>
-                    <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ ont.wifi_ssid or '' }}"
-                           maxlength="32" placeholder="Network name"
-                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                </div>
-                <div>
-                    <label for="wifi_channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Channel</label>
-                    <select id="wifi_channel" name="wifi_channel"
-                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if not ont.wifi_channel %}selected{% endif %}>Leave unchanged</option>
-                        <option value="0" {% if ont.wifi_channel == '0' %}selected{% endif %}>Auto</option>
-                        {% for channel in range(1, 14) %}
-                        <option value="{{ channel }}" {% if ont.wifi_channel|string == channel|string %}selected{% endif %}>Channel {{ channel }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div>
-                    <label for="wifi_security_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Security Mode</label>
-                    <select id="wifi_security_mode" name="wifi_security_mode"
-                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if not ont.wifi_security_mode %}selected{% endif %}>Not set</option>
-                        <option value="WPA2-Personal" {% if ont.wifi_security_mode == 'WPA2-Personal' %}selected{% endif %}>WPA2-Personal</option>
-                        <option value="WPA-WPA2-Personal" {% if ont.wifi_security_mode == 'WPA-WPA2-Personal' %}selected{% endif %}>WPA-WPA2-Personal</option>
-                        <option value="WPA3-Personal" {% if ont.wifi_security_mode == 'WPA3-Personal' %}selected{% endif %}>WPA3-Personal</option>
-                        <option value="Basic" {% if ont.wifi_security_mode == 'Basic' %}selected{% endif %}>Basic</option>
-                        <option value="None" {% if ont.wifi_security_mode == 'None' %}selected{% endif %}>None</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="wifi_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WiFi Password</label>
-                    <div class="relative">
-                        <input :type="showWifiPassword ? 'text' : 'password'" id="wifi_password" name="wifi_password"
-                               minlength="8" placeholder="Leave blank to keep current"
-                               class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <button type="button" @click="showWifiPassword = !showWifiPassword"
-                                class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600">
-                            <svg x-show="!showWifiPassword" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                            <svg x-show="showWifiPassword" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
-                        </button>
-                    </div>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Min 8 characters, leave empty to keep current</p>
-                </div>
-            </div>
-        </fieldset>
-
-        {# ==================== VoIP ==================== #}
-        <fieldset class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <legend class="px-2 text-sm font-semibold text-slate-900 dark:text-white">VoIP</legend>
+            {# VoIP - Collapsible #}
+            {% call collapsible(title="VoIP Settings", id="voip", icon="phone", open=ont.voip_enabled, badge="Enabled" if ont.voip_enabled else none) %}
             <label class="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" name="voip_enabled" value="true" {% if ont.voip_enabled %}checked{% endif %}
                        class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
                 <span class="text-sm text-slate-700 dark:text-slate-300">VoIP Enabled</span>
             </label>
-        </fieldset>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Enable Voice over IP services on this ONT.</p>
+            {% endcall %}
+        </div>
 
         {# ==================== SUBMIT BUTTONS ==================== #}
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pt-4 border-t border-slate-200 dark:border-slate-700">

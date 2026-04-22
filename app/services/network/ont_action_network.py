@@ -544,7 +544,7 @@ def _ensure_igd_ppp_wan_service(
         refresh = getattr(client, "refresh_object", None)
         if callable(refresh):
             try:
-                refresh(device_id, object_path, connection_request=True)
+                refresh(device_id, object_path)
             except GenieACSError:
                 logger.debug(
                     "PPP WAN pending verification refresh failed for %s",
@@ -563,7 +563,7 @@ def _ensure_igd_ppp_wan_service(
         )
 
     try:
-        client.add_object(device_id, object_path, connection_request=True)
+        client.add_object(device_id, object_path)
         _mark_ppp_add_object_pending(
             ont,
             root=root,
@@ -573,7 +573,7 @@ def _ensure_igd_ppp_wan_service(
         )
         refresh = getattr(client, "refresh_object", None)
         if callable(refresh):
-            refresh(device_id, object_path, connection_request=True)
+            refresh(device_id, object_path)
         refreshed = client.get_device(device_id)
     except GenieACSError as exc:
         return ActionResult(
@@ -669,7 +669,7 @@ def _request_lan_refresh(client: Any, device_id: str, root: str) -> None:
         return
     path = _LAN_CONFIG_PATHS[root]["refresh"]
     try:
-        refresh(device_id, f"{root}.{path}", connection_request=True)
+        refresh(device_id, f"{root}.{path}")
     except Exception:
         logger.debug(
             "Runtime refresh request failed for device %s after LAN config update",
@@ -800,7 +800,7 @@ def _validate_tr181_pppoe_stack(
     return None
 
 
-def _resolve_ont_fallback_connection_request_auth(
+def _resolve_ont_connection_request_auth(
     db: Session,
     serial_number: str | None,
 ) -> tuple[str, str] | None:
@@ -1177,11 +1177,7 @@ def configure_wan_config(
                 if root == "Device"
                 else f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{instance_index}."
             )
-            refresh(
-                device_id,
-                refresh_path,
-                connection_request=True,
-            )
+            refresh(device_id, refresh_path)
         logger.info(
             "WAN config set on ONT %s mode=%s vlan=%s root=%s",
             ont.serial_number,
@@ -1228,37 +1224,21 @@ def send_connection_request(db: Session, ont_id: str) -> ActionResult:
             message="No ConnectionRequestURL found on device — ONT may not have bootstrapped yet.",
         )
 
-    conn_user = (
-        client.extract_parameter_value(
-            device, f"{root}.ManagementServer.ConnectionRequestUsername"
+    # Use server-configured credentials - these are what we pushed to the CPE.
+    server_auth = _resolve_ont_connection_request_auth(db, ont.serial_number)
+    if not server_auth:
+        return ActionResult(
+            success=False,
+            message="No connection request credentials configured on ACS server.",
         )
-        or ""
-    )
-    conn_pass = (
-        client.extract_parameter_value(
-            device, f"{root}.ManagementServer.ConnectionRequestPassword"
-        )
-        or ""
-    )
+    conn_user, conn_pass = server_auth
 
     try:
         status_code = _send_connection_request_http(
             str(conn_url),
-            str(conn_user),
-            str(conn_pass),
+            conn_user,
+            conn_pass,
         )
-        if status_code == 401:
-            fallback_auth = _resolve_ont_fallback_connection_request_auth(
-                db, ont.serial_number
-            )
-            if fallback_auth:
-                fallback_user, fallback_pass = fallback_auth
-                if (fallback_user, fallback_pass) != (str(conn_user), str(conn_pass)):
-                    status_code = _send_connection_request_http(
-                        str(conn_url),
-                        fallback_user,
-                        fallback_pass,
-                    )
         if status_code in (200, 204):
             logger.info(
                 "Connection request sent to ONT %s at %s", ont.serial_number, conn_url

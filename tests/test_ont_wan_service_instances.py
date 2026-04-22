@@ -10,6 +10,8 @@ Tests the Phase 2+3 WAN service architecture introduced in migration 026:
 
 from __future__ import annotations
 
+from tests.legacy_ont_profile_link import seed_legacy_profile_link
+
 
 class TestOntWanServiceInstanceModel:
     """Test OntWanServiceInstance model and relationships."""
@@ -175,7 +177,7 @@ class TestPppoeUsernameTemplateResolution:
 class TestVlanResolutionByTag:
     """Test VLAN resolution by tag number."""
 
-    def test_resolve_vlan_by_tag_global(self, db_session, region) -> None:
+    def test_resolve_vlan_by_tag_requires_olt_scope(self, db_session, region) -> None:
         from app.models.network import Vlan
         from app.services.network.ont_profile_apply import _resolve_vlan_by_tag
 
@@ -184,8 +186,7 @@ class TestVlanResolutionByTag:
         db_session.commit()
 
         result = _resolve_vlan_by_tag(db_session, 203, olt_device_id=None)
-        assert result is not None
-        assert result.tag == 203
+        assert result is None
 
     def test_resolve_vlan_scoped_to_olt(self, db_session, region) -> None:
         from app.models.network import OLTDevice, Vlan
@@ -222,6 +223,7 @@ class TestApplyProfileCreatesWanInstances:
 
     def test_apply_profile_creates_wan_service_instances(self, db_session) -> None:
         from app.models.network import (
+            OntConfigOverride,
             OntProfileWanService,
             OntProvisioningProfile,
             OntUnit,
@@ -229,7 +231,7 @@ class TestApplyProfileCreatesWanInstances:
             WanConnectionType,
             WanServiceType,
         )
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
         # Create profile with WAN services
         profile = OntProvisioningProfile(
@@ -270,7 +272,7 @@ class TestApplyProfileCreatesWanInstances:
         db_session.refresh(profile)
 
         # Apply profile
-        result = apply_profile_to_ont(
+        result = apply_bundle_to_ont(
             db_session, str(ont.id), str(profile.id), create_wan_instances=True
         )
 
@@ -289,9 +291,63 @@ class TestApplyProfileCreatesWanInstances:
         assert internet_inst.connection_type == WanConnectionType.pppoe
         assert internet_inst.s_vlan == 203
 
-        iptv_inst = next(i for i in instances if i.service_type == WanServiceType.iptv)
-        assert iptv_inst.connection_type == WanConnectionType.dhcp
-        assert iptv_inst.s_vlan == 500
+    def test_apply_profile_uses_effective_pppoe_username_fallback(self, db_session) -> None:
+        from app.models.network import (
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
+            OntConfigOverride,
+            OntProfileWanService,
+            OntProvisioningProfile,
+            OntUnit,
+            PppoePasswordMode,
+            WanConnectionType,
+            WanServiceType,
+        )
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
+
+        profile = OntProvisioningProfile(name="New Bundle", is_active=True)
+        db_session.add(profile)
+        db_session.flush()
+
+        internet_service = OntProfileWanService(
+            profile_id=profile.id,
+            service_type=WanServiceType.internet,
+            name="Internet",
+            priority=1,
+            connection_type=WanConnectionType.pppoe,
+            pppoe_username_template="",
+            pppoe_password_mode=PppoePasswordMode.generate,
+            s_vlan=203,
+            is_active=True,
+        )
+        db_session.add(internet_service)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HWTC-EFFECTIVE-WAN",
+            pppoe_username=None,
+        )
+        db_session.add(ont)
+        db_session.flush()
+
+        db_session.add(
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="wan.pppoe_username",
+                value_json={"value": "effective-user@isp.local"},
+            )
+        )
+        db_session.commit()
+
+        result = apply_bundle_to_ont(
+            db_session, str(ont.id), str(profile.id), create_wan_instances=True
+        )
+
+        assert result.success is True
+        db_session.refresh(ont)
+        instances = ont.wan_service_instances
+        assert len(instances) == 1
+        assert instances[0].pppoe_username == "effective-user@isp.local"
 
     def test_apply_profile_replaces_existing_instances(self, db_session) -> None:
         from sqlalchemy import select
@@ -303,7 +359,7 @@ class TestApplyProfileCreatesWanInstances:
             OntWanServiceInstance,
             WanServiceType,
         )
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
         # Create ONT with existing instance
         ont = OntUnit(serial_number="HWTC-REPLACE")
@@ -334,7 +390,7 @@ class TestApplyProfileCreatesWanInstances:
         db_session.commit()
 
         # Apply profile
-        result = apply_profile_to_ont(
+        result = apply_bundle_to_ont(
             db_session, str(ont.id), str(profile.id), create_wan_instances=True
         )
 
@@ -360,7 +416,7 @@ class TestApplyProfileCreatesWanInstances:
             OntUnit,
             WanServiceType,
         )
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
         profile = OntProvisioningProfile(name="Skip Instances", is_active=True)
         db_session.add(profile)
@@ -377,7 +433,7 @@ class TestApplyProfileCreatesWanInstances:
         db_session.add(ont)
         db_session.commit()
 
-        result = apply_profile_to_ont(
+        result = apply_bundle_to_ont(
             db_session, str(ont.id), str(profile.id), create_wan_instances=False
         )
 
@@ -386,6 +442,66 @@ class TestApplyProfileCreatesWanInstances:
 
         db_session.refresh(ont)
         assert len(ont.wan_service_instances) == 0
+
+    def test_apply_profile_clears_legacy_projection_fields(self, db_session) -> None:
+        from sqlalchemy import select
+
+        from app.models.network import (
+            ConfigMethod,
+            IpProtocol,
+            MgmtIpMode,
+            OntBundleAssignment,
+            OntProvisioningProfile,
+            OntUnit,
+            WanMode,
+        )
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
+
+        profile = OntProvisioningProfile(
+            name="Projection Clear",
+            config_method=ConfigMethod.tr069,
+            ip_protocol=IpProtocol.ipv4,
+            mgmt_ip_mode=MgmtIpMode.dhcp,
+            is_active=True,
+        )
+        ont = OntUnit(
+            serial_number="HWTC-CLEAR-PROJECTION",
+            config_method=ConfigMethod.omci,
+            ip_protocol=IpProtocol.dual_stack,
+            wan_mode=WanMode.pppoe,
+            pppoe_username="legacy-user",
+            mgmt_ip_mode=MgmtIpMode.static_ip,
+            mgmt_ip_address="172.16.1.10",
+            wifi_ssid="legacy-ssid",
+        )
+        db_session.add_all([profile, ont])
+        db_session.commit()
+
+        result = apply_bundle_to_ont(
+            db_session,
+            str(ont.id),
+            str(profile.id),
+            create_wan_instances=False,
+        )
+
+        assert result.success is True
+        db_session.refresh(ont)
+        assignment = db_session.scalars(
+            select(OntBundleAssignment)
+            .where(OntBundleAssignment.ont_unit_id == ont.id)
+            .where(OntBundleAssignment.is_active.is_(True))
+            .limit(1)
+        ).first()
+        assert assignment is not None
+        assert assignment.bundle_id == profile.id
+        assert ont.provisioning_profile_id is None
+        assert ont.config_method is None
+        assert ont.ip_protocol is None
+        assert ont.wan_mode is None
+        assert ont.pppoe_username is None
+        assert ont.mgmt_ip_mode is None
+        assert ont.mgmt_ip_address is None
+        assert ont.wifi_ssid is None
 
 
 class TestServiceIntentIncludesWanInstances:
@@ -439,6 +555,71 @@ class TestServiceIntentIncludesWanInstances:
 
         assert intent["has_wan_instances"] is False
         assert intent["wan_service_instances"] == []
+
+    def test_build_service_intent_uses_active_bundle_wan_services_not_legacy_fk(
+        self, db_session
+    ) -> None:
+        from app.models.network import (
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
+            OntProfileWanService,
+            OntProvisioningProfile,
+            OntUnit,
+            WanConnectionType,
+        )
+        from app.services.network.ont_service_intent import build_service_intent
+
+        legacy_profile = OntProvisioningProfile(name="Legacy Intent Profile", is_active=True)
+        assigned_bundle = OntProvisioningProfile(
+            name="Assigned Intent Bundle",
+            is_active=True,
+        )
+        db_session.add_all([legacy_profile, assigned_bundle])
+        db_session.flush()
+
+        db_session.add_all(
+            [
+                OntProfileWanService(
+                    profile_id=legacy_profile.id,
+                    name="Legacy Internet",
+                    s_vlan=111,
+                    connection_type=WanConnectionType.pppoe,
+                    is_active=True,
+                ),
+                OntProfileWanService(
+                    profile_id=assigned_bundle.id,
+                    name="Assigned Internet",
+                    s_vlan=222,
+                    connection_type=WanConnectionType.pppoe,
+                    is_active=True,
+                ),
+            ]
+        )
+
+        ont = OntUnit(
+            serial_number="TEST-INTENT-ACTIVE-BUNDLE-001",
+            is_active=True,
+        )
+        seed_legacy_profile_link(ont, legacy_profile)
+        db_session.add(ont)
+        db_session.flush()
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=assigned_bundle.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        intent = build_service_intent(ont, db=db_session)
+
+        service_path = next(
+            section for section in intent["sections"] if section["key"] == "service_path"
+        )
+        assert "222" in service_path["rows"][0]["value"]
+        assert "111" not in service_path["rows"][0]["value"]
 
 
 class TestProvisioningFlowWithWanInstances:

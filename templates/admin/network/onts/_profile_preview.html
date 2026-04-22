@@ -1,4 +1,9 @@
 {# Profile Preview — HTMX partial loaded when operator selects a profile on the Configure page #}
+{% if error %}
+<div class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-300">
+    {{ error }}
+</div>
+{% elif profile %}
 <div class="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-800/40 dark:bg-blue-900/10 space-y-4">
     <div class="flex items-center justify-between">
         <h4 class="text-sm font-bold text-slate-900 dark:text-white">{{ profile.name }}</h4>
@@ -52,7 +57,7 @@
             <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Download Speed</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
                 {% if profile.download_speed_profile %}
-                {{ profile.download_speed_profile.name }} ({{ (profile.download_speed_profile.speed_kbps / 1000)|int }} Mbps)
+                {{ profile.download_speed_profile.name }} ({{ profile.download_speed_profile.speed_kbps|format_speed }})
                 {% else %}—{% endif %}
             </dd>
         </div>
@@ -60,7 +65,7 @@
             <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Upload Speed</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
                 {% if profile.upload_speed_profile %}
-                {{ profile.upload_speed_profile.name }} ({{ (profile.upload_speed_profile.speed_kbps / 1000)|int }} Mbps)
+                {{ profile.upload_speed_profile.name }} ({{ profile.upload_speed_profile.speed_kbps|format_speed }})
                 {% else %}—{% endif %}
             </dd>
         </div>
@@ -118,5 +123,5 @@
             </table>
         </div>
     </div>
-    {% endif %}
 </div>
+{% endif %}

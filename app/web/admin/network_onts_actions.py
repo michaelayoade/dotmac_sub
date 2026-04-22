@@ -397,35 +397,35 @@ def ont_factory_reset(
 
 
 @router.post(
-    "/onts/{ont_id}/apply-profile",
+    "/onts/{ont_id}/apply-bundle",
     dependencies=[Depends(require_permission("network:write"))],
 )
-def ont_apply_profile(
+def ont_apply_bundle(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Apply a provisioning profile to an ONT."""
+    """Apply a provisioning bundle to an ONT."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
     form = parse_form_data_sync(request)
-    profile_id = _form_str(form, "profile_id")
-    if not profile_id:
+    bundle_id = _form_str(form, "bundle_id")
+    if not bundle_id:
         return _action_json_response(
             success=False,
-            message="No profile selected",
-            action="Apply Provisioning Profile",
+            message="No bundle selected",
+            action="Apply Provisioning Bundle",
             request=request,
             ont_id=ont_id,
         )
 
-    result = web_network_ont_actions_service.apply_profile(
-        db, ont_id, profile_id, request=request
+    result = web_network_ont_actions_service.apply_bundle(
+        db, ont_id, bundle_id, request=request
     )
     return _action_result_response(
         result=result,
         request=request,
         ont_id=ont_id,
-        action="Apply Provisioning Profile",
+        action="Apply Provisioning Bundle",
     )
 
 
@@ -649,19 +649,71 @@ def ont_set_lan_config(
 
 
 @router.post(
+    "/onts/{ont_id}/voip-config",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_voip_config(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Set VoIP enabled status on ONT."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    voip_enabled_raw = _form_str(form, "voip_enabled").strip()
+    voip_enabled = voip_enabled_raw in {"true", "1", "yes", "on"}
+
+    from app.models.network import OntUnit
+    from app.services.adapters import AdapterResult
+    from app.services.common import coerce_uuid
+
+    ont = db.get(OntUnit, coerce_uuid(ont_id))
+    if not ont:
+        result = AdapterResult(ok=False, message="ONT not found")
+    else:
+        ont.voip_enabled = voip_enabled
+        db.flush()
+        status = "enabled" if voip_enabled else "disabled"
+        result = AdapterResult(ok=True, message=f"VoIP {status} on {ont.serial_number}")
+
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set VoIP Config",
+    )
+
+
+@router.post(
     "/onts/{ont_id}/wan-config",
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ont_set_wan_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Set WAN mode, VLAN, and static IP settings via GenieACS TR-069."""
+    """Set WAN mode, VLAN, ONU mode, and static IP settings via GenieACS TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
     form = parse_form_data_sync(request)
     vlan_raw = _form_str(form, "wan_vlan").strip()
     instance_raw = _form_str(form, "instance_index", "1").strip()
+    onu_mode_raw = _form_str(form, "onu_mode").strip()
+    ip_protocol_raw = _form_str(form, "ip_protocol").strip()
+
+    # Update ONU mode and IP protocol on the ONT record if provided
+    if onu_mode_raw in ("routing", "bridging") or ip_protocol_raw in ("ipv4", "dual_stack"):
+        from app.models.network import IpProtocol, OnuMode, OntUnit
+        from app.services.common import coerce_uuid
+
+        ont = db.get(OntUnit, coerce_uuid(ont_id))
+        if ont:
+            if onu_mode_raw in ("routing", "bridging"):
+                ont.onu_mode = OnuMode(onu_mode_raw)
+            if ip_protocol_raw in ("ipv4", "dual_stack"):
+                ont.ip_protocol = IpProtocol(ip_protocol_raw)
+            db.flush()
+
     result = web_network_ont_actions_service.configure_wan_with_pppoe(
         db,
         ont_id,
@@ -703,6 +755,135 @@ def ont_reveal_pppoe_password(
     if not found:
         return JSONResponse({"password": ""}, status_code=404)
     return JSONResponse({"password": password})
+
+
+@router.get(
+    "/onts/{ont_id}/running-config",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_running_config(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Fetch ONT-specific configuration from the OLT via SSH.
+
+    Returns the service-port and ONT info from the OLT CLI.
+    Falls back to cached data if OLT is unreachable.
+    """
+    from datetime import UTC, datetime
+
+    from app.models.network import OntUnit
+    from app.services.common import coerce_uuid
+    from app.services.network.olt_ssh import run_cli_command
+    from app.services.network.olt_read_cache import olt_cache
+
+    ont = db.get(OntUnit, coerce_uuid(ont_id))
+    if not ont:
+        return templates.TemplateResponse(
+            "admin/network/onts/_running_config_modal.html",
+            {
+                "request": request,
+                "ont": None,
+                "error": "ONT not found",
+                "config_text": "",
+                "from_cache": False,
+                "fetched_at": None,
+            },
+        )
+
+    # Try to get the OLT from the ONT's assignment
+    olt = None
+    if ont.olt_device:
+        olt = ont.olt_device
+    elif ont.active_assignment and ont.active_assignment.pon_port:
+        olt = ont.active_assignment.pon_port.olt
+
+    if not olt:
+        return templates.TemplateResponse(
+            "admin/network/onts/_running_config_modal.html",
+            {
+                "request": request,
+                "ont": ont,
+                "error": "No OLT associated with this ONT",
+                "config_text": "",
+                "from_cache": False,
+                "fetched_at": None,
+            },
+        )
+
+    # Build the ONT-specific command (Huawei style)
+    # Get F/S/P from the assignment
+    fsp = None
+    onu_id = None
+    if ont.active_assignment and ont.active_assignment.pon_port:
+        pon = ont.active_assignment.pon_port
+        fsp = pon.name  # e.g., "0/1/0"
+        onu_id = ont.active_assignment.onu_id
+
+    # Cache key for this ONT's config
+    cache_key = f"ont_config:{ont_id}"
+    cached = olt_cache.get(str(olt.id), "cli", cache_key)
+    cached_at = olt_cache.get_timestamp(str(olt.id), "cli", cache_key)
+
+    config_lines = []
+    error_msg = None
+    from_cache = False
+
+    # Try to fetch service-port info for this ONT
+    if fsp and onu_id:
+        # Run display service-port filtered by ONT
+        cmd = f"display service-port port {fsp} ont {onu_id}"
+        ok, msg, output = run_cli_command(olt, cmd)
+        if ok and output.strip():
+            config_lines.append(f"# Service Ports ({cmd})")
+            config_lines.append(output.strip())
+            config_lines.append("")
+        elif not ok and cached:
+            from_cache = True
+            config_lines.append(cached)
+            error_msg = f"OLT unreachable - showing cached config"
+        else:
+            error_msg = msg
+
+        # Also try to get ONT info
+        cmd2 = f"display ont info {fsp} {onu_id}"
+        ok2, msg2, output2 = run_cli_command(olt, cmd2)
+        if ok2 and output2.strip():
+            config_lines.append(f"# ONT Info ({cmd2})")
+            config_lines.append(output2.strip())
+    else:
+        # Fallback: try by serial number
+        cmd = f"display ont info by-sn {ont.serial_number}"
+        ok, msg, output = run_cli_command(olt, cmd)
+        if ok and output.strip():
+            config_lines.append(f"# ONT Info ({cmd})")
+            config_lines.append(output.strip())
+        elif not ok and cached:
+            from_cache = True
+            config_lines.append(cached)
+            error_msg = f"OLT unreachable - showing cached config"
+        else:
+            error_msg = msg
+
+    config_text = "\n".join(config_lines)
+
+    # Cache successful results
+    if config_text and not from_cache and not error_msg:
+        olt_cache.set(str(olt.id), "cli", config_text, cache_key)
+
+    return templates.TemplateResponse(
+        "admin/network/onts/_running_config_modal.html",
+        {
+            "request": request,
+            "ont": ont,
+            "olt": olt,
+            "error": error_msg,
+            "config_text": config_text,
+            "from_cache": from_cache,
+            "fetched_at": cached_at if from_cache else datetime.now(UTC),
+        },
+    )
 
 
 @router.post(
@@ -1063,27 +1244,6 @@ def ont_bind_tr069_profile(
         ont_id=ont_id,
         status_code=200 if ok else 400,
     )
-
-
-@router.get(
-    "/onts/{ont_id}/iphost-config",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-@router.get(
-    "/onts/{ont_id}/provisioning-support",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_iphost_config(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: Management IP config for ONT detail page."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(web_network_ont_actions_service.iphost_config_context(db, ont_id))
-    return templates.TemplateResponse("admin/network/onts/_mgmt_config.html", context)
 
 
 # ── Config Snapshots ──────────────────────────────────────────────────────────

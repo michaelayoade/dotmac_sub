@@ -118,11 +118,16 @@ def list_context(
         config_method=config_method,
         is_active=None,
     )
+
+    # Get usage counts for each profile (ONTs using each profile)
+    usage_counts = ont_provisioning_profiles.count_onts_by_profile(db)
+
     return {
         "request": request,
         "active_page": "provisioning-profiles",
         "active_menu": "network",
         "items": items,
+        "usage_counts": usage_counts,
         "profile_types": [e.value for e in OntProfileType],
         "config_methods": [e.value for e in ConfigMethod],
         "olt_devices": _active_olts(db),

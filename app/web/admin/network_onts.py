@@ -12,7 +12,6 @@ from fastapi.responses import (
     RedirectResponse,
     Response,
 )
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -28,19 +27,9 @@ from app.services.auth_dependencies import require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.action_logging import log_network_action_result
 from app.web.request_parsing import parse_form_data_sync
+from app.web.templates import templates
 
-templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
-
-
-_form_str = ont_web_forms_service.form_str
-_form_uuid_or_none = ont_web_forms_service.form_uuid_or_none
-_form_float_or_none = ont_web_forms_service.form_float_or_none
-_form_int_or_none = ont_web_forms_service.form_int_or_none
-_resolve_splitter_port_id = ont_web_forms_service.resolve_splitter_port_id
-_ont_unit_integrity_error_message = (
-    ont_web_forms_service.ont_unit_integrity_error_message
-)
 
 
 def _base_context(
@@ -149,7 +138,7 @@ def ont_detail_preview(
         "charts": "diagnostics",
     }
     tab = tab_aliases.get(tab, tab)
-    active_tab = tab if tab in allowed_tabs else "overview"
+    active_tab = tab if tab in allowed_tabs else "device-config"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
     try:
@@ -173,6 +162,7 @@ def ont_detail_preview(
         {
             **page_data,
             **_ont_form_dependencies(db, page_data["ont"]),
+            **web_network_ont_actions_service.unified_config_context(db, ont_id),
             "activities": activities,
             "operations": operations,
             "ont_active_tab": active_tab,
@@ -691,6 +681,7 @@ def ont_configure_form(
 def ont_configure_submit(
     request: Request,
     ont_id: str,
+    bundle_id: str = Form(default=""),
     wan_mode: str = Form(default=""),
     wan_vlan_id: str = Form(default=""),
     config_method: str = Form(default=""),
@@ -726,6 +717,7 @@ def ont_configure_submit(
     result = web_network_ont_actions_service.update_ont_config(
         db,
         ont_id,
+        bundle_id=bundle_id,
         wan_mode=wan_mode or None,
         wan_vlan_id=wan_vlan_id or None,
         config_method=config_method or None,
@@ -775,3 +767,28 @@ def ont_configure_submit(
         )
     )
     return response
+
+
+@router.get(
+    "/onts/{ont_id}/profile-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_profile_preview(
+    request: Request,
+    ont_id: str,
+    bundle_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Profile configuration preview for profile selection."""
+    if not bundle_id:
+        return HTMLResponse("")
+    context = {"request": request, "ont_id": ont_id}
+    context.update(
+        web_network_ont_actions_service.profile_preview_context(
+            db, bundle_id
+        )
+    )
+    return templates.TemplateResponse(
+        "admin/network/onts/_profile_preview.html", context
+    )

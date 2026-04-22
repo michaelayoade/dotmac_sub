@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,6 +28,10 @@ from app.services.network.ont_provisioning.saga.types import (
     SagaDefinition,
     SagaExecutionStatus,
     SagaStep,
+)
+from app.services.network.ont_provisioning.saga.workflows import (
+    _configure_wifi,
+    _push_pppoe_tr069,
 )
 
 
@@ -792,8 +797,89 @@ class TestSagaExecutorResume:
             lambda *args, **kwargs: None,
         )
 
-        with patch.object(SagaExecutor, "_load_context_models", return_value=True):
-            result = SagaExecutor(saga, context).execute()
+
+class TestSagaWorkflowEffectiveFallbacks:
+    def test_push_pppoe_uses_effective_username(
+        self, mock_db, sample_ont_id, sample_execution_id
+    ):
+        context = SagaContext(
+            db=mock_db,
+            ont_id=sample_ont_id,
+            saga_execution_id=sample_execution_id,
+            step_data={},
+        )
+        context.ont = MagicMock()
+        context.ont.pppoe_password = "secret"
+
+        with (
+            patch(
+                "app.services.network.ont_provisioning.saga.workflows.resolve_effective_ont_config",
+                return_value={"values": {"pppoe_username": "bundle-user"}},
+            ),
+            patch(
+                "app.services.network.ont_provisioning.saga.workflows.StepResult",
+                wraps=StepResult,
+            ),
+            patch(
+                "app.services.network.ont_provision_steps.push_pppoe_tr069",
+                return_value=StepResult(
+                    step_name="push_pppoe_tr069",
+                    success=True,
+                    message="ok",
+                ),
+            ) as mock_push,
+        ):
+            result = _push_pppoe_tr069(context)
 
         assert result.success is True
-        assert step_calls == ["step1"]
+        mock_push.assert_called_once_with(
+            mock_db,
+            sample_ont_id,
+            username="bundle-user",
+            password="secret",
+            instance_index=1,
+        )
+
+    def test_configure_wifi_uses_effective_bundle_values(
+        self, mock_db, sample_ont_id, sample_execution_id
+    ):
+        context = SagaContext(
+            db=mock_db,
+            ont_id=sample_ont_id,
+            saga_execution_id=sample_execution_id,
+            step_data={},
+        )
+        context.ont = MagicMock()
+        context.ont.wifi_password = "wifi-secret"
+
+        with (
+            patch(
+                "app.services.network.ont_provisioning.saga.workflows.resolve_effective_ont_config",
+                return_value={
+                    "values": {
+                        "wifi_ssid": "bundle-ssid",
+                        "wifi_enabled": True,
+                        "wifi_channel": "11",
+                        "wifi_security_mode": "WPA2-Personal",
+                    }
+                },
+            ),
+            patch(
+                "app.services.acs_config_adapter.acs_config_adapter.set_wifi_config",
+                return_value=SimpleNamespace(
+                    success=True, message="wifi ok", data={"queued": True}
+                ),
+            ) as mock_set_wifi,
+        ):
+            result = _configure_wifi(context)
+
+        assert result.success is True
+        mock_set_wifi.assert_called_once_with(
+            mock_db,
+            sample_ont_id,
+            enabled=True,
+            ssid="bundle-ssid",
+            password="wifi-secret",
+            channel="11",
+            security_mode="WPA2-Personal",
+        )

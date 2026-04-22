@@ -12,6 +12,7 @@ from app.tasks.bandwidth import (
     trim_redis_stream as trim_bandwidth_stream,
 )
 from app.tasks.billing import run_invoice_cycle
+from app.tasks.catalog import expire_subscriptions
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
 from app.tasks.events import (
     cleanup_old_events,
@@ -130,6 +131,12 @@ from app.tasks.zabbix_ingestion import (
     ingest_portal_usage,
     ingest_portal_usage_chunk,
 )
+from app.tasks.zabbix_sync import (
+    remove_device_from_zabbix_task,
+    sync_devices_to_zabbix,
+    sync_single_nas_to_zabbix,
+    sync_single_olt_to_zabbix,
+)
 
 __all__ = [
     "cleanup_old_operations",
@@ -143,6 +150,7 @@ __all__ = [
     "queue_saga_execution",
     "queue_bulk_saga_executions",
     "run_invoice_cycle",
+    "expire_subscriptions",
     "run_dunning",
     "run_prepaid_enforcement",
     "run_scheduled_export",
@@ -209,6 +217,10 @@ __all__ = [
     "dispatch_portal_usage_ingestion",
     "ingest_portal_usage",
     "ingest_portal_usage_chunk",
+    "sync_devices_to_zabbix",
+    "sync_single_olt_to_zabbix",
+    "sync_single_nas_to_zabbix",
+    "remove_device_from_zabbix_task",
     # ONT verification (Phase 2)
     "verify_ont_provisioning_state",
     "verify_single_ont",

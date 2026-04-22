@@ -70,8 +70,117 @@ class TestUpdateWanConfig:
         assert result.success is False
         assert "invalid" in result.message.lower()
 
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    def test_rejects_wan_vlan_from_other_olt(self, mock_resolve_context, mock_get):
+        ont = MagicMock()
+        mock_get.return_value = (ont, None)
+        olt = MagicMock(id=uuid.uuid4())
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+        vlan = MagicMock(id=uuid.uuid4(), tag=450, olt_device_id=uuid.uuid4())
+        db = MagicMock()
+        db.get.return_value = vlan
+
+        result = OntWriteService.update_wan_config(
+            db,
+            "ont-1",
+            wan_mode="dhcp",
+            vlan_id=str(vlan.id),
+        )
+
+        assert result.success is False
+        assert "not configured on this ont's olt" in result.message.lower()
+        db.commit.assert_not_called()
+
+    @patch("app.services.network.ont_write.upsert_ont_config_override")
+    @patch("app.services.network.ont_write.is_bundle_managed_ont")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    def test_bundle_managed_ont_writes_wan_intent_to_overrides(
+        self,
+        mock_get,
+        mock_bundle_managed,
+        mock_upsert_override,
+    ):
+        ont = MagicMock(wan_mode=None, pppoe_username=None)
+        mock_get.return_value = (ont, None)
+        mock_bundle_managed.return_value = True
+        db = MagicMock()
+
+        result = OntWriteService.update_wan_config(
+            db,
+            "ont-1",
+            wan_mode="pppoe",
+            pppoe_username="subscriber-user",
+        )
+
+        assert result.success is True
+        assert ont.wan_mode is None
+        assert ont.pppoe_username is None
+        override_fields = [
+            call.kwargs["field_name"] for call in mock_upsert_override.call_args_list
+        ]
+        assert "wan.wan_mode" in override_fields
+        assert "wan.pppoe_username" in override_fields
+        assert db.commit.called
+
 
 class TestUpdateManagementIp:
+    @patch("app.services.network.ont_write.upsert_ont_config_override")
+    @patch("app.services.network.ont_write.is_bundle_managed_ont")
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    def test_bundle_managed_ont_writes_management_intent_to_overrides(
+        self,
+        mock_get_adapter,
+        mock_get,
+        mock_resolve_context,
+        mock_emit,
+        mock_bundle_managed,
+        mock_upsert_override,
+    ):
+        from app.services.network.olt_protocol_adapters import OltOperationResult
+
+        ont = MagicMock(external_id="generic:5")
+        mock_get.return_value = (ont, None)
+        mock_bundle_managed.return_value = True
+        olt = MagicMock(id=uuid.uuid4())
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.configure_iphost.return_value = OltOperationResult(
+            success=True, message="ok", data={}
+        )
+        mock_get_adapter.return_value = mock_adapter
+        db = MagicMock()
+        db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+            mgmt_vlan_id=FAKE_UUID,
+            mgmt_ip_address="172.16.201.10",
+        )
+
+        assert result.success is True
+        assert ont.mgmt_ip_mode is None
+        assert ont.mgmt_vlan_id is None
+        assert ont.mgmt_ip_address is None
+        override_fields = [
+            call.kwargs["field_name"] for call in mock_upsert_override.call_args_list
+        ]
+        assert "management.ip_mode" in override_fields
+        assert "management.vlan_tag" in override_fields
+        assert "management.ip_address" in override_fields
+        assert db.commit.called
+
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
@@ -89,7 +198,7 @@ class TestUpdateManagementIp:
 
         ont = MagicMock(external_id="huawei:4194320640.5")
         mock_get.return_value = (ont, None)
-        olt = MagicMock()
+        olt = MagicMock(id=uuid.uuid4())
         mock_resolve_context.return_value = (
             SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
@@ -102,6 +211,7 @@ class TestUpdateManagementIp:
         )
         mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
+        db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
         result = OntWriteService.update_management_ip(
             db,
@@ -132,7 +242,7 @@ class TestUpdateManagementIp:
 
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
-        olt = MagicMock()
+        olt = MagicMock(id=uuid.uuid4())
         mock_resolve_context.return_value = (
             SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
@@ -145,6 +255,7 @@ class TestUpdateManagementIp:
         )
         mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
+        db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
         result = OntWriteService.update_management_ip(
             db,
@@ -220,7 +331,7 @@ class TestUpdateManagementIp:
 
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
-        olt = MagicMock()
+        olt = MagicMock(id=uuid.uuid4())
         mock_resolve_context.return_value = (
             SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
             None,
@@ -236,6 +347,7 @@ class TestUpdateManagementIp:
         )
         mock_get_adapter.return_value = mock_adapter
         db = MagicMock()
+        db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
         result = OntWriteService.update_management_ip(
             db,
@@ -248,6 +360,35 @@ class TestUpdateManagementIp:
         assert "timed out" in result.message
         db.commit.assert_not_called()
         mock_emit.assert_not_called()
+
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    def test_rejects_global_management_vlan_id(
+        self,
+        mock_get,
+        mock_resolve_context,
+    ):
+        ont = MagicMock(external_id="generic:5")
+        mock_get.return_value = (ont, None)
+        olt = MagicMock(id=uuid.uuid4())
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+        vlan = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=None)
+        db = MagicMock()
+        db.get.return_value = vlan
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+            mgmt_vlan_id=str(vlan.id),
+        )
+
+        assert result.success is False
+        assert "not configured on this ont's olt" in result.message.lower()
+        db.commit.assert_not_called()
 
 
 class TestUpdateServicePort:

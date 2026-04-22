@@ -26,6 +26,10 @@ from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
 )
+from app.services.network.ont_config_overrides import (
+    is_bundle_managed_ont,
+    upsert_ont_config_override,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,33 @@ def _emit_ont_event(db: Session, event_name: str, payload: dict) -> None:
 
 def _is_test_mock(value: object) -> bool:
     return isinstance(value, Mock)
+
+
+def _resolve_ont_scoped_vlan(
+    db: Session,
+    *,
+    vlan_id: str,
+    olt_id: object | None,
+    field_label: str,
+):
+    """Resolve a VLAN and enforce that it belongs to the ONT's OLT."""
+    from app.models.network import Vlan
+
+    vlan = db.get(Vlan, vlan_id)
+    if vlan is None:
+        return None, ActionResult(success=False, message=f"{field_label} VLAN not found.")
+    if olt_id is None:
+        return None, ActionResult(
+            success=False,
+            message=f"{field_label} VLAN requires the ONT to be assigned to an OLT.",
+        )
+    if vlan.olt_device_id != olt_id:
+        tag = getattr(vlan, "tag", vlan_id)
+        return None, ActionResult(
+            success=False,
+            message=f"{field_label} VLAN {tag} is not configured on this ONT's OLT.",
+        )
+    return vlan, None
 
 
 class OntWriteService:
@@ -181,8 +212,28 @@ class OntWriteService:
             ont.wan_mode = WanMode(wan_mode)
         except ValueError:
             return ActionResult(success=False, message=f"Invalid wan_mode: {wan_mode}")
+        ctx = None
+        if vlan_id:
+            ctx, context_err = _strict_olt_write_context(db, ont_id)
+            if context_err:
+                return context_err
+            if ctx is None:
+                return ActionResult(
+                    success=False, message="ONT OLT context is incomplete."
+                )
+        bundle_managed = is_bundle_managed_ont(db, ont)
         if pppoe_username:
-            ont.pppoe_username = pppoe_username
+            if bundle_managed:
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wan.pppoe_username",
+                    value=pppoe_username,
+                    reason="ont_write.update_wan_config",
+                )
+                ont.pppoe_username = None
+            else:
+                ont.pppoe_username = pppoe_username
         if pppoe_password:
             from app.services.credential_crypto import encrypt_credential
 
@@ -190,7 +241,34 @@ class OntWriteService:
         if vlan_id:
             from app.services.common import coerce_uuid
 
-            ont.wan_vlan_id = coerce_uuid(vlan_id)
+            vlan, vlan_err = _resolve_ont_scoped_vlan(
+                db,
+                vlan_id=vlan_id,
+                olt_id=getattr(ctx.olt, "id", None),
+                field_label="WAN",
+            )
+            if vlan_err:
+                return vlan_err
+            if bundle_managed:
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wan.vlan_tag",
+                    value=vlan.tag,
+                    reason="ont_write.update_wan_config",
+                )
+                ont.wan_vlan_id = None
+            else:
+                ont.wan_vlan_id = coerce_uuid(str(vlan.id))
+        if bundle_managed:
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wan.wan_mode",
+                value=wan_mode,
+                reason="ont_write.update_wan_config",
+            )
+            ont.wan_mode = None
         _set_sync_meta(ont, "api")
         db.commit()
         db.refresh(ont)
@@ -230,13 +308,16 @@ class OntWriteService:
         vlan_int = None
         resolved_mgmt_vlan_id = None
         if mgmt_vlan_id:
-            from app.services.network.cpe import Vlans
-
-            vlan_obj = Vlans.get(db, mgmt_vlan_id)
-            vlan_int = vlan_obj.tag if vlan_obj else None
-            resolved_mgmt_vlan_id = mgmt_vlan_id if vlan_obj else None
-            if vlan_int is None:
-                return ActionResult(success=False, message="Management VLAN not found.")
+            vlan_obj, vlan_err = _resolve_ont_scoped_vlan(
+                db,
+                vlan_id=mgmt_vlan_id,
+                olt_id=getattr(ctx.olt, "id", None),
+                field_label="Management",
+            )
+            if vlan_err:
+                return vlan_err
+            vlan_int = vlan_obj.tag
+            resolved_mgmt_vlan_id = str(vlan_obj.id)
         elif mgmt_vlan_tag is not None:
             from app.models.network import Vlan
 
@@ -245,7 +326,7 @@ class OntWriteService:
                 select(Vlan).where(
                     Vlan.tag == vlan_int,
                     Vlan.is_active.is_(True),
-                    (Vlan.olt_device_id == ctx.olt.id) | (Vlan.olt_device_id.is_(None)),
+                    Vlan.olt_device_id == ctx.olt.id,
                 )
             ).first()
             resolved_mgmt_vlan_id = getattr(vlan_obj, "id", None) if vlan_obj else None
@@ -279,14 +360,44 @@ class OntWriteService:
         from app.models.network import MgmtIpMode
         from app.services.common import coerce_uuid
 
+        bundle_managed = is_bundle_managed_ont(db, ont)
         try:
-            ont.mgmt_ip_mode = MgmtIpMode(mgmt_ip_mode)
+            parsed_mgmt_mode = MgmtIpMode(mgmt_ip_mode)
         except ValueError:
-            pass
-        if resolved_mgmt_vlan_id:
-            ont.mgmt_vlan_id = coerce_uuid(str(resolved_mgmt_vlan_id))
-        if mgmt_ip_address:
-            ont.mgmt_ip_address = mgmt_ip_address
+            parsed_mgmt_mode = None
+        if bundle_managed:
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="management.ip_mode",
+                value=getattr(parsed_mgmt_mode, "value", mgmt_ip_mode),
+                reason="ont_write.update_management_ip",
+            )
+            if vlan_int is not None:
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="management.vlan_tag",
+                    value=vlan_int,
+                    reason="ont_write.update_management_ip",
+                )
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="management.ip_address",
+                value=mgmt_ip_address,
+                reason="ont_write.update_management_ip",
+            )
+            ont.mgmt_ip_mode = None
+            ont.mgmt_vlan_id = None
+            ont.mgmt_ip_address = None
+        else:
+            if parsed_mgmt_mode is not None:
+                ont.mgmt_ip_mode = parsed_mgmt_mode
+            if resolved_mgmt_vlan_id:
+                ont.mgmt_vlan_id = coerce_uuid(str(resolved_mgmt_vlan_id))
+            if mgmt_ip_address:
+                ont.mgmt_ip_address = mgmt_ip_address
         _set_sync_meta(ont, "ssh")
         db.commit()
         db.refresh(ont)

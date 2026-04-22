@@ -116,8 +116,10 @@
 {% set current_gateway = wan_intent.get('gateway') or (wan_info.get('gateway') if wan_info else '') %}
 {% set current_dns = wan_intent.get('dns_servers') or (wan_info.get('dns_servers') if wan_info else '') %}
 {% set current_pppoe_user = wan_intent.get('pppoe_username') or current_pppoe_user or '' %}
+{% set current_onu_mode = (ont.onu_mode.value if ont and ont.onu_mode else (wan_intent.get('onu_mode') or 'routing')) %}
+{% set current_ip_protocol = (ont.ip_protocol.value if ont and ont.ip_protocol else (wan_intent.get('ip_protocol') or 'ipv4')) %}
 <div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
-     x-data="{ wanMode: '{{ current_wan_mode }}' }">
+     x-data="{ wanMode: '{{ current_wan_mode }}', onuMode: '{{ current_onu_mode }}', ipProtocol: '{{ current_ip_protocol }}' }">
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WAN Service</h4>
     <form hx-post="/admin/network/onts/{{ ont_id }}/wan-config"
           hx-swap="none"
@@ -126,6 +128,48 @@
           data-loading-label="Applying WAN..."
           class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
+        {# ONU Mode Toggle - Routing vs Bridging #}
+        <div class="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50/50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">ONU Mode</span>
+            <div class="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-600 dark:bg-slate-700">
+                <button type="button"
+                        @click="onuMode = 'routing'"
+                        :class="onuMode === 'routing' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-600'"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors">
+                    Routing
+                </button>
+                <button type="button"
+                        @click="onuMode = 'bridging'"
+                        :class="onuMode === 'bridging' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-600'"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors">
+                    Bridging
+                </button>
+            </div>
+            <input type="hidden" name="onu_mode" :value="onuMode">
+            <span class="text-xs text-slate-500 dark:text-slate-400" x-show="onuMode === 'routing'">ONT performs NAT and routing</span>
+            <span class="text-xs text-slate-500 dark:text-slate-400" x-show="onuMode === 'bridging'" x-cloak>ONT acts as a transparent bridge</span>
+        </div>
+        {# IP Protocol Toggle - IPv4 vs Dual-Stack #}
+        <div class="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50/50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">IP Protocol</span>
+            <div class="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-600 dark:bg-slate-700">
+                <button type="button"
+                        @click="ipProtocol = 'ipv4'"
+                        :class="ipProtocol === 'ipv4' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-600'"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors">
+                    IPv4
+                </button>
+                <button type="button"
+                        @click="ipProtocol = 'dual_stack'"
+                        :class="ipProtocol === 'dual_stack' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-600'"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors">
+                    Dual-Stack
+                </button>
+            </div>
+            <input type="hidden" name="ip_protocol" :value="ipProtocol">
+            <span class="text-xs text-slate-500 dark:text-slate-400" x-show="ipProtocol === 'ipv4'">IPv4 only</span>
+            <span class="text-xs text-slate-500 dark:text-slate-400" x-show="ipProtocol === 'dual_stack'" x-cloak>IPv4 + IPv6</span>
+        </div>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">WAN Mode</label>
@@ -141,9 +185,11 @@
                     Internet VLAN <span class="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <select name="wan_vlan" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-	                    <option value="">Leave unchanged</option>
-	                    {% for vlan in vlans or [] %}
-	                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan')|string == vlan.tag|string or (ont.wan_vlan_id and vlan.id|string == ont.wan_vlan_id|string) %}selected{% endif %}>VLAN {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}</option>
+                    <option value="">Leave unchanged</option>
+                    {% for vlan in vlans or [] %}
+                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan')|string == vlan.tag|string or (ont.wan_vlan_id and vlan.id|string == ont.wan_vlan_id|string) %}selected{% endif %}>
+                        {{ vlan | vlan_label }}
+                    </option>
                     {% endfor %}
                 </select>
             </div>
@@ -216,8 +262,10 @@
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
                 <select name="vlan_id" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-	                    {% for vlan in vlans or [] %}
-	                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan')|string == vlan.tag|string or (ont.wan_vlan_id and vlan.id|string == ont.wan_vlan_id|string) %}selected{% endif %}>VLAN {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}</option>
+                    {% for vlan in vlans or [] %}
+                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan')|string == vlan.tag|string or (ont.wan_vlan_id and vlan.id|string == ont.wan_vlan_id|string) %}selected{% endif %}>
+                        {{ vlan | vlan_label }}
+                    </option>
                     {% endfor %}
                 </select>
             </div>

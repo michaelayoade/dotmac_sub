@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntProvisioningProfile, OntUnit
+from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +75,7 @@ def validate_chain(
         )
         return result
 
-    # Try to find provisioning profile directly from ONT
-    profile: OntProvisioningProfile | None = None
-    if ont.provisioning_profile_id:
-        profile = db.get(OntProvisioningProfile, str(ont.provisioning_profile_id))
+    profile: OntProvisioningProfile | None = resolve_assigned_bundle(db, ont)
 
     if not profile:
         result.warnings.append(

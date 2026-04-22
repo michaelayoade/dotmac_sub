@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OntUnit
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.web_network_ont_actions._common import _log_action_audit
 
 logger = logging.getLogger(__name__)
@@ -41,11 +42,13 @@ def reveal_stored_pppoe_password(
         return "", False
 
     password = resolve_stored_pppoe_password(db, ont_id)
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
     _log_action_audit(
         db,
         request=request,
         action="reveal_pppoe_password",
         ont_id=ont_id,
-        metadata={"username": ont.pppoe_username or ""},
+        metadata={"username": str(values.get("pppoe_username") or "")},
     )
     return password, True

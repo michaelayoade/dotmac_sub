@@ -752,9 +752,13 @@ def ip_pools_list(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
-def vlans_list(request: Request, db: Session = Depends(get_db)):
+def vlans_list(
+    request: Request,
+    olt_id: str | None = None,
+    db: Session = Depends(get_db),
+):
     """List all VLANs."""
-    state = web_network_vlans_service.build_vlans_list_data(db)
+    state = web_network_vlans_service.build_vlans_list_data(db, olt_device_id=olt_id)
 
     context = _base_context(request, db, active_page="vlans")
     context.update(state)
@@ -766,9 +770,15 @@ def vlans_list(request: Request, db: Session = Depends(get_db)):
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
-def vlan_new(request: Request, db: Session = Depends(get_db)):
+def vlan_new(
+    request: Request,
+    olt_id: str | None = None,
+    db: Session = Depends(get_db),
+):
     context = _base_context(request, db, active_page="vlans")
-    context.update(web_network_vlans_service.build_vlan_new_form_data(db))
+    context.update(
+        web_network_vlans_service.build_vlan_new_form_data(db, olt_device_id=olt_id)
+    )
     return templates.TemplateResponse("admin/network/vlans/form.html", context)
 
 
@@ -783,7 +793,11 @@ def vlan_create(request: Request, db: Session = Depends(get_db)):
         vlan = web_network_vlans_service.handle_vlan_create(db, form)
     except Exception as exc:
         context = _base_context(request, db, active_page="vlans")
-        context.update(web_network_vlans_service.build_vlan_new_form_data(db))
+        context.update(
+            web_network_vlans_service.build_vlan_new_form_data(
+                db, olt_device_id=str(form.get("olt_device_id") or "").strip() or None
+            )
+        )
         context.update({"error": str(exc), "form_values": dict(form)})
         return templates.TemplateResponse(
             "admin/network/vlans/form.html", context, status_code=400

@@ -276,12 +276,11 @@ class GenieACSClient:
         *,
         device_id: str,
         task_name: str,
-        connection_request: bool,
         interval_seconds: int,
         started_at: float,
     ) -> tuple[threading.Event, threading.Thread | None]:
         done = threading.Event()
-        if not connection_request or interval_seconds <= 0:
+        if interval_seconds <= 0:
             return done, None
 
         def _log_waiting() -> None:
@@ -293,7 +292,6 @@ class GenieACSClient:
                         "event": "genieacs_task_create_waiting",
                         "device_id": device_id,
                         "task_name": task_name,
-                        "connection_request": connection_request,
                         "elapsed_ms": elapsed_ms,
                     },
                 )
@@ -448,7 +446,6 @@ class GenieACSClient:
         self,
         device_id: str,
         task: dict,
-        connection_request: bool = True,
         dedupe_pending: bool = True,
         enforce_safety: bool = True,
         allow_broad_refresh: bool = False,
@@ -460,11 +457,9 @@ class GenieACSClient:
         Args:
             device_id: Device ID
             task: Task definition
-            connection_request: Whether to trigger connection request
 
         Returns:
-            Task result dict, may include 'connectionRequestError' if device
-            was unreachable when connection_request=True
+            Task result dict
         """
         prepared = self._prepare_pending_tasks_for_create(
             device_id,
@@ -479,7 +474,6 @@ class GenieACSClient:
             return prepared
 
         encoded_id = quote(device_id, safe="")
-        params = {"connection_request": str(connection_request).lower()}
         task_name = str(task.get("name") or "unknown")
         value_count = self._task_value_count(task)
         started_at = time.monotonic()
@@ -489,7 +483,6 @@ class GenieACSClient:
                 "event": "genieacs_task_create_begin",
                 "device_id": device_id,
                 "task_name": task_name,
-                "connection_request": connection_request,
                 "value_count": value_count,
                 "timeout_seconds": self.timeout,
             },
@@ -497,7 +490,6 @@ class GenieACSClient:
         done, wait_thread = self._start_task_wait_logger(
             device_id=device_id,
             task_name=task_name,
-            connection_request=connection_request,
             interval_seconds=self._task_wait_log_interval_seconds(),
             started_at=started_at,
         )
@@ -506,7 +498,6 @@ class GenieACSClient:
             response = self._request(
                 "POST",
                 f"/devices/{encoded_id}/tasks",
-                params=params,
                 json_data=task,
             )
         except Exception:
@@ -517,7 +508,6 @@ class GenieACSClient:
                     "event": "genieacs_task_create_failed",
                     "device_id": device_id,
                     "task_name": task_name,
-                    "connection_request": connection_request,
                     "elapsed_ms": elapsed_ms,
                 },
             )
@@ -529,25 +519,6 @@ class GenieACSClient:
 
         result = response.json() if response.text else {}
 
-        # GenieACS returns 202 even when device is offline, with error in reason phrase
-        # e.g., "HTTP/1.1 202 Device is offline" or "202 Connection request error: ..."
-        # Capture this in the result for callers to handle
-        if response.status_code == 202 and hasattr(response, "reason_phrase"):
-            reason = response.reason_phrase or ""
-            # Check for error indicators in the reason phrase
-            error_indicators = [
-                "offline",
-                "error",
-                "EHOSTUNREACH",
-                "ECONNREFUSED",
-                "timeout",
-                "unreachable",
-            ]
-            if any(ind.lower() in reason.lower() for ind in error_indicators):
-                # Only set if not already present from JSON body
-                if "connectionRequestError" not in result:
-                    result["connectionRequestError"] = reason
-
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(
             "genieacs_task_create_complete",
@@ -555,12 +526,10 @@ class GenieACSClient:
                 "event": "genieacs_task_create_complete",
                 "device_id": device_id,
                 "task_name": task_name,
-                "connection_request": connection_request,
                 "status_code": response.status_code,
                 "elapsed_ms": elapsed_ms,
                 "task_id": result.get("_id"),
                 "already_pending": bool(result.get("alreadyPending")),
-                "connection_request_error": result.get("connectionRequestError"),
             },
         )
 
@@ -570,7 +539,6 @@ class GenieACSClient:
         self,
         device_id: str,
         parameters: list[str],
-        connection_request: bool = True,
         allow_when_pending: bool = False,
     ) -> dict:
         """Get parameter values from device.
@@ -578,7 +546,6 @@ class GenieACSClient:
         Args:
             device_id: Device ID
             parameters: List of parameter paths
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
@@ -587,7 +554,6 @@ class GenieACSClient:
         return self.create_task(
             device_id,
             task,
-            connection_request,
             allow_when_pending=allow_when_pending,
         )
 
@@ -595,14 +561,12 @@ class GenieACSClient:
         self,
         device_id: str,
         parameters: dict[str, Any],
-        connection_request: bool = True,
     ) -> dict:
         """Set parameter values on device.
 
         Args:
             device_id: Device ID
             parameters: Dict of parameter path -> value
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
@@ -612,13 +576,12 @@ class GenieACSClient:
             [k, v, _infer_cwmp_value_type(k, v)] for k, v in parameters.items()
         ]
         task = {"name": "setParameterValues", "parameterValues": param_list}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(device_id, task)
 
     def refresh_object(
         self,
         device_id: str,
         object_path: str,
-        connection_request: bool = True,
         allow_broad_refresh: bool = False,
         allow_when_pending: bool = False,
     ) -> dict:
@@ -627,7 +590,6 @@ class GenieACSClient:
         Args:
             device_id: Device ID
             object_path: Object path to refresh (e.g., "Device.WiFi.")
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result for the refreshObject task.
@@ -636,36 +598,33 @@ class GenieACSClient:
         return self.create_task(
             device_id,
             task,
-            connection_request,
             allow_broad_refresh=allow_broad_refresh,
             allow_when_pending=allow_when_pending,
         )
 
-    def reboot_device(self, device_id: str, connection_request: bool = True) -> dict:
+    def reboot_device(self, device_id: str) -> dict:
         """Reboot device.
 
         Args:
             device_id: Device ID
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
         """
         task = {"name": "reboot"}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(device_id, task)
 
-    def factory_reset(self, device_id: str, connection_request: bool = True) -> dict:
+    def factory_reset(self, device_id: str) -> dict:
         """Factory reset device.
 
         Args:
             device_id: Device ID
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
         """
         task = {"name": "factoryReset"}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(device_id, task)
 
     def download(
         self,
@@ -673,7 +632,6 @@ class GenieACSClient:
         file_type: str,
         file_url: str,
         filename: str | None = None,
-        connection_request: bool = True,
     ) -> dict:
         """Trigger firmware/config download on device.
 
@@ -682,7 +640,6 @@ class GenieACSClient:
             file_type: File type (e.g., "1 Firmware Upgrade Image")
             file_url: URL to download from
             filename: Optional filename
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
@@ -694,45 +651,41 @@ class GenieACSClient:
         }
         if filename:
             task["filename"] = filename
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(device_id, task)
 
     def add_object(
         self,
         device_id: str,
         object_path: str,
-        connection_request: bool = True,
     ) -> dict:
         """Add object instance.
 
         Args:
             device_id: Device ID
             object_path: Object path (e.g., "Device.NAT.PortMapping.")
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
         """
         task = {"name": "addObject", "objectName": object_path.rstrip(".")}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(device_id, task)
 
     def delete_object(
         self,
         device_id: str,
         object_path: str,
-        connection_request: bool = True,
     ) -> dict:
         """Delete object instance.
 
         Args:
             device_id: Device ID
             object_path: Object path (e.g., "Device.NAT.PortMapping.1.")
-            connection_request: Whether to trigger connection request
 
         Returns:
             Task result
         """
         task = {"name": "deleteObject", "objectName": object_path}
-        return self.create_task(device_id, task, connection_request)
+        return self.create_task(device_id, task)
 
     def get_pending_tasks(self, device_id: str) -> list[dict[str, Any]]:
         """Get pending tasks for device.
@@ -1012,7 +965,6 @@ class GenieACSClient:
         device_id: str,
         parameters: dict[str, Any],
         *,
-        connection_request: bool = True,
         timeout_sec: int = 30,
     ) -> tuple[bool, str, dict]:
         """Set parameter values and wait for the task to complete.
@@ -1020,15 +972,12 @@ class GenieACSClient:
         Args:
             device_id: Device ID
             parameters: Dict of parameter path -> value
-            connection_request: Whether to trigger connection request
             timeout_sec: Max seconds to wait for completion
 
         Returns:
             Tuple of (success, message, task_result)
         """
-        task_result = self.set_parameter_values(
-            device_id, parameters, connection_request
-        )
+        task_result = self.set_parameter_values(device_id, parameters)
         task_id = task_result.get("_id", "")
         if not task_id:
             return True, "Task accepted (no ID returned)", task_result

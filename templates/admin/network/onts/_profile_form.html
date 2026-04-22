@@ -1,19 +1,19 @@
-{# Profile Apply Form — Lazy-loaded with available profiles #}
+{# Bundle Apply Form — Lazy-loaded with available bundles #}
 {% if available_profile_templates %}
-<form hx-post="/admin/network/onts/{{ ont_id }}/apply-profile"
+<form hx-post="/admin/network/onts/{{ ont_id }}/apply-bundle"
       hx-swap="none"
-      hx-confirm="Apply this profile template to the ONT now?"
+      hx-confirm="Apply this bundle to the ONT now?"
       data-network-action
-      data-loading-label="Applying profile..."
+      data-loading-label="Applying bundle..."
       class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
     {% include "components/forms/csrf_input.html" %}
     <div class="flex-1">
         <label class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
-            Profile <span class="text-red-500" aria-hidden="true">*</span>
+            Bundle <span class="text-red-500" aria-hidden="true">*</span>
         </label>
-        <select name="profile_id" required
+        <select name="bundle_id" required
             class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            <option value="">Select profile...</option>
+            <option value="">Select bundle...</option>
             {% for p in available_profile_templates %}
             <option value="{{ p.id }}" {% if current_profile_id and current_profile_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
             {% endfor %}
@@ -22,9 +22,9 @@
     <button type="submit"
         class="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-        Apply
+        Apply Bundle
     </button>
 </form>
 {% else %}
-<p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No profile templates available.</p>
+<p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No bundle templates available.</p>
 {% endif %}

@@ -8,25 +8,56 @@
     <!-- Header -->
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-            <a href="/admin/network" class="mb-3 inline-flex items-center gap-1 text-sm font-medium text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
+            <a href="{{ '/admin/network/olts/' ~ selected_olt.id if selected_olt else '/admin/network' }}" class="mb-3 inline-flex items-center gap-1 text-sm font-medium text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
                 </svg>
-                Back to Network
+                {{ 'Back to ' ~ selected_olt.name if selected_olt else 'Back to Network' }}
             </a>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">VLANs</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage network VLAN segmentation</p>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">
+                {% if selected_olt %}{{ selected_olt.name }} VLANs{% else %}VLANs{% endif %}
+            </h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {% if selected_olt %}
+                OLT-scoped VLAN inventory, ONT usage, and pool bindings for {{ selected_olt.name }}.
+                {% else %}
+                Manage network VLAN segmentation across all OLTs.
+                {% endif %}
+            </p>
         </div>
         <div class="flex items-center gap-2">
-            <a href="/admin/network/vlans/new" class="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+            {% if selected_olt %}
+            <a href="/admin/network/olts/{{ selected_olt.id }}?tab=settings" class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                Back to OLT
+            </a>
+            {% endif %}
+            <a href="/admin/network/vlans/new{% if selected_olt %}?olt_id={{ selected_olt.id }}{% endif %}" class="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                 Add VLAN
             </a>
         </div>
     </div>
 
+    <!-- OLT Filter -->
+    {% if olt_devices and olt_devices | length > 1 %}
+    <div class="flex items-center gap-3">
+        <label for="olt_filter" class="text-sm font-medium text-slate-700 dark:text-slate-300">Filter by OLT:</label>
+        <select id="olt_filter"
+                onchange="window.location.href = this.value ? '/admin/network/vlans?olt_id=' + this.value : '/admin/network/vlans'"
+                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="">All OLTs</option>
+            {% for olt in olt_devices %}
+            <option value="{{ olt.id }}" {% if selected_olt and selected_olt.id == olt.id %}selected{% endif %}>{{ olt.name }}</option>
+            {% endfor %}
+        </select>
+        {% if selected_olt %}
+        <a href="/admin/network/vlans" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Clear filter</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <!-- Stats -->
-    <div class="grid gap-4 sm:grid-cols-2">
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex items-center gap-4">
                 <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-violet-100 dark:bg-violet-900/30">
@@ -44,8 +75,30 @@
                     <svg class="h-6 w-6 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
                 <div>
-                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Active</p>
-                    <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
+                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">ONT References</p>
+                    <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.ont_refs }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-700/50">
+                    <svg class="h-6 w-6 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8M8 12h8M8 17h5"/></svg>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Management VLANs</p>
+                    <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.management }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center gap-4">
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/30">
+                    <svg class="h-6 w-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+                <div>
+                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Internet VLANs</p>
+                    <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.internet }}</p>
                 </div>
             </div>
         </div>
@@ -61,6 +114,7 @@
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Purpose</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Usage</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Description</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
                         <th scope="col" class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
@@ -81,7 +135,11 @@
                             <span class="text-sm font-medium text-slate-900 dark:text-white">{{ vlan.name or '-' }}</span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="text-sm text-slate-500 dark:text-slate-400">{{ vlan.olt_device.name if vlan.olt_device else '-' }}</span>
+                            {% if vlan.olt_device %}
+                            <a href="/admin/network/olts/{{ vlan.olt_device.id }}" class="text-sm text-slate-600 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">{{ vlan.olt_device.name }}</a>
+                            {% else %}
+                            <span class="text-sm text-slate-500 dark:text-slate-400">-</span>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% if vlan.purpose %}
@@ -93,6 +151,15 @@
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">-</span>
                             {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% set usage = usage_counts.get(vlan.id|string, {"onts": 0, "wan_onts": 0, "mgmt_onts": 0, "ip_pools": 0}) %}
+                            <div class="flex flex-wrap gap-1.5">
+                                <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">{{ usage.onts }} ONT refs</span>
+                                {% if usage.ip_pools %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">{{ usage.ip_pools }} pools</span>
+                                {% endif %}
+                            </div>
                         </td>
                         <td class="px-6 py-4">
                             <span class="text-sm text-slate-500 dark:text-slate-400">{{ vlan.description or '-' }}</span>
@@ -110,7 +177,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="7" class="px-6 py-12 text-center">
+                        <td colspan="8" class="px-6 py-12 text-center">
                             <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
                             <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No VLANs configured</h3>
                             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started by adding a VLAN.</p>

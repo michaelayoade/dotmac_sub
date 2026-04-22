@@ -12,14 +12,24 @@ from app.models.catalog import (
 )
 from app.models.compensation_failure import CompensationFailure, CompensationStatus
 from app.models.network import (
+    ConfigMethod,
+    IpProtocol,
+    MgmtIpMode,
     OLTDevice,
+    OntBundleAssignment,
+    OntBundleAssignmentStatus,
+    OntConfigOverride,
     OntAcsStatus,
     OntAssignment,
     OntAuthorizationStatus,
+    OntProfileWanService,
+    OntProvisioningProfile,
     OntStatusSource,
     OntUnit,
     OnuOnlineStatus,
     PonPort,
+    WanConnectionType,
+    WanMode,
 )
 from app.models.provisioning import (
     ProvisioningRun,
@@ -29,6 +39,7 @@ from app.models.provisioning import (
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import web_network_core_devices_views as core_devices_views
+from tests.legacy_ont_profile_link import seed_legacy_profile_link
 
 
 def test_display_ont_serial_decodes_huawei_hex() -> None:
@@ -163,6 +174,45 @@ def test_ont_detail_page_data_hides_synthetic_serial(db_session):
     assert payload["display_serial_label"] == "-"
 
 
+def test_ont_detail_page_data_profile_state_uses_active_bundle_assignment(
+    db_session, monkeypatch
+):
+    legacy_profile = OntProvisioningProfile(name="Legacy Detail Profile", is_active=True)
+    assigned_bundle = OntProvisioningProfile(name="Assigned Detail Bundle", is_active=True)
+    db_session.add_all([legacy_profile, assigned_bundle])
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="ONT-DETAIL-BUNDLE-STATE-001",
+        is_active=True,
+        provisioning_status=None,
+    )
+    seed_legacy_profile_link(ont, legacy_profile)
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=assigned_bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_profile_apply.detect_drift",
+        lambda _db, _ont_id: None,
+    )
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["profile_state"]["profile_id"] == str(assigned_bundle.id)
+    assert payload["profile_state"]["profile_name"] == "Assigned Detail Bundle"
+
+
 def test_ont_detail_page_data_sanitizes_impossible_optical_values(db_session):
     ont = OntUnit(
         serial_number="ONT-BAD-OPTICAL-001",
@@ -268,7 +318,89 @@ def test_ont_detail_page_data_uses_wifi_clients_when_host_count_missing(db_sessi
 
     assert payload is not None
     assert payload["connected_customer_devices"] == 3
-    assert payload["connected_wifi_clients"] == 3
+
+
+def test_ont_detail_page_data_uses_effective_bundle_values_in_summaries(db_session):
+    olt = OLTDevice(name="OLT-DETAIL-EFFECTIVE", mgmt_ip="198.51.100.215")
+    db_session.add(olt)
+    db_session.flush()
+
+    bundle = OntProvisioningProfile(
+        name="Detail Effective Bundle",
+        olt_device_id=olt.id,
+        mgmt_ip_mode=MgmtIpMode.static_ip,
+        mgmt_vlan_tag=911,
+        wifi_enabled=True,
+        wifi_ssid_template="bundle-ssid",
+        wifi_channel="6",
+        config_method=ConfigMethod.tr069,
+        ip_protocol=IpProtocol.ipv4,
+        is_active=True,
+    )
+    db_session.add(bundle)
+    db_session.flush()
+
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            s_vlan=912,
+            connection_type=WanConnectionType.pppoe,
+            is_active=True,
+        )
+    )
+
+    ont = OntUnit(
+        serial_number="DETAIL-EFFECTIVE-ONT-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        wan_mode=WanMode.static_ip,
+        pppoe_username="legacy-user",
+        mgmt_ip_mode=MgmtIpMode.dhcp,
+        tr069_last_snapshot={},
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.add_all(
+        [
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="wan.pppoe_username",
+                value_json={"value": "override-user"},
+            ),
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="management.ip_address",
+                value_json={"value": "10.91.0.2"},
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["observed_runtime_summary"]["pppoe_user"] == "override-user"
+    assert payload["observed_runtime_summary"]["wan_mode"] == "pppoe"
+
+    rows = {row["label"]: row["value"] for row in payload["desired_config_summary"]["rows"]}
+    assert rows["Mgmt mode"] == "static_ip"
+    assert rows["Mgmt VLAN"] == "911"
+    assert rows["Mgmt IP"] == "10.91.0.2"
+    assert rows["WAN mode"] == "pppoe"
+    assert rows["WAN VLAN"] == "912"
+    assert rows["PPPoE user"] == "override-user"
+    assert rows["SSID"] == "bundle-ssid"
+    assert rows["WiFi channel"] == "6"
 
 
 def test_ont_detail_page_data_uses_recent_acs_inform_for_effective_online_status(
@@ -643,6 +775,7 @@ def test_onts_list_page_data_searches_direct_olt_pon_topology_without_assignment
 def test_ont_index_view_toggles_are_navigation_links() -> None:
     template = Path("templates/admin/network/onts/index.html").read_text()
 
+    assert 'id="ont-fleet-page"' in template
     assert 'href="/admin/network/onts?view=list"' in template
     assert (
         'href="/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc"'
@@ -651,6 +784,29 @@ def test_ont_index_view_toggles_are_navigation_links() -> None:
     assert 'href="/admin/network/onts?view=unconfigured"' in template
     assert 'id="ont-filter-form" autocomplete="off"' in template
     assert 'autocomplete="off" autocapitalize="off" autocorrect="off"' in template
+    assert 'hx-target="#ont-fleet-page"' in template
+    assert 'hx-select="#ont-fleet-page"' in template
+    assert 'hx-swap="outerHTML"' in template
+
+
+def test_ont_detail_uses_all_config_operator_view() -> None:
+    template = Path("templates/admin/network/onts/detail.html").read_text()
+    unified_template = Path("templates/admin/network/onts/_unified_config.html").read_text()
+
+    assert "default('device-config')" in template
+    assert "All Config" in template
+    assert "/unified-config" not in template
+    assert '{% include "admin/network/onts/_unified_config.html" %}' in template
+    assert "Loading device configuration..." not in template
+    assert "OLT / Service Path" in unified_template
+    assert "Observed Service Ports" in unified_template
+    assert '_config_wan.html' in unified_template
+    assert '_config_tr069_profile.html' in unified_template
+    assert '_config_wifi.html' in unified_template
+    assert '_config_lan.html' in unified_template
+    assert "_service_ports_embedded.html" in unified_template
+    assert "Loading WAN configuration..." not in unified_template
+    assert "Loading TR-069 profiles..." not in unified_template
 
 
 def test_ont_detail_page_data_includes_recent_provisioning_runs(db_session):

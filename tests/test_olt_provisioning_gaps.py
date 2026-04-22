@@ -1378,6 +1378,13 @@ class TestWebNetworkServicePortsWrappers:
 
         assert _parse_ont_id_on_olt("generic:5") == 5
 
+    def test_shared_parse_ont_id_on_olt_accepts_prefixed_and_fsp_formats(self) -> None:
+        from app.services.network.serial_utils import parse_ont_id_on_olt
+
+        assert parse_ont_id_on_olt("generic:5") == 5
+        assert parse_ont_id_on_olt("huawei:4194320384.5") == 5
+        assert parse_ont_id_on_olt("0/1/6.8") == 8
+
     def test_normalize_fsp_strips_pon_prefix(self) -> None:
         from app.services.web_network_service_ports import _normalize_fsp
 
@@ -2050,7 +2057,7 @@ class TestGetProfileTemplates:
         assert "Scoped Template B" not in names
 
     def test_apply_profile_rejects_other_olt_scope(self, db_session) -> None:
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
         ont_olt = OLTDevice(name="ONT Scope OLT", vendor="Huawei", model="MA5608T")
         profile_olt = OLTDevice(
@@ -2072,14 +2079,14 @@ class TestGetProfileTemplates:
         db_session.refresh(ont)
         db_session.refresh(profile)
 
-        result = apply_profile_to_ont(db_session, str(ont.id), str(profile.id))
+        result = apply_bundle_to_ont(db_session, str(ont.id), str(profile.id))
         assert result.success is False
         assert "another OLT" in result.message
 
     def test_apply_profile_rejects_other_business_owner_scope(
         self, db_session
     ) -> None:
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
         olt = OLTDevice(name="Owner Scope OLT", vendor="Huawei", model="MA5608T")
         owner = Subscriber(
@@ -2117,7 +2124,7 @@ class TestGetProfileTemplates:
         )
         db_session.commit()
 
-        result = apply_profile_to_ont(db_session, str(ont.id), str(profile.id))
+        result = apply_bundle_to_ont(db_session, str(ont.id), str(profile.id))
 
         assert result.success is False
         assert "another business account" in result.message
@@ -2154,6 +2161,7 @@ class TestGetProfileTemplates:
     def test_resolve_profile_accepts_matching_business_owner_scope(
         self, db_session
     ) -> None:
+        from app.models.network import OntBundleAssignment, OntBundleAssignmentStatus
         from app.services.network.ont_profile_apply import resolve_profile_for_ont
 
         olt = OLTDevice(name="Owner Scope Match OLT", vendor="Huawei", model="MA5608T")
@@ -2176,12 +2184,19 @@ class TestGetProfileTemplates:
         )
         db_session.add_all([ont, profile])
         db_session.commit()
-        ont.provisioning_profile_id = profile.id
         db_session.add(
             OntAssignment(
                 ont_unit_id=ont.id,
                 subscriber_id=owner.id,
                 active=True,
+            )
+        )
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=profile.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
             )
         )
         db_session.commit()

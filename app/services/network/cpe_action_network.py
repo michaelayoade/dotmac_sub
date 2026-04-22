@@ -41,7 +41,7 @@ def _send_connection_request_http(
     return response.status_code
 
 
-def _resolve_cpe_fallback_connection_request_auth(
+def _resolve_cpe_connection_request_auth(
     db: Session,
     cpe_id: str,
 ) -> tuple[str, str] | None:
@@ -168,37 +168,21 @@ def send_connection_request(db: Session, cpe_id: str) -> ActionResult:
             message="No ConnectionRequestURL found — CPE may not have bootstrapped yet.",
         )
 
-    conn_user = (
-        client.extract_parameter_value(
-            device, f"{root}.ManagementServer.ConnectionRequestUsername"
+    # Use server-configured credentials - these are what we pushed to the CPE.
+    server_auth = _resolve_cpe_connection_request_auth(db, str(cpe.id))
+    if not server_auth:
+        return ActionResult(
+            success=False,
+            message="No connection request credentials configured on ACS server.",
         )
-        or ""
-    )
-    conn_pass = (
-        client.extract_parameter_value(
-            device, f"{root}.ManagementServer.ConnectionRequestPassword"
-        )
-        or ""
-    )
+    conn_user, conn_pass = server_auth
 
     try:
         status_code = _send_connection_request_http(
             str(conn_url),
-            str(conn_user),
-            str(conn_pass),
+            conn_user,
+            conn_pass,
         )
-        if status_code == 401:
-            fallback_auth = _resolve_cpe_fallback_connection_request_auth(
-                db, str(cpe.id)
-            )
-            if fallback_auth:
-                fallback_user, fallback_pass = fallback_auth
-                if (fallback_user, fallback_pass) != (str(conn_user), str(conn_pass)):
-                    status_code = _send_connection_request_http(
-                        str(conn_url),
-                        fallback_user,
-                        fallback_pass,
-                    )
         if status_code in (200, 204):
             logger.info(
                 "Connection request sent to CPE %s at %s", cpe.serial_number, conn_url

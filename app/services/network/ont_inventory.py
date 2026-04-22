@@ -2,17 +2,83 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import logging
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntAssignment, OntProvisioningStatus
+from app.models.network import (
+    OntAssignment,
+    OntBundleAssignment,
+    OntBundleAssignmentStatus,
+    OntConfigOverride,
+    OntProvisioningStatus,
+)
 from app.services import network as network_service
 from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult
 
 logger = logging.getLogger(__name__)
+
+
+def reset_ont_service_state(db: Session, ont) -> None:
+    """Clear desired-state, bundle state, and runtime cache for a reusable ONT."""
+    now = datetime.now(UTC)
+    active_bundle_assignments = db.scalars(
+        select(OntBundleAssignment)
+        .where(OntBundleAssignment.ont_unit_id == ont.id)
+        .where(OntBundleAssignment.is_active.is_(True))
+    ).all()
+    for assignment in active_bundle_assignments:
+        assignment.is_active = False
+        assignment.status = OntBundleAssignmentStatus.superseded
+        assignment.superseded_at = now
+
+    overrides = db.scalars(
+        select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
+    ).all()
+    for override in overrides:
+        db.delete(override)
+
+    ont.provisioning_profile_id = None
+    ont.provisioning_status = OntProvisioningStatus.unprovisioned
+    ont.last_provisioned_at = None
+    ont.authorization_status = None
+    ont.wan_vlan_id = None
+    ont.wan_mode = None
+    ont.config_method = None
+    ont.ip_protocol = None
+    ont.pppoe_username = None
+    ont.pppoe_password = None
+    ont.mac_address = None
+    ont.observed_wan_ip = None
+    ont.observed_pppoe_status = None
+    ont.observed_lan_mode = None
+    ont.observed_wifi_clients = None
+    ont.observed_lan_hosts = None
+    ont.observed_runtime_updated_at = None
+    ont.wan_remote_access = False
+    ont.tr069_acs_server_id = None
+    ont.mgmt_ip_mode = None
+    ont.mgmt_vlan_id = None
+    ont.mgmt_ip_address = None
+    ont.mgmt_remote_access = False
+    ont.voip_enabled = False
+    ont.lan_gateway_ip = None
+    ont.lan_subnet_mask = None
+    ont.lan_dhcp_enabled = None
+    ont.lan_dhcp_start = None
+    ont.lan_dhcp_end = None
+    ont.wifi_ssid = None
+    ont.wifi_password = None
+    if hasattr(ont, "wifi_enabled"):
+        ont.wifi_enabled = None
+    if hasattr(ont, "wifi_channel"):
+        ont.wifi_channel = None
+    if hasattr(ont, "wifi_security_mode"):
+        ont.wifi_security_mode = None
+    ont.provisioning_steps_completed = None
 
 
 def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
@@ -61,44 +127,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     ont.board = None
     ont.port = None
     ont.external_id = None
-    ont.provisioning_profile_id = None
-    ont.provisioning_status = OntProvisioningStatus.unprovisioned
-    ont.last_provisioned_at = None
-    ont.authorization_status = None
-    ont.wan_vlan_id = None
-    ont.wan_mode = None
-    ont.config_method = None
-    ont.ip_protocol = None
-    ont.pppoe_username = None
-    ont.pppoe_password = None
-    ont.mac_address = None
-    ont.observed_wan_ip = None
-    ont.observed_pppoe_status = None
-    ont.observed_lan_mode = None
-    ont.observed_wifi_clients = None
-    ont.observed_lan_hosts = None
-    ont.observed_runtime_updated_at = None
-    ont.wan_remote_access = False
-    ont.tr069_acs_server_id = None
-    ont.mgmt_ip_mode = None
-    ont.mgmt_vlan_id = None
-    ont.mgmt_ip_address = None
-    ont.mgmt_remote_access = False
-    ont.voip_enabled = False
-    ont.lan_gateway_ip = None
-    ont.lan_subnet_mask = None
-    ont.lan_dhcp_enabled = None
-    ont.lan_dhcp_start = None
-    ont.lan_dhcp_end = None
-    ont.wifi_ssid = None
-    ont.wifi_password = None
-    if hasattr(ont, "wifi_enabled"):
-        ont.wifi_enabled = None
-    if hasattr(ont, "wifi_channel"):
-        ont.wifi_channel = None
-    if hasattr(ont, "wifi_security_mode"):
-        ont.wifi_security_mode = None
-    ont.provisioning_steps_completed = None
+    reset_ont_service_state(db, ont)
 
     db.flush()
     cpe = ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)

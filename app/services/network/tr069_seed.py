@@ -28,21 +28,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _VENDOR_SEEDS: list[dict[str, Any]] = [
-    # ── Huawei HG8145V5 (TR-181 / Device) ──────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # Huawei EG Series (Enterprise Grade) - TR-181 / Device
+    # ═══════════════════════════════════════════════════════════════════
     {
         "vendor": "Huawei",
-        "model": "HG8145V5",
+        "model": "EG8145V5",
         "tr069_root": "Device",
         "max_wan_services": 1,
         "max_lan_ports": 4,
-        "max_ssids": 2,
+        "max_ssids": 4,
         "supports_vlan_tagging": True,
         "supports_qinq": False,
         "supports_ipv6": True,
-        "supported_features": {"wifi": True, "voip": False, "catv": False},
-        "notes": "Common GPON ONT. TR-181 data model.",
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "Enterprise GPON ONT. 4 ETH, 4 WiFi, 2 VoIP. TR-181.",
         "parameter_overrides": [
-            # Huawei uses KeyPassphrase, not PreSharedKey, for the WiFi password
             {
                 "canonical_name": "wifi.psk",
                 "tr069_path": "WiFi.AccessPoint.{i}.Security.KeyPassphrase",
@@ -52,19 +53,145 @@ _VENDOR_SEEDS: list[dict[str, Any]] = [
             },
         ],
     },
-    # ── Huawei HG8245H (TR-098 / InternetGatewayDevice) ────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # Huawei HG Series - Various models from SmartOLT
+    # Source: docs/references/smartolt/Screenshot 2026-02-24 160837.png
+    # ═══════════════════════════════════════════════════════════════════
+    # ── HG8010H: 1 ETH, Bridging only ──────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8010H",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 1,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": False, "catv": False},
+        "notes": "Single-port ONT. Bridging only. No WiFi/VoIP.",
+        "parameter_overrides": [],
+    },
+    # ── HG8120C: 2 ETH, 1 VoIP ─────────────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8120C",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 2,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": True, "catv": False},
+        "notes": "2-port ONT with VoIP. No WiFi.",
+        "parameter_overrides": [],
+    },
+    # ── HG8240H: 4 ETH, 4 WiFi, 2 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8240H",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8240T: 4 ETH, 4 WiFi, 2 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8240T",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT variant. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8242: 4 ETH, 4 WiFi, 2 VoIP, 1 CATV ──────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8242",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": True},
+        "notes": "4-port ONT with CATV support. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8242H: 4 ETH, 4 WiFi, 2 VoIP, 1 CATV ─────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8242H",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": True},
+        "notes": "4-port ONT with CATV support variant. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8245H: 4 ETH, 4 WiFi, 2 VoIP (common model) ──────────────────
     {
         "vendor": "Huawei",
         "model": "HG8245H",
         "tr069_root": "InternetGatewayDevice",
         "max_wan_services": 1,
         "max_lan_ports": 4,
-        "max_ssids": 2,
+        "max_ssids": 4,
         "supports_vlan_tagging": True,
         "supports_qinq": False,
         "supports_ipv6": False,
         "supported_features": {"wifi": True, "voip": True, "catv": False},
-        "notes": "Older GPON ONT with VoIP. TR-098 data model.",
+        "notes": "Common 4-port dual-band WiFi ONT with VoIP. TR-098.",
         "parameter_overrides": [
             {
                 "canonical_name": "system.mac_address",
@@ -82,7 +209,253 @@ _VENDOR_SEEDS: list[dict[str, Any]] = [
             },
         ],
     },
-    # ── ZTE F660 (TR-098 / InternetGatewayDevice) ──────────────────────
+    # ── HG8310M: 1 ETH, Bridging only ──────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8310M",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 1,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": False, "catv": False},
+        "notes": "Single-port ONT. Bridging only. No WiFi/VoIP.",
+        "parameter_overrides": [],
+    },
+    # ── HG8311: 1 ETH, 1 VoIP ──────────────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8311",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 1,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": True, "catv": False},
+        "notes": "Single-port ONT with VoIP. No WiFi.",
+        "parameter_overrides": [],
+    },
+    # ── HG8321R: 2 ETH, 1 VoIP ─────────────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8321R",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 2,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": True, "catv": False},
+        "notes": "2-port ONT with VoIP. No WiFi.",
+        "parameter_overrides": [],
+    },
+    # ── HG8326R: 2 ETH, 4 WiFi, 1 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8326R",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 2,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "2-port ONT with dual-band WiFi and VoIP.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8340M: 4 ETH, no WiFi ────────────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8340M",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": False, "catv": False},
+        "notes": "4-port ONT without WiFi. For wired-only deployments.",
+        "parameter_overrides": [],
+    },
+    # ── HG8346M: 4 ETH, 4 WiFi, 2 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8346M",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT with VoIP. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8346R: 4 ETH, 4 WiFi, 2 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8346R",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT variant. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8347R: 4 ETH, 4 WiFi, 1 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8347R",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT with single VoIP. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8545M: 4 ETH, 4 WiFi, 1 VoIP ─────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8545M",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT with VoIP. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8546M: 4 ETH, 4 WiFi, 1 VoIP (common model) ──────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8546M",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "Common 4-port dual-band WiFi ONT with VoIP. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG865: 4 ETH, 4 WiFi, 2 VoIP ───────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG865",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 4,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": True, "voip": True, "catv": False},
+        "notes": "4-port dual-band WiFi ONT with VoIP. TR-098.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "LANDevice.1.WLANConfiguration.{i}.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase, not PreSharedKey",
+            },
+        ],
+    },
+    # ── HG8145V5: 4 ETH, 2 WiFi (TR-181) ────────────────────────────────
+    {
+        "vendor": "Huawei",
+        "model": "HG8145V5",
+        "tr069_root": "Device",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 2,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": True,
+        "supported_features": {"wifi": True, "voip": False, "catv": False},
+        "notes": "Newer GPON ONT with IPv6 support. TR-181 data model.",
+        "parameter_overrides": [
+            {
+                "canonical_name": "wifi.psk",
+                "tr069_path": "WiFi.AccessPoint.{i}.Security.KeyPassphrase",
+                "writable": True,
+                "value_type": "string",
+                "notes": "Huawei uses KeyPassphrase path",
+            },
+        ],
+    },
+    # ═══════════════════════════════════════════════════════════════════
+    # ZTE ONT Models
+    # ═══════════════════════════════════════════════════════════════════
     {
         "vendor": "ZTE",
         "model": "F660",
@@ -94,10 +467,12 @@ _VENDOR_SEEDS: list[dict[str, Any]] = [
         "supports_qinq": True,
         "supports_ipv6": True,
         "supported_features": {"wifi": True, "voip": True, "catv": True},
-        "notes": "ZTE GPON ONT with multiple WAN services. TR-098 data model.",
+        "notes": "ZTE GPON ONT with multiple WAN services. TR-098.",
         "parameter_overrides": [],
     },
-    # ── Nokia G-010G-A (TR-181 / Device) ────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # Nokia ONT Models
+    # ═══════════════════════════════════════════════════════════════════
     {
         "vendor": "Nokia",
         "model": "G-010G-A",
@@ -109,7 +484,24 @@ _VENDOR_SEEDS: list[dict[str, Any]] = [
         "supports_qinq": False,
         "supports_ipv6": True,
         "supported_features": {"wifi": False, "voip": False, "catv": False},
-        "notes": "Nokia SFP ONT (no WiFi, single LAN). TR-181 data model.",
+        "notes": "Nokia SFP ONT (no WiFi, single LAN). TR-181.",
+        "parameter_overrides": [],
+    },
+    # ═══════════════════════════════════════════════════════════════════
+    # Generic / Fallback
+    # ═══════════════════════════════════════════════════════════════════
+    {
+        "vendor": "Generic",
+        "model": "default",
+        "tr069_root": "InternetGatewayDevice",
+        "max_wan_services": 1,
+        "max_lan_ports": 4,
+        "max_ssids": 0,
+        "supports_vlan_tagging": True,
+        "supports_qinq": False,
+        "supports_ipv6": False,
+        "supported_features": {"wifi": False, "voip": False, "catv": False},
+        "notes": "Generic fallback for unknown ONT models.",
         "parameter_overrides": [],
     },
 ]

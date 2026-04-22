@@ -74,12 +74,20 @@ def search_candidates(serial_number: str | None) -> list[str]:
 def parse_ont_id_on_olt(external_id: str | None) -> int | None:
     """Extract the integer ONT-ID from supported external_id formats.
 
-    Supports: plain integer ("5"), dotted format ("huawei:4194320384.5"),
-    and returns None for unparseable values.
+    Supports:
+    - plain integer ("5")
+    - prefixed integer ("generic:5")
+    - dotted Huawei formats ("huawei:4194320384.5")
+    - FSP-like suffixes where the ONT id is the trailing segment ("0/1/6.8")
+
+    Returns None for unparseable values.
     """
     ext = (external_id or "").strip()
     if ext.isdigit():
         return int(ext)
+    match = re.match(r"^(?:[a-z0-9_-]+:)?(?:\d+[/.])*(\d+)$", ext, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
     if "." in ext:
         dot_part = ext.rsplit(".", 1)[-1]
         if dot_part.isdigit():

@@ -32,7 +32,6 @@ class AcsClient(Protocol):
         self,
         device_id: str,
         task: dict,
-        connection_request: bool = True,
         dedupe_pending: bool = True,
         enforce_safety: bool = True,
         allow_broad_refresh: bool = False,
@@ -44,7 +43,6 @@ class AcsClient(Protocol):
         self,
         device_id: str,
         parameters: list[str],
-        connection_request: bool = True,
         allow_when_pending: bool = False,
     ) -> dict: ...
 
@@ -52,25 +50,19 @@ class AcsClient(Protocol):
         self,
         device_id: str,
         parameters: dict[str, Any],
-        connection_request: bool = True,
     ) -> dict: ...
 
     def refresh_object(
         self,
         device_id: str,
         object_path: str,
-        connection_request: bool = True,
         allow_broad_refresh: bool = False,
         allow_when_pending: bool = False,
     ) -> dict: ...
 
-    def reboot_device(
-        self, device_id: str, connection_request: bool = True
-    ) -> dict: ...
+    def reboot_device(self, device_id: str) -> dict: ...
 
-    def factory_reset(
-        self, device_id: str, connection_request: bool = True
-    ) -> dict: ...
+    def factory_reset(self, device_id: str) -> dict: ...
 
     def download(
         self,
@@ -78,21 +70,18 @@ class AcsClient(Protocol):
         file_type: str,
         file_url: str,
         filename: str | None = None,
-        connection_request: bool = True,
     ) -> dict: ...
 
     def add_object(
         self,
         device_id: str,
         object_path: str,
-        connection_request: bool = True,
     ) -> dict: ...
 
     def delete_object(
         self,
         device_id: str,
         object_path: str,
-        connection_request: bool = True,
     ) -> dict: ...
 
     def get_pending_tasks(self, device_id: str) -> list[dict[str, Any]]: ...
@@ -150,7 +139,6 @@ class AcsClient(Protocol):
         device_id: str,
         parameters: dict[str, Any],
         *,
-        connection_request: bool = True,
         timeout_sec: int = 30,
     ) -> tuple[bool, str, dict]: ...
 

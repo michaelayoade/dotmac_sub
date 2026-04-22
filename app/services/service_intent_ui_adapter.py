@@ -58,22 +58,22 @@ class ServiceIntentUiAdapter:
 
         return acs_service_intent_adapter.build_observed_intent(summary)
 
-    def apply_provisioning_profile_to_ont(
+    def apply_bundle_to_ont(
         self,
         db: Session,
         *,
         ont_id: str,
-        profile_id: str,
+        bundle_id: str,
         create_wan_instances: bool = True,
         push_to_device: bool = False,
     ) -> object:
-        """Apply a provisioning profile through the network-owned profile adapter."""
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        """Apply a provisioning bundle through the network-owned bundle adapter."""
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
-        return apply_profile_to_ont(
+        return apply_bundle_to_ont(
             db,
             ont_id,
-            profile_id,
+            bundle_id,
             create_wan_instances=create_wan_instances,
             push_to_device=push_to_device,
         )
@@ -93,12 +93,22 @@ class ServiceIntentUiAdapter:
         return OntReadFacade.get_capabilities(db, ont_id)
 
     def profile_service_port_defaults(
-        self, ont: object, *, service_ports: list[object] | None = None
+        self,
+        ont: object,
+        *,
+        db: Session | None = None,
+        service_ports: list[object] | None = None,
     ) -> dict[str, object]:
         """Return profile-derived service-port defaults for operator UI forms."""
+        profile = None
+        if db is not None:
+            from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
+
+            profile = resolve_assigned_bundle(db, ont)
+        if profile is None:
+            profile = getattr(ont, "provisioning_profile", None)
         services = list(
-            getattr(getattr(ont, "provisioning_profile", None), "wan_services", None)
-            or []
+            getattr(profile, "wan_services", None) or []
         )
         services = [svc for svc in services if getattr(svc, "is_active", False)]
         primary = services[0] if services else None

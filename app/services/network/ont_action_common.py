@@ -288,15 +288,14 @@ def set_and_verify(
 ) -> dict[str, object]:
     """Apply params via setParameterValues and verify against a live device read.
 
-    Chains two tasks in a single CWMP session:
-      1. setParameterValues with connection_request=False (queued, no CR yet).
-      2. getParameterValues with connection_request=True (fires one CR).
+    Chains two tasks:
+      1. setParameterValues (queued).
+      2. getParameterValues (queued, triggers direct CR via adapter).
 
-    GenieACS processes tasks FIFO within the session, so the device applies
-    the writes and then returns live values in the same exchange. The GPV
-    populates the GenieACS model cache from the live device read, so the
-    subsequent cache readback reflects what the device actually has — not
-    whatever the client optimistically pushed.
+    The adapter triggers a direct connection request after task creation,
+    so the device applies the writes and returns live values immediately.
+    The GPV populates the GenieACS model cache from the live device read,
+    so the subsequent cache readback reflects what the device actually has.
 
     Raises GenieACSError when any target parameter's cached value after the
     chained session does not match the requested value. Returns the SPV task
@@ -312,9 +311,7 @@ def set_and_verify(
         raise GenieACSError("set_and_verify called with no parameters")
     expected_values = expected if expected is not None else params
 
-    spv_result: dict[str, object] = client.set_parameter_values(
-        device_id, params, connection_request=False
-    )
+    spv_result: dict[str, object] = client.set_parameter_values(device_id, params)
     readback_paths = list(expected_values.keys())
     if not readback_paths:
         return spv_result
@@ -324,9 +321,7 @@ def set_and_verify(
     last_connection_error: str | None = None
     try:
         for attempt in range(1, attempts + 1):
-            task_result = client.get_parameter_values(
-                device_id, readback_paths, connection_request=True
-            )
+            task_result = client.get_parameter_values(device_id, readback_paths)
             last_connection_error = _connection_request_error(task_result)
             if last_connection_error is None:
                 readback_tasks.append(task_result)

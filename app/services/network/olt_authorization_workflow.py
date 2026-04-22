@@ -1740,11 +1740,13 @@ def authorize_autofind_ont_and_provision_network(
             olt = None
         else:
             olt = get_olt_or_none(db, olt_id)
-        profile = getattr(ont, "provisioning_profile", None) if ont else None
-        if profile is None and ont and getattr(ont, "provisioning_profile_id", None):
-            from app.models.network import OntProvisioningProfile
+        profile = None
+        if ont is not None:
+            from app.services.network.ont_bundle_assignments import (
+                resolve_assigned_bundle,
+            )
 
-            profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+            profile = resolve_assigned_bundle(db, ont, olt=olt)
 
         if olt is not None and getattr(olt, "tr069_acs_server_id", None):
             return True
@@ -1753,25 +1755,52 @@ def authorize_autofind_ont_and_provision_network(
             or getattr(profile, "cr_password", None)
         ):
             return True
-        if ont is not None and any(
-            getattr(ont, field, None)
-            for field in (
-                "wan_mode",
-                "pppoe_username",
-                "lan_gateway_ip",
-                "lan_subnet_mask",
-                "lan_dhcp_start",
-                "lan_dhcp_end",
-                "wifi_ssid",
-                "wifi_password",
-                "wifi_security_mode",
-                "wifi_channel",
+        effective_values: dict[str, object] = {}
+        if ont is not None:
+            try:
+                from app.services.network.effective_ont_config import (
+                    resolve_effective_ont_config,
+                )
+
+                resolved = resolve_effective_ont_config(db, ont)
+                effective_values = (
+                    resolved.get("values", {}) if isinstance(resolved, dict) else {}
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not resolve effective ONT config for %s: %s",
+                    result.ont_unit_id,
+                    exc,
+                )
+        if ont is not None and (
+            any(
+                effective_values.get(field)
+                for field in (
+                    "wan_mode",
+                    "pppoe_username",
+                    "wifi_ssid",
+                    "wifi_security_mode",
+                    "wifi_channel",
+                )
+            )
+            or any(
+                getattr(ont, field, None)
+                for field in (
+                    "lan_gateway_ip",
+                    "lan_subnet_mask",
+                    "lan_dhcp_start",
+                    "lan_dhcp_end",
+                    "wifi_password",
+                )
             )
         ):
             return True
         if ont is not None and getattr(ont, "lan_dhcp_enabled", None) is not None:
             return True
-        if ont is not None and getattr(ont, "wifi_enabled", None) is not None:
+        if ont is not None and (
+            effective_values.get("wifi_enabled") is not None
+            or getattr(ont, "wifi_enabled", None) is not None
+        ):
             return True
 
         try:
@@ -1977,13 +2006,21 @@ def run_post_authorization_follow_up(
         return False, resolve_msg, steps
 
     profile_apply_ok = True
-    profile_apply_msg = "Skipped: ONT already has a provisioning profile."
+    profile_apply_msg = "Skipped: ONT already has an active configuration bundle."
     ont = db.get(OntUnit, ont_unit_id)
-    if ont is not None and not getattr(ont, "provisioning_profile_id", None):
+    if ont is not None:
+        from app.services.network.ont_bundle_assignments import (
+            get_active_bundle_assignment,
+        )
+
+        active_assignment = get_active_bundle_assignment(db, ont)
+    else:
+        active_assignment = None
+    if ont is not None and active_assignment is None:
         from sqlalchemy import desc
 
         from app.models.network import OntProvisioningProfile
-        from app.services.network.ont_profile_apply import apply_profile_to_ont
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
 
         profile = db.scalars(
             select(OntProvisioningProfile)
@@ -2002,7 +2039,7 @@ def run_post_authorization_follow_up(
                 "Skipped: no active provisioning profile is scoped to this OLT."
             )
         else:
-            apply_result = apply_profile_to_ont(db, ont_unit_id, str(profile.id))
+            apply_result = apply_bundle_to_ont(db, ont_unit_id, str(profile.id))
             profile_apply_ok = apply_result.success
             profile_apply_msg = apply_result.message
             if profile_apply_ok:

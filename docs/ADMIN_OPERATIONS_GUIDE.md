@@ -92,7 +92,7 @@ Apply configuration in this order to avoid circular setup issues:
    - Set Paystack keys (or Flutterwave)
    - Verify with test transaction
 6. **Secrets** → `/admin/system/secrets`
-   - Verify all 9 secret paths populated in OpenBao
+   - Verify required paths plus any configured optional integration paths are populated in OpenBao
 
 ### Day-0 Acceptance Checks
 
@@ -1077,14 +1077,14 @@ Permission format: `resource:action`
 | Path | Fields | Used By |
 |------|--------|---------|
 | secret/auth | jwt_secret, totp_encryption_key, credential_encryption_key, wireguard_key_encryption_key | Auth, crypto |
-| secret/paystack | secret_key, public_key | Payment gateway |
+| secret/paystack | secret_key, public_key | Payment gateway when configured |
 | secret/database | url, password | Database connection |
 | secret/redis | password, url, broker_url, result_backend | Cache/broker |
 | secret/radius | db_password, db_dsn | FreeRADIUS sync |
 | secret/genieacs | mongodb_dsn, mongodb_password, jwt_secret, cwmp_user, cwmp_pass | TR-069 ACS |
 | secret/s3 | access_key, secret_key | MinIO storage |
 | secret/migration | smartolt_api_key, splynx_mysql_pass | Data migration |
-| secret/notifications | smtp_host, smtp_port, smtp_username, smtp_password, sms_api_key | Email/SMS |
+| secret/notifications | smtp_host, smtp_port, smtp_username, smtp_password, sms_api_key, sms_api_secret | Email/SMS when configured |
 
 ### Reference Format
 
@@ -1213,7 +1213,7 @@ Backup script:
 docker exec dotmac_sub_openbao sh -c '
   export BAO_ADDR=http://127.0.0.1:8200
   export BAO_TOKEN=dotmac-sub-dev-token
-  for path in auth database redis paystack radius genieacs s3 migration notifications; do
+  for path in auth database redis radius genieacs s3 migration; do
     bao kv get -format=json secret/$path
   done
 ' > openbao_backup.json

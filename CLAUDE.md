@@ -489,6 +489,17 @@ make pre-commit-run     # Run all pre-commit hooks
 - Settings are seeded on startup from `app/services/settings_seed.py`
 - WebSocket support at `/ws` for real-time notifications
 
+## Design Context
+
+Source of truth: `.impeccable.md` at the repo root. Quick summary for non-design sessions:
+
+- **Users**: NOC technicians first (diagnose / configure / monitor under time pressure). Secondary: admins, resellers, customers on their own portals.
+- **Personality**: *Precise, confident, quiet*. Trust through accuracy and speed, not through loud UI.
+- **Aesthetic**: SmartOLT's information density and page patterns, rendered in the current dotmac Tailwind aesthetic. Never generic SaaS purple-gradient, never Stripe/Linear minimalism (wastes NOC screen real estate), never vendor-UI utilitarianism.
+- **Tokens**: Outfit (display) + Plus Jakarta Sans (body). Primary teal/cyan `#06b6d4`, accent warm orange `#f97316`. Semantic colors are a contract: emerald=healthy, amber=warning, rose=critical, blue=network, violet=people, slate=neutral.
+- **Principles**: Status first (color + shape + position, never color alone). Density with breathing room (`py-2.5`, `text-sm` tables, clear section borders). Actions confirm themselves inline (HTMX, no full reloads). Dark mode is mandatory at author time. Typography carries hierarchy (`tabular-nums` for every number). A11y target is WCAG AA.
+- **New macros**: go in `templates/components/<group>/`. Dynamic color classes must be safelisted in `tailwind.config.js`.
+
 ## OLT SSH Credentials
 
 | OLT | Username | Password |

@@ -59,7 +59,7 @@ def run_coordinated_provisioning_task(
     fsp: str,
     serial_number: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     force_reauthorize: bool = False,
 ):
     """Execute coordinated provisioning workflow.
@@ -85,7 +85,7 @@ def run_coordinated_provisioning_task(
                 olt_id,
                 fsp,
                 serial_number,
-                profile_id=profile_id,
+                bundle_id=bundle_id,
                 force_reauthorize=force_reauthorize,
             )
 

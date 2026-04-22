@@ -211,7 +211,6 @@ def test_acs_config_adapter_push_config_urgent_uses_verified_connection_request(
 
     assert result.success is True
     assert result.data["device_id"] == "device-1"
-    assert result.data["connection_request"] is True
     assert calls["ont_id"] == "ont-1"
     assert calls["parameters"] == {"Device.WiFi.SSID.1.SSID": "DOTMAC"}
     assert calls["expected"] == {"Device.WiFi.SSID.1.SSID": "DOTMAC"}
@@ -227,13 +226,11 @@ def test_verified_write_retries_connection_request_and_keeps_spv_on_success(
     calls = {"gpv": 0, "deleted": []}
 
     class FakeClient:
-        def set_parameter_values(self, device_id, params, connection_request=True):
-            assert connection_request is False
+        def set_parameter_values(self, device_id, params):
             calls["spv"] = (device_id, params)
             return {"_id": "spv-task"}
 
-        def get_parameter_values(self, device_id, paths, connection_request=True):
-            assert connection_request is True
+        def get_parameter_values(self, device_id, paths):
             calls["gpv"] += 1
             if calls["gpv"] < 3:
                 return {
@@ -286,12 +283,10 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
     deleted = []
 
     class FakeClient:
-        def set_parameter_values(self, _device_id, _params, connection_request=True):
-            assert connection_request is False
+        def set_parameter_values(self, _device_id, _params):
             return {"_id": "spv-task"}
 
-        def get_parameter_values(self, _device_id, _paths, connection_request=True):
-            assert connection_request is True
+        def get_parameter_values(self, _device_id, _paths):
             return {
                 "_id": "gpv-task",
                 "connectionRequestError": "EHOSTUNREACH",
@@ -371,7 +366,6 @@ def test_acs_config_adapter_download_uses_acs_download_rpc(monkeypatch) -> None:
         "file_type": "1 Firmware Upgrade Image",
         "file_url": "https://example.test/fw.bin",
         "filename": "fw.bin",
-        "connection_request": True,
     }
 
 

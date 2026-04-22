@@ -23,11 +23,16 @@ from app.models.network import (
     MgmtIpMode,
     OLTDevice,
     OntAssignment,
+    OntBundleAssignment,
+    OntBundleAssignmentStatus,
+    OntConfigOverride,
+    OntProfileWanService,
     OntProvisioningProfile,
     OntProvisioningStatus,
     OntUnit,
     PonPort,
     Vlan,
+    WanConnectionType,
     WanMode,
 )
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
@@ -42,7 +47,11 @@ from app.services.web_network_ont_actions import (
     operational_health_context,
     return_to_inventory,
     return_to_inventory_for_web,
+    update_ont_config,
+    wan_config_context,
+    wifi_config_context,
 )
+from tests.legacy_ont_profile_link import seed_legacy_profile_link
 
 
 def test_return_to_inventory_releases_ont_on_olt_and_keeps_inventory_active(
@@ -154,6 +163,88 @@ def test_return_to_inventory_releases_ont_on_olt_and_keeps_inventory_active(
     assert cpe.status == DeviceStatus.active
     assert cpe.subscriber_id != subscriber.id
     assert cpe.service_address_id is None
+
+
+def test_return_to_inventory_clears_bundle_assignment_and_overrides(
+    db_session, subscriber, monkeypatch
+):
+    olt = OLTDevice(name="OLT-Return-Bundle", mgmt_ip="198.51.100.51", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    pon = PonPort(olt_id=olt.id, name="0/2/9", is_active=True)
+    bundle = OntProvisioningProfile(name="Return Bundle", olt_device_id=olt.id, is_active=True)
+    db_session.add_all([pon, bundle])
+    db_session.commit()
+
+    ont = OntUnit(
+        serial_number="RETURN-BUNDLE-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/2",
+        port="9",
+        external_id="19",
+        provisioning_status=OntProvisioningStatus.provisioned,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+            active=True,
+        ),
+    )
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        OntConfigOverride(
+            ont_unit_id=ont.id,
+            field_name="wan.pppoe_username",
+            value_json={"value": "override-user"},
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_service_ports.get_service_ports_for_ont",
+        lambda *_args, **_kwargs: (True, "none", []),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.deauthorize_ont",
+        lambda _olt, _fsp, _ont_id: (True, "ONT deleted"),
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_autofind.sync_olt_autofind_candidates",
+        lambda _db, olt_id: (True, "ok", {"discovered": 0}),
+    )
+
+    result = return_ont_to_inventory(db_session, str(ont.id))
+
+    assert result.success is True
+    db_session.refresh(ont)
+    db_session.refresh(assignment)
+    active_bundle = db_session.scalars(
+        select(OntBundleAssignment)
+        .where(OntBundleAssignment.ont_unit_id == ont.id)
+        .where(OntBundleAssignment.is_active.is_(True))
+    ).first()
+    overrides = db_session.scalars(
+        select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
+    ).all()
+    assert assignment.active is False
+    assert ont.provisioning_profile_id is None
+    assert active_bundle is None
+    assert overrides == []
 
 
 def test_tr069_resolution_waits_for_first_inform(db_session, monkeypatch):
@@ -339,6 +430,556 @@ def test_configure_form_context_uses_pon_assignment_olt_when_ont_fk_missing(
     assert "10.56.0.2" not in [ip["address"] for ip in context["available_mgmt_ips"]]
 
 
+def test_ont_contexts_use_effective_bundle_resolution_with_overrides(
+    db_session, region
+):
+    olt = OLTDevice(name="OLT-Resolver", mgmt_ip="198.51.100.90", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    legacy_profile = OntProvisioningProfile(
+        name="Legacy Profile",
+        olt_device_id=olt.id,
+        mgmt_ip_mode=MgmtIpMode.dhcp,
+        mgmt_vlan_tag=700,
+        wifi_enabled=False,
+        wifi_ssid_template="legacy-ssid",
+        is_active=True,
+    )
+    assigned_bundle = OntProvisioningProfile(
+        name="Assigned Bundle",
+        olt_device_id=olt.id,
+        mgmt_ip_mode=MgmtIpMode.static_ip,
+        mgmt_vlan_tag=701,
+        wifi_enabled=True,
+        wifi_ssid_template="bundle-ssid",
+        wifi_security_mode="WPA2-Personal",
+        wifi_channel="11",
+        is_active=True,
+    )
+    db_session.add_all([legacy_profile, assigned_bundle])
+    db_session.commit()
+
+    db_session.add(
+        OntProfileWanService(
+            profile_id=assigned_bundle.id,
+            name="Internet",
+            s_vlan=777,
+            connection_type=WanConnectionType.pppoe,
+            is_active=True,
+        )
+    )
+    ont = OntUnit(
+        serial_number="RESOLVER-ONT-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        wan_mode=WanMode.static_ip,
+        pppoe_username="legacy-user",
+        mgmt_ip_mode=MgmtIpMode.dhcp,
+        wifi_ssid="legacy-ont-ssid",
+    )
+    seed_legacy_profile_link(ont, legacy_profile)
+    db_session.add(ont)
+    db_session.commit()
+
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=assigned_bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        OntConfigOverride(
+            ont_unit_id=ont.id,
+            field_name="wan.pppoe_username",
+            value_json={"value": "override-user"},
+        )
+    )
+    db_session.commit()
+
+    wan_context = wan_config_context(db_session, str(ont.id))
+    wifi_context = wifi_config_context(db_session, str(ont.id))
+
+    assert wan_context["desired_wan_config"]["wan_mode"] == "pppoe"
+    assert wan_context["desired_wan_config"]["wan_vlan"] == "777"
+    assert wan_context["desired_wan_config"]["pppoe_username"] == "override-user"
+    assert wan_context["config_resolution"]["bundle"].id == assigned_bundle.id
+    assert "pppoe_username" in wan_context["config_resolution"]["overrides"]
+    assert wan_context["config_resolution"]["using_legacy_fallback"] is False
+
+    assert wifi_context["desired_wifi_config"]["ssid"] == "bundle-ssid"
+    assert wifi_context["desired_wifi_config"]["channel"] == "11"
+    assert wifi_context["desired_wifi_config"]["security_mode"] == "WPA2-Personal"
+    assert wifi_context["config_resolution"]["bundle"].id == assigned_bundle.id
+
+
+def test_configure_form_context_uses_effective_bundle_values(db_session, region):
+    olt = OLTDevice(name="OLT-Configure-Effective", mgmt_ip="198.51.100.92", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+
+    bundle = OntProvisioningProfile(
+        name="Configure Effective Bundle",
+        olt_device_id=olt.id,
+        mgmt_ip_mode=MgmtIpMode.static_ip,
+        mgmt_vlan_tag=901,
+        wifi_enabled=True,
+        wifi_ssid_template="bundle-ssid",
+        config_method=ConfigMethod.tr069,
+        ip_protocol=IpProtocol.ipv4,
+        is_active=True,
+    )
+    db_session.add(bundle)
+    db_session.flush()
+
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            s_vlan=902,
+            connection_type=WanConnectionType.pppoe,
+            is_active=True,
+        )
+    )
+    ont = OntUnit(
+        serial_number="CONFIG-EFFECTIVE-ONT-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        wan_mode=WanMode.static_ip,
+        pppoe_username="legacy-user",
+        mgmt_ip_mode=MgmtIpMode.dhcp,
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.add_all(
+        [
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="wan.pppoe_username",
+                value_json={"value": "override-user"},
+            ),
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="management.ip_address",
+                value_json={"value": "10.90.0.2"},
+            ),
+        ]
+    )
+    db_session.commit()
+
+    context = configure_form_context(db_session, str(ont.id))
+
+    assert context["wan_mode"] == "pppoe"
+    assert context["wan_vlan_id"] == "902"
+    assert context["pppoe_username"] == "override-user"
+    assert context["mgmt_ip_mode"] == "static_ip"
+    assert context["mgmt_vlan_id"] == "901"
+    assert context["mgmt_ip_address"] == "10.90.0.2"
+    assert context["config_method"] == "tr069"
+    assert context["ip_protocol"] == "ipv4"
+
+
+def test_configure_form_context_does_not_select_legacy_profile_fk_without_assignment(
+    db_session, region
+):
+    olt = OLTDevice(name="OLT-Configure-No-Legacy-Fallback", mgmt_ip="198.51.100.93")
+    db_session.add(olt)
+    db_session.flush()
+
+    legacy_profile = OntProvisioningProfile(
+        name="Legacy Only Profile",
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    db_session.add(legacy_profile)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="CONFIG-NO-LEGACY-FALLBACK-001",
+        is_active=True,
+        olt_device_id=olt.id,
+    )
+    seed_legacy_profile_link(ont, legacy_profile)
+    db_session.add(ont)
+    db_session.commit()
+
+    context = configure_form_context(db_session, str(ont.id))
+
+    assert context["selected_bundle_id"] == ""
+    assert context["profile_preview"] is None
+
+
+def test_update_ont_config_assigns_bundle_and_persists_core_overrides(
+    db_session, region
+):
+    olt = OLTDevice(name="OLT-Author", mgmt_ip="198.51.100.91", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    wan_vlan_bundle = Vlan(
+        tag=801,
+        name="Bundle WAN",
+        region_id=region.id,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    wan_vlan_override = Vlan(
+        tag=802,
+        name="Override WAN",
+        region_id=region.id,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    mgmt_vlan_bundle = Vlan(
+        tag=803,
+        name="Bundle MGMT",
+        region_id=region.id,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    mgmt_vlan_override = Vlan(
+        tag=804,
+        name="Override MGMT",
+        region_id=region.id,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    bundle = OntProvisioningProfile(
+        name="Author Bundle",
+        olt_device_id=olt.id,
+        mgmt_ip_mode=MgmtIpMode.dhcp,
+        mgmt_vlan_tag=803,
+        wifi_enabled=True,
+        wifi_ssid_template="bundle-ssid",
+        wifi_channel="6",
+        wifi_security_mode="WPA2-Personal",
+        config_method=ConfigMethod.tr069,
+        ip_protocol=IpProtocol.ipv4,
+        is_active=True,
+    )
+    db_session.add_all(
+        [
+            wan_vlan_bundle,
+            wan_vlan_override,
+            mgmt_vlan_bundle,
+            mgmt_vlan_override,
+            bundle,
+        ]
+    )
+    db_session.commit()
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            s_vlan=801,
+            connection_type=WanConnectionType.pppoe,
+            pppoe_username_template="bundle-user",
+            is_active=True,
+        )
+    )
+    ont = OntUnit(serial_number="AUTHOR-ONT-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.commit()
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        bundle_id=str(bundle.id),
+        wan_mode="pppoe",
+        wan_vlan_id=str(wan_vlan_override.id),
+        config_method="tr069",
+        ip_protocol="ipv4",
+        pppoe_username="custom-user",
+        mgmt_ip_mode="static_ip",
+        mgmt_vlan_id=str(mgmt_vlan_override.id),
+        mgmt_ip_address="10.80.0.2",
+        wifi_enabled=True,
+        wifi_ssid="bundle-ssid",
+        wifi_channel="11",
+        wifi_security_mode="WPA3-Personal",
+        push_to_device=False,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.provisioning_profile_id is None
+
+    assignment = db_session.scalars(
+        select(OntBundleAssignment)
+        .where(OntBundleAssignment.ont_unit_id == ont.id)
+        .where(OntBundleAssignment.is_active.is_(True))
+    ).first()
+    assert assignment is not None
+    assert assignment.bundle_id == bundle.id
+
+    overrides = {
+        row.field_name: row.value_json["value"]
+        for row in db_session.scalars(
+            select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
+        ).all()
+    }
+    assert overrides["wan.vlan_tag"] == "802"
+    assert overrides["wan.pppoe_username"] == "custom-user"
+    assert overrides["management.ip_mode"] == "static_ip"
+    assert overrides["management.vlan_tag"] == "804"
+    assert overrides["management.ip_address"] == "10.80.0.2"
+    assert overrides["wifi.channel"] == "11"
+    assert overrides["wifi.security_mode"] == "WPA3-Personal"
+    assert "wifi.ssid" not in overrides
+    assert "wan.wan_mode" not in overrides
+
+
+def test_update_ont_config_manual_mode_clears_assignment_and_overrides(
+    db_session, region
+):
+    olt = OLTDevice(name="OLT-Manual", mgmt_ip="198.51.100.92", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    bundle = OntProvisioningProfile(name="Manual Bundle", olt_device_id=olt.id, is_active=True)
+    db_session.add(bundle)
+    db_session.commit()
+
+    ont = OntUnit(
+        serial_number="AUTHOR-ONT-002",
+        is_active=True,
+        olt_device_id=olt.id,
+    )
+    db_session.add(ont)
+    db_session.commit()
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        OntConfigOverride(
+            ont_unit_id=ont.id,
+            field_name="wan.pppoe_username",
+            value_json={"value": "custom-user"},
+        )
+    )
+    db_session.commit()
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        bundle_id="",
+        wifi_enabled=True,
+        push_to_device=False,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.provisioning_profile_id is None
+    active_assignment = db_session.scalars(
+        select(OntBundleAssignment)
+        .where(OntBundleAssignment.ont_unit_id == ont.id)
+        .where(OntBundleAssignment.is_active.is_(True))
+    ).first()
+    assert active_assignment is None
+    remaining_overrides = db_session.scalars(
+        select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
+    ).all()
+    assert remaining_overrides == []
+
+
+def test_update_ont_config_treats_active_assignment_as_bundle_managed_without_legacy_fk(
+    db_session, region
+):
+    olt = OLTDevice(
+        name="OLT-Bundle-Managed-No-Legacy-FK",
+        mgmt_ip="198.51.100.94",
+        is_active=True,
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    wan_vlan = Vlan(
+        tag=806,
+        name="Bundle WAN 806",
+        region_id=region.id,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    bundle = OntProvisioningProfile(
+        name="Bundle Managed Without Legacy FK",
+        olt_device_id=olt.id,
+        config_method=ConfigMethod.tr069,
+        is_active=True,
+    )
+    db_session.add_all([wan_vlan, bundle])
+    db_session.flush()
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            s_vlan=806,
+            connection_type=WanConnectionType.pppoe,
+            is_active=True,
+        )
+    )
+    ont = OntUnit(
+        serial_number="AUTHOR-ONT-NO-LEGACY-FK-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        provisioning_profile_id=None,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        bundle_id=None,
+        wan_mode="pppoe",
+        wan_vlan_id=str(wan_vlan.id),
+        config_method="tr069",
+        pppoe_username="override-user",
+        push_to_device=False,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.pppoe_username is None
+    assert ont.wan_mode is None
+    overrides = {
+        row.field_name: row.value_json["value"]
+        for row in db_session.scalars(
+            select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
+        ).all()
+    }
+    assert overrides["wan.pppoe_username"] == "override-user"
+    assert "wan.vlan_tag" not in overrides
+
+
+def test_update_ont_config_push_to_device_uses_effective_pppoe_values(
+    db_session, region, monkeypatch
+):
+    olt = OLTDevice(name="OLT-Push-Effective", mgmt_ip="198.51.100.93", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+
+    wan_vlan = Vlan(
+        tag=805,
+        name="Push WAN",
+        region_id=region.id,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    bundle = OntProvisioningProfile(
+        name="Push Bundle",
+        olt_device_id=olt.id,
+        config_method=ConfigMethod.tr069,
+        is_active=True,
+    )
+    db_session.add_all([wan_vlan, bundle])
+    db_session.commit()
+
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            s_vlan=805,
+            connection_type=WanConnectionType.pppoe,
+            pppoe_username_template="bundle-user",
+            is_active=True,
+        )
+    )
+    ont = OntUnit(serial_number="PUSH-ONT-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.commit()
+
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "app.services.credential_crypto.decrypt_credential",
+        lambda value: "resolved-secret",
+    )
+
+    def fake_configure_wan_config(db, ont_id, wan_mode, wan_vlan, request=None):
+        calls.append(
+            {
+                "ont_id": str(ont_id),
+                "wan_mode": wan_mode,
+                "wan_vlan": wan_vlan,
+            }
+        )
+        return SimpleNamespace(success=True, message="wan pushed")
+
+    def fake_set_pppoe_credentials(
+        db, ont_id, username, password, wan_vlan=None, request=None
+    ):
+        calls.append(
+            {
+                "ont_id": str(ont_id),
+                "wan_vlan": wan_vlan,
+                "username": username,
+                "password": password,
+            }
+        )
+        return SimpleNamespace(success=True, message="pppoe pushed")
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.db_config.configure_wan_config",
+        fake_configure_wan_config,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.db_config.set_pppoe_credentials",
+        fake_set_pppoe_credentials,
+    )
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        bundle_id=str(bundle.id),
+        wan_mode="pppoe",
+        wan_vlan_id=str(wan_vlan.id),
+        config_method="tr069",
+        pppoe_username="override-user",
+        pppoe_password="inline-secret",
+        push_to_device=True,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.pppoe_username is None
+    assert calls == [
+        {
+            "ont_id": str(ont.id),
+            "wan_mode": "pppoe",
+            "wan_vlan": 805,
+        },
+        {
+            "ont_id": str(ont.id),
+            "wan_vlan": 805,
+            "username": "override-user",
+            "password": "inline-secret",
+        }
+    ]
+
+
 def test_management_ip_choices_prefers_expected_olt_management_network_from_name_alias(
     db_session,
 ):
@@ -381,6 +1022,60 @@ def test_management_ip_choices_prefers_expected_olt_management_network_from_name
     assert addresses == ["172.20.100.10"]
     assert choices["mgmt_ip_pool"] is not None
     assert choices["mgmt_ip_pool"].id == managed_pool.id
+
+
+def test_management_ip_choices_use_effective_override_selected_ip(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="Override OLT", is_active=True, mgmt_ip=None)
+    db_session.add(olt)
+    db_session.flush()
+
+    pool = IpPool(
+        name="Override Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="10.60.0.0/30",
+        gateway="10.60.0.1",
+        is_active=True,
+        olt_device_id=olt.id,
+        vlan_id=None,
+    )
+    ont = OntUnit(
+        serial_number="CONFIG-ONT-OVERRIDE-IP-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        mgmt_ip_address=None,
+    )
+    db_session.add_all([pool, ont])
+    db_session.flush()
+    db_session.add(
+        OntConfigOverride(
+            ont_unit_id=ont.id,
+            field_name="management.ip_address",
+            value_json={"value": "10.60.0.2"},
+        )
+    )
+    db_session.commit()
+
+    captured: dict[str, object] = {}
+
+    def fake_choices(db, pool_id, ont_id, selected_ip=None, limit=20):
+        captured["selected_ip"] = selected_ip
+        return {"choices": [{"address": "10.60.0.2"}]}
+
+    monkeypatch.setattr(
+        "app.services.web_network_onts_provisioning.available_static_ipv4_choices",
+        fake_choices,
+    )
+
+    choices = web_network_onts_service.management_ip_choices_for_ont(
+        db_session, ont, limit=25
+    )
+
+    assert captured["selected_ip"] == "10.60.0.2"
+    assert [entry["address"] for entry in choices["available_mgmt_ips"]] == [
+        "10.60.0.2"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -929,6 +1624,62 @@ def test_return_to_inventory_keeps_local_state_when_olt_delete_fails(
     assert assignment.active is True
 
 
+def test_operational_health_uses_effective_pppoe_username(
+    db_session, monkeypatch
+):
+    acs = Tr069AcsServer(
+        name="ACS-Health-Effective",
+        base_url="http://acs.example.test",
+    )
+    olt = OLTDevice(name="OLT-Health-Effective", mgmt_ip="198.51.100.91", is_active=True)
+    db_session.add_all([acs, olt])
+    db_session.commit()
+
+    ont = OntUnit(
+        serial_number="HEALTH-EFFECTIVE-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/1",
+        port="2",
+        external_id="11",
+        pppoe_username=None,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    db_session.add(
+        Tr069CpeDevice(
+            acs_server_id=acs.id,
+            ont_unit_id=ont.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="HEALTH-ACS-EFFECTIVE",
+            connection_request_url="http://198.51.100.10:7547/",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions._config_snapshot_service",
+        lambda: SimpleNamespace(list_for_ont=lambda *_args, **_kwargs: []),
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.operational.resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "values": {
+                "wan_mode": "pppoe",
+                "pppoe_username": "override-health@example",
+            }
+        },
+    )
+
+    context = operational_health_context(db_session, str(ont.id))
+    checks = {check["label"]: check for check in context["operational_checks"]}
+
+    assert checks["PPPoE stored"]["ok"] is True
+    assert checks["PPPoE stored"]["message"] == "override-health@example"
+
+
 def test_return_to_inventory_succeeds_with_ambiguous_cpe_serial_match(
     db_session, subscriber, monkeypatch
 ):
@@ -1136,3 +1887,68 @@ def test_return_to_inventory_for_web_clears_local_state_without_olt_context(
     assert ont.lan_gateway_ip is None
     assert ont.wifi_ssid is None
     assert ont.wifi_password is None
+
+
+def test_return_to_inventory_for_web_clears_bundle_assignment_and_overrides_without_olt_context(
+    db_session, subscriber
+):
+    bundle = OntProvisioningProfile(name="Web Return Bundle", is_active=True)
+    db_session.add(bundle)
+    db_session.commit()
+
+    ont = OntUnit(
+        serial_number="RETURN-ONT-WEB-BUNDLE-001",
+        is_active=True,
+        provisioning_status=OntProvisioningStatus.provisioned,
+        pppoe_username="old-user",
+        wifi_ssid="OldWifi",
+    )
+    db_session.add(ont)
+    db_session.commit()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            subscriber_id=subscriber.id,
+            active=True,
+        )
+    )
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.add(
+        OntConfigOverride(
+            ont_unit_id=ont.id,
+            field_name="wifi.ssid",
+            value_json={"value": "override-ssid"},
+        )
+    )
+    db_session.commit()
+
+    result = return_to_inventory_for_web(db_session, str(ont.id))
+
+    assert result.success is True
+    db_session.refresh(ont)
+    active_bundle = db_session.scalars(
+        select(OntBundleAssignment)
+        .where(OntBundleAssignment.ont_unit_id == ont.id)
+        .where(OntBundleAssignment.is_active.is_(True))
+    ).first()
+    inactive_bundle = db_session.scalars(
+        select(OntBundleAssignment)
+        .where(OntBundleAssignment.ont_unit_id == ont.id)
+        .limit(1)
+    ).first()
+    overrides = db_session.scalars(
+        select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
+    ).all()
+    assert ont.provisioning_profile_id is None
+    assert active_bundle is None
+    assert inactive_bundle is not None
+    assert inactive_bundle.status == OntBundleAssignmentStatus.superseded
+    assert inactive_bundle.superseded_at is not None
+    assert overrides == []

@@ -68,13 +68,14 @@ class OntAuthorizationService:
             resolve_authorization_profiles_from_db,
         )
         from app.services.network.olt_protocol_adapters import get_protocol_adapter
+        from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 
         if line_profile_id is None or service_profile_id is None:
             profiles_ok, profiles_msg, profiles = (
                 resolve_authorization_profiles_from_db(
                     db,
                     ctx.olt,
-                    profile=getattr(ctx.ont, "provisioning_profile", None),
+                    profile=resolve_assigned_bundle(db, ctx.ont),
                 )
             )
             if not profiles_ok or profiles is None:

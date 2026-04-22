@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import func, select
+
 from app.models.network import PortVlan, VlanPurpose
 from app.schemas.network import VlanCreate, VlanUpdate
 from app.services import catalog as catalog_service
@@ -43,7 +45,48 @@ VLAN_PURPOSE_CHOICES: list[dict[str, str]] = [
 ]
 
 
-def build_vlans_list_data(db) -> dict[str, object]:
+def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
+    from app.models.network import IpPool, OntUnit
+
+    usage: dict[str, dict[str, int]] = {
+        str(vlan_id): {"onts": 0, "wan_onts": 0, "mgmt_onts": 0, "ip_pools": 0}
+        for vlan_id in vlan_ids
+    }
+    if not vlan_ids:
+        return usage
+
+    wan_rows = db.execute(
+        select(OntUnit.wan_vlan_id, func.count(OntUnit.id))
+        .where(OntUnit.wan_vlan_id.in_(vlan_ids))
+        .group_by(OntUnit.wan_vlan_id)
+    ).all()
+    for vlan_id, count in wan_rows:
+        key = str(vlan_id)
+        usage[key]["wan_onts"] = int(count or 0)
+        usage[key]["onts"] += int(count or 0)
+
+    mgmt_rows = db.execute(
+        select(OntUnit.mgmt_vlan_id, func.count(OntUnit.id))
+        .where(OntUnit.mgmt_vlan_id.in_(vlan_ids))
+        .group_by(OntUnit.mgmt_vlan_id)
+    ).all()
+    for vlan_id, count in mgmt_rows:
+        key = str(vlan_id)
+        usage[key]["mgmt_onts"] = int(count or 0)
+        usage[key]["onts"] += int(count or 0)
+
+    pool_rows = db.execute(
+        select(IpPool.vlan_id, func.count(IpPool.id))
+        .where(IpPool.vlan_id.in_(vlan_ids))
+        .group_by(IpPool.vlan_id)
+    ).all()
+    for vlan_id, count in pool_rows:
+        usage[str(vlan_id)]["ip_pools"] = int(count or 0)
+
+    return usage
+
+
+def build_vlans_list_data(db, *, olt_device_id: str | None = None) -> dict[str, object]:
     vlans = network_service.vlans.list(
         db=db,
         region_id=None,
@@ -52,6 +95,7 @@ def build_vlans_list_data(db) -> dict[str, object]:
         order_dir="asc",
         limit=100,
         offset=0,
+        olt_device_id=olt_device_id,
     )
     olt_devices = network_service.olt_devices.list(
         db=db,
@@ -61,15 +105,37 @@ def build_vlans_list_data(db) -> dict[str, object]:
         limit=500,
         offset=0,
     )
+    selected_olt = None
+    if olt_device_id:
+        try:
+            selected_olt = network_service.olt_devices.get(db, olt_device_id)
+        except Exception:
+            selected_olt = None
+    vlan_ids = [vlan.id for vlan in vlans]
+    usage_counts = _vlan_usage_counts(db, vlan_ids)
+    total_ont_refs = sum(item["onts"] for item in usage_counts.values())
+    purpose_counts: dict[str, int] = {}
+    for vlan in vlans:
+        purpose = vlan.purpose.value if vlan.purpose else "other"
+        purpose_counts[purpose] = purpose_counts.get(purpose, 0) + 1
+
     return {
         "vlans": vlans,
         "olt_devices": olt_devices,
-        "stats": {"total": len(vlans)},
+        "selected_olt": selected_olt,
+        "selected_olt_id": olt_device_id or "",
+        "usage_counts": usage_counts,
+        "stats": {
+            "total": len(vlans),
+            "ont_refs": total_ont_refs,
+            "management": purpose_counts.get("management", 0),
+            "internet": purpose_counts.get("internet", 0),
+        },
         "purpose_display": PURPOSE_DISPLAY,
     }
 
 
-def build_vlan_new_form_data(db) -> dict[str, object]:
+def build_vlan_new_form_data(db, *, olt_device_id: str | None = None) -> dict[str, object]:
     regions = catalog_service.region_zones.list(
         db=db,
         is_active=True,
@@ -86,10 +152,18 @@ def build_vlan_new_form_data(db) -> dict[str, object]:
         limit=500,
         offset=0,
     )
+    selected_olt = None
+    if olt_device_id:
+        try:
+            selected_olt = network_service.olt_devices.get(db, olt_device_id)
+        except Exception:
+            selected_olt = None
     return {
         "vlan": None,
         "regions": regions,
         "olt_devices": olt_devices,
+        "selected_olt": selected_olt,
+        "selected_olt_id": olt_device_id or "",
         "action_url": "/admin/network/vlans",
         "purpose_choices": VLAN_PURPOSE_CHOICES,
     }
@@ -127,14 +201,31 @@ def build_vlan_edit_form_data(db, *, vlan_id: str) -> dict[str, object] | None:
 
 
 def build_vlan_detail_data(db, *, vlan_id: str) -> dict[str, object] | None:
+    from app.models.network import IpPool, OntUnit
+
     try:
         vlan = network_service.vlans.get(db=db, vlan_id=vlan_id)
     except Exception:
         return None
     port_links = db.query(PortVlan).filter(PortVlan.vlan_id == vlan.id).all()
+    wan_ont_count = (
+        db.scalar(select(func.count(OntUnit.id)).where(OntUnit.wan_vlan_id == vlan.id)) or 0
+    )
+    mgmt_ont_count = (
+        db.scalar(select(func.count(OntUnit.id)).where(OntUnit.mgmt_vlan_id == vlan.id)) or 0
+    )
+    ip_pool_count = (
+        db.scalar(select(func.count(IpPool.id)).where(IpPool.vlan_id == vlan.id)) or 0
+    )
     return {
         "vlan": vlan,
         "port_links": port_links,
+        "usage_counts": {
+            "onts": int(wan_ont_count) + int(mgmt_ont_count),
+            "wan_onts": int(wan_ont_count),
+            "mgmt_onts": int(mgmt_ont_count),
+            "ip_pools": int(ip_pool_count),
+        },
         "purpose_display": PURPOSE_DISPLAY,
     }
 

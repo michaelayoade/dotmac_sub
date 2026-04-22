@@ -182,7 +182,7 @@
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">-- Select VLAN --</option>
                             {% for vlan in vlans %}
-                            <option value="{{ vlan.id }}" {% if ont and ont.user_vlan_id and ont.user_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }}{% if vlan.purpose %} - {{ vlan.purpose }}{% elif vlan.name %} - {{ vlan.name }}{% endif %}</option>
+                            <option value="{{ vlan.id }}" {% if ont and ont.user_vlan_id and ont.user_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan | vlan_label }}</option>
                             {% endfor %}
                         </select>
                     </div>

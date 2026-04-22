@@ -84,6 +84,7 @@
             {"key": "onu_mode",      "label": "ONU Mode"},
             {"key": "wan_services",  "label": "WAN Services"},
             {"key": "speed",         "label": "Speed", "hidden": true},
+            {"key": "usage",         "label": "ONTs"},
             {"key": "status",        "label": "Status"},
             {"key": "actions",       "label": "", "align": "right", "always_visible": true},
         ],
@@ -160,6 +161,19 @@
                 /
                 {% if row.upload_speed_profile %}{{ row.upload_speed_profile.name }}{% else %}-{% endif %}
             </span>
+        {% endcall %}
+        {# Usage count - how many ONTs use this profile #}
+        {% call cell_custom("usage") %}
+            {% set ont_count = usage_counts.get(row.id|string, 0) %}
+            <div class="flex items-center gap-1.5">
+                <span class="inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium tabular-nums
+                    {% if ont_count > 0 %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                    {{ ont_count }}
+                </span>
+                {% if ont_count > 0 %}
+                <span class="text-[10px] text-slate-400 dark:text-slate-500">ONT{{ 's' if ont_count != 1 else '' }}</span>
+                {% endif %}
+            </div>
         {% endcall %}
         {{ cell_status("status", "Active" if row.is_active else "Inactive",
             "active" if row.is_active else "inactive") }}

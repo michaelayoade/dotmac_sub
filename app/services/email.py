@@ -23,6 +23,19 @@ from app.services.settings_spec import resolve_value
 logger = logging.getLogger(__name__)
 
 
+def _resolve_secret_value(value: str | None) -> str | None:
+    """Resolve OpenBao/env secret refs while preserving plain values."""
+    if not value:
+        return value
+    try:
+        from app.services.secrets import resolve_secret
+
+        resolved = resolve_secret(value)
+        return resolved if resolved else None
+    except Exception:
+        return value
+
+
 def _bao_secret(path: str, field: str) -> str | None:
     """Resolve a secret from OpenBao, returning None on failure."""
     try:
@@ -128,8 +141,9 @@ def _legacy_smtp_config(db: Session | None) -> dict:
         or "localhost",
         "port": _env_int("SMTP_PORT", 587),
         "username": username,
-        "password": _env_value("SMTP_PASSWORD")
-        or _setting_value(db, "smtp_password")
+        "password": _resolve_secret_value(
+            _env_value("SMTP_PASSWORD") or _setting_value(db, "smtp_password")
+        )
         or _bao_secret("notifications", "smtp_password"),
         "use_tls": use_tls,
         "use_ssl": use_ssl,
@@ -431,7 +445,7 @@ def _resolve_smtp_sender_config(
     if selected.get("has_password"):
         password = _setting_value(db, _sender_setting_key(selected_key, "password"))
         if password:
-            selected["password"] = password
+            selected["password"] = _resolve_secret_value(password)
     selected["user"] = selected.get("username")
     selected["from_addr"] = selected.get("from_email")
     selected["sender_key"] = selected_key

@@ -41,6 +41,8 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
       # Monitoring
       SERVER_NAME: ${SERVER_NAME:-dotmac-sub-prod}
       GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
@@ -67,11 +69,12 @@ services:
     - ./templates:/app/templates
     - ./static:/app/static
     - ./alembic:/app/alembic
+    - ./scripts:/app/scripts
     - ./uploads:/app/uploads
     command:
     - /bin/sh
     - -c
-    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log --workers ${WEB_CONCURRENCY:-1}
+    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log --workers ${WEB_CONCURRENCY:-2}
   celery-worker:
     build: .
     container_name: dotmac_sub_celery_worker
@@ -102,6 +105,8 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
@@ -146,6 +151,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
@@ -198,6 +205,8 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
@@ -252,6 +261,8 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
@@ -299,6 +310,8 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
@@ -348,6 +361,8 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
@@ -397,6 +412,8 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:

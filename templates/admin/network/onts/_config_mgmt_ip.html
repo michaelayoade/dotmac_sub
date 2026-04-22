@@ -119,7 +119,7 @@
                 <option value="">Select VLAN for management traffic</option>
                 {% for vlan in vlans %}
                 <option value="{{ vlan.tag }}" {% if mgmt_form and mgmt_form.vlan_id == vlan.tag|string %}selected{% endif %}>
-                    {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}{% if vlan.description %} ({{ vlan.description }}){% endif %}
+                    {{ vlan | vlan_label }}
                 </option>
                 {% endfor %}
             </select>

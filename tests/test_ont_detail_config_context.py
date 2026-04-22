@@ -1,11 +1,12 @@
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from app.services.web_network_ont_actions.context_builders import (
     _desired_config_context,
 )
 
 
-def test_desired_config_context_prefers_durable_ont_fields() -> None:
+def test_desired_config_context_prefers_durable_ont_fields(monkeypatch) -> None:
     ont = SimpleNamespace(
         mgmt_ip_mode=SimpleNamespace(value="static"),
         mgmt_vlan=SimpleNamespace(tag=300),
@@ -24,7 +25,29 @@ def test_desired_config_context_prefers_durable_ont_fields() -> None:
         wifi_security_mode="WPA2-Personal",
     )
 
+    db = MagicMock()
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.context_builders.resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "bundle": None,
+            "overrides": [],
+            "using_legacy_fallback": True,
+            "values": {
+                "mgmt_ip_mode": "static",
+                "mgmt_vlan": 300,
+                "mgmt_ip_address": "10.30.0.44",
+                "wan_mode": "pppoe",
+                "wan_vlan": 203,
+                "pppoe_username": "customer@example",
+                "wifi_enabled": True,
+                "wifi_ssid": "CustomerWiFi",
+                "wifi_channel": "6",
+                "wifi_security_mode": "WPA2-Personal",
+            },
+        },
+    )
     context = _desired_config_context(
+        db,
         ont,
         ont_plan={
             "configure_management_ip": {
@@ -240,7 +263,6 @@ def test_detail_tab_contexts_share_db_observed_state(db_session, monkeypatch) ->
     tr069_context = context_builders.tr069_profile_config_context(
         db_session, str(ont.id)
     )
-    iphost_context = context_builders.iphost_config_context(db_session, str(ont.id))
 
     assert wan_context["wan_info"]["pppoe_username"] == "shared-user"
     assert wan_context["wan_info"]["wan_ip"] == "41.0.0.20"
@@ -248,8 +270,6 @@ def test_detail_tab_contexts_share_db_observed_state(db_session, monkeypatch) ->
     assert lan_context["lan_info"]["lan_ip"] == "192.168.55.1"
     assert tr069_context["tr069_profiles"][0].name == "ACS Primary"
     assert tr069_context["tr069_profiles_freshness"]["fetched_at"] == fetched_at
-    assert iphost_context["iphost_config"]["ip_address"] == "10.30.0.44"
-    assert iphost_context["iphost_freshness"]["stale"] is True
 
 
 def test_tr069_profiles_resolve_olt_from_active_assignment(db_session, monkeypatch) -> None:

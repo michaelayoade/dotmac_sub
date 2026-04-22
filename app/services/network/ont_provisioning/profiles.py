@@ -7,6 +7,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.models.network import OntProvisioningProfile, OntUnit
+from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -14,17 +15,14 @@ logger = logging.getLogger(__name__)
 def resolve_profile(
     db: Session,
     ont: OntUnit,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
 ) -> OntProvisioningProfile | None:
     """Resolve a provisioning profile for an ONT.
 
-    Priority: explicit profile_id > ONT's assigned profile.
+    Priority: explicit bundle_id > ONT's active assigned bundle.
     """
-    selected_id = profile_id or (
-        str(ont.provisioning_profile_id) if ont.provisioning_profile_id else None
-    )
-    if selected_id:
-        profile = db.get(OntProvisioningProfile, selected_id)
+    if bundle_id:
+        profile = db.get(OntProvisioningProfile, bundle_id)
         if (
             profile
             and profile.olt_device_id
@@ -38,6 +36,9 @@ def resolve_profile(
                 ont.olt_device_id,
             )
             return None
+        return profile
+    profile = resolve_assigned_bundle(db, ont)
+    if profile is not None:
         return profile
     logger.warning(
         "ONT %s has no selected or assigned provisioning profile; refusing implicit profile fallback",

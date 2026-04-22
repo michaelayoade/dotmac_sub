@@ -4,283 +4,192 @@
 {% block title %}{{ display_serial_label }} - ONT - Admin{% endblock %}
 
 {% block content %}
+{# State flags used by the header and Danger Zone #}
+{%- set authorization_status = ont.authorization_status.value if ont.authorization_status and ont.authorization_status.value is defined else (ont.authorization_status if ont.authorization_status else '') -%}
+{%- set provisioning_status = ont.provisioning_status.value if ont.provisioning_status and ont.provisioning_status.value is defined else (ont.provisioning_status if ont.provisioning_status else 'unprovisioned') -%}
+{%- set authorized_for_configuration = authorization_status == 'authorized' -%}
+{%- set show_provision_cta = authorized_for_configuration and (inventory_ready or provisioning_status != 'provisioned') -%}
+{%- set fsp = (assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '')) -%}
+
 <div class="space-y-4"
-     x-data="{ activeTab: '{{ ont_active_tab | default('overview') }}' }"
-     x-init="
-        if (activeTab === 'device-config') {
-            const trigger = document.querySelector('[data-tab=\"device-config\"]');
-            if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#device-config-content', swap: 'innerHTML'});
-        }
-     ">
-    {# Header — Clean Professional Layout for NOC Technicians #}
-    <div class="relative">
+     x-data="{ activeTab: '{{ ont_active_tab | default('device-config') }}' }">
+    {# Compact header — one row: status · identity · context pills · single primary CTA #}
+    <div class="flex flex-col gap-3 border-b border-slate-200 pb-3 dark:border-slate-700">
         {# Breadcrumb #}
-        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-4">
-            <a href="/admin/network" class="hover:text-blue-600 dark:hover:text-blue-400">Network</a>
-            <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <a href="/admin/network/onts" class="hover:text-blue-600 dark:hover:text-blue-400">ONTs</a>
-            <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <nav class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <a href="/admin/network" class="hover:text-slate-700 dark:hover:text-slate-200">Network</a>
+            <span class="text-slate-300 dark:text-slate-600">/</span>
+            <a href="/admin/network/onts" class="hover:text-slate-700 dark:hover:text-slate-200">ONTs</a>
+            <span class="text-slate-300 dark:text-slate-600">/</span>
             <span aria-current="page" class="font-medium text-slate-700 dark:text-slate-200">{{ display_serial_label }}</span>
         </nav>
 
-        {# Main Header Card #}
-        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
-            <div class="flex flex-col lg:flex-row lg:items-stretch">
-                {# Left: Device Identity & Status #}
-                <div class="flex-1 p-5 lg:p-6">
-                    <div class="flex items-start justify-between gap-4">
-                        <div class="flex items-center gap-4">
-                            {# Status Indicator - Large and Prominent #}
-                            {% if signal_info and signal_info.online_status == 'online' %}
-                            <div class="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/25">
-                                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12l4-4m-4 4l4 4"/></svg>
-                                <span class="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5">
-                                    <span class="absolute inline-flex h-full w-full animate-ping motion-reduce:animate-none rounded-full bg-emerald-400 opacity-75"></span>
-                                    <span class="relative inline-flex h-3.5 w-3.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-800"></span>
-                                </span>
-                            </div>
-                            {% elif signal_info and signal_info.online_status == 'offline' %}
-                            <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-red-600 shadow-lg shadow-rose-500/25">
-                                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                            </div>
-                            {% else %}
-                            <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-slate-400 to-slate-500 shadow-lg shadow-slate-500/25">
-                                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            </div>
-                            {% endif %}
-                            <div>
-                                <h1 class="text-xl font-semibold tracking-tight text-slate-900 dark:text-white lg:text-2xl">{{ display_serial_label }}</h1>
-                                <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-                                    {{ identity_label }}
-                                    {% if ont.firmware_version %}<span class="ml-1 font-mono text-xs text-slate-400 dark:text-slate-500">v{{ ont.firmware_version }}</span>{% endif %}
-                                </p>
-                            </div>
-                        </div>
-                        {# Desktop Actions #}
-                        <div class="hidden items-center gap-2 sm:flex">
-                            {% if ont.is_active %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/30">
-                                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                                Active
-                            </span>
-                            {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/20 dark:bg-slate-500/10 dark:text-slate-400 dark:ring-slate-500/30">
-                                <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-                                Inactive
-                            </span>
-                            {% endif %}
-                            {# Actions Dropdown #}
-                            <div x-data="{ open: false }" class="relative">
-                                <button @click="open = !open" @click.outside="open = false" type="button"
-                                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                                    Actions
-                                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                                </button>
-                                <div x-show="open" x-cloak x-transition
-                                    class="absolute right-0 z-20 mt-1 w-48 origin-top-right rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                                    <button
-                                        hx-post="/admin/network/onts/{{ ont.id }}/factory-reset"
-                                        hx-swap="none"
-                                        hx-confirm="Factory reset will ERASE ALL configuration on this ONT. The device will reboot and return to factory defaults. Continue?"
-                                        hx-disabled-elt="this"
-                                        hx-on::before-request="this.classList.add('opacity-75','cursor-wait')"
-                                        hx-on::after-request="this.classList.remove('opacity-75','cursor-wait')"
-                                        @click="open = false"
-                                        class="flex w-full items-center gap-2 px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/30">
-                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                                        Factory Reset
-                                    </button>
-                                    <button
-                                        hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
-                                        hx-swap="none"
-                                        hx-confirm="Return this ONT to inventory? This will clear subscriber assignment and reset provisioning status."
-                                        hx-disabled-elt="this"
-                                        hx-on::before-request="this.classList.add('opacity-75','cursor-wait')"
-                                        hx-on::after-request="this.classList.remove('opacity-75','cursor-wait')"
-                                        @click="open = false"
-                                        class="flex w-full items-center gap-2 px-3 py-2 text-xs text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/30">
-                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
-                                        Return to Inventory
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+        {# Identity row #}
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+            {# Small status dot — status-as-information, no decoration #}
+            {% if signal_info and signal_info.online_status == 'online' %}
+              <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" aria-label="Online"></span>
+            {% elif signal_info and signal_info.online_status == 'offline' %}
+              <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500" aria-label="Offline"></span>
+            {% else %}
+              <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-slate-400" aria-label="Unknown"></span>
+            {% endif %}
+            <h1 class="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white lg:text-xl">{{ display_serial_label }}</h1>
+            <span class="text-sm text-slate-500 dark:text-slate-400">{{ identity_label }}</span>
+            {% if ont.firmware_version %}
+              <span class="font-mono text-xs text-slate-400 dark:text-slate-500">v{{ ont.firmware_version }}</span>
+            {% endif %}
 
-                    {# Context Pills #}
-                    <div class="mt-4 flex flex-wrap items-center gap-2">
-                        {% if network_path.get('olt_name') %}
-                        <a href="/admin/network/olts/{{ network_path.olt_id }}" class="group inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10 transition-all hover:bg-blue-100 hover:ring-blue-700/20 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/20 dark:hover:bg-blue-500/20">
-                            <svg class="h-3.5 w-3.5 text-blue-500 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
-                            {{ network_path.olt_name }}
-                        </a>
-                        {% endif %}
-                        {% if network_path.get('pon_port') %}
-                        <span class="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/10 dark:bg-slate-700 dark:text-slate-300 dark:ring-slate-500/20">
-                            <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                            {{ network_path.pon_port }}
-                        </span>
-                        {% endif %}
-                        {% if subscriber_info.get('name') %}
-                        <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="group inline-flex items-center gap-1.5 rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-700/10 transition-all hover:bg-violet-100 hover:ring-violet-700/20 dark:bg-violet-500/10 dark:text-violet-300 dark:ring-violet-500/20 dark:hover:bg-violet-500/20">
-                            <svg class="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-                            {{ subscriber_info.name }}
-                        </a>
-                        {% endif %}
-                        {% if connected_customer_devices is not none %}
-                        <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-700/10 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20">
-                            <svg class="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            {{ connected_customer_devices }} connected device{{ '' if connected_customer_devices == 1 else 's' }}
-                            {% if connected_wifi_clients is not none %}
-                            <span class="text-emerald-600/70 dark:text-emerald-300/70">({{ connected_wifi_clients }} WiFi)</span>
-                            {% endif %}
-                        </span>
-                        {% endif %}
-                        {% if subscriber_info.get('plan_name') %}
-                        <span class="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 px-2.5 py-1.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-700/10 dark:bg-teal-500/10 dark:text-teal-300 dark:ring-teal-500/20">
-                            <svg class="h-3.5 w-3.5 text-teal-500 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-                            {{ subscriber_info.plan_name }}
-                        </span>
-                        {% endif %}
-                        {% if signal_info and signal_info.distance_meters is not none %}
-                        <span class="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-700/10 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/20">
-                            <svg class="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-                            {{ "{:,}".format(signal_info.distance_meters) }}m
-                        </span>
-                        {% endif %}
-                    </div>
-                </div>
-
-                {% set authorization_status = ont.authorization_status.value if ont.authorization_status and ont.authorization_status.value is defined else (ont.authorization_status if ont.authorization_status else '') %}
-                {% set provisioning_status = ont.provisioning_status.value if ont.provisioning_status and ont.provisioning_status.value is defined else (ont.provisioning_status if ont.provisioning_status else 'unprovisioned') %}
-                {% set authorized_for_configuration = authorization_status == 'authorized' %}
-                {% set show_provision_cta = authorized_for_configuration and (inventory_ready or provisioning_status != 'provisioned') %}
-                {% if show_provision_cta %}
-                {# Right: ONT Configuration Action #}
-                <div class="flex flex-col justify-center gap-2 border-t border-slate-200/60 bg-slate-50/50 p-4 dark:border-slate-700/60 dark:bg-slate-900/30 lg:w-56 lg:border-l lg:border-t-0 lg:p-5">
-                    <a href="/admin/network/onts/{{ ont.id }}/provision"
-                       class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                        Configure ONT
-                    </a>
-                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Use after OLT authorization and provisioning are complete.</p>
-                </div>
-                {% elif not authorized_for_configuration %}
-                <div class="flex flex-col justify-center gap-2 border-t border-slate-200/60 bg-slate-50/50 p-4 dark:border-slate-700/60 dark:bg-slate-900/30 lg:w-56 lg:border-l lg:border-t-0 lg:p-5"
-                     x-data="{
-                         status: null,
-                         operationId: null,
-                         init() {
-                             window.addEventListener('operation-status', (e) => {
-                                 if (e.detail.operation_id === this.operationId) {
-                                     this.status = e.detail.status;
-                                     if (e.detail.status === 'succeeded') {
-                                         setTimeout(() => location.reload(), 1500);
-                                     }
-                                 }
-                             });
-                         },
-                         handleQueued(e) {
-                             if (e.detail && e.detail.operation_id) {
-                                 this.operationId = e.detail.operation_id;
-                                 this.status = 'running';
-                                 if (window.operationTracker) {
-                                     window.operationTracker.track(e.detail.operation_id, { showToasts: true });
-                                 }
-                             }
-                         }
-                     }"
-                     @operationqueued.window="handleQueued($event)">
-                    {% if network_path.get('olt_id') %}
-                    {# Construct FSP from assignment pon_port or ont.board/port #}
-                    {% set fsp = assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '') %}
-                    {% if fsp %}
-                    <form method="POST" action="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
-                          hx-post="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
-                          hx-swap="none"
-                          hx-disabled-elt="button[type='submit']"
-                          @htmx:before-request="status = 'submitting'"
-                          @htmx:after-request="if (!operationId) status = null">
-                        {% include "components/forms/csrf_input.html" %}
-                        <input type="hidden" name="ont_id" value="{{ ont.id }}">
-                        <input type="hidden" name="fsp" value="{{ fsp }}">
-                        <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
-                        <template x-if="status === 'succeeded'">
-                            <div class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                Authorized
-                            </div>
-                        </template>
-                        <template x-if="status === 'failed'">
-                            <div class="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-rose-300 bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white dark:border-rose-800 dark:bg-rose-700">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                Failed
-                            </div>
-                        </template>
-                        <template x-if="status !== 'succeeded' && status !== 'failed'">
-                            <button type="submit"
-                                    :disabled="status === 'submitting' || status === 'running'"
-                                    :class="(status === 'submitting' || status === 'running') ? 'opacity-75 cursor-wait' : 'hover:bg-amber-700'"
-                                    class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
-                                <svg x-show="!status" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                                <svg x-show="status === 'submitting' || status === 'running'" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                <span x-text="status === 'running' ? 'Authorizing...' : (status === 'submitting' ? 'Queuing...' : 'Authorize on OLT')"></span>
-                            </button>
-                        </template>
-                    </form>
-                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">FSP: {{ fsp }}</p>
-                    {% else %}
-                    <a href="/admin/network/olts/{{ network_path.olt_id }}?tab=provisioning&search={{ ont.serial_number }}"
-                       class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                        Find &amp; Authorize
-                    </a>
-                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Run autofind to discover this ONT's port.</p>
-                    {% endif %}
-                    {% else %}
-                    <div class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                        Configure ONT
-                    </div>
-                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">No OLT assigned. TR-069-only devices cannot be OLT-authorized.</p>
-                    {% endif %}
-                </div>
+            {# Primary CTA — single, state-driven, on the right #}
+            <div class="ml-auto flex items-center gap-2">
+              {% if not authorized_for_configuration %}
+                {% if network_path.get('olt_id') and fsp %}
+                <form method="POST"
+                      action="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
+                      hx-post="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
+                      hx-swap="none"
+                      hx-disabled-elt="button[type='submit']"
+                      x-data="{
+                          status: null,
+                          operationId: null,
+                          init() {
+                              window.addEventListener('operation-status', (e) => {
+                                  if (e.detail.operation_id === this.operationId) {
+                                      this.status = e.detail.status;
+                                      if (e.detail.status === 'succeeded') {
+                                          setTimeout(() => location.reload(), 1500);
+                                      }
+                                  }
+                              });
+                          },
+                          handleQueued(e) {
+                              if (e.detail && e.detail.operation_id) {
+                                  this.operationId = e.detail.operation_id;
+                                  this.status = 'running';
+                                  if (window.operationTracker) {
+                                      window.operationTracker.track(e.detail.operation_id, { showToasts: true });
+                                  }
+                              }
+                          }
+                      }"
+                      @operationqueued.window="handleQueued($event)"
+                      @htmx:before-request="status = 'submitting'"
+                      @htmx:after-request="if (!operationId) status = null">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="ont_id" value="{{ ont.id }}">
+                    <input type="hidden" name="fsp" value="{{ fsp }}">
+                    <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
+                    <button type="submit"
+                            :disabled="status === 'submitting' || status === 'running' || status === 'succeeded'"
+                            :class="{ 'opacity-75 cursor-wait': status === 'submitting' || status === 'running', 'bg-emerald-600 hover:bg-emerald-600': status === 'succeeded', 'bg-rose-600 hover:bg-rose-600': status === 'failed' }"
+                            class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
+                            title="Authorize this ONT on its OLT (FSP {{ fsp }}). Keyboard: a">
+                        <span x-text="status === 'succeeded' ? 'Authorized' : (status === 'failed' ? 'Failed' : (status === 'running' ? 'Authorizing…' : (status === 'submitting' ? 'Queuing…' : 'Authorize')))"></span>
+                    </button>
+                </form>
+                {% elif network_path.get('olt_id') %}
+                <a href="/admin/network/olts/{{ network_path.olt_id }}?tab=provisioning&search={{ ont.serial_number }}"
+                   class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                   title="Run autofind on the OLT to discover this ONT's port">
+                    Find &amp; authorize
+                </a>
                 {% endif %}
+              {% elif show_provision_cta %}
+                <a href="/admin/network/onts/{{ ont.id }}/provision"
+                   class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   title="Push WiFi / PPPoE / speed profile to this ONT. Keyboard: c"
+                   data-kbd="c">
+                    Configure
+                </a>
+              {% endif %}
             </div>
+        </div>
+
+        {# Context pills — secondary row, no decorative icons #}
+        <div class="flex flex-wrap items-center gap-1.5 text-xs">
+            {% if ont.is_active %}
+              <span class="inline-flex items-center rounded bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">Active</span>
+            {% else %}
+              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">Inactive</span>
+            {% endif %}
+            {% if network_path.get('olt_name') %}
+              <a href="/admin/network/olts/{{ network_path.olt_id }}"
+                 class="inline-flex items-center rounded bg-blue-50 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20">{{ network_path.olt_name }}</a>
+            {% endif %}
+            {% if network_path.get('pon_port') %}
+              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ network_path.pon_port }}</span>
+            {% endif %}
+            {% if subscriber_info.get('name') %}
+              <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}"
+                 class="inline-flex items-center rounded bg-violet-50 px-2 py-0.5 font-medium text-violet-700 hover:bg-violet-100 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20">{{ subscriber_info.name }}</a>
+            {% endif %}
+            {% if subscriber_info.get('plan_name') %}
+              <span class="inline-flex items-center rounded bg-teal-50 px-2 py-0.5 font-medium text-teal-700 dark:bg-teal-500/10 dark:text-teal-300">{{ subscriber_info.plan_name }}</span>
+            {% endif %}
+            {% if connected_customer_devices is not none %}
+              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <span class="tabular-nums font-medium">{{ connected_customer_devices }}</span><span class="ml-1">device{{ '' if connected_customer_devices == 1 else 's' }}</span>
+                {% if connected_wifi_clients is not none %}<span class="ml-1 text-slate-400">({{ connected_wifi_clients }} Wi-Fi)</span>{% endif %}
+              </span>
+            {% endif %}
+            {% if signal_info and signal_info.distance_meters is not none %}
+              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="Fiber distance from OLT in meters">{{ "{:,}".format(signal_info.distance_meters) }}m</span>
+            {% endif %}
+            {% if fsp %}
+              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="Frame/Slot/Port — the ONT's physical address on the OLT">FSP {{ fsp }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    {# ─── Signal + device faceplate — always above tabs, tab-independent ─── #}
+    {% from "components/devices/ont_faceplate.html" import ont_faceplate %}
+    {%- set _rx = signal_info.onu_rx_dbm if signal_info else none -%}
+    {%- if _rx is none -%}{%- set _optical_state = 'none' -%}
+    {%- elif _rx >= -25 -%}{%- set _optical_state = 'good' -%}
+    {%- elif _rx >= -28 -%}{%- set _optical_state = 'warn' -%}
+    {%- else -%}{%- set _optical_state = 'bad' -%}{%- endif -%}
+
+    {# Optical link summary — the first thing a NOC tech looks at #}
+    {% include "admin/network/onts/_optical_link_summary.html" %}
+
+    {# Device faceplate strip — no outer card chrome, just the render + numbers #}
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-6">
+        <div class="flex-1 overflow-x-auto">
+            {{ ont_faceplate(
+                ports=ethernet_ports,
+                wifi_enabled=ont.wifi_enabled if ont.wifi_enabled is defined else true,
+                voip_ports=(2 if (ont.voip_enabled if ont.voip_enabled is defined else false) else 0),
+                has_catv=false,
+                has_usb=true,
+                online=(signal_info.online_status == 'online' if signal_info else false),
+                optical_state=_optical_state,
+                model_label=(ont.model or (ont.onu_type.name if ont.onu_type is defined and ont.onu_type else none)),
+                size="h-24"
+            ) }}
+        </div>
+        <div class="flex items-center gap-4 text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 lg:justify-end">
+            <span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Up</span>
+            <span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>Down</span>
+            <span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Disabled</span>
         </div>
     </div>
 
     {% if preview_mode %}
-    <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
-        Preview mode: this page is for layout testing only. The Move ONU interaction below is visual and does not save changes.
-        <a href="{{ preview_origin_url }}" class="ml-2 font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100">Open live detail page</a>
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+        <span class="font-semibold">Preview.</span> Changes on this page are not saved.
+        <a href="{{ preview_origin_url }}" class="ml-1 font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100">Open live page</a>
     </div>
     {% endif %}
 
     {% if inventory_ready %}
-    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300">
-        This ONT is back in inventory and ready for a fresh assignment and configuration flow.
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+        Ready to assign to a new customer.
     </div>
     {% endif %}
 
     {# Tab Navigation #}
     <div x-data="{
             tabs: ['overview', 'service', 'device-config', 'diagnostics', 'history'],
-            showTabTooltip: false,
-            tabTooltipLabel: '',
-            tabTooltipTop: 0,
-            tabTooltipLeft: 0,
-            openTabTooltip(el, label) {
-                const rect = el.getBoundingClientRect();
-                this.tabTooltipLabel = label;
-                this.tabTooltipLeft = rect.left + (rect.width / 2);
-                this.tabTooltipTop = rect.bottom + 10;
-                this.showTabTooltip = true;
-            },
-            closeTabTooltip() {
-                this.showTabTooltip = false;
-            },
             focusTab(tabName) {
                 const tabEl = document.getElementById('tab-' + tabName);
                 if (tabEl) tabEl.focus();
@@ -303,99 +212,62 @@
          class="relative z-50 overflow-x-auto border-b border-slate-200 dark:border-slate-700 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
         <nav class="flex min-w-max gap-1 sm:gap-3 lg:gap-4 -mb-px" role="tablist" aria-label="ONT detail tabs">
             <button @click="activeTab = 'overview'"
-                    @mouseenter="openTabTooltip($el, 'Overview')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Overview')"
-                    @blur="closeTabTooltip()"
                     role="tab"
                     :aria-selected="activeTab === 'overview'"
                     :tabindex="activeTab === 'overview' ? 0 : -1"
-                    aria-label="Overview"
                     id="tab-overview"
                     aria-controls="panel-overview"
                     :class="activeTab === 'overview' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                <span class="whitespace-nowrap">Overview</span>
+                    class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
+                Overview
             </button>
             <button @click="activeTab = 'service'"
-                    @mouseenter="openTabTooltip($el, 'Service')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Service')"
-                    @blur="closeTabTooltip()"
                     role="tab"
                     :aria-selected="activeTab === 'service'"
                     :tabindex="activeTab === 'service' ? 0 : -1"
-                    aria-label="Service"
                     id="tab-service"
                     aria-controls="panel-service"
                     :class="activeTab === 'service' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-                <span class="whitespace-nowrap">Service</span>
+                    class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
+                Service
             </button>
             <button type="button"
                     data-tab="device-config"
-                    @click="activeTab = 'device-config'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#device-config-content', swap: 'innerHTML'}) }"
-                    @mouseenter="openTabTooltip($el, 'Device Config')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Device Config')"
-                    @blur="closeTabTooltip()"
+                    @click="activeTab = 'device-config'"
                     role="tab"
                     :aria-selected="activeTab === 'device-config'"
                     :tabindex="activeTab === 'device-config' ? 0 : -1"
-                    aria-label="Device Config"
                     id="tab-device-config"
                     aria-controls="panel-device-config"
                     :class="activeTab === 'device-config' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                <span class="whitespace-nowrap">Device Config</span>
+                    class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
+                All Config
             </button>
             <button @click="activeTab = 'diagnostics'"
-                    @mouseenter="openTabTooltip($el, 'Diagnostics')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Diagnostics')"
-                    @blur="closeTabTooltip()"
                     role="tab"
                     :aria-selected="activeTab === 'diagnostics'"
                     :tabindex="activeTab === 'diagnostics' ? 0 : -1"
-                    aria-label="Diagnostics"
                     id="tab-diagnostics"
                     aria-controls="panel-diagnostics"
                     :class="activeTab === 'diagnostics' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                <span class="whitespace-nowrap">Diagnostics</span>
+                    class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
+                Diagnostics
             </button>
             <button @click="activeTab = 'history'"
-                    @mouseenter="openTabTooltip($el, 'History')"
-                    @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'History')"
-                    @blur="closeTabTooltip()"
                     role="tab"
                     :aria-selected="activeTab === 'history'"
                     :tabindex="activeTab === 'history' ? 0 : -1"
-                    aria-label="History"
                     id="tab-history"
                     aria-controls="panel-history"
                     :class="activeTab === 'history' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                <span class="whitespace-nowrap">History</span>
+                    class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
+                History
             </button>
         </nav>
-        <div x-show="showTabTooltip"
-             x-cloak
-             :style="`left:${tabTooltipLeft}px; top:${tabTooltipTop}px; transform: translateX(-50%);`"
-             class="pointer-events-none fixed z-[2000] whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900"
-             x-text="tabTooltipLabel"></div>
     </div>
 
     {# ===================== OVERVIEW TAB ===================== #}
     <div x-show="activeTab === 'overview'" x-transition role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" class="space-y-4">
-        {# Status — single ONT state section #}
-        {% include "admin/network/onts/_optical_link_summary.html" %}
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-3"
              {% if preview_mode %}
              x-data='{
@@ -1178,13 +1050,79 @@
     </div>
 
     {# ===================== DEVICE CONFIG TAB ===================== #}
-    <div x-show="activeTab === 'device-config'" x-transition x-cloak role="tabpanel" id="panel-device-config" aria-labelledby="tab-device-config">
+    <div x-show="activeTab === 'device-config'" x-transition x-cloak role="tabpanel" id="panel-device-config" aria-labelledby="tab-device-config" class="space-y-4">
         <div id="device-config-content" aria-live="polite" aria-atomic="false">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device configuration...</span>
-            </div>
+            {% include "admin/network/onts/_unified_config.html" %}
         </div>
+
+        {# Danger Zone — destructive / recoverable actions live here, not in the header #}
+        <section aria-labelledby="danger-zone-heading"
+                 class="rounded-xl border border-rose-200 bg-rose-50/50 dark:border-rose-900/50 dark:bg-rose-950/20">
+            <header class="flex items-baseline justify-between gap-3 border-b border-rose-200 px-4 py-3 dark:border-rose-900/50">
+                <h2 id="danger-zone-heading" class="font-display text-sm font-semibold tracking-tight text-rose-900 dark:text-rose-200">Danger zone</h2>
+                <span class="text-xs text-rose-700/80 dark:text-rose-300/70">These actions affect live service.</span>
+            </header>
+            <div class="divide-y divide-rose-200/70 dark:divide-rose-900/40">
+                {# Return to inventory — recoverable, amber #}
+                <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="max-w-xl">
+                        <h3 class="text-sm font-medium text-slate-900 dark:text-slate-100">Return to inventory</h3>
+                        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">Clears the subscriber assignment and marks the ONT as available. The device itself keeps its current configuration — reassign it to a new customer to provision again.</p>
+                    </div>
+                    <button type="button"
+                            hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
+                            hx-swap="none"
+                            hx-confirm="Return this ONT to inventory? Subscriber assignment will be cleared and provisioning status reset."
+                            hx-disabled-elt="this"
+                            class="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 shadow-sm hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:border-amber-700/50 dark:bg-slate-900 dark:text-amber-400 dark:hover:bg-amber-950/30">
+                        Return to inventory
+                    </button>
+                </div>
+                {# Factory reset — irreversible, typed-SERIAL confirm #}
+                <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
+                     x-data="{ armed: false, typed: '', expected: {{ ont.serial_number | tojson }} }">
+                    <div class="max-w-xl">
+                        <h3 class="text-sm font-medium text-slate-900 dark:text-slate-100">Factory reset</h3>
+                        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">Erases all configuration on the ONT and reboots it. PPPoE, Wi-Fi, VLANs, firmware customizations — all gone. The device returns to vendor defaults.</p>
+                        <div x-show="armed" x-cloak x-transition class="mt-2">
+                            <label class="block text-xs font-medium text-slate-700 dark:text-slate-300">Type the serial number to confirm:
+                                <code class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-900 dark:bg-slate-800 dark:text-slate-100">{{ ont.serial_number }}</code>
+                            </label>
+                            <input type="text"
+                                   x-model="typed"
+                                   autocomplete="off"
+                                   spellcheck="false"
+                                   placeholder="{{ ont.serial_number }}"
+                                   class="mt-1.5 w-full rounded-md border border-rose-300 bg-white px-2.5 py-1.5 font-mono text-sm text-slate-900 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 dark:border-rose-700/50 dark:bg-slate-900 dark:text-slate-100">
+                        </div>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-2">
+                        <button type="button"
+                                x-show="armed"
+                                @click="armed = false; typed = ''"
+                                class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                            Cancel
+                        </button>
+                        <button type="button"
+                                x-show="!armed"
+                                @click="armed = true; $nextTick(() => $root.querySelector('input').focus())"
+                                class="inline-flex items-center rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 shadow-sm hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:border-rose-700/50 dark:bg-slate-900 dark:text-rose-400 dark:hover:bg-rose-950/30">
+                            Factory reset…
+                        </button>
+                        <button type="button"
+                                x-show="armed"
+                                :disabled="typed !== expected"
+                                :class="typed === expected ? 'bg-rose-600 hover:bg-rose-700' : 'bg-rose-300 dark:bg-rose-900/50 cursor-not-allowed'"
+                                hx-post="/admin/network/onts/{{ ont.id }}/factory-reset"
+                                hx-swap="none"
+                                hx-disabled-elt="this"
+                                class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium text-white shadow-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2">
+                            Erase device
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
 
     {# ===================== DIAGNOSTICS TAB ===================== #}
@@ -1214,6 +1152,44 @@
             <p class="text-sm text-slate-500 dark:text-slate-400">No runtime snapshot yet. Refresh TR-069 data to collect live state.</p>
             {% endif %}
             {% endcall %}
+
+            {# Show Running Config from OLT #}
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
+                 x-data="{ showConfig: false }">
+                <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                            <svg class="h-5 w-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">OLT Running Config</h3>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">View this ONT's configuration as stored on the OLT</p>
+                        </div>
+                    </div>
+                    <button type="button"
+                            @click="showConfig = !showConfig"
+                            hx-get="/admin/network/onts/{{ ont.id }}/running-config"
+                            hx-target="#running-config-content"
+                            hx-trigger="click once"
+                            hx-swap="innerHTML"
+                            :class="showConfig ? 'bg-slate-200 dark:bg-slate-600' : 'hover:bg-slate-100 dark:hover:bg-slate-700'"
+                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors dark:border-slate-600 dark:text-slate-200">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                        </svg>
+                        <span x-text="showConfig ? 'Hide' : 'Show'">Show</span>
+                    </button>
+                </div>
+                <div id="running-config-content" x-show="showConfig" x-collapse x-cloak class="px-5 py-4">
+                    <div class="flex items-center justify-center py-8 text-sm text-slate-500 dark:text-slate-400">
+                        <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        Loading configuration from OLT...
+                    </div>
+                </div>
+            </div>
 
             <div id="charts-content"
                  hx-get="/admin/network/onts/{{ ont.id }}/charts"
@@ -1264,6 +1240,104 @@
 
 {# Modal container for HTMX-loaded modals #}
 <div id="modal-container"></div>
+
+{# Keyboard shortcuts — NOC workflow accelerator #}
+<div x-data="{
+        cheatOpen: false,
+        chord: null,
+        chordTimer: null,
+        isEditing(el) {
+            if (!el) return false;
+            const tag = (el.tagName || '').toLowerCase();
+            return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+        },
+        switchTab(name) {
+            const tabEl = document.getElementById('tab-' + name);
+            if (tabEl) { tabEl.click(); tabEl.focus(); }
+        },
+        click(sel) {
+            const el = document.querySelector(sel);
+            if (el) el.click();
+        },
+        goto(path) {
+            window.location.href = path;
+        },
+        handle(e) {
+            if (this.isEditing(e.target)) return;
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            const key = e.key;
+            if (key === '?') { e.preventDefault(); this.cheatOpen = !this.cheatOpen; return; }
+            if (key === 'Escape') { this.cheatOpen = false; this.chord = null; return; }
+            if (this.chord === 'g') {
+                this.chord = null;
+                clearTimeout(this.chordTimer);
+                if (key === 'o') { e.preventDefault(); this.goto('/admin/network/onts'); return; }
+                if (key === 's') { e.preventDefault(); this.switchTab('service'); return; }
+                if (key === 'c') { e.preventDefault(); this.switchTab('device-config'); return; }
+                if (key === 'd') { e.preventDefault(); this.switchTab('diagnostics'); return; }
+                if (key === 'h') { e.preventDefault(); this.switchTab('history'); return; }
+                return;
+            }
+            if (key === 'g') {
+                e.preventDefault();
+                this.chord = 'g';
+                this.chordTimer = setTimeout(() => { this.chord = null; }, 1200);
+                return;
+            }
+            if (key === '1') { e.preventDefault(); this.switchTab('overview'); return; }
+            if (key === '2') { e.preventDefault(); this.switchTab('service'); return; }
+            if (key === '3') { e.preventDefault(); this.switchTab('device-config'); return; }
+            if (key === '4') { e.preventDefault(); this.switchTab('diagnostics'); return; }
+            if (key === '5') { e.preventDefault(); this.switchTab('history'); return; }
+            if (key === 'r') { e.preventDefault(); location.reload(); return; }
+            if (key === 'c') { e.preventDefault(); this.click('a[data-kbd=\'c\']'); return; }
+            if (key === 'a') { e.preventDefault(); this.click('button[type=\'submit\']:not([disabled])'); return; }
+        }
+     }"
+     @keydown.window="handle($event)">
+
+    {# Floating hint button — unobtrusive #}
+    <button type="button"
+            @click="cheatOpen = true"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+            class="fixed bottom-4 right-4 z-40 inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200">
+        <span class="font-mono text-sm">?</span>
+    </button>
+
+    {# Cheat sheet modal #}
+    <div x-show="cheatOpen"
+         x-cloak
+         x-transition.opacity
+         @click.self="cheatOpen = false"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+        <div class="w-full max-w-md rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+             @keydown.escape.window="cheatOpen = false">
+            <header class="flex items-baseline justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <h2 class="font-display text-sm font-semibold tracking-tight text-slate-900 dark:text-white">Keyboard shortcuts</h2>
+                <button type="button" @click="cheatOpen = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200" aria-label="Close">&times;</button>
+            </header>
+            <div class="grid grid-cols-1 gap-x-6 gap-y-1.5 px-4 py-3 text-xs text-slate-700 sm:grid-cols-2 dark:text-slate-300">
+                <div class="col-span-full mb-1 font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">Navigation</div>
+                <div class="flex items-baseline justify-between gap-3"><span>Overview</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">1</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Service</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">2</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Configuration</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">3</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Diagnostics</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">4</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>History</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">5</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Back to ONT list</span><span class="font-mono text-[11px]"><kbd class="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">g</kbd> <kbd class="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">o</kbd></span></div>
+
+                <div class="col-span-full mb-1 mt-3 font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</div>
+                <div class="flex items-baseline justify-between gap-3"><span>Refresh page</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">r</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Configure ONT</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">c</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Authorize ONT</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">a</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Toggle this panel</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">?</kbd></div>
+            </div>
+            <footer class="border-t border-slate-200 px-4 py-2 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                Shortcuts pause while typing in a field.
+            </footer>
+        </div>
+    </div>
+</div>
 
 {{ animation_styles() }}
 {% endblock %}

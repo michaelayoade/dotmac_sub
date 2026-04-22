@@ -70,13 +70,39 @@ class GenieAcsConfigWriter:
         *,
         args: list[object] | tuple[object, ...] | None = None,
         kwargs: dict[str, object] | None = None,
+        trigger_inform: bool = True,
     ) -> ActionResult:
+        """Execute a config action and optionally trigger immediate Inform.
+
+        Args:
+            db: Database session
+            action: Config action name
+            ont_id: ONT ID
+            args: Positional arguments for the action
+            kwargs: Keyword arguments for the action
+            trigger_inform: If True, send direct connection request after action
+                to trigger immediate CPE Inform (default: True)
+        """
         if not self.supports_config_action(action):
             raise ValueError(f"Unsupported ACS configuration action: {action}")
         method = getattr(self, action, None)
         if method is None:
             raise ValueError(f"ACS configuration action is not implemented: {action}")
-        return method(db, ont_id, *(args or ()), **dict(kwargs or {}))
+
+        result = method(db, ont_id, *(args or ()), **dict(kwargs or {}))
+
+        # Trigger immediate Inform via direct connection request
+        if trigger_inform and result.success and action != "send_connection_request":
+            cr_result = self.send_connection_request(db, ont_id)
+            if not cr_result.success:
+                # Config was queued but CR failed - config will apply on next periodic inform
+                result = ActionResult(
+                    success=True,
+                    message=f"{result.message} (CR: {cr_result.message})",
+                    data=result.data,
+                )
+
+        return result
 
     def queue_config_action(
         self,
@@ -526,8 +552,6 @@ class GenieAcsConfigWriter:
                 "device_id": device_id,
                 "parameters": list(normalized_parameters),
                 "task": task,
-                "connection_request": True,
-                "connection_request_attempts": max(1, int(connection_request_attempts)),
             },
         )
 
@@ -584,7 +608,6 @@ class GenieAcsConfigWriter:
                 file_type=file_type.strip(),
                 file_url=file_url.strip(),
                 filename=filename.strip() if filename else None,
-                connection_request=True,
             )
         except GenieACSError as exc:
             return ActionResult(success=False, message=f"ACS download failed: {exc}")
@@ -598,7 +621,6 @@ class GenieAcsConfigWriter:
                 "file_url": file_url.strip(),
                 "filename": filename.strip() if filename else None,
                 "task": task,
-                "connection_request": True,
             },
         )
 

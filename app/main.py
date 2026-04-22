@@ -88,6 +88,7 @@ from app.services.object_storage import (
     ObjectStorageError,
     ensure_storage_bucket,
 )
+from app.services.scheduler_config import find_unregistered_scheduled_tasks
 from app.services.settings_seed import (
     seed_audit_settings,
     seed_auth_policy_settings,
@@ -130,6 +131,56 @@ _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
+
+
+def _get_release_metadata() -> dict[str, str | None]:
+    return {
+        "release": os.getenv("APP_RELEASE") or os.getenv("IMAGE_TAG") or os.getenv("GIT_SHA"),
+        "git_sha": os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA"),
+        "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "unknown",
+    }
+
+
+def _log_release_metadata(component: str) -> None:
+    metadata = _get_release_metadata()
+    logger.info(
+        "application_release",
+        extra={
+            "event": "application_release",
+            "component": component,
+            **metadata,
+        },
+    )
+
+
+def _warn_on_scheduler_registry_drift() -> None:
+    try:
+        from app.celery_app import celery_app
+
+        drift = find_unregistered_scheduled_tasks(celery_app.tasks.keys())
+    except Exception:
+        logger.warning(
+            "scheduler_registry_drift_check_failed",
+            exc_info=True,
+            extra={"event": "scheduler_registry_drift_check_failed"},
+        )
+        return
+
+    if not drift:
+        logger.info(
+            "scheduler_registry_drift_check_clean",
+            extra={"event": "scheduler_registry_drift_check_clean"},
+        )
+        return
+
+    logger.warning(
+        "scheduler_registry_drift_detected",
+        extra={
+            "event": "scheduler_registry_drift_detected",
+            "unknown_task_count": len(drift),
+            "unknown_tasks": [item["task_name"] for item in drift],
+        },
+    )
 
 
 def _assert_required_schema() -> None:
@@ -283,8 +334,10 @@ def _log_zabbix_startup_health() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
+    _log_release_metadata("api")
     _seed_startup_settings()
     _log_zabbix_startup_health()
+    _warn_on_scheduler_registry_drift()
     from app.websocket.manager import get_connection_manager
 
     manager = get_connection_manager()

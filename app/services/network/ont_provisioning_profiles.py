@@ -430,6 +430,22 @@ class OntProvisioningProfiles:
             stmt = stmt.where(OntProvisioningProfile.is_active.is_(is_active))
         return db.scalar(stmt) or 0
 
+    @staticmethod
+    def count_onts_by_profile(db: Session) -> dict[str, int]:
+        """Count ONTs assigned to each provisioning profile.
+
+        Returns:
+            Dict mapping profile_id (string) -> count of ONTs using that profile.
+        """
+        from app.models.network import OntBundleAssignment
+
+        stmt = (
+            select(OntBundleAssignment.bundle_id, func.count())
+            .where(OntBundleAssignment.is_active.is_(True))
+            .group_by(OntBundleAssignment.bundle_id)
+        )
+        return {str(row[0]): row[1] for row in db.execute(stmt).all()}
+
 
 class WanServices:
     """CRUD operations for WAN services within a provisioning profile."""

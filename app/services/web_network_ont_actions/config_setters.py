@@ -16,6 +16,10 @@ from app.services import network as network_service
 from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
+from app.services.network.ont_config_overrides import (
+    is_bundle_managed_ont,
+    upsert_ont_config_override,
+)
 from app.services.network.ont_scope import can_manage_ont_from_request
 from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (
@@ -41,7 +45,17 @@ def set_wifi_ssid(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            ont.wifi_ssid = ssid
+            if is_bundle_managed_ont(db, ont):
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wifi.ssid",
+                    value=ssid,
+                    reason="config_setters.set_wifi_ssid",
+                )
+                ont.wifi_ssid = None
+            else:
+                ont.wifi_ssid = ssid
             db.flush()
     _log_action_audit(
         db,
@@ -113,16 +127,57 @@ def set_wifi_config(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
+            bundle_managed = is_bundle_managed_ont(db, ont)
             if ssid is not None:
-                ont.wifi_ssid = ssid
+                if bundle_managed:
+                    upsert_ont_config_override(
+                        db,
+                        ont=ont,
+                        field_name="wifi.ssid",
+                        value=ssid,
+                        reason="config_setters.set_wifi_config",
+                    )
+                    ont.wifi_ssid = None
+                else:
+                    ont.wifi_ssid = ssid
             if password is not None:
                 ont.wifi_password = encrypt_credential(password)
             if hasattr(ont, "wifi_enabled"):
-                ont.wifi_enabled = enabled
+                if bundle_managed:
+                    upsert_ont_config_override(
+                        db,
+                        ont=ont,
+                        field_name="wifi.enabled",
+                        value=enabled,
+                        reason="config_setters.set_wifi_config",
+                    )
+                    ont.wifi_enabled = None
+                else:
+                    ont.wifi_enabled = enabled
             if channel is not None and hasattr(ont, "wifi_channel"):
-                ont.wifi_channel = str(channel)
+                if bundle_managed:
+                    upsert_ont_config_override(
+                        db,
+                        ont=ont,
+                        field_name="wifi.channel",
+                        value=channel,
+                        reason="config_setters.set_wifi_config",
+                    )
+                    ont.wifi_channel = None
+                else:
+                    ont.wifi_channel = str(channel)
             if security_mode is not None and hasattr(ont, "wifi_security_mode"):
-                ont.wifi_security_mode = security_mode
+                if bundle_managed:
+                    upsert_ont_config_override(
+                        db,
+                        ont=ont,
+                        field_name="wifi.security_mode",
+                        value=security_mode,
+                        reason="config_setters.set_wifi_config",
+                    )
+                    ont.wifi_security_mode = None
+                else:
+                    ont.wifi_security_mode = security_mode
             db.flush()
         _persist_ont_plan_step(
             db,
@@ -208,7 +263,12 @@ def set_lan_config(
     dhcp_end: str | None = None,
     request: Request | None = None,
 ) -> ActionResult:
-    """Set LAN gateway and DHCP server config on ONT via GenieACS TR-069."""
+    """Set LAN gateway and DHCP server config on ONT via GenieACS TR-069.
+
+    LAN intent remains outside the bundle + sparse-override model for now.
+    It is treated as direct ONT-local operator intent because it is customer-
+    specific runtime state, not reusable OLT-scoped bundle policy.
+    """
     result = _acs_config_writer().set_lan_config(
         db,
         ont_id,
@@ -450,9 +510,20 @@ def set_pppoe_credentials(
             ont = network_service.ont_units.get_including_inactive(
                 db=db, entity_id=ont_id
             )
-            ont.pppoe_username = username.strip() or ont.pppoe_username
-            db.add(ont)
-            db.flush()
+            if ont is not None:
+                if is_bundle_managed_ont(db, ont):
+                    upsert_ont_config_override(
+                        db,
+                        ont=ont,
+                        field_name="wan.pppoe_username",
+                        value=username.strip() or None,
+                        reason="config_setters.set_pppoe_credentials",
+                    )
+                    ont.pppoe_username = None
+                else:
+                    ont.pppoe_username = username.strip() or ont.pppoe_username
+                db.add(ont)
+                db.flush()
         except Exception:
             logger.exception("Failed to persist PPPoE username for ONT %s", ont_id)
         _persist_ont_plan_step(

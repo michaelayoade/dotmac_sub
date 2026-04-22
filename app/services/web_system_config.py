@@ -90,46 +90,6 @@ def save_preferences(db: Session, data: Mapping[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8.9 Email / SMTP Configuration
-# ---------------------------------------------------------------------------
-EMAIL_KEYS = [
-    "sender_name",
-    "sender_email",
-    "admin_email",
-    "email_enabled",
-    "smtp_host",
-    "smtp_port",
-    "smtp_encryption",
-    "smtp_auth",
-    "smtp_username",
-    "smtp_password",
-    "emails_per_hour",
-    "test_redirect_email",
-    "bcc_email",
-    "email_expiration_days",
-]
-
-
-def get_email_config_context(db: Session) -> dict:
-    settings = _read_settings(db, SettingDomain.comms, EMAIL_KEYS)
-    # Mask password
-    if settings.get("smtp_password"):
-        settings["smtp_password_display"] = "********"  # noqa: S105
-    else:
-        settings["smtp_password_display"] = ""  # nosec
-    return {"email": settings}
-
-
-def save_email_config(db: Session, data: Mapping[str, Any]) -> None:
-    # Only update password if a new value was provided
-    if not data.get("smtp_password"):
-        keys = [k for k in EMAIL_KEYS if k != "smtp_password"]
-    else:
-        keys = EMAIL_KEYS
-    _save_settings(db, SettingDomain.comms, data, keys, secret_keys={"smtp_password"})
-
-
-# ---------------------------------------------------------------------------
 # 8.7 Subscriber Settings
 # ---------------------------------------------------------------------------
 SUBSCRIBER_KEYS = [
@@ -724,10 +684,6 @@ def get_nas_types_context(db: Session) -> dict:
     return {"nas_types": types, "nas_types_raw": settings["nas_types_list"]}
 
 
-def save_nas_types(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, NAS_TYPE_KEYS)
-
-
 # ---------------------------------------------------------------------------
 # 8.27 IPv6 Configuration
 # ---------------------------------------------------------------------------
@@ -846,22 +802,3 @@ def get_templates_context(db: Session) -> dict:
         "categories": sorted({t["category"] for t in DEFAULT_TEMPLATES}),
         "channels": ["Email", "SMS", "Both"],
     }
-
-
-# ---------------------------------------------------------------------------
-# 8.28 IP Network Categories (placeholder)
-# ---------------------------------------------------------------------------
-
-
-def get_ip_categories_context(db: Session) -> dict:
-    settings = _read_settings(db, SettingDomain.network, ["ip_network_categories"])
-    raw = (
-        settings.get("ip_network_categories")
-        or "Production,Development,Corporate,Management"
-    )
-    categories = [c.strip() for c in raw.split(",") if c.strip()]
-    return {"ip_categories": categories, "ip_categories_raw": raw}
-
-
-def save_ip_categories(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network, data, ["ip_network_categories"])

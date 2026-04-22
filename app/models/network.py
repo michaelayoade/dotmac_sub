@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    ForeignKeyConstraint,
     Float,
     ForeignKey,
     Index,
@@ -290,6 +291,30 @@ class OntProvisioningStatus(enum.Enum):
     failed = "failed"
 
 
+class OntBundleAssignmentStatus(enum.Enum):
+    draft = "draft"
+    planned = "planned"
+    applying = "applying"
+    applied = "applied"
+    drifted = "drifted"
+    failed = "failed"
+    superseded = "superseded"
+
+
+class OntConfigOverrideSource(enum.Enum):
+    operator = "operator"
+    workflow = "workflow"
+    subscriber_data = "subscriber_data"
+
+
+class OntBundleKind(enum.Enum):
+    residential = "residential"
+    business = "business"
+    voice = "voice"
+    bridge = "bridge"
+    custom = "custom"
+
+
 class WanServiceProvisioningStatus(enum.Enum):
     """Provisioning state of an individual WAN service instance."""
 
@@ -401,6 +426,11 @@ class Vlan(Base):
             "olt_device_id",
             "tag",
             name="uq_vlans_region_olt_tag",
+        ),
+        UniqueConstraint(
+            "olt_device_id",
+            "id",
+            name="uq_vlans_olt_id",
         ),
     )
 
@@ -1075,6 +1105,16 @@ class OntUnit(Base):
                 "olt_device_id IS NOT NULL AND external_id IS NOT NULL"
             ),
         ),
+        ForeignKeyConstraint(
+            ["olt_device_id", "wan_vlan_id"],
+            ["vlans.olt_device_id", "vlans.id"],
+            name="fk_ont_units_wan_vlan_olt_scope",
+        ),
+        ForeignKeyConstraint(
+            ["olt_device_id", "mgmt_vlan_id"],
+            ["vlans.olt_device_id", "vlans.id"],
+            name="fk_ont_units_mgmt_vlan_olt_scope",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1230,7 +1270,7 @@ class OntUnit(Base):
     lan_dhcp_start: Mapped[str | None] = mapped_column(String(64))
     lan_dhcp_end: Mapped[str | None] = mapped_column(String(64))
 
-    # Provisioning profile tracking (desired → observed state bridge)
+    # Legacy profile link retained only for backfill/compatibility cleanup paths.
     provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id")
     )
@@ -1299,7 +1339,18 @@ class OntUnit(Base):
         "SpeedProfile", foreign_keys=[upload_speed_profile_id]
     )
     tr069_acs_server = relationship("Tr069AcsServer")
-    provisioning_profile = relationship("OntProvisioningProfile")
+    bundle_assignments = relationship(
+        "OntBundleAssignment",
+        back_populates="ont",
+        cascade="all, delete-orphan",
+        order_by="OntBundleAssignment.created_at.desc()",
+    )
+    config_overrides = relationship(
+        "OntConfigOverride",
+        back_populates="ont",
+        cascade="all, delete-orphan",
+        order_by="OntConfigOverride.field_name",
+    )
     wan_service_instances = relationship(
         "OntWanServiceInstance",
         back_populates="ont",
@@ -1352,6 +1403,114 @@ class OntProvisioningEvent(Base):
     )
 
     ont = relationship("OntUnit", back_populates="provisioning_events")
+
+
+class OntBundleAssignment(Base):
+    """Explicit assignment of a desired-state bundle to an ONT."""
+
+    __tablename__ = "ont_bundle_assignments"
+    __table_args__ = (
+        Index("ix_ont_bundle_assignments_ont_status", "ont_unit_id", "status"),
+        Index("ix_ont_bundle_assignments_bundle_status", "bundle_id", "status"),
+        Index(
+            "uq_ont_bundle_assignments_active_ont",
+            "ont_unit_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    bundle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_provisioning_profiles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assigned_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="SET NULL"),
+    )
+    status: Mapped[OntBundleAssignmentStatus] = mapped_column(
+        Enum(
+            OntBundleAssignmentStatus,
+            name="ontbundleassignmentstatus",
+            create_constraint=False,
+        ),
+        nullable=False,
+        default=OntBundleAssignmentStatus.draft,
+        server_default=OntBundleAssignmentStatus.draft.value,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    assigned_reason: Mapped[str | None] = mapped_column(Text)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    ont = relationship("OntUnit", back_populates="bundle_assignments")
+    bundle = relationship("OntProvisioningProfile", back_populates="bundle_assignments")
+    assigned_by_subscriber = relationship("Subscriber")
+
+
+class OntConfigOverride(Base):
+    """Explicit per-ONT override on top of a bundle assignment."""
+
+    __tablename__ = "ont_config_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "ont_unit_id",
+            "field_name",
+            name="uq_ont_config_overrides_ont_field",
+        ),
+        Index("ix_ont_config_overrides_field_name", "field_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    field_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    value_json: Mapped[dict | None] = mapped_column(JSON)
+    source: Mapped[OntConfigOverrideSource] = mapped_column(
+        Enum(
+            OntConfigOverrideSource,
+            name="ontconfigoverridesource",
+            create_constraint=False,
+        ),
+        nullable=False,
+        default=OntConfigOverrideSource.operator,
+        server_default=OntConfigOverrideSource.operator.value,
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    ont = relationship("OntUnit", back_populates="config_overrides")
 
 
 class BulkProvisioningRun(Base):
@@ -2036,6 +2195,15 @@ class OnuType(Base):
         nullable=False,
         default=OnuCapability.bridging_routing,
     )
+    vendor_model_capability_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vendor_model_capabilities.id", ondelete="SET NULL"),
+    )
+    default_bundle_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
+    )
+    supports_bundle_overrides: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -2049,6 +2217,15 @@ class OnuType(Base):
     )
 
     ont_units = relationship("OntUnit", back_populates="onu_type")
+    vendor_model_capability = relationship(
+        "VendorModelCapability",
+        foreign_keys=[vendor_model_capability_id],
+    )
+    default_bundle = relationship(
+        "OntProvisioningProfile",
+        foreign_keys=[default_bundle_id],
+        post_update=True,
+    )
 
 
 class SpeedProfile(Base):
@@ -2117,7 +2294,21 @@ class OntProvisioningProfile(Base):
         nullable=False,
         default=OntProfileType.residential,
     )
+    bundle_kind: Mapped[OntBundleKind | None] = mapped_column(
+        Enum(OntBundleKind, name="ontbundlekind", create_constraint=False),
+    )
     description: Mapped[str | None] = mapped_column(Text)
+    ont_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("onu_types.id", ondelete="SET NULL"),
+    )
+    cloned_from_bundle_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
+    )
+    execution_policy: Mapped[dict | None] = mapped_column(JSON)
+    required_capabilities: Mapped[dict | None] = mapped_column(JSON)
+    supports_manual_override: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Device-level defaults (reuse existing enums)
     config_method: Mapped[ConfigMethod | None] = mapped_column(
@@ -2222,6 +2413,12 @@ class OntProvisioningProfile(Base):
         foreign_keys=[owner_subscriber_id],
     )
     olt_device = relationship("OLTDevice")
+    ont_type = relationship("OnuType", foreign_keys=[ont_type_id])
+    cloned_from_bundle = relationship(
+        "OntProvisioningProfile",
+        remote_side=[id],
+        foreign_keys=[cloned_from_bundle_id],
+    )
     mgmt_ip_pool = relationship("IpPool", foreign_keys=[mgmt_ip_pool_id])
     download_speed_profile = relationship(
         "SpeedProfile", foreign_keys=[download_speed_profile_id]
@@ -2234,6 +2431,12 @@ class OntProvisioningProfile(Base):
         back_populates="profile",
         cascade="all, delete-orphan",
         order_by="OntProfileWanService.priority",
+    )
+    bundle_assignments = relationship(
+        "OntBundleAssignment",
+        back_populates="bundle",
+        cascade="all, delete-orphan",
+        order_by="OntBundleAssignment.created_at.desc()",
     )
 
 

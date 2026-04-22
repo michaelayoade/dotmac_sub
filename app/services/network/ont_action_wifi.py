@@ -163,7 +163,7 @@ def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
         else "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
     )
     try:
-        refresh(device_id, refresh_path, connection_request=True)
+        refresh(device_id, refresh_path)
     except Exception:
         logger.debug(
             "Runtime refresh request failed for device %s after WiFi update",
@@ -212,9 +212,7 @@ def _set_first_supported_path(
                     device_id,
                 )
                 try:
-                    result = client.set_parameter_values(
-                        device_id, params, connection_request=True
-                    )
+                    result = client.set_parameter_values(device_id, params)
                     _request_runtime_refresh(client, device_id, root)
                     return result
                 except GenieACSError as inner_exc:
@@ -253,7 +251,7 @@ def _set_single_wifi_field(
     params = build_tr069_params(root, {path: value})
     if verify:
         return set_and_verify(client, device_id, params)
-    return client.set_parameter_values(device_id, params, connection_request=True)
+    return client.set_parameter_values(device_id, params)
 
 
 def _set_best_effort_wifi_field(

@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
+from app.services.network.effective_ont_config import resolve_effective_ont_config
+
 if TYPE_CHECKING:
     from app.models.network import OLTDevice, OntProvisioningProfile
 
@@ -281,10 +283,15 @@ def build_desired_state_from_profile(
                     )
                 except ValueError:
                     subnet = None
+        effective = resolve_effective_ont_config(db, ont)
+        effective_values = (
+            effective.get("values", {}) if isinstance(effective, dict) else {}
+        )
         management = DesiredManagementConfig(
             vlan_tag=resolved_profile.mgmt_vlan_tag,
             ip_mode=mgmt_ip_mode,
-            ip_address=getattr(ont, "mgmt_ip_address", None),
+            ip_address=effective_values.get("mgmt_ip_address")
+            or getattr(ont, "mgmt_ip_address", None),
             subnet=subnet,
             gateway=gateway,
         )

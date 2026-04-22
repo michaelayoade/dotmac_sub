@@ -43,7 +43,6 @@ from app.services.web_network_ont_actions.config_setters import (
 # Context builders
 from app.services.web_network_ont_actions.context_builders import (
     configure_form_context,
-    iphost_config_context,
     lan_config_context,
     olt_side_config_context,
     olt_status_context,
@@ -87,7 +86,7 @@ from app.services.web_network_ont_actions.diagnostics import (
 # Inventory management
 from app.services.web_network_ont_actions.inventory import (
     _cleanup_olt_state_for_return,
-    apply_profile,
+    apply_bundle,
     firmware_upgrade,
     return_to_inventory,
     return_to_inventory_for_web,
@@ -159,7 +158,6 @@ __all__ = [
     "toggle_lan_port",
     # Context builders
     "configure_form_context",
-    "iphost_config_context",
     "lan_config_context",
     "olt_side_config_context",
     "olt_status_context",
@@ -168,7 +166,7 @@ __all__ = [
     "wan_config_context",
     "wifi_config_context",
     # Inventory
-    "apply_profile",
+    "apply_bundle",
     "firmware_upgrade",
     "return_to_inventory",
     "return_to_inventory_for_web",

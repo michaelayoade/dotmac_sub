@@ -1,10 +1,6 @@
 {# HTMX partial: ONT signal and traffic charts #}
 
-<div hx-get="/admin/network/onts/{{ ont_id }}/charts?time_range={{ time_range }}"
-     hx-trigger="every 15s"
-     hx-target="#charts-content"
-     hx-swap="innerHTML"
-     hx-indicator="#charts-refresh-indicator">
+<div>
 {# Time range selector #}
 <div class="flex items-center justify-between mb-6">
     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Signal & Traffic History</h3>
@@ -13,13 +9,24 @@
             <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
             Refreshing charts...
         </span>
+        <button
+            type="button"
+            hx-get="/admin/network/onts/{{ ont_id }}/charts?time_range={{ time_range }}"
+            hx-target="#charts-content"
+            hx-swap="innerHTML"
+            hx-indicator="#charts-refresh-indicator"
+            hx-disabled-elt="this"
+            class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+        >Refresh</button>
         <div class="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
         {% for r in ['6h', '24h', '7d', '30d'] %}
         <button
+            type="button"
             hx-get="/admin/network/onts/{{ ont_id }}/charts?time_range={{ r }}"
             hx-target="#charts-content"
             hx-swap="innerHTML"
             hx-indicator="#charts-refresh-indicator"
+            hx-disabled-elt="this"
             class="px-3 py-1.5 text-xs font-medium transition-colors {{ 'bg-blue-600 text-white' if time_range == r else 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700' }}"
         >{{ r }}</button>
         {% endfor %}

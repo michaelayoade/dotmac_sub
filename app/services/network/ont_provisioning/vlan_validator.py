@@ -70,9 +70,7 @@ def validate_vlan_exists(
 ) -> VlanValidationResult:
     """Validate that a VLAN exists in the database.
 
-    Checks for VLAN records that either:
-    - Are global (no olt_device_id)
-    - Are scoped to the specific OLT
+    Checks for VLAN records scoped to the specific OLT.
 
     Args:
         db: Database session.
@@ -88,10 +86,7 @@ def validate_vlan_exists(
     stmt = select(Vlan).where(Vlan.tag == vlan_id)
 
     if olt:
-        # Check for global VLAN or OLT-specific VLAN
-        stmt = stmt.where(
-            (Vlan.olt_device_id == olt.id) | (Vlan.olt_device_id.is_(None))
-        )
+        stmt = stmt.where(Vlan.olt_device_id == olt.id)
 
     vlan = db.scalars(stmt).first()
 

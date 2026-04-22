@@ -12,6 +12,7 @@ from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_status_adapter import (
     OntStatusResult,
@@ -37,8 +38,10 @@ def _intent_step_present(ont_plan: dict[str, Any], step_name: str) -> bool:
     )
 
 
-def _has_profile_service_path_intent(ont: OntUnit) -> bool:
-    profile = getattr(ont, "provisioning_profile", None)
+def _has_profile_service_path_intent(db: Session, ont: OntUnit) -> bool:
+    from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
+
+    profile = resolve_assigned_bundle(db, ont)
     services = getattr(profile, "wan_services", None) or []
     return any(
         getattr(service, "is_active", False)
@@ -105,6 +108,7 @@ def _runbook_step(
 
 def _build_ont_operations_runbook(
     *,
+    db: Session,
     ont: OntUnit | None,
     olt: OLTDevice | None,
     fsp: str | None,
@@ -117,6 +121,10 @@ def _build_ont_operations_runbook(
     if not ont:
         return []
 
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
     ont_id = str(ont.id)
     has_olt_context = bool(olt and fsp and ont_id_on_olt is not None)
     has_acs_device = bool(linked_tr069 and linked_tr069.genieacs_device_id)
@@ -129,24 +137,24 @@ def _build_ont_operations_runbook(
     has_service_path_intent = bool(
         _intent_step_present(ont_plan, "create_service_port")
         or _service_path_intent_present(service_intent)
-        or _has_profile_service_path_intent(ont)
-        or getattr(ont, "wan_vlan_id", None)
+        or _has_profile_service_path_intent(db, ont)
+        or effective_values.get("wan_vlan")
     )
     has_mgmt_intent = bool(
-        getattr(ont, "mgmt_vlan_id", None)
-        or getattr(ont, "mgmt_ip_mode", None)
+        effective_values.get("mgmt_vlan")
+        or effective_values.get("mgmt_ip_mode")
         or _intent_step_present(ont_plan, "configure_management_ip")
     )
     has_wan_intent = bool(
-        getattr(ont, "wan_vlan_id", None)
-        or getattr(ont, "wan_mode", None)
+        effective_values.get("wan_vlan")
+        or effective_values.get("wan_mode")
         or _intent_step_present(ont_plan, "configure_wan_tr069")
     )
     wan_plan = ont_plan.get("configure_wan_tr069")
     wan_plan = wan_plan if isinstance(wan_plan, dict) else {}
     raw_wan_mode = (
         wan_plan.get("wan_mode")
-        or getattr(getattr(ont, "wan_mode", None), "value", None)
+        or effective_values.get("wan_mode")
         or ""
     )
     wan_mode = str(raw_wan_mode).strip().lower()
@@ -155,7 +163,7 @@ def _build_ont_operations_runbook(
     elif wan_mode == "setup_via_onu":
         wan_mode = "bridge"
     has_pppoe_credentials_intent = bool(
-        getattr(ont, "pppoe_username", None)
+        effective_values.get("pppoe_username")
         or _intent_step_present(ont_plan, "push_pppoe_tr069")
         or _intent_step_present(ont_plan, "push_pppoe_omci")
     )
@@ -180,14 +188,14 @@ def _build_ont_operations_runbook(
     )
     has_wifi_intent = bool(
         _intent_step_present(ont_plan, "configure_wifi_tr069")
-        or getattr(ont, "wifi_enabled", None)
-        or getattr(ont, "wifi_ssid", None)
-        or getattr(ont, "wifi_channel", None)
-        or getattr(ont, "wifi_security_mode", None)
+        or effective_values.get("wifi_enabled")
+        or effective_values.get("wifi_ssid")
+        or effective_values.get("wifi_channel")
+        or effective_values.get("wifi_security_mode")
     )
     if wan_mode == "pppoe":
         internet_credentials_message = (
-            getattr(ont, "pppoe_username", None) or "No PPPoE username"
+            str(effective_values.get("pppoe_username") or "") or "No PPPoE username"
         )
     elif wan_mode == "static":
         internet_credentials_message = (
@@ -437,6 +445,7 @@ def operational_health_context(
         ont_plan = {}
         service_intent = {}
     operations_runbook = _build_ont_operations_runbook(
+        db=db,
         ont=ont,
         olt=olt,
         fsp=fsp,
@@ -448,11 +457,15 @@ def operational_health_context(
     )
 
     # Compute internet credentials status for health checks
+    effective = resolve_effective_ont_config(db, ont) if ont else {}
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
     wan_plan = ont_plan.get("configure_wan_tr069")
     wan_plan = wan_plan if isinstance(wan_plan, dict) else {}
     raw_wan_mode = (
         wan_plan.get("wan_mode")
-        or getattr(getattr(ont, "wan_mode", None), "value", None)
+        or effective_values.get("wan_mode")
         or ""
     )
     wan_mode = str(raw_wan_mode).strip().lower()
@@ -461,7 +474,7 @@ def operational_health_context(
     elif wan_mode == "setup_via_onu":
         wan_mode = "bridge"
     has_pppoe_credentials_intent = bool(
-        getattr(ont, "pppoe_username", None)
+        effective_values.get("pppoe_username")
         or _intent_step_present(ont_plan, "push_pppoe_tr069")
         or _intent_step_present(ont_plan, "push_pppoe_omci")
     )
@@ -473,7 +486,7 @@ def operational_health_context(
     if wan_mode == "pppoe":
         has_internet_credentials_intent = has_pppoe_credentials_intent
         internet_credentials_message = (
-            getattr(ont, "pppoe_username", None) or "No PPPoE username"
+            str(effective_values.get("pppoe_username") or "") or "No PPPoE username"
         )
     elif wan_mode == "static":
         has_internet_credentials_intent = has_static_addressing_intent
@@ -530,8 +543,9 @@ def operational_health_context(
         },
         {
             "label": "PPPoE stored",
-            "ok": bool(getattr(ont, "pppoe_username", None)),
-            "message": getattr(ont, "pppoe_username", None) or "No PPPoE username",
+            "ok": bool(effective_values.get("pppoe_username")),
+            "message": str(effective_values.get("pppoe_username") or "")
+            or "No PPPoE username",
         },
     ]
     return {

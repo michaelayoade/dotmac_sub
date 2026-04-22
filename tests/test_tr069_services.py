@@ -1,5 +1,7 @@
 """Tests for TR-069 service."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
@@ -9,7 +11,14 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.models.network import CPEDevice, OLTDevice, OntUnit
+from app.models.network import (
+    CPEDevice,
+    OLTDevice,
+    OntBundleAssignment,
+    OntBundleAssignmentStatus,
+    OntProvisioningProfile,
+    OntUnit,
+)
 from app.models.tr069 import (
     Tr069CpeDevice,
     Tr069Event,
@@ -38,6 +47,7 @@ from app.services import tr069 as tr069_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_tr069 as web_network_tr069_service
 from app.services.genieacs import GenieACSError
+from tests.legacy_ont_profile_link import seed_legacy_profile_link
 
 
 def _acs_server_payload(**overrides) -> Tr069AcsServerCreate:
@@ -910,6 +920,34 @@ def test_receive_inform_queues_saved_config_apply_for_stale_ont(
             "countdown": 30,
         }
     ]
+
+
+def test_saved_service_intent_uses_active_bundle_assignment_not_legacy_profile_fk(
+    db_session,
+):
+    bundle = OntProvisioningProfile(name="TR069 Active Bundle", is_active=True)
+    legacy_profile = OntProvisioningProfile(name="TR069 Legacy Profile", is_active=True)
+    db_session.add_all([bundle, legacy_profile])
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="STALE-INFORM-BUNDLE-001",
+        is_active=True,
+    )
+    seed_legacy_profile_link(ont, legacy_profile)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    assert tr069_service._ont_has_saved_service_intent(db_session, ont.id) is True
 
 
 def test_receive_inform_does_not_queue_saved_config_apply_for_recent_ont(

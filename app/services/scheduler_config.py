@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import timedelta
+from typing import Iterable
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
@@ -181,6 +182,32 @@ def _retire_scheduled_task(db, task_name: str) -> None:
             changed = True
     if changed:
         db.commit()
+
+
+def find_unregistered_scheduled_tasks(
+    registered_task_names: Iterable[str],
+) -> list[dict[str, object]]:
+    registered = set(registered_task_names)
+    session = SessionLocal()
+    try:
+        tasks = (
+            session.query(ScheduledTask)
+            .filter(ScheduledTask.enabled.is_(True))
+            .order_by(ScheduledTask.name.asc(), ScheduledTask.created_at.asc())
+            .all()
+        )
+        return [
+            {
+                "id": task.id,
+                "name": task.name,
+                "task_name": task.task_name,
+                "interval_seconds": task.interval_seconds,
+            }
+            for task in tasks
+            if task.task_name not in registered
+        ]
+    finally:
+        session.close()
 
 
 def get_celery_config() -> dict:

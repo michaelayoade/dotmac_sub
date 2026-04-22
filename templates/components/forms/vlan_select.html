@@ -1,0 +1,54 @@
+{#
+   VLAN Select Component with Purpose Labels
+   Usage: {% from "components/forms/vlan_select.html" import vlan_select %}
+          {{ vlan_select(name="wan_vlan_id", vlans=vlans, selected_id=selected_id) }}
+
+   Parameters:
+   - name: Field name (required)
+   - vlans: List of VLAN objects with tag, name, purpose attributes
+   - selected_id: Currently selected VLAN ID (string or None)
+   - purpose_filter: Optional VlanPurpose value to filter VLANs
+   - include_empty: Include "None" option (default: true)
+   - empty_label: Label for empty option (default: "None")
+   - class_name: Additional CSS classes
+   - id: Element ID (defaults to name)
+   - disabled: Boolean to disable select
+#}
+
+{% macro vlan_select(name, vlans, selected_id=none, purpose_filter=none, include_empty=true, empty_label="None", class_name='', id=none, disabled=false) %}
+<select name="{{ name }}"
+        id="{{ id or name }}"
+        {% if disabled %}disabled{% endif %}
+        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white {{ class_name }}">
+    {% if include_empty %}
+    <option value="">{{ empty_label }}</option>
+    {% endif %}
+    {% for vlan in vlans %}
+    {# Apply purpose filter if specified #}
+    {% if purpose_filter is none or (vlan.purpose and vlan.purpose.value == purpose_filter) %}
+    <option value="{{ vlan.id }}" {% if selected_id == vlan.id|string %}selected{% endif %}>
+        {{ vlan.tag }}{% if vlan.purpose %} - {{ vlan.purpose.value|replace('_', ' ')|title }}{% endif %}{% if vlan.name %} ({{ vlan.name }}){% endif %}
+    </option>
+    {% endif %}
+    {% endfor %}
+</select>
+{% endmacro %}
+
+{#
+   VLAN Select with Label - Full form field wrapper
+   Includes label, help text, and error display
+#}
+{% macro vlan_field(name, label, vlans, selected_id=none, purpose_filter=none, include_empty=true, empty_label="None", help_text=none, error=none, required=false, class_name='') %}
+<div class="mb-4">
+    <label for="{{ name }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+        {{ label }}
+        {% if required %}<span class="text-rose-500 ml-0.5">*</span>{% endif %}
+    </label>
+    {{ vlan_select(name=name, vlans=vlans, selected_id=selected_id, purpose_filter=purpose_filter, include_empty=include_empty, empty_label=empty_label, class_name=class_name) }}
+    {% if error %}
+    <p class="mt-1 text-xs text-rose-500">{{ error }}</p>
+    {% elif help_text %}
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ help_text }}</p>
+    {% endif %}
+</div>
+{% endmacro %}

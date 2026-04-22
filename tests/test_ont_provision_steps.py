@@ -187,6 +187,8 @@ class TestValidatePrerequisites:
             OLTDevice,
             OntAssignment,
             OntAuthorizationStatus,
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
             OntProvisioningProfile,
             OntUnit,
             PonPort,
@@ -233,7 +235,6 @@ class TestValidatePrerequisites:
             board="0/2",
             port="1",
             external_id="huawei:4194323968.1",
-            provisioning_profile_id=profile.id,
             authorization_status=OntAuthorizationStatus.authorized,
             is_active=True,
         )
@@ -244,6 +245,14 @@ class TestValidatePrerequisites:
                 ont_unit_id=ont.id,
                 pon_port_id=pon.id,
                 active=True,
+            )
+        )
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=profile.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
             )
         )
         db_session.commit()
@@ -385,6 +394,102 @@ class TestApplySavedServiceConfig:
             for s in result.data["steps"]
         )
 
+    def test_uses_effective_bundle_values_when_flat_fields_are_cleared(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.credential_crypto import encrypt_credential
+        from app.services.network.ont_provision_steps import apply_saved_service_config
+
+        ont = OntUnit(
+            serial_number="TEST-SVC-EFFECTIVE",
+            pppoe_username=None,
+            wifi_ssid=None,
+            pppoe_password=encrypt_credential("pppoe-secret"),
+            wifi_password=encrypt_credential("wifi-secret"),
+        )
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        class FakeAcsWriter:
+            def configure_wan_config(self, db, ont_id, **kwargs):
+                calls.append(("configure_wan_config", kwargs))
+                return SimpleNamespace(success=True, waiting=False, message="ok")
+
+            def set_pppoe_credentials(self, db, ont_id, username, password, **kwargs):
+                calls.append(
+                    (
+                        "set_pppoe_credentials",
+                        {
+                            "username": username,
+                            "password": password,
+                            **kwargs,
+                        },
+                    )
+                )
+                return SimpleNamespace(success=True, waiting=False, message="ok")
+
+            def set_wifi_config(self, db, ont_id, **kwargs):
+                calls.append(("set_wifi_config", kwargs))
+                return SimpleNamespace(success=True, waiting=False, message="ok")
+
+        with (
+            patch(
+                "app.services.network.ont_provision_steps._provision_wan_service_instances",
+                return_value=([], [], []),
+            ),
+            patch(
+                "app.services.network.ont_provision_steps._acs_config_writer",
+                return_value=FakeAcsWriter(),
+            ),
+            patch(
+                "app.services.network.ont_provision_steps.resolve_effective_ont_config",
+                return_value={
+                    "values": {
+                        "wan_mode": "pppoe",
+                        "wan_vlan": 203,
+                        "pppoe_username": "effective-user",
+                        "wifi_enabled": True,
+                        "wifi_ssid": "effective-ssid",
+                        "wifi_channel": "11",
+                        "wifi_security_mode": "WPA2-Personal",
+                    }
+                },
+            ),
+            patch(
+                "app.services.network.ont_service_intent.load_ont_plan_for_ont",
+                return_value={},
+            ),
+            patch(
+                "app.services.network.ont_action_network.probe_wan_capabilities",
+                return_value=SimpleNamespace(
+                    success=True,
+                    message="Capabilities probed",
+                    data={
+                        "data_model": "InternetGatewayDevice",
+                        "has_ppp_wan": True,
+                        "supports_tr069_set_ppp_credentials": True,
+                    },
+                ),
+            ),
+        ):
+            result = apply_saved_service_config(db_session, str(ont.id))
+
+        assert result.success is True
+        by_step = {name: payload for name, payload in calls}
+        assert by_step["configure_wan_config"]["wan_mode"] == "pppoe"
+        assert by_step["configure_wan_config"]["wan_vlan"] == 203
+        assert by_step["set_pppoe_credentials"]["username"] == "effective-user"
+        assert by_step["set_pppoe_credentials"]["password"] == "pppoe-secret"
+        assert by_step["set_pppoe_credentials"]["wan_vlan"] == 203
+        assert by_step["set_wifi_config"]["enabled"] is True
+        assert by_step["set_wifi_config"]["ssid"] == "effective-ssid"
+        assert by_step["set_wifi_config"]["channel"] == 11
+        assert by_step["set_wifi_config"]["security_mode"] == "WPA2-Personal"
+
 
 class TestStaticManagementIpReservation:
     """Test static management IP reservation before reconciled provisioning."""
@@ -434,6 +539,52 @@ class TestStaticManagementIpReservation:
         assert ont.mgmt_ip_address == "192.0.2.2"
         assert pool.next_available_ip == "192.0.2.3"
         assert pool.available_count == 4
+
+    def test_skips_reservation_when_effective_management_ip_already_exists(
+        self, db_session
+    ) -> None:
+        from app.models.network import (
+            IpPool,
+            IPVersion,
+            MgmtIpMode,
+            OntConfigOverride,
+            OntProvisioningProfile,
+            OntUnit,
+        )
+        from app.services.network.ont_provision_steps import (
+            _ensure_static_management_ip_from_profile,
+        )
+
+        pool = IpPool(
+            name=f"mgmt-{uuid.uuid4().hex[:8]}",
+            ip_version=IPVersion.ipv4,
+            cidr="192.0.2.0/29",
+            gateway="192.0.2.1",
+            is_active=True,
+        )
+        profile = OntProvisioningProfile(
+            name=f"static-mgmt-{uuid.uuid4().hex[:8]}",
+            mgmt_ip_mode=MgmtIpMode.static_ip,
+            mgmt_ip_pool_id=pool.id,
+        )
+        ont = OntUnit(serial_number="TEST-STATIC-MGMT-EFFECTIVE", mgmt_ip_address=None)
+        db_session.add_all([pool, profile, ont])
+        db_session.flush()
+        db_session.add(
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="management.ip_address",
+                value_json={"value": "192.0.2.44"},
+            )
+        )
+        db_session.commit()
+
+        ok, message = _ensure_static_management_ip_from_profile(
+            db_session, ont, profile
+        )
+
+        assert ok is True
+        assert message == "Static management IP already assigned."
 
 
 class TestPushPppoeOmci:

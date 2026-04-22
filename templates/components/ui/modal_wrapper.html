@@ -1,0 +1,183 @@
+{#
+  Modal Wrapper Macro
+
+  A reusable modal wrapper following consistent styling and behavior patterns.
+
+  Usage:
+    {% from "components/ui/modal_wrapper.html" import modal %}
+
+    {% call modal("my-modal", "Modal Title", size="lg") %}
+      <p>Modal content goes here</p>
+    {% endcall %}
+
+  Parameters:
+    - id: Unique identifier for the modal (required)
+    - title: Modal header title (required)
+    - size: sm, md (default), lg, xl, or full
+    - icon: Optional SVG icon HTML for the header
+    - color: Primary color for accents (default: blue)
+    - show_close: Show close button in header (default: true)
+    - show_footer: Show footer section (default: true)
+    - close_label: Cancel/Close button label (default: "Close")
+    - submit_label: Submit button label (default: "Save")
+    - submit_form_id: ID of form to submit (optional)
+    - submit_color: Color for submit button (default: blue)
+    - close_on_backdrop: Close when clicking backdrop (default: true)
+    - close_on_escape: Close when pressing Escape (default: true)
+#}
+
+{% macro modal(id, title, size='md', icon=none, color='blue', show_close=true, show_footer=true, close_label='Close', submit_label='Save', submit_form_id=none, submit_color='blue', close_on_backdrop=true, close_on_escape=true) %}
+{# Size map for max-width classes #}
+{% set size_classes = {
+    'sm': 'max-w-sm',
+    'md': 'max-w-lg',
+    'lg': 'max-w-2xl',
+    'xl': 'max-w-4xl',
+    'full': 'max-w-full mx-4'
+} %}
+
+{# Color map for submit button #}
+{% set color_classes = {
+    'blue': 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500',
+    'emerald': 'bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-500',
+    'amber': 'bg-amber-600 hover:bg-amber-700 focus:ring-amber-500',
+    'rose': 'bg-rose-600 hover:bg-rose-700 focus:ring-rose-500',
+    'violet': 'bg-violet-600 hover:bg-violet-700 focus:ring-violet-500',
+    'indigo': 'bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500'
+} %}
+
+<div x-show="showModal === '{{ id }}'" x-transition
+     x-cloak
+     {% if close_on_escape %}@keydown.escape.window="showModal = null"{% endif %}
+     class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="modal-title-{{ id }}">
+
+    {# Backdrop #}
+    <div x-show="showModal === '{{ id }}'"
+         x-transition:enter="ease-out duration-300"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="ease-in duration-200"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         {% if close_on_backdrop %}@click="showModal = null"{% endif %}
+         class="fixed inset-0 bg-black/50 backdrop-blur-sm dark:bg-slate-900/80">
+    </div>
+
+    {# Modal Panel #}
+    <div x-show="showModal === '{{ id }}'"
+         x-transition:enter="ease-out duration-300"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100"
+         x-transition:leave="ease-in duration-200"
+         x-transition:leave-start="opacity-100 scale-100"
+         x-transition:leave-end="opacity-0 scale-95"
+         @click.stop
+         class="relative w-full {{ size_classes.get(size, size_classes['md']) }} rounded-2xl bg-white shadow-2xl dark:bg-slate-800">
+
+        {# Header #}
+        <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex items-center gap-3">
+                {% if icon %}
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-{{ color }}-100 dark:bg-{{ color }}-900/30">
+                    {{ icon | safe }}
+                </div>
+                {% endif %}
+                <h3 id="modal-title-{{ id }}" class="text-lg font-semibold text-slate-900 dark:text-white">{{ title }}</h3>
+            </div>
+            {% if show_close %}
+            <button type="button"
+                    @click="showModal = null"
+                    aria-label="Close modal"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+            {% endif %}
+        </div>
+
+        {# Content #}
+        <div class="px-6 py-4">
+            {{ caller() }}
+        </div>
+
+        {# Footer #}
+        {% if show_footer %}
+        <div class="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+            <button type="button"
+                    @click="showModal = null"
+                    class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600 dark:focus:ring-offset-slate-800">
+                {{ close_label }}
+            </button>
+            {% if submit_form_id %}
+            <button type="submit"
+                    form="{{ submit_form_id }}"
+                    class="rounded-lg {{ color_classes.get(submit_color, color_classes['blue']) }} px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                {{ submit_label }}
+            </button>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}
+
+
+{#
+  Inline Modal Macro (HTMX-loaded content)
+
+  A simpler modal for content loaded dynamically via HTMX into a container.
+  Closes when clicking outside or pressing Escape, and clears container.
+
+  Usage:
+    {% from "components/ui/modal_wrapper.html" import inline_modal %}
+
+    {% call inline_modal("my-inline-modal", "Modal Title", container_id="modal-container") %}
+      <form>...</form>
+    {% endcall %}
+
+  Parameters:
+    - id: Unique identifier for the modal
+    - title: Modal header title
+    - container_id: ID of the container element to clear on close (default: "modal-container")
+    - size: sm, md (default), lg, xl
+#}
+
+{% macro inline_modal(id, title, container_id='modal-container', size='md') %}
+{% set size_classes = {
+    'sm': 'max-w-sm',
+    'md': 'max-w-lg',
+    'lg': 'max-w-2xl',
+    'xl': 'max-w-4xl'
+} %}
+
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="modal-title-{{ id }}"
+     x-data="{ open: true }"
+     x-show="open"
+     x-transition
+     @keydown.escape.window="open = false; $nextTick(() => document.getElementById('{{ container_id }}').replaceChildren())">
+    <div class="w-full {{ size_classes.get(size, size_classes['md']) }} rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
+         @click.outside="open = false; $nextTick(() => document.getElementById('{{ container_id }}').replaceChildren())">
+        {# Header #}
+        <div class="flex items-center justify-between mb-4">
+            <h3 id="modal-title-{{ id }}" class="text-lg font-bold text-slate-900 dark:text-white">{{ title }}</h3>
+            <button @click="open = false; $nextTick(() => document.getElementById('{{ container_id }}').replaceChildren())"
+                    aria-label="Close modal"
+                    class="rounded-lg p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        {# Content - injected via caller #}
+        {{ caller() }}
+    </div>
+</div>
+{% endmacro %}

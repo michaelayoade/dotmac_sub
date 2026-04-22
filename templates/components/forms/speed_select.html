@@ -1,0 +1,77 @@
+{#
+   Speed Profile Select Component with Formatted Speeds
+   Usage: {% from "components/forms/speed_select.html" import speed_select %}
+          {{ speed_select(name="download_speed", profiles=speed_profiles, selected_id=selected_id, direction="download") }}
+
+   Parameters:
+   - name: Field name (required)
+   - profiles: List of SpeedProfile objects with name, speed_kbps, direction attributes
+   - selected_id: Currently selected profile ID (string or None)
+   - direction: Filter by direction ("download" or "upload")
+   - include_empty: Include "None" option (default: true)
+   - empty_label: Label for empty option (default: "Select speed...")
+   - class_name: Additional CSS classes
+   - id: Element ID (defaults to name)
+   - disabled: Boolean to disable select
+
+   Note: Requires format_speed filter to be registered in Jinja environment
+#}
+
+{% macro speed_select(name, profiles, selected_id=none, direction=none, include_empty=true, empty_label="Select speed...", class_name='', id=none, disabled=false) %}
+<select name="{{ name }}"
+        id="{{ id or name }}"
+        {% if disabled %}disabled{% endif %}
+        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white {{ class_name }}">
+    {% if include_empty %}
+    <option value="">{{ empty_label }}</option>
+    {% endif %}
+    {% for profile in profiles %}
+    {# Apply direction filter if specified #}
+    {% if direction is none or profile.direction.value == direction %}
+    <option value="{{ profile.id }}" {% if selected_id == profile.id|string %}selected{% endif %}>
+        {{ profile.name }} ({{ profile.speed_kbps|format_speed }})
+    </option>
+    {% endif %}
+    {% endfor %}
+</select>
+{% endmacro %}
+
+{#
+   Speed Profile Select with Label - Full form field wrapper
+   Includes label, help text, and error display
+#}
+{% macro speed_field(name, label, profiles, selected_id=none, direction=none, include_empty=true, empty_label="Select speed...", help_text=none, error=none, required=false, class_name='') %}
+<div class="mb-4">
+    <label for="{{ name }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+        {{ label }}
+        {% if required %}<span class="text-rose-500 ml-0.5">*</span>{% endif %}
+    </label>
+    {{ speed_select(name=name, profiles=profiles, selected_id=selected_id, direction=direction, include_empty=include_empty, empty_label=empty_label, class_name=class_name) }}
+    {% if error %}
+    <p class="mt-1 text-xs text-rose-500">{{ error }}</p>
+    {% elif help_text %}
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ help_text }}</p>
+    {% endif %}
+</div>
+{% endmacro %}
+
+{#
+   Speed Pair Select - Download + Upload side by side
+   Useful for ONT configuration where both speeds are set together
+#}
+{% macro speed_pair_fields(profiles, download_selected=none, upload_selected=none, download_name="download_speed_profile_id", upload_name="upload_speed_profile_id") %}
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div>
+        <label for="{{ download_name }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            Download Speed
+        </label>
+        {{ speed_select(name=download_name, profiles=profiles, selected_id=download_selected, direction="download") }}
+    </div>
+    <div>
+        <label for="{{ upload_name }}" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+            Upload Speed
+        </label>
+        {{ speed_select(name=upload_name, profiles=profiles, selected_id=upload_selected, direction="upload") }}
+    </div>
+</div>
+{% endmacro %}

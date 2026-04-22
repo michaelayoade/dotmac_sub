@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_ont_provisioning_profiles as web_profile_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
+from app.web.templates import templates
 
-templates = Jinja2Templates(directory="templates")
 router = APIRouter(
     prefix="/network/provisioning-profiles",
     tags=["web-admin-provisioning-profiles"],

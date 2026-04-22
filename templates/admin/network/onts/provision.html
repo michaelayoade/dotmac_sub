@@ -6,11 +6,11 @@
 {% block content %}
 <div class="space-y-6"
      x-data='{
-        profileId: {{ (selected_profile_id or "") | tojson }},
+        bundleId: {{ (selected_bundle_id or "") | tojson }},
         tr069ProfileId: {{ (selected_tr069_profile_id or "") | tojson }},
         missingPrerequisites() {
             const issues = [];
-            if (!this.profileId) issues.push("Select OLT provisioning profile");
+            if (!this.bundleId) issues.push("Select OLT provisioning profile");
             return issues;
         },
         canSave() {
@@ -18,9 +18,9 @@
         }
      }'
      x-init="
-        if (profileId) {
+        if (bundleId) {
             $nextTick(() => {
-                htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/profile-preview?profile_id=' + profileId, {target: '#profile-preview-panel', swap: 'innerHTML'});
+                htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/profile-preview?bundle_id=' + bundleId, {target: '#profile-preview-panel', swap: 'innerHTML'});
             });
         }
      ">
@@ -146,10 +146,10 @@
             <div class="space-y-2">
                 {% for profile in profiles %}
                 <label class="flex cursor-pointer items-center gap-4 rounded-xl border p-4 transition-all"
-                       :class="profileId === '{{ profile.id }}' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/20 dark:border-blue-400 dark:bg-blue-900/20' : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600'">
+                       :class="bundleId === '{{ profile.id }}' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/20 dark:border-blue-400 dark:bg-blue-900/20' : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600'">
                     <input type="radio" name="profile_radio" value="{{ profile.id }}"
-                           x-model="profileId"
-                           hx-get="/admin/network/onts/{{ ont.id }}/profile-preview?profile_id={{ profile.id }}"
+                           x-model="bundleId"
+                           hx-get="/admin/network/onts/{{ ont.id }}/profile-preview?bundle_id={{ profile.id }}"
                            hx-target="#profile-preview-panel"
                            hx-swap="innerHTML"
                            class="text-blue-600 focus:ring-blue-500">
@@ -163,7 +163,7 @@
                             {% endif %}
                         </p>
                     </div>
-                    {% if selected_profile_id and selected_profile_id|string == profile.id|string %}
+                    {% if selected_bundle_id and selected_bundle_id|string == profile.id|string %}
                     <span class="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400">Selected</span>
                     {% endif %}
                 </label>
@@ -183,7 +183,7 @@
                 </a>
             </div>
             <div id="profile-preview-panel" class="mt-4">
-                {% if selected_profile_id %}
+                {% if selected_bundle_id %}
                 <p class="text-sm text-slate-500 dark:text-slate-400">Loading profile details...</p>
                 {% else %}
                 <p class="text-sm text-slate-500 dark:text-slate-400">Select a profile to see OLT-side VLAN, GEM, and profile settings.</p>
@@ -246,7 +246,7 @@
 
             <form method="POST" action="/admin/network/onts/{{ ont.id }}/save-provision-settings">
                 {% include "components/forms/csrf_input.html" %}
-                <input type="hidden" name="profile_id" :value="profileId">
+                <input type="hidden" name="bundle_id" :value="bundleId">
                 <input type="hidden" name="tr069_profile_id" :value="tr069ProfileId">
                 <button type="submit"
                     :disabled="!canSave()"

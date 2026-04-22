@@ -1,25 +1,102 @@
 #!/usr/bin/env bash
 # OpenBao secrets initialization for dotmac_sub.
-# Seeds all project secrets into KV v2 at secret/<path>.
+# Seeds project secrets into KV v2 at secret/<path> using real environment
+# values only. The script never falls back to baked-in secrets.
 #
 # Usage:
-#   ./scripts/openbao_init.sh              # uses .env values
-#   BAO_ADDR=http://openbao:8200 ./scripts/openbao_init.sh  # override address
+#   ./scripts/openbao_init.sh
+#   ./scripts/openbao_init.sh --check
+#   ./scripts/openbao_init.sh --strict
+#   BAO_ADDR=http://openbao:8200 ./scripts/openbao_init.sh
 #
-# Requires: docker exec access to dotmac_sub_openbao container
-#           OR bao CLI installed locally with BAO_ADDR + BAO_TOKEN set.
+# Modes:
+#   default  Write any secret groups whose required env vars are present.
+#   --check  Report what would be written/skipped without changing OpenBao.
+#   --strict Fail if any required env var for any group is missing.
 
 set -euo pipefail
 
 CONTAINER="dotmac_sub_openbao"
 BAO_ADDR="${BAO_ADDR:-http://127.0.0.1:8200}"
 BAO_TOKEN="${BAO_TOKEN:-dotmac-sub-dev-token}"
+CHECK_ONLY=0
+STRICT=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --check)
+            CHECK_ONLY=1
+            ;;
+        --strict)
+            STRICT=1
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [ -f ".env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+fi
 
 run_bao() {
     docker exec \
-        -e BAO_ADDR=http://127.0.0.1:8200 \
+        -e BAO_ADDR="$BAO_ADDR" \
         -e BAO_TOKEN="$BAO_TOKEN" \
         "$CONTAINER" bao "$@"
+}
+
+require_vars() {
+    local missing=0
+    for name in "$@"; do
+        if [ -z "${!name:-}" ]; then
+            echo "  [MISSING] $name"
+            missing=1
+        fi
+    done
+    return $missing
+}
+
+put_secret() {
+    local path="$1"
+    shift
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        echo "  [CHECK] secret/${path}"
+        return 0
+    fi
+    run_bao kv put "secret/${path}" "$@" >/dev/null
+    echo "  [OK] secret/${path}"
+}
+
+seed_group() {
+    local path="$1"
+    shift
+    local required_csv="$1"
+    shift
+    local required=()
+    local missing=0
+    IFS=',' read -r -a required <<<"$required_csv"
+
+    echo "==> secret/${path}"
+    if ! require_vars "${required[@]}"; then
+        missing=1
+    fi
+
+    if [ "$missing" -eq 1 ]; then
+        if [ "$STRICT" -eq 1 ]; then
+            echo "  [FAIL] secret/${path} skipped because required env vars are missing" >&2
+            return 1
+        fi
+        echo "  [SKIP] secret/${path} skipped because required env vars are missing"
+        return 0
+    fi
+
+    put_secret "$path" "$@"
 }
 
 echo "==> Waiting for OpenBao to be ready..."
@@ -30,75 +107,64 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "==> Seeding secrets into OpenBao KV v2 (secret/)..."
+echo "==> Seeding OpenBao KV v2 (real env values only)..."
 
-# ─── Auth & Encryption Keys ─────────────────────────────────────────
-run_bao kv put secret/auth \
-    jwt_secret="${JWT_SECRET:-r1VZDcEfRaQfT7qBnOvhpiCM6IkjdL9oT1XzbkzVxcw=}" \
-    totp_encryption_key="${TOTP_ENCRYPTION_KEY:-LRjCAO0ew_mAJLzHGBfDsUQkuoVna7xQu2nLpC05G10=}" \
-    credential_encryption_key="${CREDENTIAL_ENCRYPTION_KEY:-m6c5_ZDKKOpTcEihbuPuHJuvoJ-6EJSsighX872RJbE=}" \
-    wireguard_key_encryption_key="${WIREGUARD_KEY_ENCRYPTION_KEY:-n9EgNfu2ejUTa8P7oJi5zFwdFMvgGGtWXsULJg2dSJQ=}"
-echo "  [OK] secret/auth"
+seed_group auth \
+    "JWT_SECRET,CREDENTIAL_ENCRYPTION_KEY" \
+    "jwt_secret=${JWT_SECRET:-}" \
+    "credential_encryption_key=${CREDENTIAL_ENCRYPTION_KEY:-}" \
+    "totp_encryption_key=${TOTP_ENCRYPTION_KEY:-}" \
+    "wireguard_key_encryption_key=${WIREGUARD_KEY_ENCRYPTION_KEY:-}"
 
-# ─── Database ────────────────────────────────────────────────────────
-run_bao kv put secret/database \
-    url="${DATABASE_URL:-postgresql+psycopg://postgres:Bes3SpEVyg61QebbXSpUse7_4vbOVOa_@localhost:5434/dotmac_sub}" \
-    password="${POSTGRES_PASSWORD:-Bes3SpEVyg61QebbXSpUse7_4vbOVOa_}"
-echo "  [OK] secret/database"
+seed_group database \
+    "DATABASE_URL,POSTGRES_PASSWORD" \
+    "url=${DATABASE_URL:-}" \
+    "password=${POSTGRES_PASSWORD:-}"
 
-# ─── Redis ───────────────────────────────────────────────────────────
-run_bao kv put secret/redis \
-    password="${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}" \
-    url="${REDIS_URL:-redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@localhost:6379/0}" \
-    broker_url="${CELERY_BROKER_URL:-redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@localhost:6379/0}" \
-    result_backend="${CELERY_RESULT_BACKEND:-redis://:nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq@localhost:6379/1}"
-echo "  [OK] secret/redis"
+seed_group redis \
+    "REDIS_PASSWORD,REDIS_URL,CELERY_BROKER_URL,CELERY_RESULT_BACKEND" \
+    "password=${REDIS_PASSWORD:-}" \
+    "url=${REDIS_URL:-}" \
+    "broker_url=${CELERY_BROKER_URL:-}" \
+    "result_backend=${CELERY_RESULT_BACKEND:-}"
 
-# ─── Paystack ────────────────────────────────────────────────────────
-run_bao kv put secret/paystack \
-    secret_key="${PAYSTACK_SECRET_KEY:-sk_test_d800a38448aebcccd4642034c62515c8ad376558}" \
-    public_key="${PAYSTACK_PUBLIC_KEY:-pk_test_08238794d560ec2f0f739d12589f1e10db969973}"
-echo "  [OK] secret/paystack"
+seed_group paystack \
+    "PAYSTACK_SECRET_KEY,PAYSTACK_PUBLIC_KEY" \
+    "secret_key=${PAYSTACK_SECRET_KEY:-}" \
+    "public_key=${PAYSTACK_PUBLIC_KEY:-}"
 
-# ─── RADIUS ──────────────────────────────────────────────────────────
-run_bao kv put secret/radius \
-    db_password="${RADIUS_DB_PASS:-l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-}" \
-    db_dsn="${RADIUS_DB_DSN:-postgresql://radius_readonly:radius_ro_2026@localhost:5437/radius}"
-echo "  [OK] secret/radius"
+seed_group radius \
+    "RADIUS_DB_PASS" \
+    "db_password=${RADIUS_DB_PASS:-}" \
+    "db_dsn=${RADIUS_DB_DSN:-}"
 
-# ─── GenieACS ────────────────────────────────────────────────────────
-run_bao kv put secret/genieacs \
-    mongodb_dsn="${GENIEACS_MONGODB_DSN:-mongodb://genieacs_readonly:genieacs_ro_2026@localhost:27017/genieacs?authSource=admin}" \
-    mongodb_password="${GENIEACS_MONGODB_PASSWORD:-Rfys2820k6c0Mkq3xw5CTjVzhn6WeAjm}" \
-    jwt_secret="${GENIEACS_UI_JWT_SECRET:-l5z4WECFJ_pJ0RLg2hUx1HRo8X3ifQs7xZlGnNlHhng}" \
-    cwmp_user="${GENIEACS_CWMP_USER:-acs_dotmac}" \
-    cwmp_pass="${GENIEACS_CWMP_PASS:-4TUHM0AssAtu8elrW6NzwwYRYAwVf0jO}"
-echo "  [OK] secret/genieacs"
+seed_group genieacs \
+    "GENIEACS_MONGODB_PASSWORD,GENIEACS_UI_JWT_SECRET,GENIEACS_CWMP_USER,GENIEACS_CWMP_PASS" \
+    "mongodb_dsn=${GENIEACS_MONGODB_DSN:-}" \
+    "mongodb_password=${GENIEACS_MONGODB_PASSWORD:-}" \
+    "jwt_secret=${GENIEACS_UI_JWT_SECRET:-}" \
+    "cwmp_user=${GENIEACS_CWMP_USER:-}" \
+    "cwmp_pass=${GENIEACS_CWMP_PASS:-}"
 
-# ─── S3 / MinIO ─────────────────────────────────────────────────────
-run_bao kv put secret/s3 \
-    access_key="${S3_ACCESS_KEY:-dotmac_900808e8519d5e6a}" \
-    secret_key="${S3_SECRET_KEY:-B13hKiqAKhLwcITwXpchvKCEkq-eJg2W6cH6qyE4s2k}"
-echo "  [OK] secret/s3"
+seed_group s3 \
+    "S3_ACCESS_KEY,S3_SECRET_KEY" \
+    "access_key=${S3_ACCESS_KEY:-}" \
+    "secret_key=${S3_SECRET_KEY:-}"
 
-# ─── Migration (SmartOLT + Splynx) ──────────────────────────────────
-run_bao kv put secret/migration \
-    smartolt_api_key="${SMARTOLT_API_KEY:-f1fad2bc9506403cb1f2d09496f9a8de}" \
-    splynx_mysql_pass="${SPLYNX_MYSQL_PASS:-MigDotmac2026!}"
-echo "  [OK] secret/migration"
+seed_group migration \
+    "SPLYNX_MYSQL_PASS" \
+    "smartolt_api_key=${SMARTOLT_API_KEY:-}" \
+    "splynx_mysql_pass=${SPLYNX_MYSQL_PASS:-}"
 
-# ─── SMTP / Notifications ───────────────────────────────────────────
-run_bao kv put secret/notifications \
-    smtp_host="${SMTP_HOST:-}" \
-    smtp_port="${SMTP_PORT:-587}" \
-    smtp_username="${SMTP_USERNAME:-}" \
-    smtp_password="${SMTP_PASSWORD:-}" \
-    sms_api_key="${SMS_API_KEY:-}" \
-    sms_api_secret="${SMS_API_SECRET:-}"
-echo "  [OK] secret/notifications"
+seed_group notifications \
+    "SMTP_PORT" \
+    "smtp_host=${SMTP_HOST:-}" \
+    "smtp_port=${SMTP_PORT:-}" \
+    "smtp_username=${SMTP_USERNAME:-}" \
+    "smtp_password=${SMTP_PASSWORD:-}" \
+    "sms_api_key=${SMS_API_KEY:-}" \
+    "sms_api_secret=${SMS_API_SECRET:-}"
 
 echo ""
-echo "==> All secrets seeded. Listing paths:"
-run_bao kv list secret/ 2>/dev/null || echo "(dev mode listing)"
-echo ""
-echo "==> Done. Secrets are at: ${BAO_ADDR}/v1/secret/data/<path>"
+echo "==> Available OpenBao paths:"
+run_bao kv list secret/ 2>/dev/null || echo "(listing unavailable)"

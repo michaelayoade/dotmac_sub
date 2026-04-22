@@ -274,7 +274,6 @@ def history_context(
     db: Session,
     *,
     status: str | None,
-    channel: str | None,
     page: int,
     per_page: int,
 ) -> dict[str, object]:
@@ -301,6 +300,5 @@ def history_context(
         "total": total,
         "total_pages": total_pages,
         "status": status,
-        "channel": channel,
         "statuses": delivery_statuses(),
     }

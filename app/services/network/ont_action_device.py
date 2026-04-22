@@ -178,7 +178,6 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         result = client.get_parameter_values(
             device_id,
             _RUNTIME_REFRESH_PARAMS.get(root, _RUNTIME_REFRESH_PARAMS["Device"]),
-            connection_request=True,
         )
         logger.info("Refresh sent to ONT %s (device %s)", ont.serial_number, device_id)
         return ActionResult(

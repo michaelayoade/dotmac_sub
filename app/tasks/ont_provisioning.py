@@ -38,52 +38,8 @@ def detect_profile_drift() -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.ont_provisioning.auto_link_profiles")
 def auto_link_profiles() -> dict[str, int]:
-    """Auto-link provisioning profiles to ONTs without one.
-
-    Scans active ONTs that have no profile and attempts to resolve one via
-    ``resolve_profile_for_ont``. The resolver only returns a directly
-    assigned profile (no owner-based default lookup), so this task is
-    effectively a no-op unless an ONT already carries a profile reference.
-    """
-    logger.info("Starting auto-link of provisioning profiles to ONTs")
-    with db_session_adapter.session() as db:
-        from sqlalchemy import select
-
-        from app.models.network import OntUnit
-        from app.services.network.ont_profile_apply import resolve_profile_for_ont
-
-        stmt = (
-            select(OntUnit.id)
-            .where(
-                OntUnit.provisioning_profile_id.is_(None),
-                OntUnit.is_active.is_(True),
-            )
-            .limit(500)
-        )
-        ont_rows = list(db.execute(stmt).all())
-
-        linked = 0
-        errors = 0
-        for (ont_id,) in ont_rows:
-            try:
-                profile = resolve_profile_for_ont(db, str(ont_id))
-                if profile:
-                    ont = db.get(OntUnit, ont_id)
-                    if ont:
-                        ont.provisioning_profile_id = profile.id
-                        linked += 1
-            except Exception as e:
-                logger.error("Error linking profile for ONT %s: %s", ont_id, e)
-                errors += 1
-
-        if linked:
-            db.commit()
-            logger.info("Auto-linked %d ONTs to provisioning profiles", linked)
-        else:
-            logger.info("No ONTs needed profile auto-linking")
-
-        return {
-            "linked": linked,
-            "skipped": len(ont_rows) - linked - errors,
-            "errors": errors,
-        }
+    """Legacy compatibility task retained as a no-op after bundle cutover."""
+    logger.info(
+        "Skipping legacy ONT auto-link task because active bundle assignments are now authoritative"
+    )
+    return {"linked": 0, "skipped": 0, "errors": 0}

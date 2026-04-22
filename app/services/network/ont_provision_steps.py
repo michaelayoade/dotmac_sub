@@ -28,6 +28,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
 from app.services.network._common import NasTarget
+from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -168,7 +170,7 @@ def create_service_port(
         sa_select(Vlan).where(
             Vlan.tag == vlan_id,
             Vlan.is_active.is_(True),
-            (Vlan.olt_device_id == ctx.olt.id) | (Vlan.olt_device_id.is_(None)),
+            Vlan.olt_device_id == ctx.olt.id,
         )
     ).first()
     if not vlan_exists:
@@ -819,9 +821,7 @@ def _provision_wan_service_instances(
 
     acs_config_adapter = _acs_config_writer()
 
-    profile = getattr(ont, "provisioning_profile", None)
-    if profile is None and getattr(ont, "provisioning_profile_id", None):
-        profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+    profile = resolve_assigned_bundle(db, ont)
 
     steps: list[dict[str, object]] = []
     needs_input: list[str] = []
@@ -1311,11 +1311,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             hard_failures.append(f"{name}: {message}")
 
     bind_plan = _section("bind_tr069")
-    profile = getattr(ont, "provisioning_profile", None)
-    if profile is None and getattr(ont, "provisioning_profile_id", None):
-        from app.models.network import OntProvisioningProfile
-
-        profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+    profile = resolve_assigned_bundle(db, ont)
     cr_username = getattr(profile, "cr_username", None) if profile else None
     cr_password = getattr(profile, "cr_password", None) if profile else None
     if cr_password:
@@ -1358,17 +1354,18 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         )
     else:
         # Legacy fallback: use flat fields and ont_plan
-        wan_plan = _section("configure_wan_tr069")
-        ont_wan_mode = getattr(ont, "wan_mode", None)
-        wan_mode = wan_plan.get("wan_mode") or (
-            ont_wan_mode.value if ont_wan_mode is not None else None
+        effective = resolve_effective_ont_config(db, ont)
+        effective_values = (
+            effective.get("values", {}) if isinstance(effective, dict) else {}
         )
+        wan_plan = _section("configure_wan_tr069")
+        wan_mode = wan_plan.get("wan_mode") or effective_values.get("wan_mode")
         if wan_mode == "static_ip":
             wan_mode = "static"
         if wan_mode:
             wan_vlan = wan_plan.get("wan_vlan")
-            if wan_vlan is None and getattr(ont, "wan_vlan", None) is not None:
-                wan_vlan = getattr(ont.wan_vlan, "tag", None)
+            if wan_vlan is None:
+                wan_vlan = effective_values.get("wan_vlan")
             _append(
                 "configure_wan_tr069",
                 acs_config_adapter.configure_wan_config(
@@ -1387,7 +1384,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         pppoe_username = (
             pppoe_plan.get("username")
             or pppoe_plan.get("pppoe_username")
-            or getattr(ont, "pppoe_username", None)
+            or effective_values.get("pppoe_username")
         )
         pppoe_password = (
             decrypt_credential(ont.pppoe_password)
@@ -1445,20 +1442,22 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         if getattr(ont, "wifi_password", None)
         else None
     )
-    channel = getattr(ont, "wifi_channel", None) or wifi_plan.get("channel")
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    channel = effective_values.get("wifi_channel") or wifi_plan.get("channel")
     try:
         channel_int = int(str(channel).strip()) if channel not in (None, "") else None
     except (TypeError, ValueError):
         channel_int = None
         needs_input.append("WiFi channel must be numeric.")
     wifi_values = {
-        "enabled": getattr(ont, "wifi_enabled", None)
-        if getattr(ont, "wifi_enabled", None) is not None
+        "enabled": effective_values.get("wifi_enabled")
+        if effective_values.get("wifi_enabled") is not None
         else wifi_plan.get("enabled"),
-        "ssid": getattr(ont, "wifi_ssid", None) or wifi_plan.get("ssid"),
+        "ssid": effective_values.get("wifi_ssid") or wifi_plan.get("ssid"),
         "password": wifi_password,
         "channel": channel_int,
-        "security_mode": getattr(ont, "wifi_security_mode", None)
+        "security_mode": effective_values.get("wifi_security_mode")
         or wifi_plan.get("security_mode"),
     }
     if any(value not in (None, "", []) for value in wifi_values.values()):
@@ -2072,7 +2071,12 @@ def _ensure_static_management_ip_from_profile(
     mode_value = getattr(mode, "value", mode)
     if mode_value != "static_ip":
         return True, "Management IP mode is not static."
-    if getattr(ont, "mgmt_ip_address", None):
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    effective_mgmt_ip = effective_values.get("mgmt_ip_address") or getattr(
+        ont, "mgmt_ip_address", None
+    )
+    if effective_mgmt_ip:
         return True, "Static management IP already assigned."
 
     pool_id = getattr(profile, "mgmt_ip_pool_id", None)
@@ -2174,7 +2178,7 @@ def provision_with_reconciliation(
     db: Session,
     ont_id: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     tr069_olt_profile_id: int | None = None,
     dry_run: bool = False,
     allow_low_optical_margin: bool = False,
@@ -2191,7 +2195,7 @@ def provision_with_reconciliation(
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        profile_id: Optional explicit profile ID.
+        bundle_id: Optional explicit bundle ID.
         tr069_olt_profile_id: Optional explicit OLT-local TR-069 profile ID.
         dry_run: If True, compute delta but don't execute.
         allow_low_optical_margin: If True, proceed even with low optical margin.
@@ -2223,7 +2227,7 @@ def provision_with_reconciliation(
         ctx.fsp,
     )
 
-    profile = resolve_profile(db, ctx.ont, profile_id)
+    profile = resolve_profile(db, ctx.ont, bundle_id)
     static_ip_ok, static_ip_msg = _ensure_static_management_ip_from_profile(
         db, ctx.ont, profile
     )
@@ -2235,7 +2239,7 @@ def provision_with_reconciliation(
     delta, err = reconcile_ont_state(
         db,
         ont_id,
-        profile_id,
+        bundle_id,
         tr069_olt_profile_id=tr069_olt_profile_id,
     )
     if not delta:
@@ -2432,7 +2436,7 @@ def preview_reconciliation(
     db: Session,
     ont_id: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     tr069_olt_profile_id: int | None = None,
 ) -> dict:
     """Preview what reconciliation would do without executing.
@@ -2440,7 +2444,7 @@ def preview_reconciliation(
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        profile_id: Optional explicit profile ID.
+        bundle_id: Optional explicit bundle ID.
 
     Returns:
         Dictionary with delta summary and validation results.
@@ -2453,7 +2457,7 @@ def preview_reconciliation(
     delta, err = reconcile_ont_state(
         db,
         ont_id,
-        profile_id,
+        bundle_id,
         tr069_olt_profile_id=tr069_olt_profile_id,
     )
     if not delta:

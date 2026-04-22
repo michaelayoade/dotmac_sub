@@ -397,7 +397,6 @@ class Tr069StatusProvider:
             client.get_parameter_values(
                 device_id,
                 list(optical_params.values()),
-                connection_request=True,
             )
 
             # Re-fetch cached data after RPC

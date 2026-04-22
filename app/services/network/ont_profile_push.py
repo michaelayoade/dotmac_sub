@@ -25,6 +25,10 @@ from app.services.network.device_operation import (
     DeviceOperationContext,
     DeviceOperationStep,
 )
+from app.services.network.ont_bundle_assignments import (
+    get_active_bundle_assignment,
+    resolve_assigned_bundle,
+)
 from app.services.network.ont_olt_context import resolve_ont_olt_write_context
 from app.services.network.ont_profile_apply import (
     DriftField,
@@ -83,24 +87,19 @@ class OntProfilePushService:
                 message="ONT not found",
             )
 
-        if not ont.provisioning_profile_id:
+        profile = resolve_assigned_bundle(db, ont)
+        if profile is None:
             return ProfilePushResult(
                 success=False,
-                message="ONT has no assigned provisioning profile",
+                message="ONT has no active configuration bundle",
             )
 
-        # Load profile
         stmt = (
             select(OntProvisioningProfile)
             .options(selectinload(OntProvisioningProfile.wan_services))
-            .where(OntProvisioningProfile.id == ont.provisioning_profile_id)
+            .where(OntProvisioningProfile.id == profile.id)
         )
-        profile = db.scalars(stmt).first()
-        if not profile:
-            return ProfilePushResult(
-                success=False,
-                message="Assigned profile not found",
-            )
+        profile = db.scalars(stmt).first() or profile
 
         # Detect drift
         drift_report = detect_drift(db, ont_id)
@@ -192,11 +191,14 @@ class OntProfilePushService:
             .where(
                 OntUnit.provisioning_status == OntProvisioningStatus.drift_detected,
                 OntUnit.is_active.is_(True),
-                OntUnit.provisioning_profile_id.isnot(None),
             )
             .limit(limit)
         )
-        onts = list(db.scalars(stmt).all())
+        onts = [
+            ont
+            for ont in db.scalars(stmt).all()
+            if get_active_bundle_assignment(db, ont) is not None
+        ]
 
         results = []
         for ont in onts:

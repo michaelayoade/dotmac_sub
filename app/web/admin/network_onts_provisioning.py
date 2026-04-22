@@ -159,13 +159,13 @@ def _update_service_order_execution_context_for_ont(
 def ont_profile_preview(
     request: Request,
     ont_id: str,
-    profile_id: str = Query(...),
+    bundle_id: str = Query(...),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: profile summary for the configure page."""
     preview_context = web_onts_provisioning_service.profile_preview_context(
         db,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
     )
     if not preview_context:
         return HTMLResponse(
@@ -212,7 +212,7 @@ def ont_available_static_ips(
 def ont_provisioning_preview(
     request: Request,
     ont_id: str,
-    profile_id: str | None = Query(default=None),
+    bundle_id: str | None = Query(default=None),
     tr069_profile_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -220,7 +220,7 @@ def ont_provisioning_preview(
     data = web_onts_provisioning_service.provisioning_preview_context(
         db,
         ont_id=ont_id,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
     )
     context = _base_context(request, db, active_page="onts")
@@ -237,7 +237,7 @@ def ont_provisioning_preview(
 def ont_preflight_check(
     request: Request,
     ont_id: str,
-    profile_id: str | None = Query(default=None),
+    bundle_id: str | None = Query(default=None),
     tr069_profile_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -245,7 +245,7 @@ def ont_preflight_check(
     result = web_onts_provisioning_service.preflight_result(
         db,
         ont_id=ont_id,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
     )
     return JSONResponse(result)
@@ -258,7 +258,7 @@ def ont_preflight_check(
 def ont_save_provision_settings(
     request: Request,
     ont_id: str,
-    profile_id: str | None = Form(default=None),
+    bundle_id: str | None = Form(default=None),
     tr069_profile_id: str | None = Form(default=None),
     onu_mode: str | None = Form(default=None),
     mgmt_vlan_id: str | None = Form(default=None),
@@ -292,7 +292,7 @@ def ont_save_provision_settings(
     result = web_onts_provisioning_service.save_provision_settings(
         db,
         ont_id=ont_id,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
         onu_mode=onu_mode,
         mgmt_vlan_id=mgmt_vlan_id,
@@ -748,7 +748,7 @@ def provision_with_saga(
     internet_vlan_id: int | None = Form(default=None),
     mgmt_vlan_id: int | None = Form(default=None),
     tr069_olt_profile_id: int | None = Form(default=None),
-    profile_id: str | None = Form(default=None),
+    bundle_id: str | None = Form(default=None),
     dry_run: bool = Form(default=False),
     async_execution: bool = Form(default=True),
     db: Session = Depends(get_db),
@@ -769,7 +769,7 @@ def provision_with_saga(
         internet_vlan_id: VLAN for internet service
         mgmt_vlan_id: Management VLAN for TR-069
         tr069_olt_profile_id: OLT TR-069 profile ID
-        profile_id: Provisioning profile ID
+        bundle_id: Provisioning bundle ID
         dry_run: Preview only, don't execute
         async_execution: Run in background via Celery (default: True)
     """
@@ -800,8 +800,8 @@ def provision_with_saga(
         step_data["mgmt_vlan_id"] = mgmt_vlan_id
     if tr069_olt_profile_id is not None:
         step_data["tr069_olt_profile_id"] = tr069_olt_profile_id
-    if profile_id is not None:
-        step_data["profile_id"] = profile_id
+    if bundle_id is not None:
+        step_data["profile_id"] = bundle_id
 
     initiated_by = actor_label(request)
 

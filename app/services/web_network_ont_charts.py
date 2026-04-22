@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.services.acs_client import create_acs_state_reader
 from app.services.network.ont_metrics import (
     ChartData,
     ChartSeries,
@@ -16,8 +14,6 @@ from app.services.network.ont_metrics import (
     get_traffic_history,
 )
 from app.services.network.signal_thresholds import get_signal_thresholds
-
-logger = logging.getLogger(__name__)
 
 
 def _build_signal_fallback_from_ont(ont: OntUnit, time_range: str) -> ChartData:
@@ -66,19 +62,6 @@ def _build_signal_fallback_from_ont(ont: OntUnit, time_range: str) -> ChartData:
     )
 
 
-def _parse_snapshot_time(snapshot: dict | None) -> datetime | None:
-    if not isinstance(snapshot, dict):
-        return None
-    raw = snapshot.get("fetched_at")
-    if isinstance(raw, str) and raw:
-        try:
-            parsed = datetime.fromisoformat(raw)
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-        except ValueError:
-            return None
-    return None
-
-
 def _counter_value(port: dict, *keys: str) -> int | None:
     for key in keys:
         value = port.get(key)
@@ -110,90 +93,63 @@ def _sum_port_counters(ports: list[dict]) -> tuple[int | None, int | None]:
         if received is not None:
             received_total += received
             has_received = True
-    return (
-        sent_total if has_sent else None,
-        received_total if has_received else None,
-    )
+    return (sent_total if has_sent else None, received_total if has_received else None)
 
 
-def _build_traffic_from_tr069_delta(
-    db: Session,
-    ont: OntUnit,
-    time_range: str,
-) -> ChartData:
-    """Build a live ONT traffic point from TR-069 Ethernet byte counter deltas."""
-    previous_snapshot = dict(getattr(ont, "tr069_last_snapshot", None) or {})
-    previous_time = _parse_snapshot_time(previous_snapshot) or getattr(
-        ont, "tr069_last_snapshot_at", None
-    )
-    previous_sent, previous_received = _sum_port_counters(
-        list(previous_snapshot.get("ethernet_ports") or [])
-    )
-
-    summary = create_acs_state_reader().get_device_summary(
-        db,
-        str(ont.id),
-        persist_observed_runtime=True,
-    )
-    if not summary.available:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error=summary.error
-            or "No live ONT traffic counters are available from TR-069.",
-        )
-
-    current_time = summary.fetched_at or datetime.now(UTC)
-    if current_time.tzinfo is None:
-        current_time = current_time.replace(tzinfo=UTC)
-    if previous_time and previous_time.tzinfo is None:
-        previous_time = previous_time.replace(tzinfo=UTC)
-
-    current_sent, current_received = _sum_port_counters(summary.ethernet_ports)
-    if (
-        previous_time is None
-        or previous_sent is None
-        or previous_received is None
-        or current_sent is None
-        or current_received is None
-    ):
+def _build_traffic_from_snapshot(ont: OntUnit, time_range: str) -> ChartData:
+    """Build a one-point traffic chart from the last persisted TR-069 snapshot."""
+    snapshot = dict(getattr(ont, "tr069_last_snapshot", None) or {})
+    timestamp = getattr(ont, "tr069_last_snapshot_at", None)
+    if timestamp is None:
         return ChartData(
             time_range=time_range,
             available=False,
             error=(
-                "No live ONT traffic graph yet. Waiting for two OLT/ONT counter "
-                "samples with BytesSent/BytesReceived."
+                "No traffic history data available yet. Waiting for metrics sync or "
+                "a persisted TR-069 snapshot."
             ),
         )
 
-    elapsed = (current_time - previous_time).total_seconds()
-    if elapsed <= 0:
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+
+    bytes_sent, bytes_received = _sum_port_counters(
+        list(snapshot.get("ethernet_ports") or [])
+    )
+    if bytes_sent is None and bytes_received is None:
         return ChartData(
             time_range=time_range,
             available=False,
-            error="Waiting for the next ONT counter sample to calculate throughput.",
+            error=(
+                "No traffic history data available yet. The last persisted TR-069 "
+                "snapshot does not include Ethernet byte counters."
+            ),
         )
 
-    download_bps = max(0.0, (current_sent - previous_sent) * 8 / elapsed)
-    upload_bps = max(0.0, (current_received - previous_received) * 8 / elapsed)
-    current_ts = current_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-    previous_ts = previous_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    current_ts = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    datasets: list[ChartSeries] = []
+    if bytes_sent is not None:
+        datasets.append(
+            ChartSeries(
+                label="Bytes Sent",
+                timestamps=[current_ts],
+                values=[float(bytes_sent)],
+            )
+        )
+    if bytes_received is not None:
+        datasets.append(
+            ChartSeries(
+                label="Bytes Received",
+                timestamps=[current_ts],
+                values=[float(bytes_received)],
+            )
+        )
+
     return ChartData(
-        series=[
-            ChartSeries(
-                label="Download (bps)",
-                timestamps=[previous_ts, current_ts],
-                values=[download_bps, download_bps],
-            ),
-            ChartSeries(
-                label="Upload (bps)",
-                timestamps=[previous_ts, current_ts],
-                values=[upload_bps, upload_bps],
-            ),
-        ],
+        series=datasets,
         time_range=time_range,
         available=True,
-        error="Showing live ONT Ethernet counter delta from TR-069.",
+        error="Showing the last persisted TR-069 Ethernet counter snapshot.",
     )
 
 
@@ -239,7 +195,7 @@ def charts_tab_data(
         ont_id=str(ont.id),
     )
     if not traffic_chart.available or not traffic_chart.series:
-        traffic_chart = _build_traffic_from_tr069_delta(db, ont, time_range)
+        traffic_chart = _build_traffic_from_snapshot(ont, time_range)
 
     # Get thresholds for chart reference lines
     warn_thresh, crit_thresh = get_signal_thresholds(db)

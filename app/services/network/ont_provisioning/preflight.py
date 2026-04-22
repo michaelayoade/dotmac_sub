@@ -92,7 +92,7 @@ def validate_prerequisites(
     db: Session,
     ont_id: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     tr069_olt_profile_id: int | None = None,
 ) -> dict:
     """Check prerequisites before provisioning."""
@@ -191,7 +191,7 @@ def validate_prerequisites(
         }
     )
 
-    profile = resolve_profile(db, ont, profile_id)
+    profile = resolve_profile(db, ont, bundle_id)
     if profile:
         checks.append(
             {

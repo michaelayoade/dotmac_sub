@@ -598,7 +598,7 @@ def submit_bulk_action(
             result = bulk_provision_onts(
                 db,
                 payload.ont_ids,
-                profile_id=params.get("profile_id"),
+                bundle_id=params.get("bundle_id") or params.get("profile_id"),
                 saga_name=str(params.get("saga_name") or "full_provisioning"),
                 tr069_olt_profile_id=params.get("tr069_olt_profile_id"),
                 max_workers=int(params.get("max_parallel") or 10),

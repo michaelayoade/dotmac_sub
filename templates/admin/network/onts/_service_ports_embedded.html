@@ -1,0 +1,7 @@
+{% set error = service_ports_context.error %}
+{% set service_ports = service_ports_context.service_ports %}
+{% set vlan_chain = service_ports_context.vlan_chain %}
+{% set reference_onts = service_ports_context.reference_onts %}
+{% set service_port_intent = service_ports_context.service_port_intent %}
+{% set vlans = service_ports_context.vlans %}
+{% include "admin/network/onts/_service_ports_tab.html" %}

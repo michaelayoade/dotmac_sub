@@ -1,7 +1,10 @@
 import logging
+import os
 
 from celery import Celery, current_task
 from celery.signals import (
+    beat_init,
+    celeryd_after_setup,
     task_failure,
     task_postrun,
     task_prerun,
@@ -10,7 +13,11 @@ from celery.signals import (
 )
 from kombu import Queue
 
-from app.services.scheduler_config import build_beat_schedule, get_celery_config
+from app.services.scheduler_config import (
+    build_beat_schedule,
+    find_unregistered_scheduled_tasks,
+    get_celery_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +76,78 @@ import app.tasks  # noqa: E402, F401
 import app.tasks.nin_tasks  # noqa: E402, F401
 
 
+def _release_metadata() -> dict[str, str | None]:
+    return {
+        "release": os.getenv("APP_RELEASE") or os.getenv("IMAGE_TAG") or os.getenv("GIT_SHA"),
+        "git_sha": os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA"),
+        "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "unknown",
+    }
+
+
+def _log_release_metadata(component: str) -> None:
+    logger.info(
+        "application_release",
+        extra={
+            "event": "application_release",
+            "component": component,
+            **_release_metadata(),
+        },
+    )
+
+
+def _warn_on_scheduler_registry_drift(component: str) -> None:
+    try:
+        drift = find_unregistered_scheduled_tasks(celery_app.tasks.keys())
+    except Exception:
+        logger.warning(
+            "scheduler_registry_drift_check_failed",
+            exc_info=True,
+            extra={
+                "event": "scheduler_registry_drift_check_failed",
+                "component": component,
+            },
+        )
+        return
+
+    if not drift:
+        logger.info(
+            "scheduler_registry_drift_check_clean",
+            extra={
+                "event": "scheduler_registry_drift_check_clean",
+                "component": component,
+            },
+        )
+        return
+
+    logger.warning(
+        "scheduler_registry_drift_detected",
+        extra={
+            "event": "scheduler_registry_drift_detected",
+            "component": component,
+            "unknown_task_count": len(drift),
+            "unknown_tasks": [item["task_name"] for item in drift],
+        },
+    )
+
+
 @worker_process_init.connect
 def _dispose_inherited_db_connections(**_kwargs):
     """Celery prefork workers must not reuse parent-created DB connections."""
     from app.db import dispose_engine
 
     dispose_engine()
+
+
+@celeryd_after_setup.connect
+def _log_worker_boot(**_kwargs):
+    _log_release_metadata("celery-worker")
+    _warn_on_scheduler_registry_drift("celery-worker")
+
+
+@beat_init.connect
+def _log_beat_boot(**_kwargs):
+    _log_release_metadata("celery-beat")
+    _warn_on_scheduler_registry_drift("celery-beat")
 
 
 def _task_extra(task, task_id: str | None, **extra):

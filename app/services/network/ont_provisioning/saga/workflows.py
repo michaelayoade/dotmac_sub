@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_provisioning.saga.types import (
     SagaContext,
@@ -26,6 +27,14 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_value(ctx: SagaContext, key: str) -> object | None:
+    if ctx.ont is None:
+        return None
+    resolved = resolve_effective_ont_config(ctx.db, ctx.ont)
+    values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
+    return values.get(key)
 
 
 # ---------------------------------------------------------------------------
@@ -100,13 +109,20 @@ def _configure_management_ip(ctx: SagaContext) -> StepResult:
     vlan_id = ctx.step_data.get("mgmt_vlan_id")
     if vlan_id is None:
         # Try to get from provisioning profile
-        if ctx.ont is not None and ctx.ont.provisioning_profile_id:
-            from app.services.network.ont_provisioning.profiles import resolve_profile
+        resolved_vlan = _effective_value(ctx, "mgmt_vlan")
+        if resolved_vlan not in (None, ""):
+            vlan_id = resolved_vlan
+            ctx.step_data["mgmt_vlan_id"] = vlan_id
 
-            profile = resolve_profile(ctx.db, ctx.ont)
-            if profile and profile.mgmt_vlan_tag:
-                vlan_id = profile.mgmt_vlan_tag
-                ctx.step_data["mgmt_vlan_id"] = vlan_id
+    if ctx.step_data.get("mgmt_ip_mode") in (None, ""):
+        resolved_mode = _effective_value(ctx, "mgmt_ip_mode")
+        if resolved_mode not in (None, ""):
+            ctx.step_data["mgmt_ip_mode"] = resolved_mode
+
+    if ctx.step_data.get("mgmt_ip_address") in (None, ""):
+        resolved_ip = _effective_value(ctx, "mgmt_ip_address")
+        if resolved_ip not in (None, ""):
+            ctx.step_data["mgmt_ip_address"] = resolved_ip
 
     if vlan_id is None:
         return StepResult(
@@ -237,7 +253,7 @@ def _push_pppoe_tr069(ctx: SagaContext) -> StepResult:
     if not username or not password:
         # Try to get from ONT saved config
         if ctx.ont is not None:
-            username = username or ctx.ont.pppoe_username
+            username = username or _effective_value(ctx, "pppoe_username")
             password = password or ctx.ont.pppoe_password
 
     if not username or not password:
@@ -274,8 +290,18 @@ def _configure_wifi(ctx: SagaContext) -> StepResult:
 
     # Try to get from ONT saved config
     if ctx.ont is not None:
-        ssid = ssid or ctx.ont.wifi_ssid
+        ssid = ssid or _effective_value(ctx, "wifi_ssid")
         password = password or ctx.ont.wifi_password
+
+    wifi_enabled = ctx.step_data.get("wifi_enabled")
+    if wifi_enabled is None:
+        wifi_enabled = _effective_value(ctx, "wifi_enabled")
+    wifi_channel = ctx.step_data.get("wifi_channel")
+    if wifi_channel in (None, ""):
+        wifi_channel = _effective_value(ctx, "wifi_channel") or "auto"
+    wifi_security_mode = ctx.step_data.get("wifi_security_mode")
+    if wifi_security_mode in (None, ""):
+        wifi_security_mode = _effective_value(ctx, "wifi_security_mode") or "WPA2-PSK"
 
     if not ssid:
         return StepResult(
@@ -288,11 +314,11 @@ def _configure_wifi(ctx: SagaContext) -> StepResult:
     result = acs_config_adapter.set_wifi_config(
         ctx.db,
         ctx.ont_id,
-        enabled=ctx.step_data.get("wifi_enabled", True),
+        enabled=True if wifi_enabled is None else bool(wifi_enabled),
         ssid=ssid,
         password=password,
-        channel=ctx.step_data.get("wifi_channel", "auto"),
-        security_mode=ctx.step_data.get("wifi_security_mode", "WPA2-PSK"),
+        channel=wifi_channel,
+        security_mode=wifi_security_mode,
     )
 
     return StepResult(
@@ -365,7 +391,7 @@ def _provision_with_reconciliation(ctx: SagaContext) -> StepResult:
     validates, and executes with compensation on failure.
 
     Uses step_data keys:
-    - profile_id: Provisioning profile ID (optional)
+    - bundle_id: Provisioning bundle ID (optional)
     - tr069_olt_profile_id: TR-069 profile ID (optional)
     - allow_low_optical_margin: Allow provisioning with low margin (default: False)
     """
@@ -374,7 +400,7 @@ def _provision_with_reconciliation(ctx: SagaContext) -> StepResult:
     return ont_provision_steps.provision_with_reconciliation(
         ctx.db,
         ctx.ont_id,
-        profile_id=ctx.step_data.get("profile_id"),
+        bundle_id=ctx.step_data.get("bundle_id") or ctx.step_data.get("profile_id"),
         tr069_olt_profile_id=ctx.step_data.get("tr069_olt_profile_id"),
         dry_run=ctx.dry_run,
         allow_low_optical_margin=ctx.step_data.get("allow_low_optical_margin", False),

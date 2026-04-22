@@ -13,7 +13,7 @@ Usage:
         olt_id=olt_id,
         fsp=fsp,
         serial_number=serial_number,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
     )
 
     if result.success:
@@ -253,7 +253,7 @@ class ProvisioningCoordinator:
         fsp: str,
         serial_number: str,
         *,
-        profile_id: str | None = None,
+        bundle_id: str | None = None,
         force_reauthorize: bool = False,
         skip_acs_config: bool = False,
         acs_config_timeout_seconds: int = 120,
@@ -264,7 +264,7 @@ class ProvisioningCoordinator:
             olt_id: OLT device ID
             fsp: Frame/Slot/Port location (e.g., "0/1/0")
             serial_number: ONT serial number
-            profile_id: Optional provisioning profile ID
+            bundle_id: Optional provisioning bundle ID
             force_reauthorize: Delete existing registration first
             skip_acs_config: Skip ACS config push (just OLT registration)
             acs_config_timeout_seconds: Timeout for ACS operations
@@ -820,7 +820,7 @@ def queue_provisioning(
     fsp: str,
     serial_number: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     force_reauthorize: bool = False,
     initiated_by: str | None = None,
     request: Request | None = None,
@@ -835,7 +835,7 @@ def queue_provisioning(
         olt_id: OLT device ID
         fsp: Frame/Slot/Port location
         serial_number: ONT serial number
-        profile_id: Optional provisioning profile ID
+        bundle_id: Optional provisioning bundle ID
         force_reauthorize: Delete existing registration first
         initiated_by: User/system that initiated
         request: HTTP request for audit
@@ -875,7 +875,7 @@ def queue_provisioning(
                 "olt_id": olt_id,
                 "fsp": fsp,
                 "serial_number": serial_number,
-                "profile_id": profile_id,
+                "bundle_id": bundle_id,
                 "force_reauthorize": force_reauthorize,
             },
         )
@@ -916,7 +916,7 @@ def queue_provisioning(
             "app.tasks.provisioning.run_coordinated_provisioning_task",
             args=[str(op.id), olt_id, fsp, serial_number],
             kwargs={
-                "profile_id": profile_id,
+                "bundle_id": bundle_id,
                 "force_reauthorize": force_reauthorize,
             },
             correlation_id=correlation_key,
@@ -964,7 +964,7 @@ def provision_ont_sync(
     fsp: str,
     serial_number: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> ProvisioningResult:
@@ -978,7 +978,7 @@ def provision_ont_sync(
         olt_id,
         fsp,
         serial_number,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
         force_reauthorize=force_reauthorize,
     )
 
@@ -989,7 +989,7 @@ def provision_ont_resilient(
     fsp: str,
     serial_number: str,
     *,
-    profile_id: str | None = None,
+    bundle_id: str | None = None,
     force_reauthorize: bool = False,
     request: Request | None = None,
     prefer_sync: bool = False,
@@ -1004,7 +1004,7 @@ def provision_ont_resilient(
         olt_id: OLT device ID
         fsp: Frame/Slot/Port location
         serial_number: ONT serial number
-        profile_id: Optional provisioning profile ID
+        bundle_id: Optional provisioning bundle ID
         force_reauthorize: Delete existing registration first
         request: HTTP request for audit
         prefer_sync: Skip async and run synchronously
@@ -1025,7 +1025,7 @@ def provision_ont_resilient(
             olt_id,
             fsp,
             serial_number,
-            profile_id=profile_id,
+            bundle_id=bundle_id,
             force_reauthorize=force_reauthorize,
             request=request,
         )
@@ -1035,7 +1035,7 @@ def provision_ont_resilient(
         olt_id,
         fsp,
         serial_number,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
         force_reauthorize=force_reauthorize,
         request=request,
     )

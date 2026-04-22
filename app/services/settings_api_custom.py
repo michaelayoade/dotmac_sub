@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -11,8 +9,6 @@ from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as settings_service
 from app.services import settings_spec
 from app.services.response import list_response
-
-logger = logging.getLogger(__name__)
 
 
 def _coerce_int(value: object) -> int:
@@ -103,27 +99,6 @@ _GEOCODING_SETTING_KEYS = {
 }
 _GEOCODING_SETTING_INT_KEYS = {"timeout_sec"}
 _GEOCODING_SETTING_BOOL_KEYS = {"enabled"}
-
-_RADIUS_SETTING_KEYS = {
-    "auth_server_id",
-    "auth_shared_secret",
-    "auth_dictionary_path",
-    "auth_timeout_sec",
-    "default_auth_port",
-    "default_acct_port",
-    "default_sync_users",
-    "default_sync_nas_clients",
-    "default_sync_status",
-}
-_RADIUS_SETTING_INT_KEYS = {
-    "auth_timeout_sec",
-    "default_auth_port",
-    "default_acct_port",
-}
-_RADIUS_SETTING_SECRET_KEYS = {"auth_shared_secret"}
-_RADIUS_SETTING_BOOL_KEYS = {"default_sync_users", "default_sync_nas_clients"}
-_RADIUS_SETTING_STATUS_KEYS = {"default_sync_status"}
-
 
 def _domain_allowed_keys(domain: SettingDomain) -> str:
     specs = settings_spec.list_specs(domain)
@@ -423,68 +398,6 @@ def list_radius_settings_response(
     return _list_domain_settings_response(
         db, SettingDomain.radius, is_active, order_by, order_dir, limit, offset
     )
-
-
-def _normalize_radius_setting(
-    key: str, payload: DomainSettingUpdate
-) -> DomainSettingUpdate:
-    if key not in _RADIUS_SETTING_KEYS:
-        allowed = ", ".join(sorted(_RADIUS_SETTING_KEYS))
-        raise HTTPException(
-            status_code=400, detail=f"Invalid setting key. Allowed: {allowed}"
-        )
-    value = payload.value_text if payload.value_text is not None else payload.value_json
-    if value is None:
-        raise HTTPException(status_code=400, detail="Value required")
-    data = payload.model_dump(exclude_unset=True)
-    if key in _RADIUS_SETTING_INT_KEYS:
-        try:
-            parsed = _coerce_int(value)
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400, detail="Value must be an integer"
-            ) from exc
-        if parsed < 1:
-            raise HTTPException(status_code=400, detail="Value must be >= 1")
-        data["value_type"] = SettingValueType.integer
-        data["value_text"] = str(parsed)
-        data["value_json"] = None
-    elif key in _RADIUS_SETTING_BOOL_KEYS:
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "on"}:
-                bool_value = True
-            elif normalized in {"0", "false", "no", "off"}:
-                bool_value = False
-            else:
-                raise HTTPException(status_code=400, detail="Value must be boolean")
-        elif isinstance(value, bool):
-            bool_value = value
-        else:
-            raise HTTPException(status_code=400, detail="Value must be boolean")
-        data["value_type"] = SettingValueType.boolean
-        data["value_text"] = "true" if bool_value else "false"
-        data["value_json"] = bool_value
-    elif key in _RADIUS_SETTING_STATUS_KEYS:
-        if not isinstance(value, str):
-            raise HTTPException(status_code=400, detail="Value must be a string")
-        normalized = value.strip().lower()
-        if normalized not in {"running", "success", "failed"}:
-            raise HTTPException(
-                status_code=400, detail="Value must be running, success, or failed"
-            )
-        data["value_type"] = SettingValueType.string
-        data["value_text"] = normalized
-        data["value_json"] = None
-    else:
-        if not isinstance(value, str):
-            raise HTTPException(status_code=400, detail="Value must be a string")
-        data["value_type"] = SettingValueType.string
-        data["value_text"] = value
-        data["value_json"] = None
-    if key in _RADIUS_SETTING_SECRET_KEYS:
-        data["is_secret"] = True
-    return DomainSettingUpdate(**data)
 
 
 def upsert_radius_setting(db: Session, key: str, payload: DomainSettingUpdate):

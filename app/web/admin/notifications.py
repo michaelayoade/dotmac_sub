@@ -379,7 +379,6 @@ def notification_queue(
 def notification_history(
     request: Request,
     status: str | None = None,
-    channel: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -394,7 +393,6 @@ def notification_history(
             **web_notifications_service.history_context(
                 db,
                 status=status,
-                channel=channel,
                 page=page,
                 per_page=per_page,
             ),

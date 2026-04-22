@@ -8,7 +8,7 @@
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/network/vlans" class="hover:text-primary-600">VLANs</a>
+                <a href="/admin/network/vlans{% if vlan.olt_device_id %}?olt_id={{ vlan.olt_device_id }}{% endif %}" class="hover:text-primary-600">VLANs</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">VLAN {{ vlan.tag }}</span>
             </nav>
@@ -47,7 +47,13 @@
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ vlan.olt_device.name if vlan.olt_device else '-' }}</dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if vlan.olt_device %}
+                                <a href="/admin/network/olts/{{ vlan.olt_device.id }}" class="hover:text-primary-600 dark:hover:text-primary-400">{{ vlan.olt_device.name }}</a>
+                                {% else %}
+                                -
+                                {% endif %}
+                            </dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Purpose</dt>
@@ -142,9 +148,44 @@
                         <p class="text-sm text-slate-900 dark:text-white">{{ port_links | length }}</p>
                     </div>
                     <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONT References</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ usage_counts.onts }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">IP Pools</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ usage_counts.ip_pools }}</p>
+                    </div>
+                    <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
                         <p class="text-sm text-slate-900 dark:text-white">{{ vlan.created_at.strftime('%B %d, %Y') if vlan.created_at else '-' }}</p>
                     </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Scope & Usage</h2>
+                </div>
+                <div class="p-6 space-y-3 text-sm">
+                    <div class="flex items-center justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">WAN assignments</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ usage_counts.wan_onts }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">Management assignments</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ usage_counts.mgmt_onts }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-slate-500 dark:text-slate-400">IP pools bound</span>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ usage_counts.ip_pools }}</span>
+                    </div>
+                    {% if vlan.olt_device %}
+                    <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+                        <a href="/admin/network/olts/{{ vlan.olt_device.id }}?tab=settings" class="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">
+                            Open {{ vlan.olt_device.name }} network resources
+                        </a>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
 

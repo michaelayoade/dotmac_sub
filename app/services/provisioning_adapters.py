@@ -377,7 +377,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         timeout = config.get("timeout_sec") or connector.get("timeout_sec") or 30.0
         client = create_acs_client(base_url, timeout=float(timeout), headers=headers)
 
-        connection_request = bool(config.get("connection_request", True))
+        use_verified_write = bool(config.get("connection_request", True))
         results: list[dict] = []
         tasks = config.get("tasks") or []
         parameters = config.get("parameters") or {}
@@ -392,7 +392,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             parameters = merged_parameters
 
         if parameters:
-            if connection_request:
+            if use_verified_write:
                 expected_parameters = config.get("expected_parameters")
                 if expected_parameters is None:
                     expected_parameters = {
@@ -409,19 +409,13 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             else:
                 # Preserve explicit queued/offline provisioning semantics:
                 # verification requires an immediate connection request.
-                result = client.set_parameter_values(
-                    device_id, parameters, connection_request=False
-                )
+                result = client.set_parameter_values(device_id, parameters)
             results.append({"task": "setParameterValues", "result": result})
         if get_parameters:
-            result = client.get_parameter_values(
-                device_id, list(get_parameters), connection_request=connection_request
-            )
+            result = client.get_parameter_values(device_id, list(get_parameters))
             results.append({"task": "getParameterValues", "result": result})
         if refresh_object:
-            result = client.refresh_object(
-                device_id, refresh_object, connection_request=connection_request
-            )
+            result = client.refresh_object(device_id, refresh_object)
             results.append({"task": "refreshObject", "result": result})
         for task in tasks:
             if isinstance(task, str):
@@ -430,9 +424,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
                 payload = dict(task or {})
             if not payload.get("name"):
                 raise ValueError("GenieACS tasks require a name field")
-            result = client.create_task(
-                device_id, payload, connection_request=connection_request
-            )
+            result = client.create_task(device_id, payload)
             results.append({"task": payload["name"], "result": result})
 
         if not results:

@@ -24,15 +24,21 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from app.services.network.olt_ssh import ServicePortEntry
 
-from sqlalchemy import and_, func, select
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.network import OLTDevice, OntUnit
 from app.services.network._credentials import PppoeCredentialProvider
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.provisioning_settings import get_stale_runtime_hours
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_field(db: Session, ont: OntUnit, key: str) -> object | None:
+    resolved = resolve_effective_ont_config(db, ont)
+    values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
+    return values.get(key)
 
 
 def _acs_config_writer():
@@ -59,6 +65,28 @@ class ProvisioningEnforcement:
     """Detect and fix provisioning gaps across the ONT fleet."""
 
     @staticmethod
+    def _list_candidate_onts(
+        db: Session,
+        *,
+        olt_id: str | None = None,
+    ) -> list[OntUnit]:
+        stmt = (
+            select(OntUnit)
+            .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+            .options(
+                joinedload(OntUnit.olt_device),
+                joinedload(OntUnit.wan_vlan),
+                joinedload(OntUnit.user_vlan),
+                selectinload(OntUnit.bundle_assignments),
+                selectinload(OntUnit.config_overrides),
+            )
+            .where(OntUnit.is_active.is_(True))
+        )
+        if olt_id:
+            stmt = stmt.where(OntUnit.olt_device_id == olt_id)
+        return list(db.scalars(stmt).unique().all())
+
+    @staticmethod
     def detect_gaps(
         db: Session,
         *,
@@ -78,14 +106,6 @@ class ProvisioningEnforcement:
         """
         from app.models.network import OnuOnlineStatus
 
-        base = (
-            select(OntUnit)
-            .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-            .where(OntUnit.is_active.is_(True))
-        )
-        if olt_id:
-            base = base.where(OntUnit.olt_device_id == olt_id)
-
         gaps: dict[str, list[str]] = {
             "no_acs_binding": [],
             "no_acs_on_olt": [],
@@ -95,71 +115,61 @@ class ProvisioningEnforcement:
             "stale_wan_ip": [],
         }
 
-        # 1. No ACS binding — OLT has ACS but ONT doesn't
-        stmt = base.where(
-            OntUnit.pppoe_username.isnot(None),
-            OntUnit.tr069_acs_server_id.is_(None),
-            OLTDevice.tr069_acs_server_id.isnot(None),
-        )
-        for ont in db.scalars(stmt).all():
-            gaps["no_acs_binding"].append(str(ont.id))
-
-        # 2. No ACS on OLT — ONT's OLT has no ACS configured
-        stmt = base.where(
-            OntUnit.pppoe_username.isnot(None),
-            OLTDevice.tr069_acs_server_id.is_(None),
-        )
-        for ont in db.scalars(stmt).all():
-            gaps["no_acs_on_olt"].append(str(ont.id))
-
-        # 3. PPPoE not pushed — online, ACS-bound, has creds, but no WAN IP
-        stmt = base.where(
-            OntUnit.pppoe_username.isnot(None),
-            OntUnit.tr069_acs_server_id.isnot(None),
-            OntUnit.observed_wan_ip.is_(None),
-            OntUnit.effective_status == OnuOnlineStatus.online,
-        )
-        for ont in db.scalars(stmt).all():
-            gaps["pppoe_not_pushed"].append(str(ont.id))
-
-        # 4. WiFi pending sync — online, ACS-bound, has WiFi config in DB
-        # These ONTs should have WiFi pushed to them via TR-069
-        stmt = base.where(
-            OntUnit.wifi_ssid.isnot(None),
-            OntUnit.tr069_acs_server_id.isnot(None),
-            OntUnit.effective_status == OnuOnlineStatus.online,
-        )
-        for ont in db.scalars(stmt).all():
-            gaps["wifi_pending_sync"].append(str(ont.id))
-
-        # 5. Management config pending push — has mgmt IP in DB and OLT location
-        # These ONTs need service-port and IPHOST pushed to OLT
-        stmt = base.where(
-            OntUnit.mgmt_ip_address.isnot(None),
-            OntUnit.board.isnot(None),
-            OntUnit.port.isnot(None),
-            OntUnit.external_id.isnot(None),
-        )
-        for ont in db.scalars(stmt).all():
-            gaps["mgmt_pending_push"].append(str(ont.id))
-
-        # 6. Stale WAN IP — offline with old runtime data
         stale_hours = get_stale_runtime_hours(db)
         stale_cutoff = datetime.now(UTC) - timedelta(hours=stale_hours)
-        stmt = base.where(
-            OntUnit.observed_wan_ip.isnot(None),
-            OntUnit.effective_status.in_(
-                [
-                    OnuOnlineStatus.offline,
-                ]
-            ),
-            and_(
-                OntUnit.observed_runtime_updated_at.isnot(None),
-                OntUnit.observed_runtime_updated_at < stale_cutoff,
-            ),
-        )
-        for ont in db.scalars(stmt).all():
-            gaps["stale_wan_ip"].append(str(ont.id))
+
+        for ont in ProvisioningEnforcement._list_candidate_onts(db, olt_id=olt_id):
+            effective_pppoe_username = _effective_field(db, ont, "pppoe_username")
+            effective_wifi_ssid = _effective_field(db, ont, "wifi_ssid")
+            effective_mgmt_ip = _effective_field(db, ont, "mgmt_ip_address") or getattr(
+                ont, "mgmt_ip_address", None
+            )
+
+            if (
+                effective_pppoe_username not in (None, "")
+                and getattr(ont, "tr069_acs_server_id", None) is None
+                and getattr(getattr(ont, "olt_device", None), "tr069_acs_server_id", None)
+                is not None
+            ):
+                gaps["no_acs_binding"].append(str(ont.id))
+
+            if (
+                effective_pppoe_username not in (None, "")
+                and getattr(getattr(ont, "olt_device", None), "tr069_acs_server_id", None)
+                is None
+            ):
+                gaps["no_acs_on_olt"].append(str(ont.id))
+
+            if (
+                effective_pppoe_username not in (None, "")
+                and getattr(ont, "tr069_acs_server_id", None) is not None
+                and getattr(ont, "observed_wan_ip", None) is None
+                and getattr(ont, "effective_status", None) == OnuOnlineStatus.online
+            ):
+                gaps["pppoe_not_pushed"].append(str(ont.id))
+
+            if (
+                effective_wifi_ssid not in (None, "")
+                and getattr(ont, "tr069_acs_server_id", None) is not None
+                and getattr(ont, "effective_status", None) == OnuOnlineStatus.online
+            ):
+                gaps["wifi_pending_sync"].append(str(ont.id))
+
+            if (
+                effective_mgmt_ip not in (None, "")
+                and getattr(ont, "board", None) is not None
+                and getattr(ont, "port", None) is not None
+                and getattr(ont, "external_id", None) is not None
+            ):
+                gaps["mgmt_pending_push"].append(str(ont.id))
+
+            if (
+                getattr(ont, "observed_wan_ip", None) is not None
+                and getattr(ont, "effective_status", None) == OnuOnlineStatus.offline
+                and getattr(ont, "observed_runtime_updated_at", None) is not None
+                and ont.observed_runtime_updated_at < stale_cutoff
+            ):
+                gaps["stale_wan_ip"].append(str(ont.id))
 
         return gaps
 
@@ -169,115 +179,9 @@ class ProvisioningEnforcement:
         *,
         olt_id: str | None = None,
     ) -> dict[str, int]:
-        """Return gap counts without loading full ONT objects (fast)."""
-        from app.models.network import OnuOnlineStatus
-
-        base_where: list[ColumnElement[bool]] = [OntUnit.is_active.is_(True)]
-        if olt_id:
-            base_where.append(OntUnit.olt_device_id == olt_id)
-
-        counts: dict[str, int] = {}
-
-        # No ACS binding
-        counts["no_acs_binding"] = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-                .where(
-                    *base_where,
-                    OntUnit.pppoe_username.isnot(None),
-                    OntUnit.tr069_acs_server_id.is_(None),
-                    OLTDevice.tr069_acs_server_id.isnot(None),
-                )
-            )
-            or 0
-        )
-
-        # No ACS on OLT
-        counts["no_acs_on_olt"] = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-                .where(
-                    *base_where,
-                    OntUnit.pppoe_username.isnot(None),
-                    OLTDevice.tr069_acs_server_id.is_(None),
-                )
-            )
-            or 0
-        )
-
-        # PPPoE not pushed
-        counts["pppoe_not_pushed"] = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-                .where(
-                    *base_where,
-                    OntUnit.pppoe_username.isnot(None),
-                    OntUnit.tr069_acs_server_id.isnot(None),
-                    OntUnit.observed_wan_ip.is_(None),
-                    OntUnit.effective_status == OnuOnlineStatus.online,
-                )
-            )
-            or 0
-        )
-
-        # WiFi pending sync
-        counts["wifi_pending_sync"] = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-                .where(
-                    *base_where,
-                    OntUnit.wifi_ssid.isnot(None),
-                    OntUnit.tr069_acs_server_id.isnot(None),
-                    OntUnit.effective_status == OnuOnlineStatus.online,
-                )
-            )
-            or 0
-        )
-
-        # Management config pending push
-        counts["mgmt_pending_push"] = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-                .where(
-                    *base_where,
-                    OntUnit.mgmt_ip_address.isnot(None),
-                    OntUnit.board.isnot(None),
-                    OntUnit.port.isnot(None),
-                    OntUnit.external_id.isnot(None),
-                )
-            )
-            or 0
-        )
-
-        # Stale WAN IP
-        stale_hours = get_stale_runtime_hours(db)
-        stale_cutoff = datetime.now(UTC) - timedelta(hours=stale_hours)
-        counts["stale_wan_ip"] = (
-            db.scalar(
-                select(func.count())
-                .select_from(OntUnit)
-                .where(
-                    *base_where,
-                    OntUnit.observed_wan_ip.isnot(None),
-                    OntUnit.effective_status == OnuOnlineStatus.offline,
-                    OntUnit.observed_runtime_updated_at.isnot(None),
-                    OntUnit.observed_runtime_updated_at < stale_cutoff,
-                )
-            )
-            or 0
-        )
-
-        return counts
+        """Return gap counts derived from the same effective-config logic."""
+        gaps = ProvisioningEnforcement.detect_gaps(db, olt_id=olt_id)
+        return {key: len(value) for key, value in gaps.items()}
 
     @staticmethod
     def enforce_acs_binding(
@@ -370,7 +274,13 @@ class ProvisioningEnforcement:
         skipped = 0
         for ont_id in ont_ids:
             ont = db.get(OntUnit, ont_id)
-            if not ont or not ont.pppoe_username:
+            if not ont:
+                skipped += 1
+                continue
+            pppoe_username = _effective_field(db, ont, "pppoe_username") or getattr(
+                ont, "pppoe_username", None
+            )
+            if not pppoe_username:
                 skipped += 1
                 continue
 
@@ -396,7 +306,12 @@ class ProvisioningEnforcement:
                         ont.serial_number,
                     )
                 else:
-                    password = _resolve_access_credential_password(credentials, ont)
+                    password = _resolve_access_credential_password(
+                        db,
+                        credentials,
+                        ont,
+                        username=str(pppoe_username),
+                    )
 
             if not password:
                 logger.warning(
@@ -410,7 +325,7 @@ class ProvisioningEnforcement:
                 result = acs_config_adapter.set_pppoe_credentials(
                     db,
                     ont_id,
-                    ont.pppoe_username,
+                    str(pppoe_username),
                     password,
                 )
                 if result.success:
@@ -457,7 +372,13 @@ class ProvisioningEnforcement:
         skipped = 0
         for ont_id in ont_ids:
             ont = db.get(OntUnit, ont_id)
-            if not ont or not ont.wifi_ssid:
+            if not ont:
+                skipped += 1
+                continue
+            wifi_ssid = _effective_field(db, ont, "wifi_ssid") or getattr(
+                ont, "wifi_ssid", None
+            )
+            if not wifi_ssid:
                 skipped += 1
                 continue
 
@@ -472,19 +393,30 @@ class ProvisioningEnforcement:
                         ont.serial_number,
                     )
 
+            wifi_enabled = _effective_field(db, ont, "wifi_enabled")
+            wifi_channel = _effective_field(db, ont, "wifi_channel")
+            wifi_security_mode = _effective_field(db, ont, "wifi_security_mode")
+
             try:
                 result = acs_config_adapter.set_wifi_config(
                     db,
                     ont_id,
-                    ssid=ont.wifi_ssid,
+                    enabled=True if wifi_enabled is None else bool(wifi_enabled),
+                    ssid=str(wifi_ssid),
                     password=password,
+                    channel=str(wifi_channel) if wifi_channel not in (None, "") else None,
+                    security_mode=(
+                        str(wifi_security_mode)
+                        if wifi_security_mode not in (None, "")
+                        else None
+                    ),
                 )
                 if result.success:
                     pushed += 1
                     logger.info(
                         "WiFi config pushed to ONT %s (SSID: %s)",
                         ont.serial_number,
-                        ont.wifi_ssid,
+                        wifi_ssid,
                     )
                 else:
                     logger.warning(
@@ -535,7 +467,13 @@ class ProvisioningEnforcement:
         onts_by_olt: dict[str, list[OntUnit]] = {}
         for ont_id in ont_ids:
             ont = db.get(OntUnit, ont_id)
-            if not ont or not ont.mgmt_ip_address:
+            if not ont:
+                skipped += 1
+                continue
+            mgmt_ip_address = _effective_field(db, ont, "mgmt_ip_address") or getattr(
+                ont, "mgmt_ip_address", None
+            )
+            if not mgmt_ip_address:
                 skipped += 1
                 continue
             if not ont.board or not ont.port or not ont.external_id:
@@ -573,13 +511,16 @@ class ProvisioningEnforcement:
 
                 # Resolve VLAN tag
                 mgmt_vlan_tag = 201
-                if ont.mgmt_vlan_id:
+                effective_mgmt_vlan = _effective_field(db, ont, "mgmt_vlan")
+                if effective_mgmt_vlan not in (None, ""):
+                    mgmt_vlan_tag = int(effective_mgmt_vlan)
+                elif ont.mgmt_vlan_id:
                     vlan = db.get(Vlan, str(ont.mgmt_vlan_id))
                     if vlan:
                         mgmt_vlan_tag = vlan.tag
 
                 # Calculate subnet/gateway from IP (assume /24)
-                ip_addr = ont.mgmt_ip_address
+                ip_addr = str(mgmt_ip_address)
                 network = ipaddress.ip_network(f"{ip_addr}/24", strict=False)
                 subnet_mask = "255.255.255.0"
                 gateway = str(network.network_address + 1)
@@ -751,7 +692,10 @@ class ProvisioningEnforcement:
             for ont, olt_ont_id in fsp_onts:
                 # Determine expected VLAN (prefer wan_vlan, fallback to user_vlan)
                 expected_vlan: int | None = None
-                if ont.wan_vlan and ont.wan_vlan.tag:
+                effective_wan_vlan = _effective_field(db, ont, "wan_vlan")
+                if effective_wan_vlan not in (None, ""):
+                    expected_vlan = int(effective_wan_vlan)
+                elif ont.wan_vlan and ont.wan_vlan.tag:
                     expected_vlan = ont.wan_vlan.tag
                 elif ont.user_vlan and ont.user_vlan.tag:
                     expected_vlan = ont.user_vlan.tag
@@ -835,8 +779,11 @@ class ProvisioningEnforcement:
 
 
 def _resolve_access_credential_password(
+    db: Session,
     credentials: PppoeCredentialProvider,
     ont: OntUnit,
+    *,
+    username: str | None = None,
 ) -> str:
     """Resolve the PPPoE password via the injected credential provider.
 
@@ -844,16 +791,18 @@ def _resolve_access_credential_password(
     decrypts its stored ``secret_hash``. Returns an empty string if no
     active credential is found or the secret cannot be decrypted.
     """
-    if not ont.pppoe_username:
+    effective_pppoe_username = _effective_field(db, ont, "pppoe_username")
+    lookup_username = str(username or effective_pppoe_username or ont.pppoe_username or "").strip()
+    if not lookup_username:
         return ""
 
     try:
-        cred = credentials.get_by_username(ont.pppoe_username)
+        cred = credentials.get_by_username(lookup_username)
     except Exception as exc:  # noqa: BLE001 - provider errors must not abort the run
         logger.warning(
             "Credential provider lookup failed for ONT %s (username %s): %s",
             ont.serial_number,
-            ont.pppoe_username,
+            lookup_username,
             exc,
             exc_info=True,
         )
@@ -870,7 +819,7 @@ def _resolve_access_credential_password(
         logger.warning(
             "Could not decrypt access credential for ONT %s (username %s): %s",
             ont.serial_number,
-            ont.pppoe_username,
+            lookup_username,
             exc,
             exc_info=True,
         )

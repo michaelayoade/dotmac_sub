@@ -1,0 +1,159 @@
+{# ──────────────────────────────────────────────────────────────────
+   OLT chassis faceplate
+   Renders a Huawei/ZTE/Nokia-style OLT chassis with shelves, cards
+   per slot, and per-port state.
+   ────────────────────────────────────────────────────────────────── #}
+
+{% macro _status_to_state(status) -%}
+{%- set s = (status or '') | string | lower -%}
+{%- if s in ['normal', 'active', 'up', 'ok'] -%}up
+{%- elif s in ['fault', 'failed', 'down', 'error'] -%}down
+{%- elif s in ['disabled', 'inactive', 'admin_down'] -%}admin_down
+{%- else -%}unknown
+{%- endif -%}
+{% endmacro %}
+
+{% macro _card_border(state) -%}
+{%- if state == 'up' -%}border-emerald-300 dark:border-emerald-700/60
+{%- elif state == 'down' -%}border-rose-300 dark:border-rose-700/60
+{%- elif state == 'admin_down' -%}border-slate-300 dark:border-slate-600
+{%- else -%}border-slate-200 dark:border-slate-700
+{%- endif -%}
+{% endmacro %}
+
+{% macro _card_accent(state) -%}
+{%- if state == 'up' -%}bg-emerald-500
+{%- elif state == 'down' -%}bg-rose-500 animate-pulse
+{%- elif state == 'admin_down' -%}bg-slate-400 dark:bg-slate-500
+{%- else -%}bg-slate-300 dark:bg-slate-600
+{%- endif -%}
+{% endmacro %}
+
+{% macro _pon_port_fill(state) -%}
+{%- if state == 'up' -%}fill-emerald-500
+{%- elif state == 'down' -%}fill-rose-500
+{%- elif state == 'admin_down' -%}fill-slate-400 dark:fill-slate-500
+{%- else -%}fill-slate-200 dark:fill-slate-700
+{%- endif -%}
+{% endmacro %}
+
+{#
+  olt_faceplate – chassis render from shelf/card/port ORM graph.
+  Arguments:
+    shelves  – list of shelf dicts/ORM objects; each has:
+                 shelf_number, label, cards[]
+               each card has:
+                 slot_number, card_type, model, status, is_active, ports[]
+               each port has:
+                 port_number, port_type, status, is_active
+    model    – optional device model label (e.g. "MA5608T")
+    vendor   – optional vendor label (e.g. "Huawei")
+    compact  – bool; when true uses a smaller port grid
+#}
+{% macro olt_faceplate(shelves, model=None, vendor=None, compact=false) %}
+{%- set port_size = 10 if compact else 12 -%}
+{%- set port_gap = 2 -%}
+{%- set slot_min_w = 96 if compact else 120 -%}
+
+<div class="overflow-x-auto rounded-2xl border border-slate-300 bg-gradient-to-b from-slate-100 to-slate-200 p-3 shadow-inner dark:border-slate-700 dark:from-slate-800 dark:to-slate-900">
+  {# Top chassis label strip #}
+  <div class="mb-2 flex items-center justify-between px-1">
+    <div class="flex items-center gap-2">
+      <div class="flex gap-1">
+        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+        <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+        <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+      </div>
+      <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+        {{ vendor or 'OLT' }}{% if model %} · {{ model }}{% endif %}
+      </span>
+    </div>
+    <div class="flex items-center gap-3 text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500">
+      <span class="flex items-center gap-1">
+        <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Up
+      </span>
+      <span class="flex items-center gap-1">
+        <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Fault
+      </span>
+      <span class="flex items-center gap-1">
+        <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Disabled
+      </span>
+    </div>
+  </div>
+
+  {% if shelves %}
+    {% for shelf in shelves %}
+      {% set sorted_cards = (shelf.cards | sort(attribute='slot_number')) if shelf.cards else [] %}
+      <div class="mb-3 last:mb-0 rounded-lg border border-slate-300 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-800/60">
+        <div class="mb-1.5 flex items-center justify-between px-1 text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          <span>Shelf {{ shelf.shelf_number }}{% if shelf.label %} · {{ shelf.label }}{% endif %}</span>
+          <span>{{ sorted_cards | length }} slots</span>
+        </div>
+        <div class="flex gap-1.5">
+          {% for card_item in sorted_cards %}
+            {% set cstate = _status_to_state(card_item.status.value if card_item.status and card_item.status is not string else card_item.status) | trim %}
+            {% if not card_item.is_active %}{% set cstate = 'admin_down' %}{% endif %}
+            {% set port_count = card_item.ports | length %}
+            <div class="flex flex-col rounded-md border-2 {{ _card_border(cstate) | trim }} bg-slate-900 p-1.5 text-slate-200 shadow-sm"
+                 style="min-width: {{ slot_min_w }}px"
+                 title="Slot {{ card_item.slot_number }} — {{ card_item.card_type or 'empty' }} — {{ cstate }}">
+              {# Slot header #}
+              <div class="mb-1 flex items-center justify-between">
+                <span class="font-mono text-[9px] font-bold text-slate-300">SLOT {{ card_item.slot_number }}</span>
+                <span class="h-1.5 w-1.5 rounded-full {{ _card_accent(cstate) | trim }}"></span>
+              </div>
+              {# Card type label #}
+              <div class="mb-1 truncate font-mono text-[10px] font-semibold text-slate-100">
+                {{ card_item.card_type or '—' }}
+              </div>
+              {# Port grid as SVG #}
+              {% if port_count %}
+                {% set sorted_ports = card_item.ports | sort(attribute='port_number') %}
+                {% set cols = (16 if compact else 8) if port_count > 8 else port_count %}
+                {% set rows = ((port_count / cols) | round(0, 'ceil')) | int %}
+                {% set svg_w = cols * (port_size + port_gap) %}
+                {% set svg_h = rows * (port_size + port_gap) %}
+                <svg viewBox="0 0 {{ svg_w }} {{ svg_h }}"
+                     class="h-auto w-full"
+                     preserveAspectRatio="xMidYMid meet">
+                  {% for pp in sorted_ports %}
+                    {% set pstate = _status_to_state(pp.status.value if pp.status and pp.status is not string else pp.status) | trim %}
+                    {% if not pp.is_active %}{% set pstate = 'admin_down' %}{% endif %}
+                    {% set row = loop.index0 // cols %}
+                    {% set col = loop.index0 % cols %}
+                    <g transform="translate({{ col * (port_size + port_gap) }}, {{ row * (port_size + port_gap) }})">
+                      <rect width="{{ port_size }}" height="{{ port_size }}" rx="1.5"
+                            class="{{ _pon_port_fill(pstate) | trim }}"
+                            opacity="0.9"/>
+                      <rect x="1.5" y="1.5" width="{{ port_size - 3 }}" height="{{ port_size - 3 }}" rx="0.8"
+                            class="fill-slate-900/60"/>
+                      <title>Port {{ pp.port_number }} — {{ (pp.port_type.value if pp.port_type and pp.port_type is not string else pp.port_type) or 'port' }} — {{ pstate }}</title>
+                    </g>
+                  {% endfor %}
+                </svg>
+                <div class="mt-1 text-center font-mono text-[8px] text-slate-400">
+                  {{ port_count }} port{% if port_count != 1 %}s{% endif %}
+                </div>
+              {% else %}
+                <div class="flex h-8 items-center justify-center rounded bg-slate-800/50 font-mono text-[8px] uppercase text-slate-500">
+                  no ports
+                </div>
+              {% endif %}
+              {# Model footer #}
+              {% if card_item.model %}
+                <div class="mt-1 truncate font-mono text-[8px] text-slate-500">
+                  {{ card_item.model }}
+                </div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="rounded-md border border-dashed border-slate-300 bg-white/60 py-6 text-center text-xs text-slate-500 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400">
+      No shelf inventory recorded yet — run Autofind or define shelves to visualize the chassis.
+    </div>
+  {% endif %}
+</div>
+{% endmacro %}

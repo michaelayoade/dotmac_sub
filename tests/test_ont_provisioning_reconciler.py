@@ -388,6 +388,30 @@ class TestVlanValidator:
         assert result.is_valid is False
         assert result.exists_in_db is False
 
+    def test_global_vlan_is_invalid_for_scoped_olt(self, db_session) -> None:
+        from app.models.catalog import RegionZone
+        from app.models.network import OLTDevice, Vlan
+        from app.services.network.ont_provisioning.vlan_validator import (
+            validate_vlan_exists,
+        )
+
+        olt = OLTDevice(name="Test OLT", vendor="Huawei", model="MA5608T")
+        db_session.add(olt)
+        db_session.commit()
+        db_session.refresh(olt)
+
+        region = RegionZone(name="Test Region 2")
+        db_session.add(region)
+        db_session.commit()
+
+        vlan = Vlan(tag=200, region_id=region.id, is_active=True)
+        db_session.add(vlan)
+        db_session.commit()
+
+        result = validate_vlan_exists(db_session, 200, olt)
+        assert result.is_valid is False
+        assert result.exists_in_db is False
+
 
 # ---------------------------------------------------------------------------
 # SSH Session Tests
@@ -508,6 +532,8 @@ class TestBuildDesiredStateFromProfile:
         from app.models.network import (
             OLTDevice,
             OntAssignment,
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
             OntProfileWanService,
             OntProvisioningProfile,
             OntUnit,
@@ -563,16 +589,23 @@ class TestBuildDesiredStateFromProfile:
             board="0/2",
             port="1",
             external_id="5",
-            provisioning_profile_id=profile.id,
         )
         db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
+        db_session.flush()
 
         # Create assignment
         assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
         db_session.add(assignment)
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=profile.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
+            )
+        )
         db_session.commit()
+        db_session.refresh(ont)
 
         # Build desired state
         desired, err = build_desired_state_from_profile(
@@ -584,6 +617,85 @@ class TestBuildDesiredStateFromProfile:
         assert len(desired.service_ports) == 1
         assert desired.service_ports[0].vlan_id == 100
         assert desired.service_ports[0].gem_index == 1
+
+    def test_build_desired_state_uses_effective_management_ip(self, db_session) -> None:
+        from app.models.network import (
+            MgmtIpMode,
+            OLTDevice,
+            OntAssignment,
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
+            OntConfigOverride,
+            OntProvisioningProfile,
+            OntUnit,
+            PonPort,
+        )
+        from app.services.network.ont_provisioning.state import (
+            build_desired_state_from_profile,
+        )
+
+        olt = OLTDevice(
+            name="State OLT",
+            vendor="Huawei",
+            model="MA5608T",
+            ssh_username="admin",
+            ssh_password="test",
+        )
+        db_session.add(olt)
+        db_session.flush()
+
+        pon = PonPort(olt_id=olt.id, name="0/2/1")
+        db_session.add(pon)
+        db_session.flush()
+
+        legacy_bundle = OntProvisioningProfile(name="Legacy State Bundle", is_active=True)
+        profile = OntProvisioningProfile(
+            name="Target State Bundle",
+            olt_device_id=olt.id,
+            mgmt_ip_mode=MgmtIpMode.static_ip,
+            mgmt_vlan_tag=300,
+        )
+        db_session.add_all([legacy_bundle, profile])
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="TEST-STATE-EFFECTIVE-001",
+            board="0/2",
+            port="1",
+            external_id="5",
+            mgmt_ip_address=None,
+        )
+        db_session.add(ont)
+        db_session.flush()
+
+        db_session.add(
+            OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
+        )
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=legacy_bundle.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            OntConfigOverride(
+                ont_unit_id=ont.id,
+                field_name="management.ip_address",
+                value_json={"value": "10.30.0.44"},
+            )
+        )
+        db_session.commit()
+
+        desired, err = build_desired_state_from_profile(
+            db_session, str(ont.id), profile
+        )
+
+        assert err == ""
+        assert desired is not None
+        assert desired.management is not None
+        assert desired.management.ip_address == "10.30.0.44"
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +711,8 @@ class TestProvisioningPreflight:
             OLTDevice,
             OntAssignment,
             OntAuthorizationStatus,
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
             OntProvisioningProfile,
             OntUnit,
             PonPort,
@@ -630,7 +744,6 @@ class TestProvisioningPreflight:
             board="0/2",
             port="1",
             external_id="5",
-            provisioning_profile_id=profile.id,
             authorization_status=(
                 OntAuthorizationStatus.authorized if authorized else None
             ),
@@ -644,6 +757,14 @@ class TestProvisioningPreflight:
             active=True,
         )
         db_session.add(assignment)
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=profile.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
+            )
+        )
         db_session.commit()
         return ont
 

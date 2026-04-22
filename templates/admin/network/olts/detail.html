@@ -171,6 +171,13 @@
 
     {# ===================== OVERVIEW TAB ===================== #}
     <div x-show="activeTab === 'overview'" x-transition>
+        {# Chassis faceplate — shelf/card visualization across the top #}
+        {% if shelves %}
+        {% from "components/devices/olt_faceplate.html" import olt_faceplate %}
+        <div class="mb-6">
+            {{ olt_faceplate(shelves=shelves, model=olt.model, vendor=olt.vendor) }}
+        </div>
+        {% endif %}
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <div class="lg:col-span-2 space-y-6">
                 {# Device Information #}
@@ -315,6 +322,56 @@
                     </div>
                     {% endif %}
                 </dl>
+                {% endcall %}
+
+                {% call card("Network Resources", color="blue") %}
+                {% set pool_totals = namespace(addresses=0, assigned=0) %}
+                {% if olt_ip_pool_usage %}
+                    {% for usage in olt_ip_pool_usage %}
+                        {% if usage is mapping %}
+                            {% set pool_totals.addresses = pool_totals.addresses + (usage.get('total_addresses', 0) or 0) %}
+                            {% set pool_totals.assigned = pool_totals.assigned + (usage.get('assigned', 0) or 0) %}
+                        {% else %}
+                            {% set pool_totals.addresses = pool_totals.addresses + (usage.total_addresses | default(0)) %}
+                            {% set pool_totals.assigned = pool_totals.assigned + (usage.assigned | default(0)) %}
+                        {% endif %}
+                    {% endfor %}
+                {% endif %}
+                {% set total_pool_addresses = pool_totals.addresses %}
+                {% set total_pool_assigned = pool_totals.assigned %}
+                <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <div class="rounded-xl border border-blue-100 bg-blue-50/70 p-4 dark:border-blue-900/40 dark:bg-blue-900/10">
+                        <p class="text-xs font-medium uppercase text-blue-700 dark:text-blue-300">Service VLANs</p>
+                        <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ olt_vlans | length }}</p>
+                        <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">Defined directly on this OLT</p>
+                    </div>
+                    <div class="rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/10">
+                        <p class="text-xs font-medium uppercase text-emerald-700 dark:text-emerald-300">IP Pools</p>
+                        <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ olt_ip_pool_usage | length }}</p>
+                        <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">Management scopes tied to this OLT</p>
+                    </div>
+                    <div class="rounded-xl border border-violet-100 bg-violet-50/70 p-4 dark:border-violet-900/40 dark:bg-violet-900/10">
+                        <p class="text-xs font-medium uppercase text-violet-700 dark:text-violet-300">Assigned IPs</p>
+                        <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ total_pool_assigned }}</p>
+                        <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">Across OLT-bound IP pools</p>
+                    </div>
+                    <div class="rounded-xl border border-amber-100 bg-amber-50/70 p-4 dark:border-amber-900/40 dark:bg-amber-900/10">
+                        <p class="text-xs font-medium uppercase text-amber-700 dark:text-amber-300">Pool Capacity</p>
+                        <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ total_pool_addresses }}</p>
+                        <p class="mt-1 text-xs text-slate-600 dark:text-slate-400">Known addresses in assigned pools</p>
+                    </div>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-3">
+                    <a href="/admin/network/vlans?olt_id={{ olt.id }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        View VLAN inventory
+                    </a>
+                    <a href="/admin/network/vlans/new?olt_id={{ olt.id }}" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                        Add VLAN
+                    </a>
+                    <a href="/admin/network/ip-management/pools" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        Open IP pools
+                    </a>
+                </div>
                 {% endcall %}
 
                 {# PON Port Overview Grid #}
@@ -1015,7 +1072,7 @@
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {# VLANs on this OLT #}
             {% set vlan_actions %}
-            <a href="/admin/network/vlans" class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">Manage VLANs</a>
+            <a href="/admin/network/vlans?olt_id={{ olt.id }}" class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">View OLT VLAN inventory</a>
             {% endset %}
             {% call card("Service VLANs", color="blue", actions=vlan_actions) %}
             {% if olt_vlans %}
@@ -1027,6 +1084,7 @@
                             <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
                             <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Purpose</th>
                             <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">DHCP Snooping</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Details</th>
                             <th class="px-3 py-2 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400"></th>
                         </tr>
                     </thead>
@@ -1049,6 +1107,9 @@
                                 {% else %}
                                 <span class="text-xs text-slate-400">Off</span>
                                 {% endif %}
+                            </td>
+                            <td class="px-3 py-2 text-sm">
+                                <a href="/admin/network/vlans/{{ vlan.id }}" class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">Open</a>
                             </td>
                             <td class="px-3 py-2 text-right">
                                 <form method="POST" action="/admin/network/olts/{{ olt.id }}/vlans/unassign" class="inline">
@@ -1086,6 +1147,10 @@
                 </button>
             </form>
             {% endif %}
+            <div class="mt-4 flex flex-wrap gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+                <a href="/admin/network/vlans?olt_id={{ olt.id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">See usage counts and edit existing VLANs</a>
+                <a href="/admin/network/vlans/new?olt_id={{ olt.id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">Create a new VLAN for this OLT</a>
+            </div>
             {% endcall %}
 
             {# IP Pools on this OLT #}

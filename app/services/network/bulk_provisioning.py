@@ -81,7 +81,7 @@ def _create_bulk_run(
     db: Session,
     *,
     ont_ids: list[uuid.UUID],
-    profile_id: str | uuid.UUID | None,
+    bundle_id: str | uuid.UUID | None,
     saga_name: str,
     max_workers: int,
     initiated_by: str | None,
@@ -97,7 +97,7 @@ def _create_bulk_run(
         }
     )
     run = BulkProvisioningRun(
-        profile_id=_as_uuid(profile_id) if profile_id else None,
+        profile_id=_as_uuid(bundle_id) if bundle_id else None,
         status=BulkProvisioningRunStatus.pending,
         correlation_key=correlation_key,
         initiated_by=initiated_by,
@@ -141,7 +141,7 @@ def bulk_provision_onts(
     db: Session,
     ont_ids: list[str | uuid.UUID],
     *,
-    profile_id: str | uuid.UUID | None = None,
+    bundle_id: str | uuid.UUID | None = None,
     saga_name: str = "full_provisioning",
     tr069_olt_profile_id: int | None = None,
     max_workers: int = 10,
@@ -167,7 +167,7 @@ def bulk_provision_onts(
     run = _create_bulk_run(
         db,
         ont_ids=unique_ont_ids,
-        profile_id=profile_id,
+        bundle_id=bundle_id,
         saga_name=saga_name,
         max_workers=workers,
         initiated_by=initiated_by,
@@ -188,8 +188,9 @@ def bulk_provision_onts(
     orchestrator_task_id: str | None = None
     if queued_count:
         task_step_data = dict(step_data or {})
-        if profile_id and "profile_id" not in task_step_data:
-            task_step_data["profile_id"] = str(profile_id)
+        if bundle_id:
+            task_step_data.setdefault("bundle_id", str(bundle_id))
+            task_step_data.setdefault("profile_id", str(bundle_id))
         if (
             tr069_olt_profile_id is not None
             and "tr069_olt_profile_id" not in task_step_data

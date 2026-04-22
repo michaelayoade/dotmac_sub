@@ -1,4 +1,6 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-up prod-down prod-logs prod-restart prod-migrate prod-check
+
+PROD_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.prod.yml
 
 # Default target
 help: ## Show this help
@@ -94,6 +96,24 @@ docker-shell: ## Open shell in app container
 
 docker-migrate: ## Run migrations inside Docker
 	docker exec dotmac_sub_app alembic upgrade head
+
+prod-up: ## Start production-style Docker containers from immutable images
+	$(PROD_COMPOSE) up -d
+
+prod-down: ## Stop production-style Docker containers
+	$(PROD_COMPOSE) down
+
+prod-logs: ## Tail production-style Docker logs
+	$(PROD_COMPOSE) logs -f --tail=100
+
+prod-restart: ## Restart production-style app and worker services
+	$(PROD_COMPOSE) up -d app celery-worker celery-worker-nin celery-worker-tr069 celery-worker-acs celery-worker-bandwidth celery-worker-ingestion celery-beat
+
+prod-migrate: ## Run migrations explicitly in the production-style stack
+	$(PROD_COMPOSE) run --rm app alembic upgrade head
+
+prod-check: ## Run deployment reconciliation checks in the production-style stack
+	$(PROD_COMPOSE) run --rm app python scripts/deploy_reconcile.py
 
 # ─── Credentials ──────────────────────────────────────────
 
