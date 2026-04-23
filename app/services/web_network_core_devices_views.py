@@ -38,9 +38,9 @@ from app.models.subscriber import SubscriberCategory
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
-from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
+from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
 from app.services.network.ont_status import (
     resolve_effective_last_seen_at,
     resolve_ont_status_for_model,
@@ -2648,10 +2648,6 @@ def _ont_desired_config_summary(
     plan = ont_plan if isinstance(ont_plan, dict) else {}
     mgmt = plan.get("configure_management_ip")
     mgmt = mgmt if isinstance(mgmt, dict) else {}
-    wan = plan.get("configure_wan_tr069")
-    wan = wan if isinstance(wan, dict) else {}
-    pppoe = plan.get("push_pppoe_tr069") or plan.get("push_pppoe_omci")
-    pppoe = pppoe if isinstance(pppoe, dict) else {}
     lan = plan.get("configure_lan_tr069")
     lan = lan if isinstance(lan, dict) else {}
     wifi = plan.get("configure_wifi_tr069")
@@ -2701,30 +2697,22 @@ def _ont_desired_config_summary(
         },
         {
             "label": "WAN mode",
-            "value": _display_config_value(
-                values.get("wan_mode") or wan.get("wan_mode")
-            ),
+            "value": _display_config_value(values.get("wan_mode")),
             "value_class": "",
         },
         {
             "label": "IP protocol",
-            "value": _display_ip_protocol(
-                values.get("ip_protocol") or wan.get("ip_protocol")
-            ),
+            "value": _display_ip_protocol(values.get("ip_protocol")),
             "value_class": "",
         },
         {
             "label": "WAN VLAN",
-            "value": _display_config_value(
-                wan_vlan or wan.get("wan_vlan") or pppoe.get("vlan_id")
-            ),
+            "value": _display_config_value(wan_vlan),
             "value_class": "font-mono",
         },
         {
             "label": "PPPoE user",
-            "value": _display_config_value(
-                values.get("pppoe_username") or pppoe.get("username")
-            ),
+            "value": _display_config_value(values.get("pppoe_username")),
             "value_class": "font-mono",
         },
         {

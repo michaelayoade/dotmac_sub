@@ -148,15 +148,8 @@ def _build_ont_operations_runbook(
     has_wan_intent = bool(
         effective_values.get("wan_vlan")
         or effective_values.get("wan_mode")
-        or _intent_step_present(ont_plan, "configure_wan_tr069")
     )
-    wan_plan = ont_plan.get("configure_wan_tr069")
-    wan_plan = wan_plan if isinstance(wan_plan, dict) else {}
-    raw_wan_mode = (
-        wan_plan.get("wan_mode")
-        or effective_values.get("wan_mode")
-        or ""
-    )
+    raw_wan_mode = effective_values.get("wan_mode") or ""
     wan_mode = str(raw_wan_mode).strip().lower()
     if wan_mode == "static_ip":
         wan_mode = "static"
@@ -164,13 +157,11 @@ def _build_ont_operations_runbook(
         wan_mode = "bridge"
     has_pppoe_credentials_intent = bool(
         effective_values.get("pppoe_username")
-        or _intent_step_present(ont_plan, "push_pppoe_tr069")
-        or _intent_step_present(ont_plan, "push_pppoe_omci")
     )
     has_static_addressing_intent = bool(
-        wan_plan.get("ip_address")
-        and wan_plan.get("gateway")
-        and wan_plan.get("dns_servers")
+        effective_values.get("wan_ip")
+        and effective_values.get("gateway")
+        and effective_values.get("dns_servers")
     )
     internet_credentials_required = wan_mode in {"pppoe", "static"}
     if wan_mode == "pppoe":
@@ -461,13 +452,7 @@ def operational_health_context(
     effective_values = (
         effective.get("values", {}) if isinstance(effective, dict) else {}
     )
-    wan_plan = ont_plan.get("configure_wan_tr069")
-    wan_plan = wan_plan if isinstance(wan_plan, dict) else {}
-    raw_wan_mode = (
-        wan_plan.get("wan_mode")
-        or effective_values.get("wan_mode")
-        or ""
-    )
+    raw_wan_mode = effective_values.get("wan_mode") or ""
     wan_mode = str(raw_wan_mode).strip().lower()
     if wan_mode == "static_ip":
         wan_mode = "static"
@@ -475,13 +460,11 @@ def operational_health_context(
         wan_mode = "bridge"
     has_pppoe_credentials_intent = bool(
         effective_values.get("pppoe_username")
-        or _intent_step_present(ont_plan, "push_pppoe_tr069")
-        or _intent_step_present(ont_plan, "push_pppoe_omci")
     )
     has_static_addressing_intent = bool(
-        wan_plan.get("ip_address")
-        and wan_plan.get("gateway")
-        and wan_plan.get("dns_servers")
+        effective_values.get("wan_ip")
+        and effective_values.get("gateway")
+        and effective_values.get("dns_servers")
     )
     if wan_mode == "pppoe":
         has_internet_credentials_intent = has_pppoe_credentials_intent

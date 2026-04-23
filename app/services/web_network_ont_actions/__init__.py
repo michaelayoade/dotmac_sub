@@ -21,7 +21,6 @@ from app.services.web_network_ont_actions._common import (
     _normalize_fsp,
     _parse_ont_id_on_olt,
     _persist_ont_plan_step,
-    _persist_wan_intent,
     _resolve_return_olt_context,
     actor_name_from_request,
 )
@@ -116,7 +115,6 @@ __all__ = [
     "_normalize_fsp",
     "_parse_ont_id_on_olt",
     "_persist_ont_plan_step",
-    "_persist_wan_intent",
     "_resolve_return_olt_context",
     # Public helpers
     "actor_name_from_request",

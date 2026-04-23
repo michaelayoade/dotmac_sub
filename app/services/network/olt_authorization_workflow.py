@@ -1885,8 +1885,6 @@ def authorize_autofind_ont_and_provision_network(
             isinstance(plan.get(key), dict) and bool(plan.get(key))
             for key in (
                 "bind_tr069",
-                "configure_wan_tr069",
-                "push_pppoe_tr069",
                 "configure_lan_tr069",
                 "configure_wifi_tr069",
             )

@@ -7,8 +7,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 
 
 def _value(raw: object, default: str = "Not set") -> str:
@@ -210,7 +210,6 @@ def build_service_intent(
     subscriber_info = subscriber_info or {}
     ont_plan = ont_plan or {}
     mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
-    wan_plan = _plan_section(ont_plan, "configure_wan_tr069")
     lan_plan_from_order = _plan_section(ont_plan, "configure_lan_tr069")
     lan_plan = {
         "lan_ip": _first_present(
@@ -260,16 +259,11 @@ def build_service_intent(
     profile_service_vlans = _profile_service_vlans(profile_wan_services)
     profile_service_gems = _profile_service_gems(profile_wan_services)
     profile_service_tag_modes = _profile_service_tag_modes(profile_wan_services)
-    pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069") or _plan_section(
-        ont_plan, "push_pppoe_omci"
-    )
 
     onu_mode = _enum_value(effective_values.get("onu_mode")) or _enum_value(
         getattr(ont, "onu_mode", None)
     )
-    wan_mode = wan_plan.get("wan_mode") or _enum_value(
-        effective_values.get("wan_mode")
-    )
+    wan_mode = _enum_value(effective_values.get("wan_mode"))
     mgmt_ip_mode = (
         _enum_value(effective_values.get("mgmt_ip_mode"))
         or mgmt_plan.get("ip_mode")
@@ -277,12 +271,7 @@ def build_service_intent(
     )
     mgmt_ip_mode = "static" if mgmt_ip_mode == "static_ip" else str(mgmt_ip_mode)
 
-    pppoe_username = effective_values.get("pppoe_username") or pppoe_plan.get(
-        "username"
-    )
-    static_ip = wan_plan.get("ip_address")
-    static_gateway = wan_plan.get("gateway")
-    static_dns = wan_plan.get("dns_servers")
+    pppoe_username = effective_values.get("pppoe_username")
 
     internet_method = (
         "Bridge" if onu_mode == "bridging" else _value(wan_mode, "Not set")
@@ -293,8 +282,6 @@ def build_service_intent(
             "label": "Internet VLAN",
             "value": _value(
                 effective_values.get("wan_vlan")
-                or wan_plan.get("wan_vlan")
-                or pppoe_plan.get("vlan_id")
             ),
         },
         {"label": "ONU Mode", "value": _value(onu_mode).replace("_", " ").title()},
@@ -305,9 +292,9 @@ def build_service_intent(
     elif normalized_wan_mode in {"static", "static_ip"}:
         internet_rows.extend(
             [
-                {"label": "Static IP", "value": _value(static_ip)},
-                {"label": "Gateway", "value": _value(static_gateway)},
-                {"label": "DNS", "value": _value(static_dns)},
+                {"label": "Static IP", "value": _value(effective_values.get("wan_ip"))},
+                {"label": "Gateway", "value": _value(effective_values.get("gateway"))},
+                {"label": "DNS", "value": _value(effective_values.get("dns_servers"))},
             ]
         )
 

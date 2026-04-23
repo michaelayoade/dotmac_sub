@@ -251,32 +251,3 @@ def execute_restore_olt_from_backup(
             detail=f"OLT backup restore failed: {exc}",
         )
 
-
-def execute_push_tr069_wan_config(
-    db: Session,
-    context: dict[str, Any],
-    config: dict[str, Any] | None,
-) -> ProvisioningResult:
-    """Legacy flat WAN TR-069 executor disabled after bundle-instance cutover."""
-    return ProvisioningResult(
-        status="failed",
-        detail=(
-            "Legacy TR-069 WAN config executor is disabled. Provision the active "
-            "ONT WAN service instances instead."
-        ),
-    )
-
-
-def execute_push_tr069_pppoe_credentials(
-    db: Session,
-    context: dict[str, Any],
-    config: dict[str, Any] | None,
-) -> ProvisioningResult:
-    """Legacy flat PPPoE executor disabled after bundle-instance cutover."""
-    return ProvisioningResult(
-        status="failed",
-        detail=(
-            "Legacy TR-069 PPPoE credential executor is disabled. Provision the "
-            "active ONT WAN service instances instead."
-        ),
-    )

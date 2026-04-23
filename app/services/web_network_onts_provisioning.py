@@ -1099,24 +1099,6 @@ def save_provision_settings(
                 commit=False,
             )
         if wan_vlan_id_value or wan_protocol_value:
-            wan_values: dict[str, object] = {
-                "wan_mode": wan_protocol_value,
-                "wan_vlan_id": wan_vlan_id_value,
-                "wan_vlan": wan_vlan_tag_value,
-                "ip_pool_id": ip_pool_id_value,
-                "static_ip_pool_id": static_ip_pool_id_value,
-                "ip_address": static_ip_value,
-                "subnet_mask": static_subnet_value,
-                "gateway": static_gateway_value,
-                "dns_servers": static_dns_value,
-            }
-            update_service_order_execution_context_for_ont(
-                db,
-                ont_id=ont_id,
-                step_name="configure_wan_tr069",
-                values=wan_values,
-                commit=False,
-            )
             update_service_order_execution_context_for_ont(
                 db,
                 ont_id=ont_id,
@@ -1124,14 +1106,6 @@ def save_provision_settings(
                 values={"tr069_olt_profile_id": tr069_profile_id_int},
                 commit=False,
             )
-            if wan_protocol_value == "pppoe":
-                update_service_order_execution_context_for_ont(
-                    db,
-                    ont_id=ont_id,
-                    step_name="push_pppoe_tr069",
-                    values={"username": pppoe_username_value},
-                    commit=False,
-                )
         if any(
             value is not None
             for value in [

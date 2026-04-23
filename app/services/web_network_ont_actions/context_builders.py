@@ -53,10 +53,6 @@ def _desired_config_context(
 ) -> dict[str, object]:
     """Return durable desired config values for ONT config partials."""
     mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
-    wan_plan = _plan_section(ont_plan, "configure_wan_tr069")
-    pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069") or _plan_section(
-        ont_plan, "push_pppoe_omci"
-    )
     lan_plan = _plan_section(ont_plan, "configure_lan_tr069")
     wifi_plan = _plan_section(ont_plan, "configure_wifi_tr069")
     initial_iphost_form = initial_iphost_form or {}
@@ -65,12 +61,9 @@ def _desired_config_context(
 
     wan_mode = _first_present(
         values.get("wan_mode"),
-        wan_plan.get("wan_mode"),
     )
     wan_vlan = _first_present(
         values.get("wan_vlan"),
-        wan_plan.get("wan_vlan"),
-        pppoe_plan.get("vlan_id"),
     )
 
     mgmt_mode = _first_present(
@@ -106,16 +99,12 @@ def _desired_config_context(
         "desired_wan_config": {
             "wan_mode": wan_mode or "",
             "wan_vlan": str(wan_vlan or ""),
-            "ip_address": str(wan_plan.get("ip_address") or ""),
-            "subnet_mask": str(wan_plan.get("subnet_mask") or ""),
-            "gateway": str(wan_plan.get("gateway") or ""),
-            "dns_servers": str(wan_plan.get("dns_servers") or ""),
-            "instance_index": wan_plan.get("instance_index") or 1,
-            "pppoe_username": str(
-                values.get("pppoe_username")
-                or pppoe_plan.get("username")
-                or ""
-            ),
+            "ip_address": str(values.get("wan_ip") or ""),
+            "subnet_mask": str(values.get("subnet_mask") or ""),
+            "gateway": str(values.get("gateway") or ""),
+            "dns_servers": str(values.get("dns_servers") or ""),
+            "instance_index": 1,
+            "pppoe_username": str(values.get("pppoe_username") or ""),
         },
         "desired_lan_config": {
             "lan_ip": str(

@@ -6,11 +6,10 @@ import logging
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OLTDevice, OntUnit, OnuMode, Vlan, WanMode
+from app.models.network import OLTDevice, OntUnit
 from app.services import network as network_service
 from app.services.audit_helpers import log_audit_event
 from app.services.network.ont_actions import ActionResult
@@ -115,47 +114,6 @@ def _intent_saved_result(result: ActionResult) -> ActionResult:
         data=getattr(result, "data", None),
         waiting=getattr(result, "waiting", False),
     )
-
-
-def _persist_wan_intent(
-    db: Session,
-    ont_id: str,
-    *,
-    wan_mode: str,
-    wan_vlan: int | None,
-    ip_address: str | None,
-    subnet_mask: str | None,
-    gateway: str | None,
-    dns_servers: str | None,
-    instance_index: int,
-) -> None:
-    mode = (wan_mode or "").strip().lower()
-    step_values: dict[str, object] = {
-        "wan_mode": mode,
-        "wan_vlan": wan_vlan,
-        "ip_address": ip_address,
-        "subnet_mask": subnet_mask,
-        "gateway": gateway,
-        "dns_servers": dns_servers,
-        "instance_index": instance_index,
-    }
-    try:
-        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-        if mode == "bridge":
-            ont.onu_mode = OnuMode.bridging
-            ont.wan_mode = WanMode.setup_via_onu
-        elif mode in {"dhcp", "pppoe", "static"}:
-            ont.onu_mode = OnuMode.routing
-            ont.wan_mode = WanMode.static_ip if mode == "static" else WanMode(mode)
-        if wan_vlan is not None:
-            vlan = db.scalars(select(Vlan).where(Vlan.tag == wan_vlan).limit(1)).first()
-            if vlan:
-                ont.wan_vlan_id = vlan.id
-        db.add(ont)
-        db.flush()
-    except Exception:
-        logger.exception("Failed to persist WAN model intent for ONT %s", ont_id)
-    _persist_ont_plan_step(db, ont_id, "configure_wan_tr069", step_values)
 
 
 def _normalize_fsp(value: str | None) -> str | None:

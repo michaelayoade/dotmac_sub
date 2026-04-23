@@ -55,11 +55,6 @@ def test_desired_config_context_prefers_durable_ont_fields(monkeypatch) -> None:
                 "vlan_id": 100,
                 "ip_address": "10.0.0.10",
             },
-            "configure_wan_tr069": {
-                "wan_mode": "dhcp",
-                "wan_vlan": 100,
-            },
-            "push_pppoe_tr069": {"username": "old@example"},
             "configure_lan_tr069": {
                 "lan_ip": "192.168.1.1",
                 "dhcp_enabled": False,
@@ -182,7 +177,6 @@ def test_unified_config_context_preserves_cached_freshness_and_summaries(
                 "vlan_id": 300,
                 "ip_address": "10.30.0.44",
             },
-            "configure_wan_tr069": {"wan_mode": "pppoe"},
         },
     )
 

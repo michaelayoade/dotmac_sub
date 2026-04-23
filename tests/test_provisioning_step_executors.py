@@ -5,16 +5,12 @@ from unittest.mock import MagicMock, patch
 from app.services.provisioning_step_executors import (
     execute_create_olt_service_port,
     execute_ensure_nas_vlan,
-    execute_push_tr069_pppoe_credentials,
-    execute_push_tr069_wan_config,
 )
 
 
 def test_all_executors_importable() -> None:
     assert callable(execute_create_olt_service_port)
     assert callable(execute_ensure_nas_vlan)
-    assert callable(execute_push_tr069_wan_config)
-    assert callable(execute_push_tr069_pppoe_credentials)
 
 
 # ── execute_create_olt_service_port ──
@@ -148,28 +144,3 @@ def test_ensure_nas_vlan_success(mock_provision: MagicMock) -> None:
     assert result.payload["nas_vlan_provisioned"] is True
     mock_provision.assert_called_once()
 
-
-# ── execute_push_tr069_wan_config ──
-
-
-def test_push_wan_config_fails_without_device() -> None:
-    db = MagicMock()
-    result = execute_push_tr069_wan_config(db, {}, {})
-    assert result.status == "failed"
-    assert result.detail is not None
-    assert "disabled" in result.detail
-
-
-# ── execute_push_tr069_pppoe_credentials ──
-
-
-def test_push_pppoe_executor_is_disabled() -> None:
-    db = MagicMock()
-    result = execute_push_tr069_pppoe_credentials(
-        db,
-        {"ont_unit_id": "ont1", "subscriber_id": "sub2"},
-        {"pppoe_username": "user", "pppoe_password": "pass"},
-    )
-    assert result.status == "failed"
-    assert result.detail is not None
-    assert "disabled" in result.detail
