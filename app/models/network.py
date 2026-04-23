@@ -9,9 +9,9 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
-    ForeignKeyConstraint,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -2586,6 +2586,8 @@ class OntWanServiceInstance(Base):
     )
     s_vlan: Mapped[int | None] = mapped_column(Integer, doc="Service VLAN tag")
     c_vlan: Mapped[int | None] = mapped_column(Integer, doc="Customer VLAN tag (QinQ)")
+    cos_priority: Mapped[int | None] = mapped_column(Integer)
+    mtu: Mapped[int] = mapped_column(Integer, default=1500)
 
     # L3: Connection configuration
     connection_type: Mapped[WanConnectionType] = mapped_column(
@@ -2594,6 +2596,9 @@ class OntWanServiceInstance(Base):
         default=WanConnectionType.pppoe,
     )
     nat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    ip_mode: Mapped[IpProtocol | None] = mapped_column(
+        Enum(IpProtocol, name="ipprotocol", create_constraint=False),
+    )
 
     # PPPoE credentials (resolved from template, actual values)
     pppoe_username: Mapped[str | None] = mapped_column(String(200))
@@ -2605,6 +2610,13 @@ class OntWanServiceInstance(Base):
     static_ip: Mapped[str | None] = mapped_column(String(64))
     static_gateway: Mapped[str | None] = mapped_column(String(64))
     static_dns: Mapped[str | None] = mapped_column(String(200))
+    static_ip_source: Mapped[str | None] = mapped_column(String(200))
+
+    # Binding / OMCI execution metadata copied from the bundle service template
+    bind_lan_ports: Mapped[dict | None] = mapped_column(JSON)
+    bind_ssid_index: Mapped[int | None] = mapped_column(Integer)
+    gem_port_id: Mapped[int | None] = mapped_column(Integer)
+    t_cont_profile: Mapped[str | None] = mapped_column(String(120))
 
     # Provisioning state
     provisioning_status: Mapped[WanServiceProvisioningStatus] = mapped_column(

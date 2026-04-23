@@ -72,6 +72,9 @@ class OnuTypes:
         catv_ports: int = 0,
         allow_custom_profiles: bool = True,
         capability: OnuCapability,
+        vendor_model_capability_id: object | None = None,
+        default_bundle_id: object | None = None,
+        supports_bundle_overrides: bool = True,
         notes: str | None = None,
     ) -> OnuType:
         """Create a new ONU type catalog entry."""
@@ -85,6 +88,9 @@ class OnuTypes:
             catv_ports=catv_ports,
             allow_custom_profiles=allow_custom_profiles,
             capability=capability,
+            vendor_model_capability_id=vendor_model_capability_id,
+            default_bundle_id=default_bundle_id,
+            supports_bundle_overrides=supports_bundle_overrides,
             notes=notes,
         )
         db.add(onu_type)

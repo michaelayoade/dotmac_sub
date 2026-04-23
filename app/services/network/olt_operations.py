@@ -83,7 +83,7 @@ def olt_backup_base_dir() -> Path:
 def resolve_backup_file(file_path: str) -> Path:
     base = olt_backup_base_dir().resolve()
     candidate = (base / file_path).resolve()
-    if not str(candidate).startswith(str(base)):
+    if not candidate.is_relative_to(base):
         raise HTTPException(status_code=400, detail="Invalid backup path")
     if not candidate.exists() or not candidate.is_file():
         raise HTTPException(status_code=404, detail="Backup file not found")

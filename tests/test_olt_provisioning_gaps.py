@@ -2083,6 +2083,26 @@ class TestGetProfileTemplates:
         assert result.success is False
         assert "another OLT" in result.message
 
+    def test_apply_profile_allows_global_bundle_for_olt_ont(self, db_session) -> None:
+        from app.models.network import OntProvisioningStatus
+        from app.services.network.ont_profile_apply import apply_bundle_to_ont
+
+        olt = OLTDevice(name="Global Scope OLT", vendor="Huawei", model="MA5608T")
+        ont = OntUnit(serial_number="SCOPE-GLOBAL", olt_device_id=olt.id)
+        profile = OntProvisioningProfile(
+            name="Global Bundle",
+            olt_device_id=None,
+            is_active=True,
+        )
+        db_session.add_all([olt, ont, profile])
+        db_session.commit()
+
+        result = apply_bundle_to_ont(db_session, str(ont.id), str(profile.id))
+
+        assert result.success is True
+        db_session.refresh(ont)
+        assert ont.provisioning_status == OntProvisioningStatus.partial
+
     def test_apply_profile_rejects_other_business_owner_scope(
         self, db_session
     ) -> None:

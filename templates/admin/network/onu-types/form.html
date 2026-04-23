@@ -46,7 +46,7 @@
                             {% for pt in pon_types %}
                             <label class="flex items-center gap-2">
                                 <input type="radio" name="pon_type" value="{{ pt.value }}" required
-                                    {% if item and item.pon_type.value == pt.value %}checked{% elif not item and loop.first %}checked{% endif %}
+                                    {% if form_values and form_values.pon_type == pt.value %}checked{% elif item and item.pon_type.value == pt.value %}checked{% elif not item and not form_values and loop.first %}checked{% endif %}
                                     class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ pt.value|upper }}</span>
                             </label>
@@ -60,7 +60,7 @@
                             {% for gc in gpon_channels %}
                             <label class="flex items-center gap-2">
                                 <input type="radio" name="gpon_channel" value="{{ gc.value }}" required
-                                    {% if item and item.gpon_channel.value == gc.value %}checked{% elif not item and loop.first %}checked{% endif %}
+                                    {% if form_values and form_values.gpon_channel == gc.value %}checked{% elif item and item.gpon_channel.value == gc.value %}checked{% elif not item and not form_values and loop.first %}checked{% endif %}
                                     class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">{{ gc.value|replace('_', '-')|upper }}</span>
                             </label>
@@ -73,11 +73,39 @@
                         <select name="capability" id="capability" required
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for cap in capabilities %}
-                            <option value="{{ cap.value }}" {% if item and item.capability.value == cap.value %}selected{% endif %}>
+                            <option value="{{ cap.value }}" {% if form_values and form_values.capability == cap.value %}selected{% elif item and item.capability.value == cap.value %}selected{% endif %}>
                                 {% if cap.value == 'bridging' %}Bridging{% elif cap.value == 'routing' %}Routing{% elif cap.value == 'bridging_routing' %}Bridging & Routing{% else %}{{ cap.value|replace('_', ' ')|title }}{% endif %}
                             </option>
                             {% endfor %}
                         </select>
+                    </div>
+
+                    <div>
+                        <label for="vendor_model_capability_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor Capability Map</label>
+                        <select name="vendor_model_capability_id" id="vendor_model_capability_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">No capability map</option>
+                            {% for capability_map in vendor_capabilities %}
+                            <option value="{{ capability_map.id }}" {% if form_values and form_values.vendor_model_capability_id == capability_map.id|string %}selected{% elif item and item.vendor_model_capability_id == capability_map.id %}selected{% endif %}>
+                                {{ capability_map.vendor }} {{ capability_map.model }}{% if capability_map.firmware_pattern %} ({{ capability_map.firmware_pattern }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Drives TR-069 parameter maps and model-specific provisioning constraints.</p>
+                    </div>
+
+                    <div>
+                        <label for="default_bundle_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Default Configuration Bundle</label>
+                        <select name="default_bundle_id" id="default_bundle_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">No default bundle</option>
+                            {% for bundle in provisioning_bundles %}
+                            <option value="{{ bundle.id }}" {% if form_values and form_values.default_bundle_id == bundle.id|string %}selected{% elif item and item.default_bundle_id == bundle.id %}selected{% endif %}>
+                                {{ bundle.name }}{% if bundle.olt_device_id %} (OLT-scoped){% else %} (Global){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used as the operator default when authorizing this ONT type.</p>
                     </div>
                 </div>
             </div>
@@ -120,11 +148,21 @@
                     <div>
                         <label class="flex items-center gap-2">
                             <input type="checkbox" name="allow_custom_profiles" value="true"
-                                {% if item and item.allow_custom_profiles %}checked{% endif %}
+                                {% if form_values and form_values.allow_custom_profiles %}checked{% elif item and item.allow_custom_profiles %}checked{% elif not item and not form_values %}checked{% endif %}
                                 class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Allow Custom Profiles</span>
                         </label>
                         <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Enable custom RADIUS or provisioning profiles for this ONU type</p>
+                    </div>
+
+                    <div>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="supports_bundle_overrides" value="true"
+                                {% if form_values and form_values.supports_bundle_overrides %}checked{% elif item and item.supports_bundle_overrides %}checked{% elif not item and not form_values %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Allow Bundle Overrides</span>
+                        </label>
+                        <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Allow per-ONT overrides on top of the default bundle.</p>
                     </div>
 
                     <div>

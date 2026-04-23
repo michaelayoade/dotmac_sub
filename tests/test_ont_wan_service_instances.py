@@ -225,6 +225,7 @@ class TestApplyProfileCreatesWanInstances:
         from app.models.network import (
             OntProfileWanService,
             OntProvisioningProfile,
+            OntProvisioningStatus,
             OntUnit,
             PppoePasswordMode,
             WanConnectionType,
@@ -249,6 +250,8 @@ class TestApplyProfileCreatesWanInstances:
             pppoe_username_template="{serial_number}@isp.local",
             pppoe_password_mode=PppoePasswordMode.generate,
             s_vlan=203,
+            cos_priority=4,
+            mtu=1492,
             is_active=True,
         )
         iptv_service = OntProfileWanService(
@@ -258,6 +261,9 @@ class TestApplyProfileCreatesWanInstances:
             priority=2,
             connection_type=WanConnectionType.dhcp,
             s_vlan=500,
+            bind_lan_ports={"ports": [4]},
+            gem_port_id=12,
+            t_cont_profile="iptv-tcont",
             is_active=True,
         )
         db_session.add_all([internet_service, iptv_service])
@@ -289,6 +295,14 @@ class TestApplyProfileCreatesWanInstances:
         assert internet_inst.pppoe_username == "HWTC-MULTI-WAN@isp.local"
         assert internet_inst.connection_type == WanConnectionType.pppoe
         assert internet_inst.s_vlan == 203
+        assert internet_inst.cos_priority == 4
+        assert internet_inst.mtu == 1492
+        iptv_inst = next(i for i in instances if i.service_type == WanServiceType.iptv)
+        assert iptv_inst.bind_lan_ports == {"ports": [4]}
+        assert iptv_inst.gem_port_id == 12
+        assert iptv_inst.t_cont_profile == "iptv-tcont"
+        assert ont.provisioning_status == OntProvisioningStatus.partial
+        assert ont.last_provisioned_at is None
 
     def test_apply_profile_does_not_use_effective_pppoe_username_fallback(
         self, db_session

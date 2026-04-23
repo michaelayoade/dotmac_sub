@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    OntAcsStatus,
     OntAssignment,
     OntBundleAssignment,
     OntBundleAssignmentStatus,
     OntConfigOverride,
     OntProvisioningStatus,
+    OntStatusSource,
+    OntWanServiceInstance,
+    OnuOnlineStatus,
 )
 from app.services import network as network_service
 from app.services.network.cpe import ensure_cpe_for_ont
@@ -41,6 +45,12 @@ def reset_ont_service_state(db: Session, ont) -> None:
     for override in overrides:
         db.delete(override)
 
+    wan_service_instances = db.scalars(
+        select(OntWanServiceInstance).where(OntWanServiceInstance.ont_id == ont.id)
+    ).all()
+    for instance in wan_service_instances:
+        db.delete(instance)
+
     ont.provisioning_profile_id = None
     ont.provisioning_status = OntProvisioningStatus.unprovisioned
     ont.last_provisioned_at = None
@@ -58,6 +68,10 @@ def reset_ont_service_state(db: Session, ont) -> None:
     ont.observed_wifi_clients = None
     ont.observed_lan_hosts = None
     ont.observed_runtime_updated_at = None
+    ont.tr069_last_snapshot = None
+    ont.tr069_last_snapshot_at = None
+    ont.olt_observed_snapshot = None
+    ont.olt_observed_snapshot_at = None
     ont.wan_remote_access = False
     ont.tr069_acs_server_id = None
     ont.mgmt_ip_mode = None
@@ -79,6 +93,23 @@ def reset_ont_service_state(db: Session, ont) -> None:
     if hasattr(ont, "wifi_security_mode"):
         ont.wifi_security_mode = None
     ont.provisioning_steps_completed = None
+    ont.acs_status = OntAcsStatus.unknown
+    ont.acs_last_inform_at = None
+    ont.effective_status = OnuOnlineStatus.unknown
+    ont.effective_status_source = OntStatusSource.derived
+    ont.status_resolved_at = None
+    ont.online_status = OnuOnlineStatus.unknown
+    ont.last_seen_at = None
+    ont.offline_reason = None
+    ont.consecutive_offline_polls = 0
+    ont.onu_rx_signal_dbm = None
+    ont.olt_rx_signal_dbm = None
+    ont.onu_tx_signal_dbm = None
+    ont.ont_temperature_c = None
+    ont.ont_voltage_v = None
+    ont.ont_bias_current_ma = None
+    ont.distance_meters = None
+    ont.signal_updated_at = None
 
 
 def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:

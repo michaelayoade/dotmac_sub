@@ -248,10 +248,18 @@ def _resolve_param_paths_from_capability(
             vendor_capabilities,
         )
 
-        capability = vendor_capabilities.resolve_capability(db, vendor, model)
+        capability = vendor_capabilities.resolve_capability(
+            db,
+            vendor=vendor,
+            model=model,
+        )
         if not capability:
             return None
-        path = tr069_parameter_maps.resolve_path(db, str(capability.id), canonical_name)
+        path = tr069_parameter_maps.resolve_path(
+            db,
+            capability_id=str(capability.id),
+            canonical_name=canonical_name,
+        )
         if path:
             return [path]
     except Exception:

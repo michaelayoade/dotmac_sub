@@ -643,6 +643,36 @@ class TestParameterMapResolution:
         )
         assert result is None
 
+    def test_resolve_uses_vendor_capability_parameter_map(self, db_session) -> None:
+        from app.models.network import Tr069ParameterMap, VendorModelCapability
+        from app.services.network.ont_tr069 import _resolve_param_paths_from_capability
+
+        capability = VendorModelCapability(
+            vendor="Huawei",
+            model="HG8245H",
+            is_active=True,
+        )
+        db_session.add(capability)
+        db_session.flush()
+        db_session.add(
+            Tr069ParameterMap(
+                capability_id=capability.id,
+                canonical_name="wan.pppoe.username",
+                tr069_path="InternetGatewayDevice.WANDevice.2.Username",
+                writable=True,
+            )
+        )
+        db_session.commit()
+
+        result = _resolve_param_paths_from_capability(
+            db_session,
+            "Huawei",
+            "HG8245H",
+            "wan.pppoe.username",
+        )
+
+        assert result == ["InternetGatewayDevice.WANDevice.2.Username"]
+
 
 # ---------------------------------------------------------------------------
 # 6. Session and job cleanup

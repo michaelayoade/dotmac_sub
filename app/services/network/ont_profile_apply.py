@@ -16,7 +16,6 @@ import logging
 import secrets
 import string
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -255,12 +254,21 @@ def _create_wan_service_instances(
             vlan_id=vlan.id if vlan else None,
             s_vlan=profile_service.s_vlan,
             c_vlan=profile_service.c_vlan,
+            cos_priority=profile_service.cos_priority,
+            mtu=profile_service.mtu,
             # L3 connection
             connection_type=profile_service.connection_type,
             nat_enabled=profile_service.nat_enabled,
+            ip_mode=profile_service.ip_mode,
             # PPPoE
             pppoe_username=pppoe_username,
             pppoe_password=pppoe_password,
+            # Static IP / binding / OMCI metadata
+            static_ip_source=profile_service.static_ip_source,
+            bind_lan_ports=profile_service.bind_lan_ports,
+            bind_ssid_index=profile_service.bind_ssid_index,
+            gem_port_id=profile_service.gem_port_id,
+            t_cont_profile=profile_service.t_cont_profile,
             # Provisioning state
             provisioning_status=WanServiceProvisioningStatus.pending,
         )
@@ -284,7 +292,7 @@ def _profile_scope_mismatch_reason(
     """Return why a profile cannot apply to an ONT, or None when allowed."""
     profile_olt_id = getattr(profile, "olt_device_id", None)
     ont_olt_id = getattr(ont, "olt_device_id", None)
-    if profile_olt_id != ont_olt_id:
+    if profile_olt_id is not None and profile_olt_id != ont_olt_id:
         return "olt_scope"
 
     owner_subscriber_id = getattr(profile, "owner_subscriber_id", None)
@@ -350,8 +358,8 @@ def apply_bundle_to_ont(
 ) -> ApplyResult:
     """Apply a provisioning bundle's desired state to an ONT.
 
-    Updates the OntUnit's config fields to match the profile, sets the
-    provisioning_profile_id FK, and marks provisioning_status as provisioned.
+    Assigns the bundle as desired state and compiles per-ONT service instances.
+    Device provisioning remains pending until OLT/ACS/OMCI execution completes.
 
     When create_wan_instances=True (default), also creates OntWanServiceInstance
     records for each WAN service in the profile. These instances hold resolved
@@ -416,8 +424,8 @@ def apply_bundle_to_ont(
         assigned_reason="bundle_apply_service",
     )
     clear_bundle_managed_legacy_projection(ont)
-    ont.provisioning_status = OntProvisioningStatus.provisioned
-    ont.last_provisioned_at = datetime.now(UTC)
+    ont.provisioning_status = OntProvisioningStatus.partial
+    ont.last_provisioned_at = None
 
     # Create WAN service instances from profile's wan_services
     wan_instances_created = 0

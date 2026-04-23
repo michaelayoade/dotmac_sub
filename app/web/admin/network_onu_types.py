@@ -77,7 +77,7 @@ def onu_type_create(
     """Create a new ONU type."""
     form = parse_form_data_sync(request)
     values = web_onu_types_service.parse_form_values(form)
-    error = web_onu_types_service.validate_form(values)
+    error = web_onu_types_service.validate_form(values, db)
     if error:
         context = web_onu_types_service.form_context(request, db)
         context["error"] = error
@@ -123,7 +123,7 @@ def onu_type_update(
     """Update an existing ONU type."""
     form = parse_form_data_sync(request)
     values = web_onu_types_service.parse_form_values(form)
-    error = web_onu_types_service.validate_form(values)
+    error = web_onu_types_service.validate_form(values, db)
     if error:
         context = web_onu_types_service.form_context(request, db, onu_type_id)
         context["error"] = error

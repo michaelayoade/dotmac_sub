@@ -22,6 +22,7 @@ from app.models.network import (
     IPVersion,
     MgmtIpMode,
     OLTDevice,
+    OntAcsStatus,
     OntAssignment,
     OntBundleAssignment,
     OntBundleAssignmentStatus,
@@ -29,11 +30,15 @@ from app.models.network import (
     OntProfileWanService,
     OntProvisioningProfile,
     OntProvisioningStatus,
+    OntStatusSource,
     OntUnit,
+    OntWanServiceInstance,
+    OnuOnlineStatus,
     PonPort,
     Vlan,
     WanConnectionType,
     WanMode,
+    WanServiceType,
 )
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network import OntAssignmentCreate
@@ -185,6 +190,16 @@ def test_return_to_inventory_clears_bundle_assignment_and_overrides(
         port="9",
         external_id="19",
         provisioning_status=OntProvisioningStatus.provisioned,
+        acs_status=OntAcsStatus.online,
+        acs_last_inform_at=pon.created_at,
+        effective_status=OnuOnlineStatus.online,
+        effective_status_source=OntStatusSource.acs,
+        online_status=OnuOnlineStatus.online,
+        tr069_last_snapshot={"wan": {"status": "connected"}},
+        olt_observed_snapshot={"fsp": "0/2/9"},
+        onu_rx_signal_dbm=-18.1,
+        olt_rx_signal_dbm=-19.2,
+        observed_wan_ip="198.51.100.10",
     )
     db_session.add(ont)
     db_session.commit()
@@ -211,6 +226,14 @@ def test_return_to_inventory_clears_bundle_assignment_and_overrides(
             ont_unit_id=ont.id,
             field_name="wan.pppoe_username",
             value_json={"value": "override-user"},
+        )
+    )
+    db_session.add(
+        OntWanServiceInstance(
+            ont_id=ont.id,
+            service_type=WanServiceType.internet,
+            connection_type=WanConnectionType.pppoe,
+            pppoe_username="stale-user",
         )
     )
     db_session.commit()
@@ -241,10 +264,23 @@ def test_return_to_inventory_clears_bundle_assignment_and_overrides(
     overrides = db_session.scalars(
         select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
     ).all()
+    wan_instances = db_session.scalars(
+        select(OntWanServiceInstance).where(OntWanServiceInstance.ont_id == ont.id)
+    ).all()
     assert assignment.active is False
     assert ont.provisioning_profile_id is None
     assert active_bundle is None
     assert overrides == []
+    assert wan_instances == []
+    assert ont.acs_status == OntAcsStatus.unknown
+    assert ont.effective_status == OnuOnlineStatus.unknown
+    assert ont.effective_status_source == OntStatusSource.derived
+    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.tr069_last_snapshot is None
+    assert ont.olt_observed_snapshot is None
+    assert ont.onu_rx_signal_dbm is None
+    assert ont.olt_rx_signal_dbm is None
+    assert ont.observed_wan_ip is None
 
 
 def test_tr069_resolution_waits_for_first_inform(db_session, monkeypatch):

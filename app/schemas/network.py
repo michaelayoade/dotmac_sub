@@ -12,6 +12,7 @@ from app.models.network import (
     FiberSegmentType,
     FiberStrandStatus,
     HardwareUnitStatus,
+    IpProtocol,
     IPVersion,
     ODNEndpointType,
     OltPortType,
@@ -1204,9 +1205,12 @@ class OntWanServiceInstanceBase(BaseModel):
     vlan_id: UUID | None = None
     s_vlan: int | None = Field(default=None, ge=1, le=4094)
     c_vlan: int | None = Field(default=None, ge=1, le=4094)
+    cos_priority: int | None = Field(default=None, ge=0, le=7)
+    mtu: int = Field(default=1500, ge=576, le=9216)
     # L3 connection
     connection_type: WanConnectionType = WanConnectionType.pppoe
     nat_enabled: bool = True
+    ip_mode: IpProtocol | None = None
     # PPPoE
     pppoe_username: str | None = Field(default=None, max_length=200)
     pppoe_password: str | None = Field(default=None, max_length=500)
@@ -1214,6 +1218,12 @@ class OntWanServiceInstanceBase(BaseModel):
     static_ip: str | None = Field(default=None, max_length=64)
     static_gateway: str | None = Field(default=None, max_length=64)
     static_dns: str | None = Field(default=None, max_length=200)
+    static_ip_source: str | None = Field(default=None, max_length=200)
+    # Binding / OMCI metadata
+    bind_lan_ports: dict | None = None
+    bind_ssid_index: int | None = Field(default=None, ge=0)
+    gem_port_id: int | None = Field(default=None, ge=0)
+    t_cont_profile: str | None = Field(default=None, max_length=120)
 
 
 class OntWanServiceInstanceCreate(OntWanServiceInstanceBase):
@@ -1236,9 +1246,12 @@ class OntWanServiceInstanceUpdate(BaseModel):
     vlan_id: UUID | None = None
     s_vlan: int | None = Field(default=None, ge=1, le=4094)
     c_vlan: int | None = Field(default=None, ge=1, le=4094)
+    cos_priority: int | None = Field(default=None, ge=0, le=7)
+    mtu: int | None = Field(default=None, ge=576, le=9216)
     # L3 connection
     connection_type: WanConnectionType | None = None
     nat_enabled: bool | None = None
+    ip_mode: IpProtocol | None = None
     # PPPoE
     pppoe_username: str | None = Field(default=None, max_length=200)
     pppoe_password: str | None = Field(default=None, max_length=500)
@@ -1246,6 +1259,12 @@ class OntWanServiceInstanceUpdate(BaseModel):
     static_ip: str | None = Field(default=None, max_length=64)
     static_gateway: str | None = Field(default=None, max_length=64)
     static_dns: str | None = Field(default=None, max_length=200)
+    static_ip_source: str | None = Field(default=None, max_length=200)
+    # Binding / OMCI metadata
+    bind_lan_ports: dict | None = None
+    bind_ssid_index: int | None = Field(default=None, ge=0)
+    gem_port_id: int | None = Field(default=None, ge=0)
+    t_cont_profile: str | None = Field(default=None, max_length=120)
     # Provisioning state (typically updated by system, not user)
     provisioning_status: WanServiceProvisioningStatus | None = None
     last_error: str | None = Field(default=None, max_length=500)
