@@ -442,9 +442,11 @@ class TestApplySavedServiceConfig:
         ):
             result = apply_saved_service_config(db_session, str(ont.id))
 
-        assert result.success is True
+        # Sync-only semantics: ACS placeholder work fails hard
+        assert result.success is False
         assert result.step_name == "apply_saved_service_config"
         assert result.data is not None
+        # Missing PPPoE credentials are still captured in needs_input
         assert "PPPoE credentials missing for WAN service 'Internet'." in result.data[
             "needs_input"
         ]
@@ -551,13 +553,13 @@ class TestApplySavedServiceConfig:
         ):
             result = apply_saved_service_config(db_session, str(ont.id))
 
-        assert result.success is True
-        assert result.waiting is True
+        # Sync-only semantics: ACS placeholder work fails hard, no waiting
+        assert result.success is False
+        assert result.waiting is False
         by_step = {name: payload for name, payload in calls}
         assert any(
             step["step"] == "provision_wan_service_instance:Internet"
-            and step["success"] is True
-            and step["waiting"] is True
+            and step["success"] is False
             for step in result.data["steps"]
         )
         assert by_step["set_wifi_config"]["enabled"] is True

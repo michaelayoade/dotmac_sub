@@ -36,11 +36,11 @@ def test_direct_ont_authorize_rejects_mismatched_olt(monkeypatch) -> None:
             )
 
     def _unexpected_queue(*_args, **_kwargs):
-        raise AssertionError("mismatched direct ONT authorization must not queue")
+        raise AssertionError("mismatched direct ONT authorization must not authorize")
 
     monkeypatch.setattr(
         network_olts_inventory.olt_operations_service,
-        "queue_authorize_autofind_ont",
+        "authorize_ont",
         _unexpected_queue,
     )
 
@@ -71,11 +71,11 @@ def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
             )
 
     def _unexpected_queue(*_args, **_kwargs):
-        raise AssertionError("unscoped reseller authorization must not queue")
+        raise AssertionError("unscoped reseller authorization must not authorize")
 
     monkeypatch.setattr(
         network_olts_inventory.olt_operations_service,
-        "queue_authorize_autofind_ont",
+        "authorize_ont",
         _unexpected_queue,
     )
 
@@ -103,11 +103,11 @@ def test_authorize_without_request_auth_is_rejected(monkeypatch) -> None:
     from app.web.admin import network_olts_inventory
 
     def _unexpected_queue(*_args, **_kwargs):
-        raise AssertionError("missing-auth authorization must not queue")
+        raise AssertionError("missing-auth authorization must not authorize")
 
     monkeypatch.setattr(
         network_olts_inventory.olt_operations_service,
-        "queue_authorize_autofind_ont",
+        "authorize_ont",
         _unexpected_queue,
     )
 

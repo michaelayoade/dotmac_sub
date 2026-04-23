@@ -130,10 +130,26 @@ def test_reference_ont_options_include_huawei_dotted_external_ids(db_session) ->
 def test_authorize_autofind_logs_disappeared_candidate_after_refresh(
     db_session, monkeypatch, caplog
 ) -> None:
-    olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
+    olt = OLTDevice(
+        name="SPDC Huawei OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        mgmt_ip="192.168.1.1",
+        ssh_username="admin",
+        ssh_password="admin",
+    )
     db_session.add(olt)
     db_session.commit()
     db_session.refresh(olt)
+
+    # Add a provisioning profile to satisfy prerequisite validation
+    profile = OntProvisioningProfile(
+        name="Test Profile",
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    db_session.add(profile)
+    db_session.commit()
 
     monkeypatch.setattr(
         olt_authorization_workflow,
@@ -174,7 +190,14 @@ def test_authorize_autofind_logs_disappeared_candidate_after_refresh(
 def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     db_session, monkeypatch
 ) -> None:
-    olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
+    olt = OLTDevice(
+        name="SPDC Huawei OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        mgmt_ip="192.168.1.1",
+        ssh_username="admin",
+        ssh_password="admin",
+    )
     db_session.add(olt)
     db_session.commit()
     db_session.refresh(olt)
@@ -230,8 +253,8 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     )
     monkeypatch.setattr(
         olt_authorization_workflow,
-        "queue_post_authorization_follow_up",
-        lambda *_args, **_kwargs: (True, "Queued follow-up.", "op-123"),
+        "run_post_authorization_follow_up",
+        lambda *_args, **_kwargs: (True, "Post-auth sync completed.", []),
     )
 
     result = olt_authorization_workflow.authorize_autofind_ont(
@@ -244,7 +267,6 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     assert result.success is True
     assert result.completed_authorization is True
     assert result.ont_id_on_olt == 9
-    assert result.follow_up_operation_id == "op-123"
     assert any("already registered on the OLT" in step.message for step in result.steps)
     db_session.refresh(candidate)
     assert candidate.is_active is False
@@ -264,7 +286,14 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
 def test_force_authorize_requires_autofind_rediscovery_after_delete(
     db_session, monkeypatch
 ) -> None:
-    olt = OLTDevice(name="Strict Force OLT", vendor="Huawei", model="MA5608T")
+    olt = OLTDevice(
+        name="Strict Force OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        mgmt_ip="192.168.1.1",
+        ssh_username="admin",
+        ssh_password="admin",
+    )
     db_session.add(olt)
     db_session.commit()
     db_session.refresh(olt)
@@ -349,7 +378,14 @@ def test_force_authorize_requires_autofind_rediscovery_after_delete(
 def test_force_authorize_rejects_stale_cached_autofind_after_delete(
     db_session, monkeypatch
 ) -> None:
-    olt = OLTDevice(name="Stale Cache OLT", vendor="Huawei", model="MA5608T")
+    olt = OLTDevice(
+        name="Stale Cache OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        mgmt_ip="192.168.1.1",
+        ssh_username="admin",
+        ssh_password="admin",
+    )
     db_session.add(olt)
     db_session.commit()
     db_session.refresh(olt)
@@ -438,6 +474,12 @@ def test_force_authorize_rejects_stale_cached_autofind_after_delete(
 def test_force_authorize_resolves_olt_profiles_before_delete(
     db_session, monkeypatch
 ) -> None:
+    """Test that authorization fails early if OLT config validation fails.
+
+    With mandatory prerequisite validation, authorization now fails at
+    "Validate authorization config" if credentials or profiles are missing,
+    which achieves the same goal of blocking before any OLT operations.
+    """
     olt = OLTDevice(name="Profile Guard OLT", vendor="Huawei", model="MA5608T")
     db_session.add(olt)
     db_session.commit()
@@ -450,7 +492,7 @@ def test_force_authorize_resolves_olt_profiles_before_delete(
     )
 
     def _unexpected_delete(*_args, **_kwargs):
-        raise AssertionError("force authorize must not delete before profiles resolve")
+        raise AssertionError("force authorize must not delete before config validates")
 
     monkeypatch.setattr(
         "app.services.network.olt_ssh_ont.deauthorize_ont",
@@ -466,14 +508,22 @@ def test_force_authorize_resolves_olt_profiles_before_delete(
     )
 
     assert result.success is False
-    assert result.steps[-1].name == "Resolve OLT authorization profiles"
-    assert "No active provisioning profile is scoped" in result.steps[-1].message
+    # Authorization now fails at config validation when credentials or profiles missing
+    assert result.steps[-1].name == "Validate authorization config"
+    assert "Validate authorization config" in result.message
 
 
 def test_authorize_autofind_uses_configured_olt_profile_ids(
     db_session, monkeypatch
 ) -> None:
-    olt = OLTDevice(name="Configured Profile OLT", vendor="Huawei", model="MA5608T")
+    olt = OLTDevice(
+        name="Configured Profile OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        mgmt_ip="192.168.1.1",
+        ssh_username="admin",
+        ssh_password="admin",
+    )
     db_session.add(olt)
     db_session.commit()
     db_session.refresh(olt)
@@ -536,8 +586,8 @@ def test_authorize_autofind_uses_configured_olt_profile_ids(
     )
     monkeypatch.setattr(
         olt_authorization_workflow,
-        "queue_post_authorization_follow_up",
-        lambda *_args, **_kwargs: (True, "Queued follow-up.", "op-123"),
+        "run_post_authorization_follow_up",
+        lambda *_args, **_kwargs: (True, "Post-auth sync completed.", []),
     )
 
     result = olt_authorization_workflow.authorize_autofind_ont(
@@ -557,49 +607,51 @@ def test_authorize_autofind_uses_configured_olt_profile_ids(
     )
 
 
-def test_queue_authorize_autofind_ont_records_tracked_operation(
+def test_synchronous_authorization_returns_immediate_result(
     db_session, monkeypatch
 ) -> None:
-    from app.models.network_operation import (
-        NetworkOperation,
-        NetworkOperationStatus,
-        NetworkOperationTargetType,
+    """Authorization now runs synchronously and returns immediate success/failure."""
+    # Create a minimal OLT
+    olt = OLTDevice(name="Sync Test OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    # Mock the SSH layer to avoid actual OLT connection
+    def _fake_authorize(*_args, **_kwargs):
+        from app.services.network.olt_authorization_workflow import (
+            AuthorizationWorkflowResult,
+        )
+        return AuthorizationWorkflowResult(
+            success=True,
+            message="ONT authorized successfully.",
+            ont_unit_id="ont-123",
+            ont_id_on_olt=5,
+            status="success",
+            completed_authorization=True,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_authorization_workflow.authorize_autofind_ont_and_provision_network",
+        _fake_authorize,
     )
 
-    queued: dict[str, object] = {}
+    from app.services.network.olt_authorization_workflow import (
+        authorize_autofind_ont_and_provision_network_audited,
+    )
 
-    def _fake_enqueue(task, *, args, correlation_id, source, **_kwargs):
-        queued.update(
-            {
-                "task": task,
-                "args": args,
-                "correlation_id": correlation_id,
-                "source": source,
-            }
-        )
-        return SimpleNamespace(id="celery-123")
-
-    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
-
-    ok, message, operation_id = olt_authorization_workflow.queue_authorize_autofind_ont(
+    result = authorize_autofind_ont_and_provision_network_audited(
         db_session,
-        olt_id=str(uuid.uuid4()),
+        str(olt.id),
         fsp="0/1/6",
         serial_number="4857544328201B9A",
         force_reauthorize=True,
     )
 
-    assert ok is True
-    assert "queued" in message
-    assert operation_id is not None
-    op = db_session.get(NetworkOperation, uuid.UUID(operation_id))
-    assert op is not None
-    assert op.status == NetworkOperationStatus.waiting
-    assert op.target_type == NetworkOperationTargetType.olt
-    assert op.input_payload["force_reauthorize"] is True
-    assert queued["args"][0] == operation_id
-    assert queued["args"][4] is True
-    assert queued["source"] == "olt_authorization"
+    # Result is returned immediately, not queued
+    assert result.success is True
+    assert "authorized" in result.message.lower()
+    assert result.ont_unit_id == "ont-123"
 
 
 def test_post_authorization_binds_resolved_tr069_profile_id(
@@ -1838,7 +1890,7 @@ class TestWebNetworkOltsMigration:
             == "ONT authorization and OLT network provisioning completed. "
             "Next action: configure ONT."
         )
-        assert captured["authorize_kwargs"]["queue_follow_up"] is False
+        assert captured["authorize_kwargs"]["run_post_auth_sync"] is False
         assert captured["assignment"] == {
             "ont_unit_id": "ont-123",
             "olt_id": "olt-123",

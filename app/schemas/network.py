@@ -386,6 +386,7 @@ class OLTDeviceBase(BaseModel):
     netconf_enabled: bool = False
     netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
+    default_provisioning_profile_id: UUID | None = None
     supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     status: str | None = "active"
@@ -416,6 +417,7 @@ class OLTDeviceUpdate(BaseModel):
     netconf_enabled: bool | None = None
     netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
+    default_provisioning_profile_id: UUID | None = None
     supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     status: str | None = None
@@ -480,7 +482,9 @@ class OntUnitBase(BaseModel):
     vendor_serial_number: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     vendor: str | None = Field(default=None, max_length=120)
+    hardware_version: str | None = Field(default=None, max_length=120)
     firmware_version: str | None = Field(default=None, max_length=120)
+    software_version: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     is_active: bool = True
     # Imported / external provisioning fields
@@ -515,7 +519,9 @@ class OntUnitUpdate(BaseModel):
     vendor_serial_number: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     vendor: str | None = Field(default=None, max_length=120)
+    hardware_version: str | None = Field(default=None, max_length=120)
     firmware_version: str | None = Field(default=None, max_length=120)
+    software_version: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     is_active: bool | None = None
     # Imported / external provisioning fields

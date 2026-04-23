@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import (
     ConfigMethod,
+    IpPool,
     IpProtocol,
     MgmtIpMode,
     OntProfileType,
@@ -18,6 +19,8 @@ from app.models.network import (
     OntProvisioningProfile,
     OnuMode,
     PppoePasswordMode,
+    SpeedProfile,
+    SpeedProfileDirection,
     Vlan,
     VlanMode,
     WanConnectionType,
@@ -144,6 +147,69 @@ class OntProvisioningProfiles:
                         "Existing WAN service VLANs are not defined on the selected OLT: "
                         + ", ".join(str(tag) for tag in missing_service_vlans)
                     ),
+                )
+
+    @staticmethod
+    def _validate_mgmt_ip_pool_available(
+        db: Session,
+        *,
+        mgmt_ip_mode: MgmtIpMode | str | None,
+        mgmt_ip_pool_id: str | None,
+    ) -> None:
+        """Validate management IP pool exists and has available addresses."""
+        # Only validate when using static IP mode with a pool
+        mode_str = mgmt_ip_mode.value if isinstance(mgmt_ip_mode, MgmtIpMode) else mgmt_ip_mode
+        if mode_str != "static_ip" or not mgmt_ip_pool_id:
+            return
+
+        pool = db.get(IpPool, coerce_uuid(mgmt_ip_pool_id))
+        if not pool:
+            raise HTTPException(status_code=400, detail="Management IP pool not found.")
+        if not pool.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Management IP pool '{pool.name}' is inactive.",
+            )
+
+        # Check pool has available addresses
+        if pool.available_count is not None and pool.available_count <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Management IP pool '{pool.name}' has no available addresses.",
+            )
+
+    @staticmethod
+    def _validate_speed_profiles(
+        db: Session,
+        *,
+        download_speed_profile_id: str | None,
+        upload_speed_profile_id: str | None,
+    ) -> None:
+        """Validate speed profiles exist and have correct direction."""
+        if download_speed_profile_id:
+            profile = db.get(SpeedProfile, coerce_uuid(download_speed_profile_id))
+            if not profile:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Download speed profile not found.",
+                )
+            if profile.direction != SpeedProfileDirection.download:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Speed profile '{profile.name}' is not a download profile.",
+                )
+
+        if upload_speed_profile_id:
+            profile = db.get(SpeedProfile, coerce_uuid(upload_speed_profile_id))
+            if not profile:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Upload speed profile not found.",
+                )
+            if profile.direction != SpeedProfileDirection.upload:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Speed profile '{profile.name}' is not an upload profile.",
                 )
 
     @staticmethod
@@ -305,6 +371,16 @@ class OntProvisioningProfiles:
             mgmt_vlan_tag=mgmt_vlan_tag,
             pppoe_omci_vlan=pppoe_omci_vlan,
         )
+        OntProvisioningProfiles._validate_mgmt_ip_pool_available(
+            db,
+            mgmt_ip_mode=mgmt_ip_mode,
+            mgmt_ip_pool_id=mgmt_ip_pool_id,
+        )
+        OntProvisioningProfiles._validate_speed_profiles(
+            db,
+            download_speed_profile_id=download_speed_profile_id,
+            upload_speed_profile_id=upload_speed_profile_id,
+        )
 
         profile = OntProvisioningProfile(
             owner_subscriber_id=coerce_uuid(owner_subscriber_id),
@@ -398,6 +474,38 @@ class OntProvisioningProfiles:
                 else None
             ),
             profile_id=profile_id,
+        )
+        # Validate IP pool if mode is static_ip
+        merged_mgmt_ip_mode = kwargs.get("mgmt_ip_mode", profile.mgmt_ip_mode)
+        merged_mgmt_ip_pool_id = kwargs.get("mgmt_ip_pool_id", profile.mgmt_ip_pool_id)
+        # Coerce mgmt_ip_mode to acceptable type (MgmtIpMode or str or None)
+        mgmt_ip_mode_value: MgmtIpMode | str | None = (
+            merged_mgmt_ip_mode
+            if isinstance(merged_mgmt_ip_mode, (MgmtIpMode, str, type(None)))
+            else str(merged_mgmt_ip_mode) if merged_mgmt_ip_mode else None
+        )
+        OntProvisioningProfiles._validate_mgmt_ip_pool_available(
+            db,
+            mgmt_ip_mode=mgmt_ip_mode_value,
+            mgmt_ip_pool_id=(
+                str(merged_mgmt_ip_pool_id) if merged_mgmt_ip_pool_id else None
+            ),
+        )
+        # Validate speed profiles if being updated
+        merged_download = kwargs.get(
+            "download_speed_profile_id", profile.download_speed_profile_id
+        )
+        merged_upload = kwargs.get(
+            "upload_speed_profile_id", profile.upload_speed_profile_id
+        )
+        OntProvisioningProfiles._validate_speed_profiles(
+            db,
+            download_speed_profile_id=(
+                str(merged_download) if merged_download else None
+            ),
+            upload_speed_profile_id=(
+                str(merged_upload) if merged_upload else None
+            ),
         )
 
         for key, value in kwargs.items():

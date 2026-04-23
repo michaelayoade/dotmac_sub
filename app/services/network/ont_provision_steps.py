@@ -833,28 +833,14 @@ def _provision_wan_service_instances(
     def _append(name: str, result) -> None:
         success = bool(getattr(result, "success", False))
         message = str(getattr(result, "message", ""))
-        steps.append(
-            {
-                "step": name,
-                "success": success,
-                "waiting": bool(getattr(result, "waiting", False)),
-                "message": message,
-            }
-        )
-        if not success and not getattr(result, "waiting", False):
+        steps.append({"step": name, "success": success, "message": message})
+        if not success:
             hard_failures.append(f"{name}: {message}")
 
     def _append_step(
         name: str, success: bool, message: str, *, hard_failure: bool = True
     ) -> None:
-        steps.append(
-            {
-                "step": name,
-                "success": success,
-                "waiting": False,
-                "message": message,
-            }
-        )
+        steps.append({"step": name, "success": success, "message": message})
         if not success and hard_failure:
             hard_failures.append(f"{name}: {message}")
 
@@ -1097,7 +1083,6 @@ def _provision_wan_service_instances(
                 {
                     "step": f"provision_wan_service_instance:{service_label}",
                     "success": True,
-                    "waiting": False,
                     "message": "Skipped: management WAN is configured on the OLT.",
                 }
             )
@@ -1168,7 +1153,6 @@ def _provision_wan_service_instances(
                     {
                         "step": f"provision_wan_service_instance:{service_label}",
                         "success": False,
-                        "waiting": False,
                         "message": message,
                     }
                 )
@@ -1188,15 +1172,17 @@ def _provision_wan_service_instances(
         steps.append(
             {
                 "step": f"provision_wan_service_instance:{service_label}",
-                "success": True,
-                "waiting": True,
+                "success": False,
                 "message": message,
             }
         )
         from app.models.network import WanServiceProvisioningStatus
 
-        instance.provisioning_status = WanServiceProvisioningStatus.pending
+        instance.provisioning_status = WanServiceProvisioningStatus.failed
         instance.last_error = message[:500]
+        hard_failures.append(
+            f"provision_wan_service_instance:{service_label}: {message}"
+        )
 
         # Validate PPPoE credentials if applicable. Writes are handled by the
         # service-instance endpoint executor, not the legacy flat PPP action.
@@ -1257,26 +1243,16 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     steps: list[dict[str, object]] = []
     needs_input: list[str] = []
     hard_failures: list[str] = []
-    waiting = False
 
     def _section(name: str) -> dict[str, object]:
         value = ont_plan.get(name)
         return value if isinstance(value, dict) else {}
 
     def _append(name: str, result) -> None:
-        nonlocal waiting
-        waiting = waiting or bool(getattr(result, "waiting", False))
         success = bool(getattr(result, "success", False))
         message = str(getattr(result, "message", ""))
-        steps.append(
-            {
-                "step": name,
-                "success": success,
-                "waiting": bool(getattr(result, "waiting", False)),
-                "message": message,
-            }
-        )
-        if not success and not getattr(result, "waiting", False):
+        steps.append({"step": name, "success": success, "message": message})
+        if not success:
             hard_failures.append(f"{name}: {message}")
 
     bind_plan = _section("bind_tr069")
@@ -1329,7 +1305,6 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
                 {
                     "step": "compile_wan_service_instances",
                     "success": True,
-                    "waiting": False,
                     "message": apply_result.message,
                 }
             )
@@ -1338,9 +1313,8 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         _provision_wan_service_instances(db, ont_id)
     )
     for step in wan_instance_steps:
+        step.pop("waiting", None)  # Sync-only: no waiting semantics
         steps.append(step)
-        if step.get("waiting"):
-            waiting = True
     needs_input.extend(wan_instance_needs)
     hard_failures.extend(wan_instance_failures)
     if not (wan_instance_steps or wan_instance_needs or wan_instance_failures):
@@ -1433,7 +1407,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             "; ".join(hard_failures),
             ms,
             critical=False,
-            waiting=waiting,
+            waiting=False,  # Sync-only: no waiting semantics
             data={"steps": steps, "needs_input": needs_input},
         )
     if not steps and not needs_input:
@@ -1455,7 +1429,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         message,
         ms,
         critical=False,
-        waiting=waiting,
+        waiting=False,  # Sync-only: no waiting semantics
         data={"steps": steps, "needs_input": needs_input},
     )
 

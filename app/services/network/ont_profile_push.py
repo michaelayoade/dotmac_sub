@@ -155,9 +155,11 @@ class OntProfilePushService:
 
         result = op.execute()
 
-        if result.success or result.partial_success:
-            # Update provisioning status
+        if result.success:
             ont.provisioning_status = OntProvisioningStatus.provisioned
+            db.commit()
+        elif result.partial_success or result.steps_failed:
+            ont.provisioning_status = OntProvisioningStatus.failed
             db.commit()
 
         return ProfilePushResult(

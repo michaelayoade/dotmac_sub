@@ -12,12 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import OLTDevice, OntProvisioningProfile, OntUnit
 from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice
+from app.models.tr069 import Tr069AcsServer
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services import network as network_service
 from app.services import tr069 as tr069_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
+from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.network.olt_inventory import get_olt_or_none as get_olt_or_none
 from app.services.network.olt_monitoring_devices import find_linked_network_device
@@ -69,6 +71,9 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         if netconf_port_raw.isdigit()
         else netconf_port_raw or None,
         "tr069_acs_server_id": form.get("tr069_acs_server_id", "").strip() or None,
+        "default_provisioning_profile_id": (
+            form.get("default_provisioning_profile_id", "").strip() or None
+        ),
         "snmp_enabled": form.get("snmp_enabled") == "true",
         "snmp_port": int(snmp_port_raw)
         if snmp_port_raw.isdigit()
@@ -135,6 +140,29 @@ def validate_values(
             stmt = stmt.where(OLTDevice.id != current_olt.id)
         if db.scalars(stmt).first():
             return "Management IP already exists"
+
+    # Validate default_provisioning_profile_id if provided
+    default_profile_id = values.get("default_provisioning_profile_id")
+    if default_profile_id:
+        profile = db.get(OntProvisioningProfile, coerce_uuid(default_profile_id))
+        if not profile:
+            return "Default provisioning bundle not found."
+        if not profile.is_active:
+            return f"Default provisioning bundle '{profile.name}' is inactive."
+        # If OLT already exists, check profile is scoped to this OLT or is global
+        if current_olt and profile.olt_device_id:
+            if profile.olt_device_id != current_olt.id:
+                return f"Bundle '{profile.name}' is scoped to a different OLT."
+
+    # Validate tr069_acs_server_id if provided
+    acs_server_id = values.get("tr069_acs_server_id")
+    if acs_server_id:
+        acs_server = db.get(Tr069AcsServer, coerce_uuid(acs_server_id))
+        if not acs_server:
+            return "TR-069 ACS server not found."
+        if not acs_server.is_active:
+            return f"TR-069 ACS server '{acs_server.name}' is inactive."
+
     return None
 
 
@@ -163,6 +191,9 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
             "netconf_enabled": bool(values.get("netconf_enabled")),
             "netconf_port": values.get("netconf_port"),
             "tr069_acs_server_id": values.get("tr069_acs_server_id"),
+            "default_provisioning_profile_id": values.get(
+                "default_provisioning_profile_id"
+            ),
             "supported_pon_types": values.get("supported_pon_types"),
             "status": values.get("status"),
             "notes": values.get("notes"),
@@ -195,6 +226,9 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "netconf_enabled": values.get("netconf_enabled"),
         "netconf_port": values.get("netconf_port"),
         "tr069_acs_server_id": values.get("tr069_acs_server_id"),
+        "default_provisioning_profile_id": values.get(
+            "default_provisioning_profile_id"
+        ),
         "notes": values.get("notes"),
         "is_active": values.get("is_active"),
     }
@@ -318,6 +352,7 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         netconf_enabled=olt.netconf_enabled,
         netconf_port=olt.netconf_port,
         tr069_acs_server_id=olt.tr069_acs_server_id,
+        default_provisioning_profile_id=olt.default_provisioning_profile_id,
         notes=olt.notes,
         is_active=olt.is_active,
         # SNMP: prefer OLT's own fields, fall back to linked NetworkDevice

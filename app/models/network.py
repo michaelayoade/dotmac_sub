@@ -729,6 +729,11 @@ class OLTDevice(Base):
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
+    default_provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
+        doc="Default bundle for newly authorized ONTs on this OLT",
+    )
     tr069_profiles_snapshot: Mapped[dict | None] = mapped_column(JSON)
     tr069_profiles_snapshot_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -783,6 +788,9 @@ class OLTDevice(Base):
     shelves = relationship("OltShelf", back_populates="olt")
     config_backups = relationship("OltConfigBackup", back_populates="olt")
     tr069_acs_server = relationship("Tr069AcsServer")
+    default_provisioning_profile = relationship(
+        "OntProvisioningProfile", foreign_keys=[default_provisioning_profile_id]
+    )
     vlans = relationship("Vlan", back_populates="olt_device")
     ip_pools = relationship("IpPool", back_populates="olt_device")
 
@@ -1124,7 +1132,9 @@ class OntUnit(Base):
     vendor_serial_number: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
     vendor: Mapped[str | None] = mapped_column(String(120))
+    hardware_version: Mapped[str | None] = mapped_column(String(120))
     firmware_version: Mapped[str | None] = mapped_column(String(120))
+    software_version: Mapped[str | None] = mapped_column(String(120))
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -2412,7 +2422,7 @@ class OntProvisioningProfile(Base):
         backref="ont_provisioning_profiles",
         foreign_keys=[owner_subscriber_id],
     )
-    olt_device = relationship("OLTDevice")
+    olt_device = relationship("OLTDevice", foreign_keys=[olt_device_id])
     ont_type = relationship("OnuType", foreign_keys=[ont_type_id])
     cloned_from_bundle = relationship(
         "OntProvisioningProfile",

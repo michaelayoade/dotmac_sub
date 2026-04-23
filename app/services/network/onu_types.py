@@ -75,6 +75,7 @@ class OnuTypes:
         vendor_model_capability_id: object | None = None,
         default_bundle_id: object | None = None,
         supports_bundle_overrides: bool = True,
+        is_active: bool = True,
         notes: str | None = None,
     ) -> OnuType:
         """Create a new ONU type catalog entry."""
@@ -91,6 +92,7 @@ class OnuTypes:
             vendor_model_capability_id=vendor_model_capability_id,
             default_bundle_id=default_bundle_id,
             supports_bundle_overrides=supports_bundle_overrides,
+            is_active=is_active,
             notes=notes,
         )
         db.add(onu_type)

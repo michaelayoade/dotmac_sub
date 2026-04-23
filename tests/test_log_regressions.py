@@ -102,21 +102,21 @@ def test_olt_detail_autofind_partial_supports_force_authorize_loading_state() ->
     assert "Authorizing..." in template
 
 
-def test_force_authorize_route_queues_without_running_foreground_workflow(
+def test_force_authorize_route_runs_synchronously(
     monkeypatch,
 ) -> None:
     from app.web.admin import network_olts_inventory
 
     captured: dict[str, object] = {}
 
-    def _fake_queue(
+    def _fake_authorize(
         _db,
         *,
         olt_id: str,
         fsp: str,
         serial_number: str,
         force_reauthorize: bool = False,
-        initiated_by: str | None = None,
+        preset_id: str | None = None,
         request=None,
     ):
         captured.update(
@@ -125,31 +125,21 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
                 "fsp": fsp,
                 "serial_number": serial_number,
                 "force_reauthorize": force_reauthorize,
-                "initiated_by": initiated_by,
+                "preset_id": preset_id,
                 "request": request,
             }
         )
-        return True, "Force authorization queued.", "op-123"
-
-    def _unexpected_foreground_workflow(*_args, **_kwargs):
-        raise AssertionError("force authorize should not run in the web request")
+        return True, "ONT authorized and provisioned.", "ont-123"
 
     monkeypatch.setattr(
-        "app.services.network.olt_authorization_workflow.queue_authorize_autofind_ont",
-        _fake_queue,
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_authorization_workflow.authorize_autofind_ont_audited",
-        _unexpected_foreground_workflow,
+        network_olts_inventory.olt_operations_service,
+        "authorize_ont",
+        _fake_authorize,
     )
     monkeypatch.setattr(
         network_olts_inventory.web_admin_service,
         "get_current_user",
         lambda _request: {"name": "Alice Admin"},
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_web_audit.log_olt_audit_event",
-        lambda *_args, **_kwargs: None,
     )
 
     request = Request(
@@ -175,33 +165,33 @@ def test_force_authorize_route_queues_without_running_foreground_workflow(
         serial_number="4857544328201B9A",
         return_to="/admin/network/onts?view=unconfigured",
         force_reauthorize="true",
+        preset_id="",
         db=SimpleNamespace(rollback=lambda: None),
     )
 
     assert response.status_code == 303
-    assert "Force+authorization+queued" in response.headers["location"]
+    assert "ONT+authorized" in response.headers["location"]
     assert captured["force_reauthorize"] is True
     assert captured["fsp"] == "0/1/6"
     assert captured["serial_number"] == "4857544328201B9A"
-    assert captured["initiated_by"] == "Alice Admin"
     assert captured["request"] is request
 
 
-def test_normal_authorize_route_queues_without_running_foreground_workflow(
+def test_normal_authorize_route_runs_synchronously(
     monkeypatch,
 ) -> None:
     from app.web.admin import network_olts_inventory
 
     captured: dict[str, object] = {}
 
-    def _fake_queue(
+    def _fake_authorize(
         _db,
         *,
         olt_id: str,
         fsp: str,
         serial_number: str,
         force_reauthorize: bool = False,
-        initiated_by: str | None = None,
+        preset_id: str | None = None,
         request=None,
     ):
         captured.update(
@@ -210,31 +200,21 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
                 "fsp": fsp,
                 "serial_number": serial_number,
                 "force_reauthorize": force_reauthorize,
-                "initiated_by": initiated_by,
+                "preset_id": preset_id,
                 "request": request,
             }
         )
-        return True, "Authorization queued.", "op-456"
-
-    def _unexpected_foreground_workflow(*_args, **_kwargs):
-        raise AssertionError("authorize should not run in the web request")
+        return True, "ONT authorized.", "ont-456"
 
     monkeypatch.setattr(
-        "app.services.network.olt_authorization_workflow.queue_authorize_autofind_ont",
-        _fake_queue,
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_authorization_workflow.authorize_autofind_ont_audited",
-        _unexpected_foreground_workflow,
+        network_olts_inventory.olt_operations_service,
+        "authorize_ont",
+        _fake_authorize,
     )
     monkeypatch.setattr(
         network_olts_inventory.web_admin_service,
         "get_current_user",
         lambda _request: {"name": "Alice Admin"},
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_web_audit.log_olt_audit_event",
-        lambda *_args, **_kwargs: None,
     )
 
     request = Request(
@@ -260,15 +240,15 @@ def test_normal_authorize_route_queues_without_running_foreground_workflow(
         serial_number="4857544328201B9A",
         return_to="/admin/network/onts?view=unconfigured",
         force_reauthorize="",
+        preset_id="",
         db=SimpleNamespace(rollback=lambda: None),
     )
 
     assert response.status_code == 303
-    assert "Authorization+queued" in response.headers["location"]
+    assert "ONT+authorized" in response.headers["location"]
     assert captured["force_reauthorize"] is False
     assert captured["fsp"] == "0/1/6"
     assert captured["serial_number"] == "4857544328201B9A"
-    assert captured["initiated_by"] == "Alice Admin"
     assert captured["request"] is request
 
 

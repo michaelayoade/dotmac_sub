@@ -407,16 +407,22 @@ def _waiting_for_igd_ppp_service_result(
     wan_vlan: int | None,
     message_prefix: str,
 ) -> ActionResult:
+    """Return a hard failure for PPPoE WAN creation verification.
+
+    Under sync-only provisioning semantics, we fail hard rather than waiting
+    for the next inform/refresh cycle. The caller should retry provisioning
+    once the device state has been refreshed.
+    """
     details = _igd_wan_details(client, device, root, instance_index)
     return ActionResult(
         success=False,
-        waiting=True,
+        waiting=False,  # Sync-only: fail hard, no deferred verification
         message=(
-            f"{message_prefix} Waiting for the next inform/refresh before "
-            "verifying PPPoE WAN creation."
+            f"{message_prefix} PPPoE WAN service not visible after creation "
+            "request. Retry provisioning once device state has refreshed."
         ),
         data={
-            "waiting_reason": "ppp_wan_add_object_verification",
+            "failure_reason": "ppp_wan_add_object_not_visible",
             "retry_after_seconds": _PPP_ADD_OBJECT_VERIFY_DELAY_SECONDS,
             "missing_ppp_wan_service": True,
             "required_step": "verify_ppp_wan_add_object",

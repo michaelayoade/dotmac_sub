@@ -13,12 +13,10 @@ from starlette.requests import Request
 
 from app.models.network import OLTDevice
 from app.services.network import olt_operations
-from app.services.network.action_logging import actor_label
 from app.services.network.olt import OLTDevices
 from app.services.network.olt_authorization_workflow import (
     AuthorizationWorkflowResult,
     authorize_autofind_ont_and_provision_network_audited,
-    queue_authorize_autofind_ont,
 )
 
 
@@ -49,38 +47,6 @@ def authorize_ont(
         serial_number,
         force_reauthorize=force_reauthorize,
         request=request,
-    )
-
-
-def queue_authorize_ont(
-    db: Session,
-    olt_id: str,
-    *,
-    fsp: str,
-    serial_number: str,
-    force_reauthorize: bool = False,
-    request: Request | None = None,
-) -> OltApiWriteResult:
-    ok, message, operation_id = queue_authorize_autofind_ont(
-        db,
-        olt_id=olt_id,
-        fsp=fsp,
-        serial_number=serial_number,
-        force_reauthorize=force_reauthorize,
-        initiated_by=actor_label(request),
-        request=request,
-    )
-    return OltApiWriteResult(
-        ok,
-        message,
-        {
-            "status": "queued" if ok else "error",
-            "operation_id": operation_id,
-            "olt_id": olt_id,
-            "fsp": fsp,
-            "serial_number": serial_number,
-            "force_reauthorize": force_reauthorize,
-        },
     )
 
 

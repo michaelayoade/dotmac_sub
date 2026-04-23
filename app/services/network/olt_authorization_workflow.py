@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic, sleep
 
-from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -891,7 +890,7 @@ def authorize_autofind_ont(
     *,
     force_reauthorize: bool = False,
     preset_id: str | None = None,
-    queue_follow_up: bool = True,
+    run_post_auth_sync: bool = True,
 ):
     """Authorize an unregistered ONT on an OLT with a fail-fast workflow.
 
@@ -905,9 +904,9 @@ def authorize_autofind_ont(
         preset_id: Optional authorization preset ID to use for profile resolution.
             If provided and the preset has line/service profile IDs, those are
             used instead of the OLT's default provisioning profile.
-        queue_follow_up: If True, queue the legacy post-authorization sync after
-            OLT authorization. Callers that continue into inline network
-            provisioning should set this to False.
+        run_post_auth_sync: If True, run post-authorization sync inline (SNMP sync,
+            mgmt IP config, ACS binding). Callers that handle provisioning separately
+            should set this to False.
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.olt_write_reconciliation import (
@@ -1538,60 +1537,61 @@ def authorize_autofind_ont(
         step_started_at=resolve_started_at,
     )
 
-    follow_up_operation_id: str | None = None
-    if queue_follow_up:
-        queue_started_at = monotonic()
+    if run_post_auth_sync:
+        sync_started_at = monotonic()
         if ont_id is None:
             return _fail(
-                "Queue post-authorization sync",
+                "Post-authorization sync",
                 "ONT ID on OLT is not available",
-                step_started_at=queue_started_at,
+                step_started_at=sync_started_at,
                 ont_unit_id=ont_unit_id,
                 status="warning",
                 completed_authorization=True,
             )
-        queue_ok, queue_msg, follow_up_operation_id = (
-            queue_post_authorization_follow_up(
-                db,
-                ont_unit_id=ont_unit_id,
-                olt_id=olt_id,
-                fsp=fsp,
-                serial_number=serial_number,
-                ont_id_on_olt=ont_id,
-            )
+        # Run post-authorization sync inline (synchronous)
+        sync_ok, sync_msg, sync_steps = run_post_authorization_follow_up(
+            db,
+            ont_unit_id=ont_unit_id,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            ont_id_on_olt=ont_id,
+            skip_autofind_resolve=True,  # Already resolved above
         )
-        if not queue_ok:
-            return _fail(
-                "Queue post-authorization sync",
-                queue_msg,
-                step_started_at=queue_started_at,
-                ont_unit_id=ont_unit_id,
-                ont_id_on_olt=ont_id,
-                status="warning",
-                completed_authorization=True,
+        # Append all sync steps to the workflow steps
+        for sync_step in sync_steps:
+            steps.append(
+                AuthorizationStepResult(
+                    step=len(steps) + 1,
+                    name=str(sync_step.get("name", "Post-auth step")),
+                    success=bool(sync_step.get("success", False)),
+                    message=str(sync_step.get("message", "")),
+                    duration_ms=0,
+                )
             )
-        _append_step(
-            "Queue post-authorization sync",
-            True,
-            queue_msg,
-            step_started_at=queue_started_at,
-        )
+        if not sync_ok:
+            # Post-auth sync failed, but authorization was successful
+            return _finalize(
+                AuthorizationWorkflowResult(
+                    success=True,
+                    message=f"ONT authorization completed, but post-auth sync had issues: {sync_msg}",
+                    steps=steps,
+                    ont_unit_id=ont_unit_id,
+                    ont_id_on_olt=ont_id,
+                    status="warning",
+                    completed_authorization=True,
+                )
+            )
 
     return _finalize(
         AuthorizationWorkflowResult(
             success=True,
-            message=(
-                "ONT authorization completed. Post-authorization sync is "
-                "running in the background."
-                if queue_follow_up
-                else "ONT authorization completed."
-            ),
+            message="ONT authorization completed.",
             steps=steps,
             ont_unit_id=ont_unit_id,
             ont_id_on_olt=ont_id,
             status="success",
             completed_authorization=True,
-            follow_up_operation_id=follow_up_operation_id,
         )
     )
 
@@ -1670,7 +1670,7 @@ def authorize_autofind_ont_and_provision_network(
         serial_number,
         force_reauthorize=force_reauthorize,
         preset_id=preset_id,
-        queue_follow_up=False,
+        run_post_auth_sync=False,
     )
     result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
     if not result.success:
@@ -2032,8 +2032,14 @@ def run_post_authorization_follow_up(
     fsp: str,
     serial_number: str,
     ont_id_on_olt: int,
+    skip_autofind_resolve: bool = False,
 ) -> tuple[bool, str, list[dict[str, object]]]:
-    """Run non-critical reconciliation after successful OLT authorization."""
+    """Run non-critical reconciliation after successful OLT authorization.
+
+    Args:
+        skip_autofind_resolve: If True, skip the autofind candidate resolution step
+            (caller already resolved it in the main authorization workflow).
+    """
     steps: list[dict[str, object]] = []
 
     def _add_step(name: str, success: bool, message: str) -> None:
@@ -2063,15 +2069,17 @@ def run_post_authorization_follow_up(
     if not sync_ok:
         return False, sync_msg, steps
 
-    resolve_ok, resolve_msg = _resolve_authorized_autofind_candidate(
-        db,
-        olt_id=olt_id,
-        fsp=fsp,
-        serial_number=serial_number,
-    )
-    _add_step("Resolve autofind candidate", resolve_ok, resolve_msg)
-    if not resolve_ok:
-        return False, resolve_msg, steps
+    # Skip autofind resolution if caller already did it (avoids redundant DB call)
+    if not skip_autofind_resolve:
+        resolve_ok, resolve_msg = _resolve_authorized_autofind_candidate(
+            db,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+        )
+        _add_step("Resolve autofind candidate", resolve_ok, resolve_msg)
+        if not resolve_ok:
+            return False, resolve_msg, steps
 
     profile_apply_ok = True
     profile_apply_msg = "Skipped: ONT already has an active configuration bundle."
@@ -2188,248 +2196,6 @@ def run_post_authorization_follow_up(
         return False, message, steps
 
     return True, "Post-authorization sync completed successfully.", steps
-
-
-def queue_post_authorization_follow_up(
-    db: Session,
-    *,
-    ont_unit_id: str,
-    olt_id: str,
-    fsp: str,
-    serial_number: str,
-    ont_id_on_olt: int,
-    initiated_by: str | None = None,
-) -> tuple[bool, str, str | None]:
-    """Queue post-authorization reconciliation as a tracked background operation."""
-    from app.models.network_operation import (
-        NetworkOperation,
-        NetworkOperationStatus,
-        NetworkOperationTargetType,
-        NetworkOperationType,
-    )
-    from app.services.network_operations import network_operations
-    from app.tasks.ont_authorization import run_post_authorization_follow_up_task
-
-    correlation_key = f"ont_post_auth_sync:{ont_unit_id}"
-
-    try:
-        op = network_operations.start(
-            db,
-            NetworkOperationType.ont_authorize,
-            NetworkOperationTargetType.ont,
-            ont_unit_id,
-            correlation_key=correlation_key,
-            initiated_by=initiated_by,
-            input_payload={
-                "phase": "post_authorization_sync",
-                "title": "Post-Authorization Sync",
-                "message": "Queued after successful OLT authorization.",
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "ont_id_on_olt": ont_id_on_olt,
-            },
-        )
-    except HTTPException as exc:
-        if exc.status_code == 409:
-            existing = db.scalars(
-                select(NetworkOperation.id).where(
-                    NetworkOperation.correlation_key == correlation_key,
-                    NetworkOperation.status.in_(
-                        (
-                            NetworkOperationStatus.pending,
-                            NetworkOperationStatus.running,
-                            NetworkOperationStatus.waiting,
-                        )
-                    ),
-                )
-            ).first()
-            return (
-                True,
-                "Post-authorization sync is already in progress.",
-                (str(existing) if existing else None),
-            )
-        raise
-
-    network_operations.mark_waiting(
-        db,
-        str(op.id),
-        "Queued after successful OLT authorization.",
-    )
-    db.commit()
-
-    try:
-        from app.services.queue_adapter import enqueue_task
-
-        enqueue_task(
-            run_post_authorization_follow_up_task,
-            args=[
-                str(op.id),
-                ont_unit_id,
-                olt_id,
-                fsp,
-                serial_number,
-                ont_id_on_olt,
-            ],
-            correlation_id=correlation_key,
-            source="olt_post_authorization",
-        )
-    except Exception as exc:
-        network_operations.mark_failed(
-            db,
-            str(op.id),
-            f"Failed to queue post-authorization sync: {exc}",
-        )
-        db.commit()
-        logger.error(
-            "Failed to queue post-authorization sync for ONT %s: %s",
-            ont_unit_id,
-            exc,
-            exc_info=True,
-        )
-        return (
-            False,
-            "Authorization succeeded, but follow-up sync could not be queued.",
-            str(op.id),
-        )
-
-    return (
-        True,
-        "Queued post-authorization sync and ACS bind in the background.",
-        str(op.id),
-    )
-
-
-def queue_authorize_autofind_ont(
-    db: Session,
-    *,
-    olt_id: str,
-    fsp: str,
-    serial_number: str,
-    force_reauthorize: bool = False,
-    initiated_by: str | None = None,
-    preset_id: str | None = None,
-    request: Request | None = None,
-) -> tuple[bool, str, str | None]:
-    """Queue the full ONT authorization workflow as a tracked operation."""
-    from app.models.network_operation import (
-        NetworkOperation,
-        NetworkOperationStatus,
-        NetworkOperationTargetType,
-        NetworkOperationType,
-    )
-    from app.services.network_operations import network_operations
-    from app.tasks.ont_authorization import run_authorize_autofind_ont_task
-
-    normalized_serial = str(serial_number or "").replace("-", "").strip().upper()
-    mode = "force" if force_reauthorize else "normal"
-    correlation_key = f"ont_authorize:{mode}:{olt_id}:{fsp}:{normalized_serial}"
-
-    try:
-        op = network_operations.start(
-            db,
-            NetworkOperationType.ont_authorize,
-            NetworkOperationTargetType.olt,
-            olt_id,
-            correlation_key=correlation_key,
-            initiated_by=initiated_by,
-            input_payload={
-                "phase": "authorization",
-                "title": "Force ONT Authorization"
-                if force_reauthorize
-                else "ONT Authorization",
-                "message": "Queued force authorization on the OLT."
-                if force_reauthorize
-                else "Queued authorization on the OLT.",
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force_reauthorize,
-                "preset_id": preset_id,
-            },
-        )
-    except HTTPException as exc:
-        if exc.status_code == 409:
-            existing = db.scalars(
-                select(NetworkOperation.id).where(
-                    NetworkOperation.correlation_key == correlation_key,
-                    NetworkOperation.status.in_(
-                        (
-                            NetworkOperationStatus.pending,
-                            NetworkOperationStatus.running,
-                            NetworkOperationStatus.waiting,
-                        )
-                    ),
-                )
-            ).first()
-            return (
-                True,
-                "Authorization is already queued or running.",
-                (str(existing) if existing else None),
-            )
-        raise
-
-    network_operations.mark_waiting(db, str(op.id), "Queued authorization on the OLT.")
-    db.commit()
-
-    try:
-        from app.services.queue_adapter import enqueue_task
-
-        enqueue_task(
-            run_authorize_autofind_ont_task,
-            args=[
-                str(op.id),
-                olt_id,
-                fsp,
-                serial_number,
-                force_reauthorize,
-                preset_id,
-            ],
-            correlation_id=correlation_key,
-            source="olt_authorization",
-        )
-    except Exception as exc:
-        network_operations.mark_failed(
-            db,
-            str(op.id),
-            f"Failed to queue ONT authorization: {exc}",
-        )
-        db.commit()
-        from app.services.network.action_logging import log_network_action_result
-
-        log_network_action_result(
-            request=request,
-            resource_type="olt",
-            resource_id=olt_id,
-            action="Force Authorize ONT" if force_reauthorize else "Authorize ONT",
-            success=False,
-            message=f"Failed to queue ONT authorization: {exc}",
-            metadata={
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force_reauthorize,
-                "operation_id": str(op.id),
-                "queued": False,
-            },
-        )
-        logger.error(
-            "Failed to queue ONT authorization for serial %s on OLT %s: %s",
-            serial_number,
-            olt_id,
-            exc,
-            exc_info=True,
-        )
-        return False, "Failed to queue ONT authorization.", str(op.id)
-
-    return (
-        True,
-        (
-            "Force authorization queued. Track progress in operation history."
-            if force_reauthorize
-            else "Authorization queued. Track progress in operation history."
-        ),
-        str(op.id),
-    )
 
 
 def get_autofind_candidate_by_serial(

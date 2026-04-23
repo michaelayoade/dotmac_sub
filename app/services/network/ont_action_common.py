@@ -379,11 +379,11 @@ def get_ont_client_or_error(
             return None, ActionResult(
                 success=False,
                 message=(
-                    f"ONT {ont.serial_number} is synced locally and waiting for its "
-                    "first GenieACS inform before TR-069 configuration can be pushed."
+                    f"ONT {ont.serial_number} has no GenieACS identity. Sync-only "
+                    "provisioning requires a resolvable ACS device before push."
                 ),
-                data={"waiting_reason": "next_inform", "serial": ont.serial_number},
-                waiting=True,
+                data={"missing_acs_identity": True, "serial": ont.serial_number},
+                waiting=False,
             )
         return None, error
     if resolved is None:

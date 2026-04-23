@@ -1,0 +1,537 @@
+"""OLT Readiness Validator - Comprehensive OLT and bundle validation.
+
+Validates that OLTs and their provisioning bundles have all required
+prerequisites for ONT authorization.
+
+Usage:
+    from app.services.network.olt_readiness_validator import (
+        validate_olt_readiness,
+        validate_all_olts_readiness,
+        OltReadinessReport,
+    )
+
+    # Validate single OLT
+    report = validate_olt_readiness(db, olt_id)
+    if report.is_ready:
+        print("OLT is ready for authorization")
+    else:
+        for issue in report.blocking_issues:
+            print(f"BLOCKING: {issue}")
+
+    # Validate all OLTs
+    reports = validate_all_olts_readiness(db)
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import TYPE_CHECKING
+
+from sqlalchemy import select
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+
+class IssueSeverity(str, Enum):
+    """Severity of a validation issue."""
+
+    blocking = "blocking"  # Prevents authorization
+    warning = "warning"  # May cause issues
+    info = "info"  # Informational only
+
+
+@dataclass
+class ValidationIssue:
+    """A single validation issue."""
+
+    category: str
+    message: str
+    severity: IssueSeverity
+    code: str | None = None
+    field: str | None = None
+
+
+@dataclass
+class BundleValidationResult:
+    """Validation result for a single provisioning bundle."""
+
+    bundle_id: str
+    bundle_name: str
+    is_valid: bool = True
+    issues: list[ValidationIssue] = field(default_factory=list)
+
+
+@dataclass
+class OltReadinessReport:
+    """Complete readiness report for an OLT."""
+
+    olt_id: str
+    olt_name: str
+    is_ready: bool = True
+    issues: list[ValidationIssue] = field(default_factory=list)
+    bundles: list[BundleValidationResult] = field(default_factory=list)
+    connectivity_tested: bool = False
+    ssh_ok: bool | None = None
+    snmp_ok: bool | None = None
+
+    @property
+    def blocking_issues(self) -> list[ValidationIssue]:
+        """Return only blocking issues."""
+        return [i for i in self.issues if i.severity == IssueSeverity.blocking]
+
+    @property
+    def warnings(self) -> list[ValidationIssue]:
+        """Return only warnings."""
+        return [i for i in self.issues if i.severity == IssueSeverity.warning]
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "olt_id": self.olt_id,
+            "olt_name": self.olt_name,
+            "is_ready": self.is_ready,
+            "blocking_issues": [
+                {"category": i.category, "message": i.message, "code": i.code}
+                for i in self.blocking_issues
+            ],
+            "warnings": [
+                {"category": i.category, "message": i.message, "code": i.code}
+                for i in self.warnings
+            ],
+            "bundles": [
+                {
+                    "id": b.bundle_id,
+                    "name": b.bundle_name,
+                    "is_valid": b.is_valid,
+                    "issues": [
+                        {"category": i.category, "message": i.message, "code": i.code}
+                        for i in b.issues
+                    ],
+                }
+                for b in self.bundles
+            ],
+            "connectivity": {
+                "tested": self.connectivity_tested,
+                "ssh_ok": self.ssh_ok,
+                "snmp_ok": self.snmp_ok,
+            },
+        }
+
+
+def validate_olt_readiness(
+    db: Session,
+    olt_id: str,
+    *,
+    test_connectivity: bool = False,
+) -> OltReadinessReport:
+    """Validate that an OLT is ready for ONT authorization.
+
+    Args:
+        db: Database session.
+        olt_id: OLT device ID.
+        test_connectivity: If True, test SSH/SNMP connectivity.
+
+    Returns:
+        OltReadinessReport with validation results.
+    """
+    from app.models.network import OLTDevice, OntProvisioningProfile
+
+    olt = db.get(OLTDevice, olt_id)
+    if not olt:
+        return OltReadinessReport(
+            olt_id=olt_id,
+            olt_name="Unknown",
+            is_ready=False,
+            issues=[
+                ValidationIssue(
+                    category="olt",
+                    message="OLT not found",
+                    severity=IssueSeverity.blocking,
+                    code="OLT_NOT_FOUND",
+                )
+            ],
+        )
+
+    report = OltReadinessReport(
+        olt_id=str(olt.id),
+        olt_name=olt.name or "Unnamed OLT",
+    )
+
+    # 1. Validate OLT credentials
+    _validate_olt_credentials(olt, report)
+
+    # 2. Validate OLT vendor/model
+    _validate_olt_vendor_model(olt, report)
+
+    # 3. Validate provisioning profiles
+    profiles = db.scalars(
+        select(OntProvisioningProfile).where(
+            OntProvisioningProfile.olt_device_id == olt.id,
+        )
+    ).all()
+
+    if not profiles:
+        report.issues.append(
+            ValidationIssue(
+                category="provisioning",
+                message="No provisioning bundles scoped to this OLT",
+                severity=IssueSeverity.blocking,
+                code="NO_BUNDLES",
+            )
+        )
+        report.is_ready = False
+    else:
+        active_profiles = [p for p in profiles if p.is_active]
+        if not active_profiles:
+            report.issues.append(
+                ValidationIssue(
+                    category="provisioning",
+                    message="No active provisioning bundles for this OLT",
+                    severity=IssueSeverity.blocking,
+                    code="NO_ACTIVE_BUNDLES",
+                )
+            )
+            report.is_ready = False
+
+        for profile in profiles:
+            bundle_result = _validate_bundle(db, profile, olt)
+            report.bundles.append(bundle_result)
+
+    # 4. Connectivity tests (optional)
+    if test_connectivity:
+        report.connectivity_tested = True
+        report.ssh_ok = _test_ssh_connectivity(olt)
+        report.snmp_ok = _test_snmp_connectivity(olt)
+
+        if report.ssh_ok is False:
+            report.issues.append(
+                ValidationIssue(
+                    category="connectivity",
+                    message="SSH connection test failed",
+                    severity=IssueSeverity.blocking,
+                    code="SSH_FAILED",
+                )
+            )
+            report.is_ready = False
+
+    # Final readiness check
+    if report.blocking_issues:
+        report.is_ready = False
+
+    return report
+
+
+def _validate_olt_credentials(olt: object, report: OltReadinessReport) -> None:
+    """Validate OLT has required credentials."""
+    if not getattr(olt, "mgmt_ip", None) and not getattr(olt, "hostname", None):
+        report.issues.append(
+            ValidationIssue(
+                category="credentials",
+                message="Missing management IP or hostname",
+                severity=IssueSeverity.blocking,
+                code="NO_MGMT_ADDRESS",
+                field="mgmt_ip",
+            )
+        )
+
+    if not getattr(olt, "ssh_username", None):
+        report.issues.append(
+            ValidationIssue(
+                category="credentials",
+                message="Missing SSH username",
+                severity=IssueSeverity.blocking,
+                code="NO_SSH_USERNAME",
+                field="ssh_username",
+            )
+        )
+
+    if not getattr(olt, "ssh_password", None):
+        report.issues.append(
+            ValidationIssue(
+                category="credentials",
+                message="Missing SSH password",
+                severity=IssueSeverity.blocking,
+                code="NO_SSH_PASSWORD",
+                field="ssh_password",
+            )
+        )
+
+
+def _validate_olt_vendor_model(olt: object, report: OltReadinessReport) -> None:
+    """Validate OLT has vendor and model set."""
+    if not getattr(olt, "vendor", None):
+        report.issues.append(
+            ValidationIssue(
+                category="device",
+                message="Missing vendor",
+                severity=IssueSeverity.blocking,
+                code="NO_VENDOR",
+                field="vendor",
+            )
+        )
+
+    if not getattr(olt, "model", None):
+        report.issues.append(
+            ValidationIssue(
+                category="device",
+                message="Missing model",
+                severity=IssueSeverity.warning,
+                code="NO_MODEL",
+                field="model",
+            )
+        )
+
+
+def _validate_bundle(
+    db: Session,
+    profile: object,
+    olt: object,
+) -> BundleValidationResult:
+    """Validate a provisioning bundle has required data."""
+    result = BundleValidationResult(
+        bundle_id=str(getattr(profile, "id", "")),
+        bundle_name=getattr(profile, "name", "Unnamed"),
+    )
+
+    is_active = getattr(profile, "is_active", False)
+    if not is_active:
+        result.issues.append(
+            ValidationIssue(
+                category="bundle",
+                message="Bundle is inactive",
+                severity=IssueSeverity.info,
+                code="INACTIVE",
+            )
+        )
+        # Don't validate inactive bundles further
+        return result
+
+    # Check authorization profiles (required for Huawei)
+    vendor = getattr(olt, "vendor", "").lower()
+    if "huawei" in vendor:
+        line_profile = getattr(profile, "authorization_line_profile_id", None)
+        service_profile = getattr(profile, "authorization_service_profile_id", None)
+
+        if not line_profile:
+            result.issues.append(
+                ValidationIssue(
+                    category="bundle",
+                    message="Missing authorization line profile ID",
+                    severity=IssueSeverity.blocking,
+                    code="NO_LINE_PROFILE",
+                    field="authorization_line_profile_id",
+                )
+            )
+            result.is_valid = False
+
+        if not service_profile:
+            result.issues.append(
+                ValidationIssue(
+                    category="bundle",
+                    message="Missing authorization service profile ID",
+                    severity=IssueSeverity.blocking,
+                    code="NO_SERVICE_PROFILE",
+                    field="authorization_service_profile_id",
+                )
+            )
+            result.is_valid = False
+
+    # Check VLANs exist
+    _validate_bundle_vlans(db, profile, result)
+
+    # Check IP pool availability
+    _validate_bundle_ip_pool(db, profile, result)
+
+    return result
+
+
+def _validate_bundle_vlans(
+    db: Session,
+    profile: object,
+    result: BundleValidationResult,
+) -> None:
+    """Validate bundle VLANs exist and are active."""
+    from app.models.network import Vlan
+
+    vlan_fields = [
+        ("data_vlan_id", "Data VLAN"),
+        ("mgmt_vlan_id", "Management VLAN"),
+        ("voip_vlan_id", "VoIP VLAN"),
+        ("iptv_vlan_id", "IPTV VLAN"),
+    ]
+
+    for field_name, label in vlan_fields:
+        vlan_id = getattr(profile, field_name, None)
+        if vlan_id:
+            vlan = db.scalars(
+                select(Vlan).where(Vlan.vlan_id == vlan_id)
+            ).first()
+            if not vlan:
+                result.issues.append(
+                    ValidationIssue(
+                        category="vlan",
+                        message=f"{label} {vlan_id} does not exist in database",
+                        severity=IssueSeverity.warning,
+                        code="VLAN_NOT_FOUND",
+                        field=field_name,
+                    )
+                )
+            elif not getattr(vlan, "is_active", True):
+                result.issues.append(
+                    ValidationIssue(
+                        category="vlan",
+                        message=f"{label} {vlan_id} is inactive",
+                        severity=IssueSeverity.warning,
+                        code="VLAN_INACTIVE",
+                        field=field_name,
+                    )
+                )
+
+
+def _validate_bundle_ip_pool(
+    db: Session,
+    profile: object,
+    result: BundleValidationResult,
+) -> None:
+    """Validate IP pool has available addresses."""
+    from app.models.network import IpPool
+
+    mgmt_ip_mode = getattr(profile, "mgmt_ip_mode", None)
+    mgmt_ip_pool_id = getattr(profile, "mgmt_ip_pool_id", None)
+
+    if mgmt_ip_mode == "static_ip" and mgmt_ip_pool_id:
+        pool = db.get(IpPool, mgmt_ip_pool_id)
+        if not pool:
+            result.issues.append(
+                ValidationIssue(
+                    category="ip_pool",
+                    message="Management IP pool not found",
+                    severity=IssueSeverity.blocking,
+                    code="POOL_NOT_FOUND",
+                    field="mgmt_ip_pool_id",
+                )
+            )
+            result.is_valid = False
+        elif not getattr(pool, "is_active", True):
+            result.issues.append(
+                ValidationIssue(
+                    category="ip_pool",
+                    message=f"Management IP pool '{pool.name}' is inactive",
+                    severity=IssueSeverity.blocking,
+                    code="POOL_INACTIVE",
+                    field="mgmt_ip_pool_id",
+                )
+            )
+            result.is_valid = False
+        else:
+            available = getattr(pool, "available_count", None)
+            if available is not None and available <= 0:
+                result.issues.append(
+                    ValidationIssue(
+                        category="ip_pool",
+                        message=f"Management IP pool '{pool.name}' has no available addresses",
+                        severity=IssueSeverity.warning,
+                        code="POOL_EXHAUSTED",
+                        field="mgmt_ip_pool_id",
+                    )
+                )
+
+
+def _test_ssh_connectivity(olt: object) -> bool | None:
+    """Test SSH connectivity to OLT."""
+    try:
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+        adapter = get_protocol_adapter(olt)
+        result = adapter.test_connection()
+        return result.success
+    except Exception as exc:
+        logger.warning("SSH connectivity test failed for OLT %s: %s", getattr(olt, "name", "?"), exc)
+        return False
+
+
+def _test_snmp_connectivity(olt: object) -> bool | None:
+    """Test SNMP connectivity to OLT."""
+    try:
+        from app.services.network.olt_snmp import test_snmp_connection
+
+        mgmt_ip = getattr(olt, "mgmt_ip", None) or getattr(olt, "hostname", None)
+        community = getattr(olt, "snmp_community", "public")
+        if not mgmt_ip:
+            return None
+        return test_snmp_connection(mgmt_ip, community)
+    except Exception as exc:
+        logger.warning("SNMP connectivity test failed for OLT %s: %s", getattr(olt, "name", "?"), exc)
+        return False
+
+
+def validate_all_olts_readiness(
+    db: Session,
+    *,
+    test_connectivity: bool = False,
+) -> list[OltReadinessReport]:
+    """Validate all OLTs are ready for authorization.
+
+    Args:
+        db: Database session.
+        test_connectivity: If True, test SSH/SNMP connectivity for each OLT.
+
+    Returns:
+        List of OltReadinessReport for each OLT.
+    """
+    from app.models.network import OLTDevice
+
+    olts = db.scalars(select(OLTDevice)).all()
+    reports = []
+
+    for olt in olts:
+        report = validate_olt_readiness(
+            db,
+            str(olt.id),
+            test_connectivity=test_connectivity,
+        )
+        reports.append(report)
+
+    return reports
+
+
+def get_readiness_summary(reports: list[OltReadinessReport]) -> dict:
+    """Generate summary statistics from readiness reports.
+
+    Args:
+        reports: List of OLT readiness reports.
+
+    Returns:
+        Summary dictionary with counts and statistics.
+    """
+    total = len(reports)
+    ready = sum(1 for r in reports if r.is_ready)
+    not_ready = total - ready
+
+    # Count issue types
+    blocking_issues = sum(len(r.blocking_issues) for r in reports)
+    warnings = sum(len(r.warnings) for r in reports)
+
+    # Group OLTs by status
+    ready_olts = [r.olt_name for r in reports if r.is_ready]
+    not_ready_olts = [
+        {"name": r.olt_name, "issues": [i.message for i in r.blocking_issues]}
+        for r in reports
+        if not r.is_ready
+    ]
+
+    return {
+        "total_olts": total,
+        "ready_count": ready,
+        "not_ready_count": not_ready,
+        "ready_percentage": round(ready / total * 100, 1) if total > 0 else 0,
+        "total_blocking_issues": blocking_issues,
+        "total_warnings": warnings,
+        "ready_olts": ready_olts,
+        "not_ready_olts": not_ready_olts,
+    }

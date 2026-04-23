@@ -54,10 +54,7 @@ from app.tasks.olt_queue import (
     process_deferred_olt_operations,
     retry_failed_operations,
 )
-from app.tasks.ont_authorization import (
-    run_authorize_autofind_ont_task,
-    run_post_authorization_follow_up_task,
-)
+from app.tasks.ont_authorization import run_post_authorization_follow_up_task
 from app.tasks.ont_autofind import autofind_single_olt, discover_all_olt_autofind
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_onts
@@ -206,7 +203,6 @@ __all__ = [
     "execute_ont_bulk_action",
     "discover_all_olt_autofind",
     "autofind_single_olt",
-    "run_authorize_autofind_ont_task",
     "run_post_authorization_follow_up_task",
     "run_enforcement",
     "evaluate_alert_rules",

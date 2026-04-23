@@ -124,6 +124,7 @@ def parse_form_values(form: FormData) -> dict[str, object]:
         "supports_bundle_overrides": (
             _form_str(form, "supports_bundle_overrides") == "true"
         ),
+        "is_active": _form_str(form, "is_active") == "true",
         "notes": _form_str(form, "notes") or None,
     }
 
@@ -197,6 +198,7 @@ def handle_create(db: Session, form_data: dict[str, object]) -> OnuType:
             else None
         ),
         supports_bundle_overrides=bool(form_data.get("supports_bundle_overrides")),
+        is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
 
@@ -228,6 +230,7 @@ def handle_update(
             else None
         ),
         supports_bundle_overrides=bool(form_data.get("supports_bundle_overrides")),
+        is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
 

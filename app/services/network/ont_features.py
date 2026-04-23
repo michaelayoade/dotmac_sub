@@ -145,7 +145,7 @@ class OntFeatureService:
 
     @staticmethod
     def toggle_catv(db: Session, ont_id: str, *, enabled: bool) -> ActionResult:
-        """Toggle CATV on ONT (requires vendor capability)."""
+        """Toggle CATV on ONT (requires OLT multicast VLAN configuration)."""
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
@@ -156,19 +156,19 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
-        # CATV toggle is a desired-state write; actual OLT multicast VLAN binding
-        # is handled by provisioning or reconciliation tasks.
-        _set_sync_meta(ont, "api")
-        db.commit()
-        _emit_feature_event(db, ont_id, "catv", enabled)
+        # CATV requires OLT-side multicast VLAN binding (btv service-port)
+        # This is not a simple TR-069 parameter - it requires OLT SSH commands
         return ActionResult(
-            success=True,
-            message=f"CATV {'enabled' if enabled else 'disabled'} (desired state).",
+            success=False,
+            message=(
+                "CATV toggle requires OLT multicast VLAN configuration. "
+                "Use the provisioning system to configure CATV services."
+            ),
         )
 
     @staticmethod
     def toggle_iptv(db: Session, ont_id: str, *, enabled: bool) -> ActionResult:
-        """Toggle IPTV on ONT."""
+        """Toggle IPTV on ONT (requires OLT WAN service configuration)."""
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
@@ -179,34 +179,51 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
-        _set_sync_meta(ont, "api")
-        db.commit()
-        _emit_feature_event(db, ont_id, "iptv", enabled)
+        # IPTV requires OLT-side WAN service configuration with IPTV VLAN
+        # This is not a simple toggle - it requires service-port configuration
         return ActionResult(
-            success=True,
-            message=f"IPTV {'enabled' if enabled else 'disabled'} (desired state).",
+            success=False,
+            message=(
+                "IPTV toggle requires OLT WAN service configuration. "
+                "Use the provisioning system to configure IPTV services."
+            ),
         )
 
     @staticmethod
     def toggle_wan_remote_access(
         db: Session, ont_id: str, *, enabled: bool
     ) -> ActionResult:
-        """Toggle WAN remote access."""
+        """Toggle WAN remote access via TR-069."""
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        ont.wan_remote_access = enabled
-        _set_sync_meta(ont, "api")
-        db.commit()
-        db.refresh(ont)
-        _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
-        return ActionResult(
-            success=True,
-            message=f"WAN remote access {'enabled' if enabled else 'disabled'}.",
+        # Require ACS connectivity
+        if not getattr(ont, "tr069_acs_server_id", None):
+            return ActionResult(
+                success=False,
+                message="ONT has no ACS server configured. Cannot push remote access config.",
+            )
+
+        # Push via TR-069
+        from app.services.network.ont_action_remote_access import (
+            set_wan_remote_access_best_effort,
         )
+
+        result = set_wan_remote_access_best_effort(
+            db, ont_id, enabled=enabled, protocol="ssh"
+        )
+
+        if result.success:
+            ont.wan_remote_access = enabled
+            _set_sync_meta(ont, "acs")
+            db.commit()
+            db.refresh(ont)
+            _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
+
+        return result
 
     @staticmethod
     def toggle_lan_port(
@@ -230,36 +247,38 @@ class OntFeatureService:
     def configure_dhcp_snooping(
         db: Session, ont_id: str, *, enabled: bool
     ) -> ActionResult:
-        """Configure DHCP snooping (desired state)."""
+        """Configure DHCP snooping (requires OLT port configuration)."""
         ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             return err
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        _set_sync_meta(ont, "api")
-        db.commit()
-        _emit_feature_event(db, ont_id, "dhcp_snooping", enabled)
+        # DHCP snooping is an OLT port-level feature, not ONT configuration
         return ActionResult(
-            success=True,
-            message=f"DHCP snooping {'enabled' if enabled else 'disabled'} (desired state).",
+            success=False,
+            message=(
+                "DHCP snooping requires OLT port configuration. "
+                "This feature is not available for individual ONT toggle."
+            ),
         )
 
     @staticmethod
     def set_max_mac_learn(db: Session, ont_id: str, *, max_mac: int) -> ActionResult:
-        """Set MAC address learning limit (desired state)."""
+        """Set MAC address learning limit (requires OLT port configuration)."""
         ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             return err
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        _set_sync_meta(ont, "api")
-        db.commit()
-        _emit_feature_event(db, ont_id, "max_mac_learn")
+        # MAC learning limit is an OLT port-level feature
         return ActionResult(
-            success=True,
-            message=f"Max MAC learn set to {max_mac} (desired state).",
+            success=False,
+            message=(
+                "MAC learning limit requires OLT port configuration. "
+                "This feature is not available for individual ONT toggle."
+            ),
         )
 
     @staticmethod
@@ -277,15 +296,24 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
-        # This would typically use TR-069 SetParameterValues for the web UI credentials.
-        # For now, record as desired state until TR-069 parameter map is in place.
-        _set_sync_meta(ont, "api")
-        db.commit()
-        _emit_feature_event(db, ont_id, "web_credentials")
-        return ActionResult(
-            success=True,
-            message="Web credentials update queued.",
-        )
+        # Require ACS connectivity
+        if not getattr(ont, "tr069_acs_server_id", None):
+            return ActionResult(
+                success=False,
+                message="ONT has no ACS server configured. Cannot push web credentials.",
+            )
+
+        # Push via TR-069
+        from app.services.network.ont_action_web_credentials import set_web_credentials
+
+        result = set_web_credentials(db, ont_id, username=username, password=password)
+
+        if result.success:
+            _set_sync_meta(ont, "acs")
+            db.commit()
+            _emit_feature_event(db, ont_id, "web_credentials")
+
+        return result
 
 
 ont_features = OntFeatureService()

@@ -97,7 +97,7 @@ def persist_authorized_ont_inventory(
         if candidate.model:
             ont.model = candidate.model
         if candidate.software_version:
-            ont.firmware_version = candidate.software_version
+            ont.software_version = candidate.software_version
         if candidate.mac:
             ont.mac_address = candidate.mac
 

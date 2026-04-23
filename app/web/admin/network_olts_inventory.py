@@ -38,7 +38,7 @@ from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
-from app.services.network.action_logging import actor_label, log_network_action_result
+from app.services.network.action_logging import log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
@@ -290,6 +290,9 @@ def olt_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
                 db
             ),
+            "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
+                db
+            ),
         }
     )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -317,6 +320,9 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
                 "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
+                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -333,6 +339,9 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
                     db
                 ),
                 "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
+                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
             }
@@ -370,6 +379,9 @@ def olt_edit(
             "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
                 db
             ),
+            "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
+                db
+            ),
         }
     )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -404,6 +416,9 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
                 "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
+                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -419,6 +434,9 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
                 "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
+                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
             }
@@ -1250,116 +1268,75 @@ def olt_authorize_ont(
             or str(direct_ont.serial_number or "").strip().upper()
             != str(serial_number or "").strip().upper()
         ):
-            queue_msg = "ONT authorization scope check failed"
+            error_msg = "ONT authorization scope check failed"
             if is_htmx:
                 return Response(
                     status_code=403,
-                    headers=_toast_headers(queue_msg, "error"),
+                    headers=_toast_headers(error_msg, "error"),
                 )
             return RedirectResponse(
                 f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status=error"
-                f"&sync_message={quote_plus(queue_msg)}",
+                f"&sync_message={quote_plus(error_msg)}",
                 status_code=303,
             )
 
     scoped_ont_id = ont_id if isinstance(ont_id, str) else ""
     if not can_authorize_ont_from_request(request, db, scoped_ont_id):
-        queue_msg = "ONT authorization scope check failed"
+        error_msg = "ONT authorization scope check failed"
         if is_htmx:
             return Response(
                 status_code=403,
-                headers=_toast_headers(queue_msg, "error"),
+                headers=_toast_headers(error_msg, "error"),
             )
         return RedirectResponse(
             f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status=error"
-            f"&sync_message={quote_plus(queue_msg)}",
+            f"&sync_message={quote_plus(error_msg)}",
             status_code=303,
         )
 
     force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
     # Normalize preset_id: empty string means no preset selected
     effective_preset_id = preset_id.strip() if preset_id else None
-    initiated_by = None
     try:
-        initiated_by = actor_label(request)
-        # Queue authorization to run in background via Celery
-        queue_ok, queue_msg, operation_id = (
-            olt_operations_service.queue_authorize_autofind_ont(
+        # Run authorization synchronously - immediate success or failure
+        auth_ok, auth_msg, ont_unit_id = olt_operations_service.authorize_ont(
             db,
             olt_id=olt_id,
             fsp=fsp,
             serial_number=serial_number,
             force_reauthorize=force,
-            initiated_by=initiated_by,
             preset_id=effective_preset_id,
             request=request,
-        )
         )
     except Exception as exc:
         db.rollback()
         logger.error(
-            "Failed to queue ONT authorization from web route olt_id=%s fsp=%s serial=%s: %s",
+            "ONT authorization failed olt_id=%s fsp=%s serial=%s: %s",
             olt_id,
             fsp,
             serial_number,
             exc,
             exc_info=True,
         )
-        queue_ok = False
-        queue_msg = f"Authorization failed: {exc}"
-        operation_id = None
-    status = "success" if queue_ok else "error"
+        auth_ok = False
+        auth_msg = f"Authorization failed: {exc}"
+        ont_unit_id = None
+    status = "success" if auth_ok else "error"
 
-    try:
-        from app.services.network.olt_web_audit import log_olt_audit_event
+    # On success, redirect to the ONT detail page or ONT list
+    if auth_ok and ont_unit_id:
+        target = f"/admin/network/onts/{ont_unit_id}"
+        if is_htmx:
+            return Response(
+                status_code=200,
+                headers={
+                    **_toast_headers(auth_msg, status),
+                    "HX-Redirect": target,
+                },
+            )
+        return RedirectResponse(target, status_code=303)
 
-        log_olt_audit_event(
-            db,
-            request=request,
-            action="force_authorize_ont" if force else "authorize_ont",
-            entity_id=olt_id,
-            metadata={
-                "result": status,
-                "message": queue_msg,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force,
-                "preset_id": effective_preset_id,
-                "follow_up_operation_id": operation_id,
-                "initiated_by": initiated_by,
-            },
-            status_code=200 if queue_ok else 500,
-            is_success=queue_ok,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to audit ONT authorization olt_id=%s fsp=%s serial=%s: %s",
-            olt_id,
-            fsp,
-            serial_number,
-            exc,
-            exc_info=True,
-        )
-    # For queued operations, send a special event to trigger WebSocket subscription
-    if queue_ok and operation_id and is_htmx:
-        # Return immediately with operation tracking info
-        # The UI will subscribe to WebSocket for real-time updates
-        trigger_data = {
-            "showToast": {"message": queue_msg, "type": "info"},
-            "operationQueued": {
-                "operation_id": operation_id,
-                "serial_number": serial_number,
-                "fsp": fsp,
-                "olt_id": olt_id,
-            },
-        }
-        return Response(
-            status_code=200,
-            headers={
-                "HX-Trigger": json.dumps(trigger_data, ensure_ascii=True),
-            },
-        )
-
+    # On failure, redirect back to where user came from with error message
     if return_to in (
         "/admin/network/unconfigured-onts",
         "/admin/network/onts",
@@ -1371,28 +1348,27 @@ def olt_authorize_ont(
             else return_to
         )
         separator = "&" if "?" in target_base else "?"
-        target = (
-            f"{target_base}{separator}status={status}&message={quote_plus(queue_msg)}"
-        )
+        target = f"{target_base}{separator}status=error&message={quote_plus(auth_msg)}"
         if is_htmx:
             return Response(
                 status_code=200,
                 headers={
-                    **_toast_headers(queue_msg, status),
+                    **_toast_headers(auth_msg, "error"),
                     "HX-Redirect": target,
                 },
             )
         return RedirectResponse(target, status_code=303)
 
+    # Default: redirect to OLT provisioning tab with error
     target = (
-        f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status={status}"
-        f"&sync_message={quote_plus(queue_msg)}"
+        f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status=error"
+        f"&sync_message={quote_plus(auth_msg)}"
     )
     if is_htmx:
         return Response(
             status_code=200,
             headers={
-                **_toast_headers(queue_msg, status),
+                **_toast_headers(auth_msg, "error"),
                 "HX-Redirect": target,
             },
         )

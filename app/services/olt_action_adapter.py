@@ -105,7 +105,7 @@ class OltActionAdapter:
             **kwargs,
         )
 
-    def queue_authorize_autofind_ont(
+    def authorize_ont(
         self,
         db: Session,
         *,
@@ -113,22 +113,29 @@ class OltActionAdapter:
         fsp: str,
         serial_number: str,
         force_reauthorize: bool = False,
-        initiated_by: str | None = None,
+        preset_id: str | None = None,
+        request: object | None = None,
         **kwargs: Any,
     ) -> tuple[bool, str, str | None]:
+        """Authorize an ONT synchronously.
+
+        Returns:
+            Tuple of (success, message, ont_unit_id).
+        """
         from app.services.network.olt_authorization_workflow import (
-            queue_authorize_autofind_ont,
+            authorize_autofind_ont_and_provision_network_audited,
         )
 
-        return queue_authorize_autofind_ont(
+        result = authorize_autofind_ont_and_provision_network_audited(
             db,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
+            olt_id,
+            fsp,
+            serial_number,
             force_reauthorize=force_reauthorize,
-            initiated_by=initiated_by,
-            **kwargs,
+            preset_id=preset_id,
+            request=request,
         )
+        return (result.success, result.message, result.ont_unit_id)
 
 
 olt_action_adapter = OltActionAdapter()

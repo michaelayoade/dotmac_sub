@@ -978,7 +978,9 @@ class NetworkConfigValidator(BaseConfigValidator):
 
         # OLT-specific validation
         if olt and db:
+            self._validate_olt_has_vendor_model(olt, result)
             self._validate_olt_has_credentials(olt, result)
+            self._validate_olt_has_provisioning_profile(db, olt, result)
             if config.fsp:
                 self._validate_pon_port_exists(db, olt, config.fsp, result)
 
@@ -1020,12 +1022,70 @@ class NetworkConfigValidator(BaseConfigValidator):
         olt: OLTDevice,
         result: ConfigValidationResult,
     ) -> None:
-        """Check if OLT has SSH credentials configured."""
-        if not getattr(olt, "ssh_username", None):
-            result.add_warning(
+        """Check if OLT has SSH credentials configured (required for authorization)."""
+        # Management address is required for SSH connection
+        if not getattr(olt, "mgmt_ip", None) and not getattr(olt, "hostname", None):
+            result.add_error(
                 "olt",
-                "OLT does not have SSH credentials configured",
-                code="NO_CREDENTIALS",
+                "OLT management IP or hostname is required for authorization",
+                code="NO_MGMT_ADDRESS",
+            )
+        if not getattr(olt, "ssh_username", None):
+            result.add_error(
+                "olt",
+                "OLT SSH username is required for authorization",
+                code="NO_SSH_USERNAME",
+            )
+        if not getattr(olt, "ssh_password", None):
+            result.add_error(
+                "olt",
+                "OLT SSH password is required for authorization",
+                code="NO_SSH_PASSWORD",
+            )
+
+    def _validate_olt_has_vendor_model(
+        self,
+        olt: OLTDevice,
+        result: ConfigValidationResult,
+    ) -> None:
+        """Check if OLT has vendor and model configured (required for authorization)."""
+        if not getattr(olt, "vendor", None):
+            result.add_error(
+                "olt",
+                "OLT vendor is required for authorization",
+                code="NO_VENDOR",
+            )
+        if not getattr(olt, "model", None):
+            result.add_error(
+                "olt",
+                "OLT model is required for authorization",
+                code="NO_MODEL",
+            )
+
+    def _validate_olt_has_provisioning_profile(
+        self,
+        db: Session,
+        olt: OLTDevice,
+        result: ConfigValidationResult,
+    ) -> None:
+        """Check if OLT has an active provisioning profile (required for authorization)."""
+        from sqlalchemy import select
+
+        from app.models.network import OntProvisioningProfile
+
+        # Check if OLT has a default profile or any OLT-scoped active profile
+        stmt = select(OntProvisioningProfile.id).where(
+            OntProvisioningProfile.olt_device_id == olt.id,
+            OntProvisioningProfile.is_active.is_(True),
+        )
+        profile_exists = db.scalars(stmt).first() is not None
+
+        if not profile_exists:
+            result.add_error(
+                "olt",
+                f"OLT '{olt.name}' has no active provisioning profile. "
+                "Create a provisioning bundle scoped to this OLT before authorizing ONTs.",
+                code="NO_PROVISIONING_PROFILE",
             )
 
     def _validate_pon_port_exists(

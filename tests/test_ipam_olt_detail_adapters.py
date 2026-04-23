@@ -335,42 +335,48 @@ def test_olt_action_adapter_rejects_unknown_legacy_passthrough() -> None:
     assert not hasattr(olt_action_adapter, "nonexistent_legacy_action")
 
 
-def test_olt_action_adapter_delegates_authorization_queue(monkeypatch) -> None:
+def test_olt_action_adapter_delegates_authorization_sync(monkeypatch) -> None:
+    from types import SimpleNamespace
+
     from app.services.network import olt_authorization_workflow
     from app.services.olt_action_adapter import olt_action_adapter
 
     calls = {}
 
-    def fake_queue(db, **kwargs):
-        calls["queue"] = (db, kwargs)
-        return True, "queued", "op-1"
+    def fake_authorize(db, olt_id, fsp, serial_number, **kwargs):
+        calls["authorize"] = (db, olt_id, fsp, serial_number, kwargs)
+        return SimpleNamespace(
+            success=True,
+            message="ONT authorized",
+            ont_unit_id="ont-123",
+        )
 
     monkeypatch.setattr(
         olt_authorization_workflow,
-        "queue_authorize_autofind_ont",
-        fake_queue,
+        "authorize_autofind_ont_and_provision_network_audited",
+        fake_authorize,
     )
 
     db = object()
-    result = olt_action_adapter.queue_authorize_autofind_ont(
+    result = olt_action_adapter.authorize_ont(
         db,
         olt_id="olt-1",
         fsp="0/1/1",
         serial_number="HWTC1234",
         force_reauthorize=True,
-        initiated_by="admin",
+        preset_id="preset-1",
         request="request-context",
     )
 
-    assert result == (True, "queued", "op-1")
-    assert calls["queue"] == (
+    assert result == (True, "ONT authorized", "ont-123")
+    assert calls["authorize"] == (
         db,
+        "olt-1",
+        "0/1/1",
+        "HWTC1234",
         {
-            "olt_id": "olt-1",
-            "fsp": "0/1/1",
-            "serial_number": "HWTC1234",
             "force_reauthorize": True,
-            "initiated_by": "admin",
+            "preset_id": "preset-1",
             "request": "request-context",
         },
     )

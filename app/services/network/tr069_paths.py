@@ -122,6 +122,16 @@ _TR181_PATHS: dict[str, str] = {
     "optical.lower_threshold": "Optical.Interface.{i}.LowerOpticalThreshold",
     "optical.upper_threshold": "Optical.Interface.{i}.UpperOpticalThreshold",
     "optical.transmit_level": "Optical.Interface.{i}.TransmitOpticalLevel",
+    # ── Remote Access (vendor-specific, typically X_HW_ for Huawei) ────
+    "remote_access.enabled": "X_HW_UserInterface.RemoteAccessEnable",
+    "remote_access.ssh_enabled": "X_HW_UserInterface.SSHEnable",
+    "remote_access.ssh_port": "X_HW_UserInterface.SSHPort",
+    "remote_access.telnet_enabled": "X_HW_UserInterface.TelnetEnable",
+    "remote_access.telnet_port": "X_HW_UserInterface.TelnetPort",
+    # ── Web Management Credentials ─────────────────────────────────────
+    "web.admin_username": "Users.User.1.Username",
+    "web.admin_password": "Users.User.1.Password",
+    "web.admin_enable": "Users.User.1.Enable",
 }
 
 
@@ -195,6 +205,16 @@ _TR098_PATHS: dict[str, str] = {
     "optical.lower_threshold": "WANDevice.1.X_GponInterafceConfig.LowerRXThreshold",
     "optical.upper_threshold": "WANDevice.1.X_GponInterafceConfig.UpperRXThreshold",
     "optical.transmit_level": "WANDevice.1.X_GponInterafceConfig.TXPower",
+    # ── Remote Access (vendor-specific) ────────────────────────────────
+    "remote_access.enabled": "X_HW_UserInterface.RemoteAccessEnable",
+    "remote_access.ssh_enabled": "X_HW_UserInterface.SSHEnable",
+    "remote_access.ssh_port": "X_HW_UserInterface.SSHPort",
+    "remote_access.telnet_enabled": "X_HW_UserInterface.TelnetEnable",
+    "remote_access.telnet_port": "X_HW_UserInterface.TelnetPort",
+    # ── Web Management Credentials (vendor-specific for Huawei) ────────
+    "web.admin_username": "X_HW_WebUserInfo.1.UserName",
+    "web.admin_password": "X_HW_WebUserInfo.1.Password",
+    "web.admin_enable": "X_HW_WebUserInfo.1.Enable",
 }
 
 
