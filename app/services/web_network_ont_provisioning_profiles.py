@@ -143,6 +143,7 @@ def form_context(
     request: Request,
     db: Session,
     profile_id: str | None = None,
+    olt_device_id: str | None = None,
 ) -> dict[str, object]:
     """Return context dict for the create/edit form."""
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -158,7 +159,7 @@ def form_context(
     dl_profiles = speed_profiles.list(db, direction="download", is_active=True)
     ul_profiles = speed_profiles.list(db, direction="upload", is_active=True)
 
-    return {
+    context: dict[str, object] = {
         "request": request,
         "active_page": "provisioning-profiles",
         "active_menu": "network",
@@ -188,6 +189,9 @@ def form_context(
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+    if not profile_id and olt_device_id:
+        context["form_values"] = {"olt_device_id": olt_device_id}
+    return context
 
 
 def parse_profile_form(form: FormData) -> dict[str, object]:

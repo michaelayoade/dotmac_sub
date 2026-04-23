@@ -793,8 +793,14 @@ def test_ont_detail_uses_all_config_operator_view() -> None:
     template = Path("templates/admin/network/onts/detail.html").read_text()
     unified_template = Path("templates/admin/network/onts/_unified_config.html").read_text()
 
-    assert "default('device-config')" in template
-    assert "All Config" in template
+    assert "default('summary')" in template
+    assert "Effective Config" in template
+    assert "Observed State" in template
+    assert "<span>Summary</span>" in template
+    assert "<span>Effective Config</span>" in template
+    assert "<span>Observed State</span>" in template
+    assert "<span>History</span>" in template
+    assert "<span>Diagnostics</span>" not in template
     assert "/unified-config" not in template
     assert '{% include "admin/network/onts/_unified_config.html" %}' in template
     assert "Loading device configuration..." not in template

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
@@ -50,10 +50,13 @@ def provisioning_profiles_list(
 )
 def provisioning_profile_create_form(
     request: Request,
+    olt_device_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Show provisioning profile create form."""
-    context = web_profile_service.form_context(request, db)
+    context = web_profile_service.form_context(
+        request, db, olt_device_id=olt_device_id
+    )
     return templates.TemplateResponse(
         "admin/network/provisioning-profiles/form.html", context
     )

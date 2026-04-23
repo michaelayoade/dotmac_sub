@@ -2406,8 +2406,15 @@ class TestOntLocationDetailsHelpers:
         preview_template = Path(
             "templates/admin/network/onts/_profile_preview.html"
         ).read_text()
+        olt_detail_template = Path(
+            "templates/admin/network/olts/detail.html"
+        ).read_text()
 
         assert "/admin/network/provisioning-profiles/create" in provision_template
+        assert (
+            "/admin/network/provisioning-profiles/create?olt_device_id={{ olt.id }}"
+            in olt_detail_template
+        )
         assert (
             "/admin/network/provisioning-profiles/{{ profile.id }}/edit"
             in preview_template
