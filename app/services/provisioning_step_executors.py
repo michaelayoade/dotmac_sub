@@ -257,128 +257,14 @@ def execute_push_tr069_wan_config(
     context: dict[str, Any],
     config: dict[str, Any] | None,
 ) -> ProvisioningResult:
-    """Push WAN configuration to ONT/CPE via TR-069.
-
-    Sets WAN connection type and VLAN on the device via GenieACS.
-
-    Context keys used:
-        ont_unit_id: ONT unit ID (for ONT-based push)
-        cpe_device_id: CPE device ID (for CPE-based push)
-
-    Config keys:
-        wan_mode: WAN mode (pppoe, dhcp, bridge). Default: pppoe
-        wan_vlan: WAN VLAN ID (optional)
-        wan_instance: WANConnectionDevice / PPP.Interface index (IGD / TR-181).
-            When unset, auto-discovered from the device snapshot; falls back to 1.
-    """
-    config = config or {}
-    ont_unit_id = context.get("ont_unit_id")
-    cpe_device_id = context.get("cpe_device_id")
-    wan_mode = config.get("wan_mode", "pppoe")
-
-    try:
-        if ont_unit_id:
-            from app.services.network.ont_action_common import (
-                detect_data_model_root,
-                get_ont_client_or_error,
-            )
-
-            ont_resolved, ont_error = get_ont_client_or_error(db, ont_unit_id)
-            if ont_error:
-                return ProvisioningResult(status="failed", detail=ont_error.message)
-            if ont_resolved is None:
-                return ProvisioningResult(
-                    status="failed", detail="ONT resolution failed."
-                )
-            ont, client, device_id = ont_resolved
-            root = detect_data_model_root(db, ont, client, device_id)
-        elif cpe_device_id:
-            from app.services.network.ont_action_common import (
-                detect_data_model_root,
-                get_cpe_client_or_error,
-            )
-
-            cpe_resolved, cpe_error = get_cpe_client_or_error(db, cpe_device_id)
-            if cpe_error:
-                return ProvisioningResult(status="failed", detail=cpe_error.message)
-            if cpe_resolved is None:
-                return ProvisioningResult(
-                    status="failed", detail="CPE resolution failed."
-                )
-            cpe, client, device_id = cpe_resolved
-            root = detect_data_model_root(db, cpe, client, device_id)
-        else:
-            return ProvisioningResult(
-                status="failed",
-                detail="No ONT or CPE device ID in context for TR-069 WAN config push.",
-            )
-
-        # Build WAN parameters based on mode
-        from app.services.genieacs import GenieACSError
-        from app.services.network.ont_action_common import (
-            build_tr069_params,
-            resolve_wan_ppp_instance,
-            set_and_verify,
-        )
-
-        wan_instance = config.get("wan_instance")
-        if wan_instance is None:
-            wan_instance = resolve_wan_ppp_instance(client, device_id, root)
-        wan_instance = max(1, int(wan_instance))
-
-        params: dict[str, str] = {}
-        if wan_mode == "pppoe":
-            if root == "Device":
-                params[f"PPP.Interface.{wan_instance}.Enable"] = "true"
-            else:
-                params[
-                    f"WANDevice.1.WANConnectionDevice.{wan_instance}"
-                    ".WANPPPConnection.1.Enable"
-                ] = "1"
-                params[
-                    f"WANDevice.1.WANConnectionDevice.{wan_instance}"
-                    ".WANPPPConnection.1.ConnectionType"
-                ] = "IP_Routed"
-
-        wan_vlan = config.get("wan_vlan")
-        if wan_vlan:
-            if root == "Device":
-                params["Ethernet.VLANTermination.1.VLANID"] = str(wan_vlan)
-            else:
-                params[
-                    f"WANDevice.1.WANConnectionDevice.{wan_instance}"
-                    ".WANPPPConnection.1.X_HW_VLAN"
-                ] = str(wan_vlan)
-
-        if params:
-            tr069_params = build_tr069_params(root, params)
-            set_and_verify(client, device_id, tr069_params)
-
-        logger.info(
-            "TR-069 WAN config pushed: mode=%s, vlan=%s, wan_instance=%s",
-            wan_mode,
-            wan_vlan,
-            wan_instance,
-        )
-        return ProvisioningResult(
-            status="ok",
-            detail=f"WAN config pushed via TR-069 (mode={wan_mode}).",
-            payload={
-                "tr069_wan_configured": True,
-                "wan_mode": wan_mode,
-                "wan_instance": wan_instance,
-            },
-        )
-    except GenieACSError as exc:
-        logger.error("TR-069 WAN config push failed: %s", exc)
-        return ProvisioningResult(
-            status="failed", detail=f"TR-069 WAN config push failed: {exc}"
-        )
-    except Exception as exc:
-        logger.error("TR-069 WAN config push failed: %s", exc)
-        return ProvisioningResult(
-            status="failed", detail=f"TR-069 WAN config push failed: {exc}"
-        )
+    """Legacy flat WAN TR-069 executor disabled after bundle-instance cutover."""
+    return ProvisioningResult(
+        status="failed",
+        detail=(
+            "Legacy TR-069 WAN config executor is disabled. Provision the active "
+            "ONT WAN service instances instead."
+        ),
+    )
 
 
 def execute_push_tr069_pppoe_credentials(
@@ -386,104 +272,11 @@ def execute_push_tr069_pppoe_credentials(
     context: dict[str, Any],
     config: dict[str, Any] | None,
 ) -> ProvisioningResult:
-    """Push PPPoE credentials to ONT/CPE via TR-069.
-
-    Resolves credentials from subscription's access credentials
-    or from config overrides.
-
-    Context keys used:
-        ont_unit_id or cpe_device_id: Device to push to
-        subscription_id: To resolve PPPoE credentials
-
-    Config keys:
-        pppoe_username: Override username (optional)
-        pppoe_password: Override password (optional)
-        wan_instance: WANConnectionDevice index (IGD) / PPP.Interface index (TR-181).
-            When unset, auto-discovered from the device snapshot; falls back to 1.
-        wan_vlan: VLAN tag for the PPP WAN service. Required when creating a new
-            WANPPPConnection instance; ignored when the instance already exists.
-    """
-    config = config or {}
-    ont_unit_id = context.get("ont_unit_id")
-    cpe_device_id = context.get("cpe_device_id")
-
-    # Resolve credentials
-    username = config.get("pppoe_username")
-    password = config.get("pppoe_password")
-
-    if not username or not password:
-        subscription_id = context.get("subscription_id")
-        if subscription_id:
-            from sqlalchemy import select as sa_select
-
-            from app.models.catalog import AccessCredential
-            from app.services.credential_crypto import decrypt_credential
-
-            cred: AccessCredential | None = None
-            subscriber_id = context.get("subscriber_id")
-            if subscriber_id:
-                cred = db.scalars(
-                    sa_select(AccessCredential).where(
-                        AccessCredential.subscriber_id == subscriber_id,
-                        AccessCredential.is_active.is_(True),
-                    )
-                ).first()
-            if cred:
-                username = username or cred.username
-                password = password or decrypt_credential(cred.secret_hash)
-
-    if not username or not password:
-        return ProvisioningResult(
-            status="failed",
-            detail="PPPoE credentials not found in config or subscription.",
-        )
-
-    try:
-        if ont_unit_id:
-            from app.services.acs_client import create_acs_config_writer
-
-            writer_kwargs: dict[str, Any] = {}
-            cfg_instance = config.get("wan_instance")
-            if cfg_instance is not None:
-                writer_kwargs["instance_index"] = max(1, int(cfg_instance))
-            cfg_vlan = config.get("wan_vlan")
-            if cfg_vlan is not None:
-                writer_kwargs["wan_vlan"] = int(cfg_vlan)
-
-            result = create_acs_config_writer().set_pppoe_credentials(
-                db, ont_unit_id, username, password, **writer_kwargs
-            )
-        elif cpe_device_id:
-            # CPE doesn't handle PPPoE — it's behind the ONT. Skip gracefully.
-            return ProvisioningResult(
-                status="ok",
-                detail="CPE devices don't handle PPPoE — credentials pushed to ONT only.",
-                payload={"tr069_pppoe_skipped_cpe": True},
-            )
-        else:
-            return ProvisioningResult(
-                status="failed",
-                detail="No ONT or CPE device ID for TR-069 PPPoE push.",
-            )
-
-        if result.success:
-            masked = username[:3] + "***" if len(username) > 3 else "***"
-            logger.info(
-                "PPPoE credentials pushed via TR-069 for user %s (wan_instance=%s)",
-                masked,
-                writer_kwargs.get("instance_index", 1),
-            )
-            payload: dict[str, Any] = {"tr069_pppoe_pushed": True}
-            if "instance_index" in writer_kwargs:
-                payload["wan_instance"] = writer_kwargs["instance_index"]
-            return ProvisioningResult(
-                status="ok",
-                detail=result.message,
-                payload=payload,
-            )
-        return ProvisioningResult(status="failed", detail=result.message)
-    except Exception as exc:
-        logger.error("TR-069 PPPoE push failed: %s", exc)
-        return ProvisioningResult(
-            status="failed", detail=f"TR-069 PPPoE push failed: {exc}"
-        )
+    """Legacy flat PPPoE executor disabled after bundle-instance cutover."""
+    return ProvisioningResult(
+        status="failed",
+        detail=(
+            "Legacy TR-069 PPPoE credential executor is disabled. Provision the "
+            "active ONT WAN service instances instead."
+        ),
+    )

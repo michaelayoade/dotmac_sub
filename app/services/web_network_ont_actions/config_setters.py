@@ -322,38 +322,21 @@ def configure_wan_config(
     instance_index: int = 1,
     request: Request | None = None,
 ) -> ActionResult:
-    """Set WAN mode, VLAN, and static IP fields via GenieACS TR-069."""
+    """Legacy flat WAN push endpoint retained only as a compatibility stub."""
     if request is not None and not can_manage_ont_from_request(request, db, ont_id):
         return ActionResult(
             success=False,
             message="ONT WAN configuration scope check failed.",
             waiting=False,
         )
-
-    result = _acs_config_writer().configure_wan_config(
-        db,
-        ont_id,
-        wan_mode=wan_mode,
-        wan_vlan=wan_vlan,
-        ip_address=ip_address,
-        subnet_mask=subnet_mask,
-        gateway=gateway,
-        dns_servers=dns_servers,
-        instance_index=instance_index,
+    result = ActionResult(
+        success=False,
+        message=(
+            "Legacy WAN TR-069 pushes are disabled. Update the active WAN "
+            "service instance and provision that instance instead."
+        ),
+        waiting=False,
     )
-    if result.success:
-        _persist_wan_intent(
-            db,
-            ont_id,
-            wan_mode=wan_mode,
-            wan_vlan=wan_vlan,
-            ip_address=ip_address,
-            subnet_mask=subnet_mask,
-            gateway=gateway,
-            dns_servers=dns_servers,
-            instance_index=instance_index,
-        )
-        result = _intent_saved_result(result)
     _log_action_audit(
         db,
         request=request,
@@ -384,14 +367,8 @@ def configure_wan_with_pppoe(
     pppoe_password: str | None = None,
     request: Request | None = None,
 ) -> ActionResult:
-    """Configure WAN settings and optionally push PPPoE credentials.
-
-    This method orchestrates WAN configuration and PPPoE credential push
-    as a single logical operation. For PPPoE mode, if credentials are
-    provided, both username and password must be supplied.
-    """
-    # First configure the WAN settings
-    wan_result = configure_wan_config(
+    """Legacy combined WAN/PPPoE push endpoint retained as a compatibility stub."""
+    return configure_wan_config(
         db,
         ont_id,
         wan_mode=wan_mode,
@@ -402,61 +379,6 @@ def configure_wan_with_pppoe(
         dns_servers=dns_servers,
         instance_index=instance_index,
         request=request,
-    )
-
-    # If WAN config failed or no PPPoE credentials provided, return WAN result
-    if not wan_result.success:
-        return wan_result
-
-    # Check if PPPoE credentials should be pushed
-    has_username = bool(pppoe_username)
-    has_password = bool(pppoe_password)
-
-    if wan_mode != "pppoe" or (not has_username and not has_password):
-        return wan_result
-
-    # For PPPoE mode with credentials, both must be provided
-    if has_username != has_password:
-        return ActionResult(
-            success=False,
-            message=(
-                f"{wan_result.message} PPPoE credential push requires both "
-                "username and password."
-            ),
-            data={"wan": wan_result.data},
-            waiting=False,
-        )
-
-    # Push PPPoE credentials
-    credential_result = set_pppoe_credentials(
-        db,
-        ont_id,
-        pppoe_username,
-        pppoe_password,
-        instance_index=instance_index,
-        wan_vlan=wan_vlan,
-        request=request,
-    )
-
-    # Combine results
-    combined_success = wan_result.success and credential_result.success
-    combined_waiting = (
-        (wan_result.waiting or credential_result.waiting)
-        and wan_result.success
-        and credential_result.success
-    )
-
-    return ActionResult(
-        success=combined_success,
-        message=(
-            f"WAN service: {wan_result.message} "
-            f"PPPoE credentials: {credential_result.message}"
-        ),
-        data={
-            "wan": wan_result.data,
-            "pppoe_credentials": credential_result.data,
-        },
-        waiting=combined_waiting,
     )
 
 
@@ -471,92 +393,15 @@ def set_pppoe_credentials(
     initiated_by: str | None = None,
     request: Request | None = None,
 ) -> ActionResult:
-    """Push PPPoE credentials to ONT via TR-069 with operation tracking.
-
-    When ``instance_index`` is omitted, the underlying network call
-    auto-discovers the WANConnectionDevice hosting an existing
-    WANPPPConnection.
-    """
-    initiated_by = initiated_by or actor_name_from_request(request)
-    if wan_vlan is None:
-        try:
-            ont = network_service.ont_units.get_including_inactive(
-                db=db, entity_id=ont_id
-            )
-            wan_vlan = (
-                int(ont.wan_vlan.tag) if ont.wan_vlan and ont.wan_vlan.tag else None
-            )
-        except Exception:
-            logger.exception("Failed to resolve WAN VLAN for ONT %s", ont_id)
-    result = run_tracked_action(
-        db,
-        NetworkOperationType.ont_set_pppoe,
-        NetworkOperationTargetType.ont,
-        ont_id,
-        lambda: _acs_config_writer().set_pppoe_credentials(
-            db,
-            ont_id,
-            username,
-            password,
-            instance_index=instance_index,
-            wan_vlan=wan_vlan,
+    """Legacy flat PPPoE push endpoint retained only as a compatibility stub."""
+    result = ActionResult(
+        success=False,
+        message=(
+            "Legacy PPPoE TR-069 pushes are disabled. Update the active WAN "
+            "service instance credentials and provision that instance instead."
         ),
-        correlation_key=f"ont_set_pppoe:{ont_id}",
-        initiated_by=initiated_by,
+        waiting=False,
     )
-    if result.success:
-        ont = None
-        try:
-            ont = network_service.ont_units.get_including_inactive(
-                db=db, entity_id=ont_id
-            )
-            if ont is not None:
-                if is_bundle_managed_ont(db, ont):
-                    upsert_ont_config_override(
-                        db,
-                        ont=ont,
-                        field_name="wan.pppoe_username",
-                        value=username.strip() or None,
-                        reason="config_setters.set_pppoe_credentials",
-                    )
-                    ont.pppoe_username = None
-                else:
-                    ont.pppoe_username = username.strip() or ont.pppoe_username
-                db.add(ont)
-                db.flush()
-        except Exception:
-            logger.exception("Failed to persist PPPoE username for ONT %s", ont_id)
-        _persist_ont_plan_step(
-            db,
-            ont_id,
-            "push_pppoe_tr069",
-            {
-                "username": username,
-                "password_set": bool(password),
-                "instance_index": instance_index,
-                "wan_vlan": wan_vlan,
-            },
-        )
-        # Emit audit event for PPPoE credential change
-        from app.services.events import emit_event
-        from app.services.events.types import EventType
-
-        emit_event(
-            db,
-            EventType.ont_pppoe_credentials_set,
-            {
-                "ont_id": ont_id,
-                "ont_serial": ont.serial_number if ont else None,
-                "username_set": bool(username),
-                "password_set": bool(password),
-                "instance_index": instance_index,
-                "wan_vlan": wan_vlan,
-                "method": "tr069",
-                "result": "success",
-            },
-            actor=actor_name_from_request(request),
-        )
-        result = _intent_saved_result(result)
     waiting = getattr(result, "waiting", False)
     _log_action_audit(
         db,

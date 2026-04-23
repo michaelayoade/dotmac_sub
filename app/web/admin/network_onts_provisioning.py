@@ -12,7 +12,6 @@ from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -26,8 +25,9 @@ from app.services.network.action_logging import log_network_action_result
 from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_scope import can_manage_ont_from_request
+from app.web.templates import templates
 
-templates = Jinja2Templates(directory="templates")
+# Add filter for credential masking in provisioning templates
 templates.env.filters["masked_credentials"] = mask_credentials
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-provisioning"])
 

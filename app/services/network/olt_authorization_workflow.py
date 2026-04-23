@@ -890,6 +890,7 @@ def authorize_autofind_ont(
     serial_number: str,
     *,
     force_reauthorize: bool = False,
+    preset_id: str | None = None,
     queue_follow_up: bool = True,
 ):
     """Authorize an unregistered ONT on an OLT with a fail-fast workflow.
@@ -901,6 +902,9 @@ def authorize_autofind_ont(
         serial_number: ONT serial number
         force_reauthorize: If True, delete any existing registration of this
             serial on the OLT before authorizing on the specified port.
+        preset_id: Optional authorization preset ID to use for profile resolution.
+            If provided and the preset has line/service profile IDs, those are
+            used instead of the OLT's default provisioning profile.
         queue_follow_up: If True, queue the legacy post-authorization sync after
             OLT authorization. Callers that continue into inline network
             provisioning should set this to False.
@@ -1082,16 +1086,58 @@ def authorize_autofind_ont(
     if not can_authorize:
         return _fail("Authorize ONT on OLT", block_reason)
 
+    # Load authorization preset if provided
+    authorization_preset = None
+    if preset_id:
+        from app.models.network import AuthorizationPreset
+
+        try:
+            from uuid import UUID as UUIDType
+
+            preset_uuid = UUIDType(str(preset_id))
+            authorization_preset = db.get(AuthorizationPreset, preset_uuid)
+            if authorization_preset and not authorization_preset.is_active:
+                logger.warning(
+                    "Authorization preset %s is inactive, ignoring",
+                    preset_id,
+                )
+                authorization_preset = None
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                "Invalid preset_id %r during authorization: %s",
+                preset_id,
+                exc,
+            )
+
     authorization_profiles = None
     if force_reauthorize:
         profile_started_at = monotonic()
         from app.services.network.olt_profile_resolution import (
+            AuthorizationProfileResolution,
             resolve_authorization_profiles_from_db,
         )
 
-        profiles_ok, profiles_msg, authorization_profiles = (
-            resolve_authorization_profiles_from_db(db, olt)
-        )
+        # Use preset profile IDs if available
+        if (
+            authorization_preset
+            and authorization_preset.line_profile_id is not None
+            and authorization_preset.service_profile_id is not None
+        ):
+            authorization_profiles = AuthorizationProfileResolution(
+                line_profile_id=authorization_preset.line_profile_id,
+                service_profile_id=authorization_preset.service_profile_id,
+                message=(
+                    f"Using authorization preset '{authorization_preset.name}': "
+                    f"line {authorization_preset.line_profile_id}, "
+                    f"service {authorization_preset.service_profile_id}."
+                ),
+            )
+            profiles_ok = True
+            profiles_msg = authorization_profiles.message
+        else:
+            profiles_ok, profiles_msg, authorization_profiles = (
+                resolve_authorization_profiles_from_db(db, olt)
+            )
         if not profiles_ok or authorization_profiles is None:
             return _fail(
                 "Resolve OLT authorization profiles",
@@ -1224,12 +1270,31 @@ def authorize_autofind_ont(
     if authorization_profiles is None:
         profile_started_at = monotonic()
         from app.services.network.olt_profile_resolution import (
+            AuthorizationProfileResolution,
             resolve_authorization_profiles_from_db,
         )
 
-        profiles_ok, profiles_msg, authorization_profiles = (
-            resolve_authorization_profiles_from_db(db, olt)
-        )
+        # Use preset profile IDs if available
+        if (
+            authorization_preset
+            and authorization_preset.line_profile_id is not None
+            and authorization_preset.service_profile_id is not None
+        ):
+            authorization_profiles = AuthorizationProfileResolution(
+                line_profile_id=authorization_preset.line_profile_id,
+                service_profile_id=authorization_preset.service_profile_id,
+                message=(
+                    f"Using authorization preset '{authorization_preset.name}': "
+                    f"line {authorization_preset.line_profile_id}, "
+                    f"service {authorization_preset.service_profile_id}."
+                ),
+            )
+            profiles_ok = True
+            profiles_msg = authorization_profiles.message
+        else:
+            profiles_ok, profiles_msg, authorization_profiles = (
+                resolve_authorization_profiles_from_db(db, olt)
+            )
         if not profiles_ok or authorization_profiles is None:
             return _fail(
                 "Resolve OLT authorization profiles",
@@ -1588,6 +1653,7 @@ def authorize_autofind_ont_and_provision_network(
     serial_number: str,
     *,
     force_reauthorize: bool = False,
+    preset_id: str | None = None,
 ) -> AuthorizationWorkflowResult:
     """Authorize an autofind ONT, then apply OLT-layer network provisioning.
 
@@ -1603,6 +1669,7 @@ def authorize_autofind_ont_and_provision_network(
         fsp,
         serial_number,
         force_reauthorize=force_reauthorize,
+        preset_id=preset_id,
         queue_follow_up=False,
     )
     result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
@@ -1889,6 +1956,7 @@ def authorize_autofind_ont_and_provision_network_audited(
     serial_number: str,
     *,
     force_reauthorize: bool = False,
+    preset_id: str | None = None,
     request: Request | None = None,
 ) -> AuthorizationWorkflowResult:
     from app.services.network.action_logging import log_network_action_result
@@ -1899,6 +1967,7 @@ def authorize_autofind_ont_and_provision_network_audited(
         fsp,
         serial_number,
         force_reauthorize=force_reauthorize,
+        preset_id=preset_id,
     )
     status = getattr(result, "status", "success" if result.success else "error")
     try:
@@ -1913,6 +1982,7 @@ def authorize_autofind_ont_and_provision_network_audited(
                 "fsp": fsp,
                 "serial_number": serial_number,
                 "force_reauthorize": force_reauthorize,
+                "preset_id": preset_id,
                 "network_provisioning": True,
             },
             status_code=200 if status in {"success", "warning"} else 500,
@@ -2240,6 +2310,7 @@ def queue_authorize_autofind_ont(
     serial_number: str,
     force_reauthorize: bool = False,
     initiated_by: str | None = None,
+    preset_id: str | None = None,
     request: Request | None = None,
 ) -> tuple[bool, str, str | None]:
     """Queue the full ONT authorization workflow as a tracked operation."""
@@ -2276,6 +2347,7 @@ def queue_authorize_autofind_ont(
                 "fsp": fsp,
                 "serial_number": serial_number,
                 "force_reauthorize": force_reauthorize,
+                "preset_id": preset_id,
             },
         )
     except HTTPException as exc:
@@ -2313,6 +2385,7 @@ def queue_authorize_autofind_ont(
                 fsp,
                 serial_number,
                 force_reauthorize,
+                preset_id,
             ],
             correlation_id=correlation_key,
             source="olt_authorization",

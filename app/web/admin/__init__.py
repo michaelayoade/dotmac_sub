@@ -46,6 +46,9 @@ from app.web.admin.network_ip_management import router as network_ip_management_
 from app.web.admin.network_monitoring import router as network_monitoring_router
 from app.web.admin.network_olts_inventory import router as network_olts_inventory_router
 from app.web.admin.network_olts_profiles import router as network_olts_profiles_router
+from app.web.admin.network_authorization_presets import (
+    router as network_authorization_presets_router,
+)
 from app.web.admin.network_ont_provisioning_profiles import (
     router as network_ont_provisioning_profiles_router,
 )
@@ -294,6 +297,10 @@ router.include_router(
 )
 router.include_router(
     network_ont_provisioning_profiles_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_authorization_presets_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

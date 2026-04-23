@@ -144,11 +144,9 @@ def read_param_from_cache(
 
     Returns (None, None) if the path is not present or the cache cannot be read.
     """
-    from app.services.genieacs import GenieACSError  # local import avoids cycle
-
     try:
         device = client.get_device(device_id)
-    except (GenieACSError, Exception) as exc:  # noqa: BLE001 — best-effort cache read
+    except Exception as exc:  # noqa: BLE001 - best-effort cache read
         logger.debug(
             "GenieACS device cache read failed for %s path=%s: %s",
             device_id,
@@ -187,11 +185,9 @@ def resolve_wan_ppp_instance(
     if root != TR069_ROOT_IGD:
         return default
 
-    from app.services.genieacs import GenieACSError  # local import avoids cycle
-
     try:
         device = client.get_device(device_id)
-    except (GenieACSError, Exception) as exc:  # noqa: BLE001 — best-effort
+    except Exception as exc:  # noqa: BLE001 - best-effort cache read
         logger.debug(
             "WAN PPP instance resolution: device fetch failed for %s: %s",
             device_id,

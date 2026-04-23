@@ -209,20 +209,12 @@ def _create_wan_service_instances(
         return 0
 
     created = 0
-    effective = resolve_effective_ont_config(db, ont)
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
     for profile_service in active_services:
         # Resolve PPPoE username from template
         pppoe_username = _resolve_pppoe_username_template(
             profile_service.pppoe_username_template,
             **subscriber_context,
         )
-        if (
-            profile_service.connection_type.value == "pppoe"
-            and not pppoe_username
-            and effective_values.get("pppoe_username")
-        ):
-            pppoe_username = str(effective_values.get("pppoe_username"))
 
         # Resolve PPPoE password based on mode
         pppoe_password: str | None = None
@@ -243,12 +235,6 @@ def _create_wan_service_instances(
             # Credential-sourced passwords will be resolved at provisioning time
             # (from AccessCredential table)
             pppoe_password = None
-        if (
-            profile_service.connection_type.value == "pppoe"
-            and pppoe_password is None
-            and getattr(ont, "pppoe_password", None)
-        ):
-            pppoe_password = ont.pppoe_password
 
         # Resolve VLAN by tag
         vlan = _resolve_vlan_by_tag(
@@ -448,16 +434,15 @@ def apply_bundle_to_ont(
     db.flush()
 
     logger.info(
-        "Applied bundle %s (%s) to ONT %s: %d legacy fields projected, %d WAN instances created",
+        "Applied bundle %s (%s) to ONT %s: cleared legacy desired-state fields, %d WAN instances created",
         profile.id,
         profile.name,
         ont_id,
-        fields_updated,
         wan_instances_created,
     )
     message = (
         f"Bundle '{profile.name}' applied successfully. "
-        f"{fields_updated} legacy fields projected"
+        "Legacy desired-state fields cleared"
     )
     if wan_instances_created:
         message += f", {wan_instances_created} WAN service instances created"

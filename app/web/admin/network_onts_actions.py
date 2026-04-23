@@ -6,7 +6,6 @@ import json
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -14,14 +13,14 @@ from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import web_network_ont_charts as web_network_ont_charts_service
+from app.services import web_network_ont_topology as web_network_ont_topology_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
 from app.services.network.action_logging import log_network_action_result
 from app.services.network.ont_scope import can_manage_ont_from_request
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.web.request_parsing import parse_form_data_sync
-
-templates = Jinja2Templates(directory="templates")
+from app.web.templates import templates
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-actions"])
 
 
@@ -1095,6 +1094,25 @@ def ont_charts(
     context.update(data)
     return templates.TemplateResponse(
         "admin/network/onts/_charts_partial.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/topology",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_topology(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Fiber path topology for ONT detail page."""
+    data = web_network_ont_topology_service.topology_tab_data(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_topology_partial.html", context
     )
 
 

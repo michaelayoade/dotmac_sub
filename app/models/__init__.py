@@ -189,6 +189,7 @@ from app.models.saga_execution import (  # noqa: F401
     SagaExecutionStatus,
 )
 from app.models.network import (  # noqa: F401
+    AuthorizationPreset,
     BulkProvisioningItem,
     BulkProvisioningItemStatus,
     BulkProvisioningRun,

@@ -11,6 +11,27 @@
 {% elif autofind_entries | length == 0 %}
 {{ empty_state("No Unregistered ONTs", "All physically connected ONTs on this OLT are already authorized.") }}
 {% else %}
+{# Authorization Preset Selector #}
+{% if authorization_presets and authorization_presets|length > 0 %}
+<div class="mb-4 flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50/50 px-4 py-3 dark:border-violet-900/30 dark:bg-violet-900/10" x-data="{ selectedPreset: '' }">
+    <div class="flex items-center gap-2">
+        <svg class="h-5 w-5 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        <span class="text-sm font-medium text-violet-700 dark:text-violet-300">Authorization Preset:</span>
+    </div>
+    <select x-model="selectedPreset" id="authorizationPresetSelect"
+        class="rounded-lg border border-violet-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-violet-600 dark:bg-slate-800 dark:text-white">
+        <option value="">Use OLT defaults</option>
+        {% for preset in authorization_presets %}
+        <option value="{{ preset.id }}" {% if preset.is_default %}selected{% endif %}>
+            {{ preset.name }}{% if preset.is_default %} (Default){% endif %}
+            {% if preset.line_profile_id is not none %} — L:{{ preset.line_profile_id }}/S:{{ preset.service_profile_id }}{% endif %}
+        </option>
+        {% endfor %}
+    </select>
+    <a href="/admin/network/authorization-presets" class="text-xs text-violet-600 hover:text-violet-800 dark:text-violet-400 dark:hover:text-violet-300" target="_blank">Manage presets</a>
+</div>
+{% endif %}
+
 <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900/30 dark:bg-blue-900/10 dark:text-blue-300 mb-4">
     {{ autofind_message }}
 </div>
@@ -71,6 +92,7 @@
                         <input type="hidden" name="fsp" value="{{ entry.fsp }}">
                         <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
                         <input type="hidden" name="force_reauthorize" :value="force ? 'true' : ''">
+                        <input type="hidden" name="preset_id" :value="document.getElementById('authorizationPresetSelect')?.value || ''">
                         <label class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400 cursor-pointer whitespace-nowrap" :class="submitting && 'opacity-50 pointer-events-none'" title="Delete existing registration first">
                             <input type="checkbox" x-model="force" :disabled="submitting" class="h-3.5 w-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800">
                             Force

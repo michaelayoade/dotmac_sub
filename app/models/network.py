@@ -3101,3 +3101,90 @@ class QueuedOltOperation(Base):
     )
 
     olt_device = relationship("OLTDevice")
+
+
+# =============================================================================
+# Authorization Presets for Quick ONT Authorization
+# =============================================================================
+
+
+class AuthorizationPreset(Base):
+    """Reusable preset for ONT authorization workflow.
+
+    Allows NOC technicians to quickly authorize ONTs with pre-configured
+    settings. Can optionally auto-authorize ONTs matching a serial pattern.
+    """
+
+    __tablename__ = "authorization_presets"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_authorization_presets_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+
+    # Link to provisioning profile applied after authorization
+    provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
+        index=True,
+    )
+
+    # OLT-level authorization profile IDs (from OLT CLI)
+    line_profile_id: Mapped[int | None] = mapped_column(
+        Integer, doc="OLT ont-lineprofile profile-id"
+    )
+    service_profile_id: Mapped[int | None] = mapped_column(
+        Integer, doc="OLT ont-srvprofile profile-id"
+    )
+
+    # Default VLAN for service-port creation
+    default_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+    )
+
+    # Auto-authorization settings
+    auto_authorize: Mapped[bool] = mapped_column(
+        Boolean, default=False,
+        doc="Automatically authorize matching ONTs without manual intervention"
+    )
+    serial_pattern: Mapped[str | None] = mapped_column(
+        String(120),
+        doc="Regex pattern for auto-matching serial numbers (e.g., 'HWTC.*', 'ZTEG.*')"
+    )
+
+    # OLT scope (null = all OLTs)
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        index=True,
+        doc="Scope to specific OLT; null means global preset"
+    )
+
+    # Priority for auto-matching (higher = checked first)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False,
+        doc="Default preset shown first in selection dropdown"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    # Relationships
+    provisioning_profile = relationship("OntProvisioningProfile")
+    default_vlan = relationship("Vlan")
+    olt_device = relationship("OLTDevice", foreign_keys=[olt_device_id])

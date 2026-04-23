@@ -1,10 +1,11 @@
-"""Push ONT signal and OLT health metrics to VictoriaMetrics."""
+"""Push ONT signal, traffic, and OLT health metrics to VictoriaMetrics."""
 
 from __future__ import annotations
 
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 from sqlalchemy import func, select
@@ -22,12 +23,63 @@ logger = logging.getLogger(__name__)
 
 _VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
 
+# How recently a TR-069 snapshot must be to push traffic metrics (avoid stale data)
+_TRAFFIC_SNAPSHOT_MAX_AGE_HOURS = 24
+
+
+def _extract_traffic_bytes(snapshot: dict[str, Any] | None) -> tuple[int | None, int | None]:
+    """Extract total bytes sent/received from TR-069 ethernet port snapshot.
+
+    Args:
+        snapshot: TR-069 last snapshot dict containing ethernet_ports.
+
+    Returns:
+        Tuple of (bytes_sent, bytes_received), either may be None if unavailable.
+    """
+    if not snapshot:
+        return None, None
+
+    ports = snapshot.get("ethernet_ports") or []
+    if not ports:
+        return None, None
+
+    sent_total = 0
+    received_total = 0
+    has_sent = False
+    has_received = False
+
+    for port in ports:
+        if not isinstance(port, dict):
+            continue
+        # Try multiple key formats (TR-069 variations)
+        for sent_key in ("bytes_sent", "Stats.BytesSent", "BytesSent"):
+            val = port.get(sent_key)
+            if val not in (None, ""):
+                try:
+                    sent_total += int(str(val).strip())
+                    has_sent = True
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        for recv_key in ("bytes_received", "Stats.BytesReceived", "BytesReceived"):
+            val = port.get(recv_key)
+            if val not in (None, ""):
+                try:
+                    received_total += int(str(val).strip())
+                    has_received = True
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+    return (sent_total if has_sent else None, received_total if has_received else None)
+
 
 def _push_signal_metrics(db: Session) -> int:
-    """Push per-ONT signal metrics and aggregate status counts to VictoriaMetrics.
+    """Push per-ONT signal and traffic metrics to VictoriaMetrics.
 
-    Reads current signal data from the database and writes Prometheus line
-    protocol to VictoriaMetrics' import endpoint (sync HTTP).
+    Reads current signal data and TR-069 traffic snapshots from the database
+    and writes Prometheus line protocol to VictoriaMetrics' import endpoint.
 
     Returns:
         Number of metric lines written.
@@ -35,7 +87,7 @@ def _push_signal_metrics(db: Session) -> int:
     # Import here to avoid circular imports at module level
     from app.services.network.signal_thresholds import get_signal_thresholds
 
-    # Collect ONTs with recent signal data and their OLT/PON info
+    # Collect ONTs with signal or traffic data and their OLT/PON info
     stmt = (
         select(
             OntUnit.id.label("ont_id"),
@@ -46,6 +98,8 @@ def _push_signal_metrics(db: Session) -> int:
             OntUnit.ont_temperature_c,
             OntUnit.ont_voltage_v,
             OntUnit.ont_bias_current_ma,
+            OntUnit.tr069_last_snapshot,
+            OntUnit.tr069_last_snapshot_at,
             OLTDevice.name.label("olt_name"),
             PonPort.name.label("pon_port_name"),
         )
@@ -62,7 +116,9 @@ def _push_signal_metrics(db: Session) -> int:
         )
         .where(
             OntUnit.is_active.is_(True),
-            OntUnit.signal_updated_at.is_not(None),
+            # Include ONTs with signal data OR traffic snapshots
+            (OntUnit.signal_updated_at.is_not(None))
+            | (OntUnit.tr069_last_snapshot_at.is_not(None)),
         )
     )
     rows = db.execute(stmt).all()
@@ -70,7 +126,9 @@ def _push_signal_metrics(db: Session) -> int:
     if not rows:
         return 0
 
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    now = datetime.now(UTC)
+    now_ms = int(now.timestamp() * 1000)
+    traffic_cutoff = now - timedelta(hours=_TRAFFIC_SNAPSHOT_MAX_AGE_HOURS)
     lines: list[str] = []
 
     seen_serials: set[str] = set()
@@ -87,6 +145,7 @@ def _push_signal_metrics(db: Session) -> int:
             f'olt_name="{olt_name}",pon_port="{pon_port}"'
         )
 
+        # Signal metrics
         if row.olt_rx_signal_dbm is not None:
             lines.append(f"ont_olt_rx_dbm{{{labels}}} {row.olt_rx_signal_dbm} {now_ms}")
         if row.onu_rx_signal_dbm is not None:
@@ -103,6 +162,27 @@ def _push_signal_metrics(db: Session) -> int:
             lines.append(
                 f"ont_bias_current_ma{{{labels}}} {row.ont_bias_current_ma} {now_ms}"
             )
+
+        # Traffic metrics from TR-069 snapshot (if recent enough)
+        snapshot_at = row.tr069_last_snapshot_at
+        if snapshot_at is not None:
+            # Normalize timezone
+            if snapshot_at.tzinfo is None:
+                snapshot_at = snapshot_at.replace(tzinfo=UTC)
+            if snapshot_at >= traffic_cutoff:
+                bytes_sent, bytes_received = _extract_traffic_bytes(
+                    row.tr069_last_snapshot
+                )
+                # Use snapshot timestamp for traffic metrics (reflects when data was collected)
+                snapshot_ms = int(snapshot_at.timestamp() * 1000)
+                if bytes_sent is not None:
+                    lines.append(
+                        f"ont_tx_bytes_total{{{labels}}} {bytes_sent} {snapshot_ms}"
+                    )
+                if bytes_received is not None:
+                    lines.append(
+                        f"ont_rx_bytes_total{{{labels}}} {bytes_received} {snapshot_ms}"
+                    )
 
     # Aggregate effective service status counts for dashboards.
     status_counts = db.execute(

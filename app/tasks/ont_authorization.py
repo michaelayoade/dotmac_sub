@@ -77,7 +77,7 @@ def run_post_authorization_follow_up_task(
 
 @celery_app.task(name="app.tasks.ont_authorization.run_authorize_autofind_ont")
 @idempotent_task(
-    key_func=lambda operation_id, olt_id, fsp, serial_number, force_reauthorize=False, **kw: (
+    key_func=lambda operation_id, olt_id, fsp, serial_number, force_reauthorize=False, preset_id=None, **kw: (
         f"{olt_id}:{fsp}:{serial_number}"
     )
 )
@@ -87,6 +87,7 @@ def run_authorize_autofind_ont_task(
     fsp: str,
     serial_number: str,
     force_reauthorize: bool = False,
+    preset_id: str | None = None,
 ) -> dict[str, object]:
     """Run the full OLT autofind authorization workflow in the background."""
     from app.models.network import OLTDevice
@@ -154,6 +155,7 @@ def run_authorize_autofind_ont_task(
             fsp,
             serial_number,
             force_reauthorize=force_reauthorize,
+            preset_id=preset_id,
             request=None,
         )
         payload = result.to_dict()

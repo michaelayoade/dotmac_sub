@@ -10,7 +10,6 @@ from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -29,8 +28,7 @@ from app.services.auth_dependencies import require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.web.request_parsing import parse_form_data_sync
-
-templates = Jinja2Templates(directory="templates")
+from app.web.templates import templates
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-inventory"])
 logger = logging.getLogger(__name__)
 

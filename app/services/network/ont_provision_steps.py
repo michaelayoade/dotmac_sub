@@ -1352,7 +1352,15 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             subscriber_context_provider=default_subscriber_validator,
         )
         if not apply_result.success:
-            hard_failures.append(f"compile_wan_service_instances: {apply_result.message}")
+            ms = int((time.monotonic() - t0) * 1000)
+            return StepResult(
+                "apply_saved_service_config",
+                False,
+                f"compile_wan_service_instances: {apply_result.message}",
+                ms,
+                critical=False,
+                data={"steps": steps, "needs_input": needs_input},
+            )
         else:
             steps.append(
                 {

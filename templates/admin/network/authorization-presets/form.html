@@ -1,0 +1,204 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ 'Edit' if item else 'New' }} Authorization Preset - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data='{
+    selectedOlt: "{{ form_values.olt_device_id if form_values is defined and form_values else (item.olt_device_id|string if item and item.olt_device_id else '') }}",
+    autoAuthorize: {{ 'true' if (form_values is defined and form_values and form_values.auto_authorize) or (item and item.auto_authorize) else 'false' }},
+    vlans: {{ vlans|map(attribute="__dict__")|list|tojson if vlans else "[]" }},
+    filteredVlans() {
+        if (!this.selectedOlt) return [];
+        return {{ vlans|selectattr("olt_device_id")|map(attribute="id")|list|tojson }}.length > 0 ?
+            this.vlans.filter(v => v.olt_device_id === this.selectedOlt || !v.olt_device_id) : this.vlans;
+    }
+}'>
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+                <a href="/admin/network/authorization-presets" class="hover:text-violet-600">Authorization Presets</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">{{ 'Edit Preset' if item else 'New Preset' }}</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Authorization Preset' if item else 'Add Authorization Preset' }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update preset configuration' if item else 'Create a quick-apply template for ONT authorization' }}</p>
+        </div>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        {# -- Basic Information -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Basic Information</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {% if error %}
+                <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Preset Name <span class="text-red-500">*</span></label>
+                        <input type="text" name="name" id="name" required maxlength="120"
+                            value="{{ form_values.name if form_values is defined and form_values else (item.name if item else '') }}"
+                            placeholder="e.g. Residential Default, Business Premium"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div class="sm:col-span-2">
+                        <label for="description" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
+                        <input type="text" name="description" id="description" maxlength="500"
+                            value="{{ form_values.description if form_values is defined and form_values else (item.description if item else '') }}"
+                            placeholder="Brief description of when to use this preset"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="olt_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Scope</label>
+                        <select name="olt_device_id" id="olt_device_id" x-model="selectedOlt"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% set selected_olt_id = (form_values.olt_device_id if form_values is defined and form_values else (item.olt_device_id|string if item and item.olt_device_id else "")) %}
+                            <option value="">Global (all OLTs)</option>
+                            {% for olt in olt_devices %}
+                            <option value="{{ olt.id }}" {% if selected_olt_id == olt.id|string %}selected{% endif %}>{{ olt.name }}{% if olt.mgmt_ip %} ({{ olt.mgmt_ip }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave empty for a global preset that applies to all OLTs.</p>
+                    </div>
+
+                    <div>
+                        <label for="priority" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Priority</label>
+                        <input type="number" name="priority" id="priority" min="0" max="1000"
+                            value="{{ form_values.priority if form_values is defined and form_values and form_values.priority is not none else (item.priority if item else 0) }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Higher priority presets are checked first for auto-authorization.</p>
+                    </div>
+
+                    <div class="flex items-center gap-6 sm:col-span-2">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_active" value="true"
+                                {% if (form_values is defined and form_values and form_values.is_active) or (item and item.is_active) or not item %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="is_default" value="true"
+                                {% if (form_values is defined and form_values and form_values.is_default) or (item and item.is_default) %}checked{% endif %}
+                                class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600">
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Default Preset</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# -- Authorization Settings -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Authorization Settings</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OLT profile assignments and VLAN configuration</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="provisioning_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Provisioning Profile</label>
+                        <select name="provisioning_profile_id" id="provisioning_profile_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% set selected_profile_id = (form_values.provisioning_profile_id if form_values is defined and form_values else (item.provisioning_profile_id|string if item and item.provisioning_profile_id else "")) %}
+                            <option value="">No provisioning profile</option>
+                            {% for profile in provisioning_profiles %}
+                            <option value="{{ profile.id }}" {% if selected_profile_id == profile.id|string %}selected{% endif %}>{{ profile.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Post-authorization provisioning template.</p>
+                    </div>
+
+                    <div>
+                        <label for="default_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Default VLAN</label>
+                        <select name="default_vlan_id" id="default_vlan_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% set selected_vlan_id = (form_values.default_vlan_id if form_values is defined and form_values else (item.default_vlan_id|string if item and item.default_vlan_id else "")) %}
+                            <option value="">No default VLAN</option>
+                            {% for vlan in vlans %}
+                            <option value="{{ vlan.id }}" {% if selected_vlan_id == vlan.id|string %}selected{% endif %}>{{ vlan|vlan_label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="line_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Line Profile ID</label>
+                        <input type="number" name="line_profile_id" id="line_profile_id" min="0" max="65535"
+                            value="{{ form_values.line_profile_id if form_values is defined and form_values and form_values.line_profile_id is not none else (item.line_profile_id if item and item.line_profile_id is not none else '') }}"
+                            placeholder="e.g. 10"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Huawei OLT line-profile ID for authorization.</p>
+                    </div>
+
+                    <div>
+                        <label for="service_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Service Profile ID</label>
+                        <input type="number" name="service_profile_id" id="service_profile_id" min="0" max="65535"
+                            value="{{ form_values.service_profile_id if form_values is defined and form_values and form_values.service_profile_id is not none else (item.service_profile_id if item and item.service_profile_id is not none else '') }}"
+                            placeholder="e.g. 10"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Huawei OLT srv-profile ID for authorization.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# -- Auto-Authorization -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Auto-Authorization</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Automatically authorize matching ONTs without manual intervention</p>
+                    </div>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="auto_authorize" value="true" x-model="autoAuthorize"
+                            class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600">
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable</span>
+                    </label>
+                </div>
+            </div>
+            <div class="p-6" x-show="autoAuthorize" x-transition>
+                <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 mb-4 dark:border-amber-800 dark:bg-amber-900/30">
+                    <div class="flex items-start gap-3">
+                        <svg class="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        <div class="text-sm text-amber-700 dark:text-amber-300">
+                            <p class="font-medium">Auto-authorization will automatically provision matching ONTs</p>
+                            <p class="mt-1 text-amber-600 dark:text-amber-400">ONTs with serial numbers matching the pattern below will be authorized using this preset's settings.</p>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <label for="serial_pattern" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Serial Number Pattern (Regex)</label>
+                    <input type="text" name="serial_pattern" id="serial_pattern" maxlength="255"
+                        value="{{ form_values.serial_pattern if form_values is defined and form_values else (item.serial_pattern if item else '') }}"
+                        placeholder="e.g. ^48575443.* or ^ZTEG[A-Z0-9]{8}$"
+                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Regular expression to match ONT serial numbers. Use <code class="rounded bg-slate-100 px-1 dark:bg-slate-700">^</code> for start, <code class="rounded bg-slate-100 px-1 dark:bg-slate-700">$</code> for end, <code class="rounded bg-slate-100 px-1 dark:bg-slate-700">.*</code> for any characters.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        {# -- Submit Buttons -- #}
+        <div class="flex items-center justify-end gap-3 pt-4">
+            <a href="/admin/network/authorization-presets"
+                class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                Cancel
+            </a>
+            <button type="submit"
+                class="rounded-lg bg-gradient-to-r from-violet-500 to-purple-600 px-6 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition-all hover:shadow-xl hover:shadow-violet-500/30 hover:-translate-y-0.5">
+                {{ 'Update Preset' if item else 'Create Preset' }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
