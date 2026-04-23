@@ -309,79 +309,12 @@ def test_profile_push_requires_active_bundle_assignment_not_legacy_profile_fk(
     assert result.message == "ONT has no active configuration bundle"
 
 
-def test_enforce_pppoe_push_is_disabled(db_session, monkeypatch):
-    olt = OLTDevice(name="OLT-PPPOE", mgmt_ip="198.51.100.101", is_active=True)
-    db_session.add(olt)
-    db_session.flush()
-    bundle = OntProvisioningProfile(name="Bundle", olt_device_id=olt.id, is_active=True)
-    db_session.add(bundle)
-    db_session.commit()
-
-    db_session.add(
-        OntProfileWanService(
-            profile_id=bundle.id,
-            name="Internet",
-            s_vlan=900,
-            connection_type=WanConnectionType.pppoe,
-            pppoe_username_template="bundle-user",
-            is_active=True,
-        )
-    )
-    ont = OntUnit(
-        serial_number="ENF-PPPOE-001",
-        is_active=True,
-        olt_device_id=olt.id,
-        pppoe_username="legacy-user",
-    )
-    db_session.add(ont)
-    db_session.commit()
-
-    db_session.add(
-        OntBundleAssignment(
-            ont_unit_id=ont.id,
-            bundle_id=bundle.id,
-            status=OntBundleAssignmentStatus.applied,
-            is_active=True,
-        )
-    )
-    db_session.add(
-        OntConfigOverride(
-            ont_unit_id=ont.id,
-            field_name="wan.pppoe_username",
-            value_json={"value": "override-user"},
-        )
-    )
-    db_session.commit()
-
-    calls: list[tuple[str, str, str]] = []
-
-    class FakeAcsWriter:
-        def set_pppoe_credentials(self, db, ont_id, username, password):
-            calls.append((str(ont_id), str(username), str(password)))
-            return SimpleNamespace(success=True, message="ok")
-
-    class FakeCreds:
-        def get_by_username(self, username):
-            assert username == "override-user"
-            return SimpleNamespace(secret_hash=None)
-
-    result = ProvisioningEnforcement.enforce_pppoe_push(
-        db_session,
-        [str(ont.id)],
-        credentials=FakeCreds(),
-    )
-
-    assert result == {"pushed": 0, "failed": 0, "skipped": 1}
-    assert calls == []
-
-
 def test_resolve_access_credential_password_uses_effective_username_fallback(
     db_session, monkeypatch
 ):
     from app.models.network import (
         OntBundleAssignment,
         OntBundleAssignmentStatus,
-        OntConfigOverride,
         OntProvisioningProfile,
         OntUnit,
     )

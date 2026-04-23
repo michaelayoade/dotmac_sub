@@ -258,25 +258,6 @@ class ProvisioningEnforcement:
         return {"sent": sent, "failed": failed}
 
     @staticmethod
-    def enforce_pppoe_push(
-        db: Session,
-        ont_ids: list[str],
-        *,
-        credentials: PppoeCredentialProvider | None = None,
-    ) -> dict[str, int]:
-        """Reject legacy PPPoE enforcement.
-
-        PPPoE credentials must be applied through OntWanServiceInstance
-        provisioning so endpoint selection is service-instance and model aware.
-        """
-        logger.warning(
-            "Legacy PPPoE enforcement is disabled for %d ONTs; provision active "
-            "WAN service instances instead",
-            len(ont_ids),
-        )
-        return {"pushed": 0, "failed": 0, "skipped": len(ont_ids)}
-
-    @staticmethod
     def enforce_wifi_push(
         db: Session,
         ont_ids: list[str],

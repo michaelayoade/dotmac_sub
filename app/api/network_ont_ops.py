@@ -26,11 +26,9 @@ from app.schemas.network_ont_ops import (
     OntMgmtIpUpdate,
     OntMoveRequest,
     OntPingRequest,
-    OntPPPoERequest,
     OntServicePortUpdate,
     OntSpeedProfileUpdate,
     OntTracerouteRequest,
-    OntWanConfigUpdate,
     OntWebCredentialsRequest,
     OntWifiConfigRequest,
     OntWifiPasswordRequest,
@@ -139,38 +137,6 @@ def toggle_lan_port(
 ) -> OntActionResponse:
     result = ont_actions.toggle_lan_port(db, ont_id, port, payload.enabled)
     return _action_response(result)
-
-
-@router.post(
-    "/ont-units/{ont_id}/pppoe",
-    response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def set_pppoe_credentials(
-    ont_id: str, payload: OntPPPoERequest, db: Session = Depends(get_db)
-) -> OntActionResponse:
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            "Legacy PPPoE credential writes are disabled. Update and provision the "
-            "active WAN service instance instead."
-        ),
-    )
-
-
-@router.post(
-    "/ont-units/{ont_id}/enable-ipv6",
-    response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def enable_ipv6_on_ont(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            "Legacy IPv6 WAN enablement is disabled. Provision IPv6 through the "
-            "active WAN service instance instead."
-        ),
-    )
 
 
 @router.post(
@@ -331,23 +297,6 @@ def update_ont_speed_profile(
         upload_profile_id=payload.upload_profile_id,
     )
     return _action_response(result)
-
-
-@router.put(
-    "/ont-units/{ont_id}/wan-config",
-    response_model=OntActionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def update_ont_wan_config(
-    ont_id: str, payload: OntWanConfigUpdate, db: Session = Depends(get_db)
-) -> OntActionResponse:
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            "Legacy WAN configuration writes are disabled. Update and provision the "
-            "active WAN service instance instead."
-        ),
-    )
 
 
 @router.put(

@@ -684,29 +684,6 @@ def ont_set_voip_config(
     )
 
 
-@router.post(
-    "/onts/{ont_id}/wan-config",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_set_wan_config(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
-    """Reject legacy WAN pushes; WAN services are provisioned from bundle instances."""
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-    return _action_json_response(
-        success=False,
-        message=(
-            "Legacy WAN TR-069 pushes are disabled. Provision the active WAN "
-            "service instance instead."
-        ),
-        action="Set WAN Config",
-        request=request,
-        ont_id=ont_id,
-    )
-
-
 @router.get(
     "/onts/{ont_id}/pppoe-password",
     dependencies=[Depends(require_permission("network:write"))],
@@ -858,33 +835,6 @@ def ont_running_config(
 
 
 @router.post(
-    "/onts/{ont_id}/pppoe-credentials",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_set_pppoe_credentials(
-    request: Request,
-    ont_id: str,
-    username: str = Form(""),
-    password: str = Form(""),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Reject legacy PPPoE pushes; credentials live on WAN service instances."""
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-    return _action_json_response(
-        success=False,
-        message=(
-            "Legacy PPPoE TR-069 pushes are disabled. Update and provision the "
-            "active WAN service instance instead."
-        ),
-        action="Push PPPoE Credentials",
-        request=request,
-        ont_id=ont_id,
-    )
-
-
-@router.post(
     "/onts/{ont_id}/ping-diagnostic",
     dependencies=[Depends(require_permission("network:read"))],
 )
@@ -932,31 +882,6 @@ def ont_traceroute_diagnostic(
         success=result.success,
         message=result.message,
         action="Run Traceroute Diagnostic",
-        request=request,
-        ont_id=ont_id,
-    )
-
-
-@router.post(
-    "/onts/{ont_id}/enable-ipv6",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_enable_ipv6(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Reject legacy IPv6 enablement; provision WAN service instances instead."""
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-    return _action_json_response(
-        success=False,
-        message=(
-            "Legacy IPv6 WAN enablement is disabled. Provision IPv6 through the "
-            "active WAN service instance instead."
-        ),
-        action="Enable IPv6",
         request=request,
         ont_id=ont_id,
     )

@@ -31,7 +31,6 @@ from app.services.network.ont_provisioning.saga.types import (
 )
 from app.services.network.ont_provisioning.saga.workflows import (
     _configure_wifi,
-    _push_pppoe_tr069,
 )
 
 
@@ -799,31 +798,6 @@ class TestSagaExecutorResume:
 
 
 class TestSagaWorkflowEffectiveFallbacks:
-    def test_push_pppoe_saga_step_is_disabled(
-        self, mock_db, sample_ont_id, sample_execution_id
-    ):
-        context = SagaContext(
-            db=mock_db,
-            ont_id=sample_ont_id,
-            saga_execution_id=sample_execution_id,
-            step_data={},
-        )
-        context.ont = MagicMock()
-        context.ont.pppoe_password = "secret"
-
-        with patch(
-            "app.services.network.ont_provision_steps.push_pppoe_tr069"
-        ) as mock_push:
-            result = _push_pppoe_tr069(context)
-
-        assert result.success is False
-        assert result.data == {
-            "disabled": True,
-            "replacement": "provision_wan_service_instance",
-        }
-        assert "Legacy PPPoE TR-069 saga step is disabled" in result.message
-        mock_push.assert_not_called()
-
     def test_configure_wifi_uses_effective_bundle_values(
         self, mock_db, sample_ont_id, sample_execution_id
     ):

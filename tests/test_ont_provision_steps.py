@@ -928,9 +928,6 @@ class TestWebRouteRegistration:
         assert "/network/onts/{ont_id}/step/bind-tr069" in route_paths
         assert "/network/onts/{ont_id}/step/set-cr-credentials" in route_paths
         assert "/network/onts/{ont_id}/step/push-pppoe-omci" in route_paths
-        assert "/network/onts/{ont_id}/step/push-pppoe-tr069" in route_paths
-        assert "/network/onts/{ont_id}/step/configure-wan-tr069" in route_paths
-        assert "/network/onts/{ont_id}/step/enable-ipv6" in route_paths
         assert "/network/onts/{ont_id}/step/rollback-service-ports" in route_paths
 
     def test_preflight_still_registered(self) -> None:

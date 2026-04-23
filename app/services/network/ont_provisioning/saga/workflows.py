@@ -237,20 +237,6 @@ def _apply_saved_service_config(ctx: SagaContext) -> StepResult:
     return ont_provision_steps.apply_saved_service_config(ctx.db, ctx.ont_id)
 
 
-def _push_pppoe_tr069(ctx: SagaContext) -> StepResult:
-    """Reject legacy PPPoE pushes from saga execution."""
-    return StepResult(
-        step_name="push_pppoe_tr069",
-        success=False,
-        message=(
-            "Legacy PPPoE TR-069 saga step is disabled. Provision the active "
-            "WAN service instance instead."
-        ),
-        critical=False,
-        data={"disabled": True, "replacement": "provision_wan_service_instance"},
-    )
-
-
 def _configure_wifi(ctx: SagaContext) -> StepResult:
     """Configure WiFi via TR-069.
 
