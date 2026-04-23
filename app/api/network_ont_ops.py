@@ -164,8 +164,13 @@ def set_pppoe_credentials(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def enable_ipv6_on_ont(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
-    result = ont_actions.enable_ipv6_on_wan(db, ont_id)
-    return _action_response(result)
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Legacy IPv6 WAN enablement is disabled. Provision IPv6 through the "
+            "active WAN service instance instead."
+        ),
+    )
 
 
 @router.post(

@@ -264,106 +264,17 @@ class ProvisioningEnforcement:
         *,
         credentials: PppoeCredentialProvider | None = None,
     ) -> dict[str, int]:
-        """Re-push PPPoE credentials to ONTs via TR-069.
+        """Reject legacy PPPoE enforcement.
 
-        Args:
-            db: Database session.
-            ont_ids: OntUnit IDs to re-push PPPoE credentials for.
-            Optional access-credential provider used as a fallback when
-            the ONT's own ``pppoe_password`` field is empty or cannot be
-            decrypted. When omitted, the full application attempts to
-            wire the default AccessCredential-backed adapter lazily. If
-            that bridge is unavailable, standalone mode skips the fallback.
+        PPPoE credentials must be applied through OntWanServiceInstance
+        provisioning so endpoint selection is service-instance and model aware.
         """
-        from app.services.credential_crypto import decrypt_credential
-
-        if credentials is None:
-            credentials = _default_credential_provider(db)
-
-        acs_config_adapter = _acs_config_writer()
-        pushed = 0
-        failed = 0
-        skipped = 0
-        for ont_id in ont_ids:
-            ont = db.get(OntUnit, ont_id)
-            if not ont:
-                skipped += 1
-                continue
-            pppoe_username = _effective_field(db, ont, "pppoe_username") or getattr(
-                ont, "pppoe_username", None
-            )
-            if not pppoe_username:
-                skipped += 1
-                continue
-
-            # Decrypt stored password
-            password = ""
-            if ont.pppoe_password:
-                try:
-                    password = decrypt_credential(ont.pppoe_password) or ""
-                except ValueError:
-                    logger.warning(
-                        "Cannot decrypt PPPoE password for ONT %s, skipping",
-                        ont.serial_number,
-                    )
-                    failed += 1
-                    continue
-
-            if not password:
-                # Fall back to the access-credential provider when wired up.
-                if credentials is None:
-                    logger.warning(
-                        "No credential provider configured — skipping "
-                        "AccessCredential fallback for ONT %s",
-                        ont.serial_number,
-                    )
-                else:
-                    password = _resolve_access_credential_password(
-                        db,
-                        credentials,
-                        ont,
-                        username=str(pppoe_username),
-                    )
-
-            if not password:
-                logger.warning(
-                    "No PPPoE password available for ONT %s, skipping push",
-                    ont.serial_number,
-                )
-                skipped += 1
-                continue
-
-            try:
-                result = acs_config_adapter.set_pppoe_credentials(
-                    db,
-                    ont_id,
-                    str(pppoe_username),
-                    password,
-                )
-                if result.success:
-                    pushed += 1
-                else:
-                    logger.warning(
-                        "PPPoE push failed for ONT %s: %s",
-                        ont.serial_number,
-                        result.message,
-                    )
-                    failed += 1
-            except Exception as exc:
-                logger.warning(
-                    "PPPoE push error for ONT %s: %s",
-                    ont.serial_number,
-                    exc,
-                )
-                failed += 1
-
-        logger.info(
-            "PPPoE enforcement: pushed %d, failed %d, skipped %d",
-            pushed,
-            failed,
-            skipped,
+        logger.warning(
+            "Legacy PPPoE enforcement is disabled for %d ONTs; provision active "
+            "WAN service instances instead",
+            len(ont_ids),
         )
-        return {"pushed": pushed, "failed": failed, "skipped": skipped}
+        return {"pushed": 0, "failed": 0, "skipped": len(ont_ids)}
 
     @staticmethod
     def enforce_wifi_push(

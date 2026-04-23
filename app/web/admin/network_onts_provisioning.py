@@ -667,10 +667,16 @@ def step_enable_ipv6(
     wan_instance: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Enable IPv6 dual-stack via TR-069."""
-    result = steps.enable_ipv6(db, ont_id, wan_instance=wan_instance)
-    _update_service_order_execution_context_for_ont(
-        db, ont_id, "enable_ipv6", {"wan_instance": wan_instance}
+    """Reject legacy IPv6 enablement; provision WAN service instances instead."""
+    result = StepResult(
+        step_name="enable_ipv6",
+        success=False,
+        message=(
+            "Legacy IPv6 WAN enablement is disabled. Provision IPv6 through the "
+            "active WAN service instance instead."
+        ),
+        critical=False,
+        data={"disabled": True, "replacement": "provision_wan_service_instance"},
     )
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)

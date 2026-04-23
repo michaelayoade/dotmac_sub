@@ -238,38 +238,16 @@ def _apply_saved_service_config(ctx: SagaContext) -> StepResult:
 
 
 def _push_pppoe_tr069(ctx: SagaContext) -> StepResult:
-    """Push PPPoE credentials via TR-069.
-
-    Uses step_data keys:
-    - pppoe_username: PPPoE username (required)
-    - pppoe_password: PPPoE password (required)
-    - pppoe_instance_index: WAN instance (default: 1)
-    """
-    from app.services.network import ont_provision_steps
-
-    username = ctx.step_data.get("pppoe_username")
-    password = ctx.step_data.get("pppoe_password")
-
-    if not username or not password:
-        # Try to get from ONT saved config
-        if ctx.ont is not None:
-            username = username or _effective_value(ctx, "pppoe_username")
-            password = password or ctx.ont.pppoe_password
-
-    if not username or not password:
-        return StepResult(
-            step_name="push_pppoe_tr069",
-            success=False,
-            message="PPPoE credentials not available",
-            critical=False,
-        )
-
-    return ont_provision_steps.push_pppoe_tr069(
-        ctx.db,
-        ctx.ont_id,
-        username=username,
-        password=password,
-        instance_index=ctx.step_data.get("pppoe_instance_index", 1),
+    """Reject legacy PPPoE pushes from saga execution."""
+    return StepResult(
+        step_name="push_pppoe_tr069",
+        success=False,
+        message=(
+            "Legacy PPPoE TR-069 saga step is disabled. Provision the active "
+            "WAN service instance instead."
+        ),
+        critical=False,
+        data={"disabled": True, "replacement": "provision_wan_service_instance"},
     )
 
 
@@ -554,16 +532,8 @@ FULL_PROVISIONING_SAGA = SagaDefinition(
 
 ACS_CONFIG_SAGA = SagaDefinition(
     name="acs_config",
-    description="ACS-side configuration (WiFi, LAN, PPPoE)",
+    description="ACS-side configuration (WiFi, LAN)",
     steps=[
-        SagaStep(
-            name="push_pppoe_tr069",
-            action=_push_pppoe_tr069,
-            compensate=None,
-            critical=False,
-            resumable=True,
-            description="Push PPPoE credentials via TR-069",
-        ),
         SagaStep(
             name="configure_wifi",
             action=_configure_wifi,

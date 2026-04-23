@@ -946,16 +946,16 @@ def ont_enable_ipv6(
     ont_id: str,
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Enable IPv6 dual-stack on an ONT via TR-069."""
+    """Reject legacy IPv6 enablement; provision WAN service instances instead."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = web_network_ont_actions_service.execute_enable_ipv6(
-        db, ont_id, request=request
-    )
     return _action_json_response(
-        success=result.success,
-        message=result.message,
+        success=False,
+        message=(
+            "Legacy IPv6 WAN enablement is disabled. Provision IPv6 through the "
+            "active WAN service instance instead."
+        ),
         action="Enable IPv6",
         request=request,
         ont_id=ont_id,

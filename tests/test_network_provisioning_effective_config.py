@@ -309,7 +309,7 @@ def test_profile_push_requires_active_bundle_assignment_not_legacy_profile_fk(
     assert result.message == "ONT has no active configuration bundle"
 
 
-def test_enforce_pppoe_push_uses_effective_override_username(db_session, monkeypatch):
+def test_enforce_pppoe_push_is_disabled(db_session, monkeypatch):
     olt = OLTDevice(name="OLT-PPPOE", mgmt_ip="198.51.100.101", is_active=True)
     db_session.add(olt)
     db_session.flush()
@@ -360,20 +360,10 @@ def test_enforce_pppoe_push_uses_effective_override_username(db_session, monkeyp
             calls.append((str(ont_id), str(username), str(password)))
             return SimpleNamespace(success=True, message="ok")
 
-    monkeypatch.setattr(
-        "app.services.network.provisioning_enforcement._acs_config_writer",
-        lambda: FakeAcsWriter(),
-    )
-
     class FakeCreds:
         def get_by_username(self, username):
             assert username == "override-user"
             return SimpleNamespace(secret_hash=None)
-
-    monkeypatch.setattr(
-        "app.services.network.provisioning_enforcement._resolve_access_credential_password",
-        lambda db, credentials, ont, username=None: "resolved-pass",
-    )
 
     result = ProvisioningEnforcement.enforce_pppoe_push(
         db_session,
@@ -381,8 +371,8 @@ def test_enforce_pppoe_push_uses_effective_override_username(db_session, monkeyp
         credentials=FakeCreds(),
     )
 
-    assert result == {"pushed": 1, "failed": 0, "skipped": 0}
-    assert calls == [(str(ont.id), "override-user", "resolved-pass")]
+    assert result == {"pushed": 0, "failed": 0, "skipped": 1}
+    assert calls == []
 
 
 def test_resolve_access_credential_password_uses_effective_username_fallback(

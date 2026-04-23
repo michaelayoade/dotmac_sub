@@ -799,7 +799,7 @@ class TestSagaExecutorResume:
 
 
 class TestSagaWorkflowEffectiveFallbacks:
-    def test_push_pppoe_uses_effective_username(
+    def test_push_pppoe_saga_step_is_disabled(
         self, mock_db, sample_ont_id, sample_execution_id
     ):
         context = SagaContext(
@@ -811,34 +811,18 @@ class TestSagaWorkflowEffectiveFallbacks:
         context.ont = MagicMock()
         context.ont.pppoe_password = "secret"
 
-        with (
-            patch(
-                "app.services.network.ont_provisioning.saga.workflows.resolve_effective_ont_config",
-                return_value={"values": {"pppoe_username": "bundle-user"}},
-            ),
-            patch(
-                "app.services.network.ont_provisioning.saga.workflows.StepResult",
-                wraps=StepResult,
-            ),
-            patch(
-                "app.services.network.ont_provision_steps.push_pppoe_tr069",
-                return_value=StepResult(
-                    step_name="push_pppoe_tr069",
-                    success=True,
-                    message="ok",
-                ),
-            ) as mock_push,
-        ):
+        with patch(
+            "app.services.network.ont_provision_steps.push_pppoe_tr069"
+        ) as mock_push:
             result = _push_pppoe_tr069(context)
 
-        assert result.success is True
-        mock_push.assert_called_once_with(
-            mock_db,
-            sample_ont_id,
-            username="bundle-user",
-            password="secret",
-            instance_index=1,
-        )
+        assert result.success is False
+        assert result.data == {
+            "disabled": True,
+            "replacement": "provision_wan_service_instance",
+        }
+        assert "Legacy PPPoE TR-069 saga step is disabled" in result.message
+        mock_push.assert_not_called()
 
     def test_configure_wifi_uses_effective_bundle_values(
         self, mock_db, sample_ont_id, sample_execution_id

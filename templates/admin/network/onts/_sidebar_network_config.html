@@ -59,18 +59,11 @@
 {# ── IPv6 Dual-Stack ────────────────────────────────────────────────── #}
 {% call card("IPv6 Dual-Stack", color="teal") %}
 <div class="space-y-2.5">
-    <p class="text-xs text-slate-500 dark:text-slate-400">Enable DHCPv6 prefix delegation on the ONT WAN interface via TR-069. The subscriber will receive a /64 prefix for their LAN.</p>
-    <form hx-post="/admin/network/onts/{{ ont.id }}/enable-ipv6"
-          hx-swap="none"
-          hx-confirm="Enable IPv6 dual-stack on this ONT? This will configure DHCPv6-PD via TR-069."
-          data-network-action
-          data-loading-label="Enabling...">
-        {% include "components/forms/csrf_input.html" %}
-        <button type="submit"
-                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-cyan-700 hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-1">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-            Enable IPv6
-        </button>
-    </form>
+    <p class="text-xs text-slate-500 dark:text-slate-400">Legacy PPP-instance IPv6 enablement is disabled. Provision IPv6 through the active WAN service instance.</p>
+    <button type="button" disabled
+            class="w-full inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-lg bg-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+        Enable IPv6 via Instance
+    </button>
 </div>
 {% endcall %}
