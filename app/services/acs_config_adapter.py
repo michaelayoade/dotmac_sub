@@ -44,14 +44,11 @@ class GenieAcsConfigWriter:
             "set_wifi_config",
             "toggle_lan_port",
             "set_lan_config",
-            "configure_wan_config",
-            "set_pppoe_credentials",
             "set_connection_request_credentials",
             "send_connection_request",
             "push_config_urgent",
             "download",
             "firmware_upgrade",
-            "enable_ipv6_on_wan",
         }
     )
 
@@ -309,113 +306,6 @@ class GenieAcsConfigWriter:
             dhcp_enabled=dhcp_enabled,
             dhcp_start=dhcp_start,
             dhcp_end=dhcp_end,
-        )
-
-    def queue_configure_wan_config(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        wan_mode: str,
-        wan_vlan: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-        dns_servers: str | None = None,
-        instance_index: int = 1,
-        **metadata: Any,
-    ) -> AcsConfigQueueResult:
-        return self.queue_config_action(
-            db,
-            "configure_wan_config",
-            ont_id,
-            kwargs={
-                "wan_mode": wan_mode,
-                "wan_vlan": wan_vlan,
-                "ip_address": ip_address,
-                "subnet_mask": subnet_mask,
-                "gateway": gateway,
-                "dns_servers": dns_servers,
-                "instance_index": instance_index,
-            },
-            **metadata,
-        )
-
-    def configure_wan_config(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        wan_mode: str,
-        wan_vlan: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-        dns_servers: str | None = None,
-        instance_index: int = 1,
-    ) -> ActionResult:
-        from app.services.network.ont_action_network import configure_wan_config
-
-        return configure_wan_config(
-            db,
-            ont_id,
-            wan_mode=wan_mode,
-            wan_vlan=wan_vlan,
-            ip_address=ip_address,
-            subnet_mask=subnet_mask,
-            gateway=gateway,
-            dns_servers=dns_servers,
-            instance_index=instance_index,
-        )
-
-    def queue_set_pppoe_credentials(
-        self,
-        db: Session,
-        ont_id: str,
-        username: str,
-        password: str,
-        *,
-        instance_index: int | None = None,
-        wan_vlan: int | None = None,
-        **metadata: Any,
-    ) -> AcsConfigQueueResult:
-        kwargs: dict[str, object] = {}
-        if instance_index is not None:
-            kwargs["instance_index"] = instance_index
-        if wan_vlan is not None:
-            kwargs["wan_vlan"] = wan_vlan
-        return self.queue_config_action(
-            db,
-            "set_pppoe_credentials",
-            ont_id,
-            args=(username, password),
-            kwargs=kwargs,
-            **metadata,
-        )
-
-    def set_pppoe_credentials(
-        self,
-        db: Session,
-        ont_id: str,
-        username: str,
-        password: str,
-        *,
-        instance_index: int | None = None,
-        wan_vlan: int | None = None,
-    ) -> ActionResult:
-        from app.services.network.ont_action_network import set_pppoe_credentials
-
-        kwargs: dict[str, object] = {}
-        if instance_index is not None:
-            kwargs["instance_index"] = instance_index
-        if wan_vlan is not None:
-            kwargs["wan_vlan"] = wan_vlan
-        return set_pppoe_credentials(
-            db,
-            ont_id,
-            username,
-            password,
-            **kwargs,
         )
 
     def queue_set_connection_request_credentials(
@@ -680,40 +570,6 @@ class GenieAcsConfigWriter:
             ),
             data=data,
         )
-
-    def queue_enable_ipv6_on_wan(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        wan_instance: int | None = None,
-        **metadata: Any,
-    ) -> AcsConfigQueueResult:
-        kwargs: dict[str, object] = {}
-        if wan_instance is not None:
-            kwargs["wan_instance"] = wan_instance
-        return self.queue_config_action(
-            db,
-            "enable_ipv6_on_wan",
-            ont_id,
-            kwargs=kwargs,
-            **metadata,
-        )
-
-    def enable_ipv6_on_wan(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        wan_instance: int | None = None,
-    ) -> ActionResult:
-        from app.services.network.ont_action_network import enable_ipv6_on_wan
-
-        kwargs: dict[str, object] = {}
-        if wan_instance is not None:
-            kwargs["wan_instance"] = wan_instance
-        return enable_ipv6_on_wan(db, ont_id, **kwargs)
-
 
 AcsConfigAdapter = GenieAcsConfigWriter
 acs_config_adapter = GenieAcsConfigWriter()

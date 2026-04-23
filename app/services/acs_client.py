@@ -203,31 +203,6 @@ class AcsConfigWriter(Protocol):
         dhcp_end: str | None = None,
     ) -> Any: ...
 
-    def configure_wan_config(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        wan_mode: str,
-        wan_vlan: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-        dns_servers: str | None = None,
-        instance_index: int = 1,
-    ) -> Any: ...
-
-    def set_pppoe_credentials(
-        self,
-        db: Session,
-        ont_id: str,
-        username: str,
-        password: str,
-        *,
-        instance_index: int | None = None,
-        wan_vlan: int | None = None,
-    ) -> Any: ...
-
     def set_connection_request_credentials(
         self,
         db: Session,
@@ -264,11 +239,6 @@ class AcsConfigWriter(Protocol):
     def firmware_upgrade(
         self, db: Session, ont_id: str, firmware_image_id: str
     ) -> Any: ...
-
-    def enable_ipv6_on_wan(
-        self, db: Session, ont_id: str, *, wan_instance: int | None = None
-    ) -> Any: ...
-
 
 class AcsStateReader(Protocol):
     """Application-level ACS observed-state read port."""

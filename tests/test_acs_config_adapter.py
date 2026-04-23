@@ -414,51 +414,6 @@ def test_acs_config_adapter_firmware_upgrade_uses_firmware_image(
     assert result.data["firmware_version"] == "V1R2"
     assert result.data["task"] == {"_id": "firmware-task"}
 
-
-def test_acs_config_adapter_delegates_wan_config(monkeypatch) -> None:
-    from app.services.acs_config_adapter import acs_config_adapter
-    from app.services.network import ont_action_network
-    from app.services.network.ont_action_common import ActionResult
-
-    calls = {}
-
-    def fake_configure_wan_config(db, ont_id, **kwargs):
-        calls["db"] = db
-        calls["ont_id"] = ont_id
-        calls["kwargs"] = kwargs
-        return ActionResult(success=True, message="ok", data={"adapter": "acs"})
-
-    monkeypatch.setattr(
-        ont_action_network,
-        "configure_wan_config",
-        fake_configure_wan_config,
-    )
-
-    result = acs_config_adapter.configure_wan_config(
-        object(),
-        "ont-1",
-        wan_mode="static",
-        wan_vlan=203,
-        ip_address="100.64.1.20",
-        subnet_mask="255.255.255.0",
-        gateway="100.64.1.1",
-        dns_servers="1.1.1.1",
-        instance_index=2,
-    )
-
-    assert result.success is True
-    assert calls["ont_id"] == "ont-1"
-    assert calls["kwargs"] == {
-        "wan_mode": "static",
-        "wan_vlan": 203,
-        "ip_address": "100.64.1.20",
-        "subnet_mask": "255.255.255.0",
-        "gateway": "100.64.1.1",
-        "dns_servers": "1.1.1.1",
-        "instance_index": 2,
-    }
-
-
 def test_acs_config_adapter_queues_wifi_config(monkeypatch) -> None:
     from app.services.acs_config_adapter import acs_config_adapter
     from app.services.queue_adapter import QueueDispatchResult

@@ -30,10 +30,7 @@ from app.services.web_network_ont_actions._common import (
 from app.services.web_network_ont_actions.config_setters import (
     bind_tr069_profile,
     configure_management_ip,
-    configure_wan_config,
-    configure_wan_with_pppoe,
     set_lan_config,
-    set_pppoe_credentials,
     set_wifi_config,
     set_wifi_password,
     set_wifi_ssid,
@@ -67,7 +64,6 @@ from app.services.web_network_ont_actions.db_config import (
 from app.services.web_network_ont_actions.device_actions import (
     execute_config_snapshot_refresh,
     execute_connection_request,
-    execute_enable_ipv6,
     execute_factory_reset,
     execute_omci_reboot,
     execute_reboot,
@@ -140,7 +136,6 @@ __all__ = [
     # Device actions
     "execute_config_snapshot_refresh",
     "execute_connection_request",
-    "execute_enable_ipv6",
     "execute_factory_reset",
     "execute_omci_reboot",
     "execute_reboot",
@@ -148,10 +143,7 @@ __all__ = [
     # Configuration setters
     "bind_tr069_profile",
     "configure_management_ip",
-    "configure_wan_config",
-    "configure_wan_with_pppoe",
     "set_lan_config",
-    "set_pppoe_credentials",
     "set_wifi_config",
     "set_wifi_password",
     "set_wifi_ssid",

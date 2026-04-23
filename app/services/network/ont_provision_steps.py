@@ -63,8 +63,6 @@ from app.services.network.provisioning_settings import (
 from app.services.network.provisioning_settings import (
     get_olt_write_mode_enabled,
     get_pppoe_provisioning_method,
-    get_pppoe_push_max_attempts,
-    get_pppoe_push_retry_delay,
     get_tr069_bootstrap_poll_interval,
     get_tr069_bootstrap_timeout,
 )
@@ -75,9 +73,6 @@ _TR069_TASK_READY_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_timeout_
 _TR069_TASK_READY_POLL_INTERVAL_SEC = (
     _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
 )
-_PPPOE_PUSH_MAX_ATTEMPTS = _PROVISIONING_DEFAULTS.pppoe_push_max_attempts
-_PPPOE_PUSH_RETRY_DELAY_SEC = _PROVISIONING_DEFAULTS.pppoe_push_retry_delay_sec
-
 
 def _acs_config_writer():
     from app.services.acs_client import create_acs_config_writer
@@ -818,8 +813,6 @@ def _provision_wan_service_instances(
     if not instances:
         return [], [], []
 
-    acs_config_adapter = _acs_config_writer()
-
     profile = resolve_assigned_bundle(db, ont)
 
     steps: list[dict[str, object]] = []
@@ -1102,7 +1095,7 @@ def _provision_wan_service_instances(
         if str(instance.service_type.value) == "management":
             steps.append(
                 {
-                    "step": f"configure_wan_tr069:{service_label}",
+                    "step": f"provision_wan_service_instance:{service_label}",
                     "success": True,
                     "waiting": False,
                     "message": "Skipped: management WAN is configured on the OLT.",
@@ -1160,7 +1153,6 @@ def _provision_wan_service_instances(
                     service_label,
                 )
 
-        acs_instance_index = idx
         if (
             wan_mode == "pppoe"
             and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice"
@@ -1174,33 +1166,39 @@ def _provision_wan_service_instances(
                 )
                 steps.append(
                     {
-                        "step": f"configure_wan_tr069:{service_label}",
+                        "step": f"provision_wan_service_instance:{service_label}",
                         "success": False,
                         "waiting": False,
                         "message": message,
                     }
                 )
-                hard_failures.append(f"configure_wan_tr069:{service_label}: {message}")
+                hard_failures.append(
+                    f"provision_wan_service_instance:{service_label}: {message}"
+                )
                 from app.models.network import WanServiceProvisioningStatus
 
                 instance.provisioning_status = WanServiceProvisioningStatus.failed
                 instance.last_error = message[:500]
                 _mark_ppp_wan_requires_precreated()
                 continue
-            acs_instance_index = detected_index
+        message = (
+            "ACS WAN writes require service-instance endpoint resolution and are "
+            "not executed through legacy flat TR-069 actions."
+        )
+        steps.append(
+            {
+                "step": f"provision_wan_service_instance:{service_label}",
+                "success": False,
+                "waiting": False,
+                "message": message,
+            }
+        )
+        hard_failures.append(
+            f"provision_wan_service_instance:{service_label}: {message}"
+        )
 
-        # Configure WAN mode (creates WAN service if needed)
-        if wan_mode:
-            wan_result = acs_config_adapter.configure_wan_config(
-                db,
-                ont_id,
-                wan_mode=wan_mode,
-                wan_vlan=wan_vlan,
-                instance_index=acs_instance_index,
-            )
-            _append(f"configure_wan_tr069:{service_label}", wan_result)
-
-        # Push PPPoE credentials if applicable
+        # Validate PPPoE credentials if applicable. Writes are handled by the
+        # service-instance endpoint executor, not the legacy flat PPP action.
         if instance.connection_type == WanConnectionType.pppoe:
             pppoe_username = instance.pppoe_username
             pppoe_password = None
@@ -1211,41 +1209,10 @@ def _provision_wan_service_instances(
                     pppoe_password = None
 
             if pppoe_username and pppoe_password:
-                pppoe_result = acs_config_adapter.set_pppoe_credentials(
-                    db,
-                    ont_id,
-                    pppoe_username,
-                    pppoe_password,
-                    wan_vlan=wan_vlan,
-                    instance_index=acs_instance_index,
-                )
-                _append(f"push_pppoe_tr069:{service_label}", pppoe_result)
+                from app.models.network import WanServiceProvisioningStatus
 
-                # Update instance status on success
-                if pppoe_result.success:
-                    from datetime import UTC, datetime
-
-                    from app.models.network import WanServiceProvisioningStatus
-
-                    instance.provisioning_status = (
-                        WanServiceProvisioningStatus.provisioned
-                    )
-                    instance.last_provisioned_at = datetime.now(UTC)
-                    instance.last_error = None
-                elif getattr(pppoe_result, "waiting", False):
-                    from app.models.network import WanServiceProvisioningStatus
-
-                    instance.provisioning_status = WanServiceProvisioningStatus.pending
-                    instance.last_error = (
-                        pppoe_result.message[:500] if pppoe_result.message else None
-                    )
-                else:
-                    from app.models.network import WanServiceProvisioningStatus
-
-                    instance.provisioning_status = WanServiceProvisioningStatus.failed
-                    instance.last_error = (
-                        pppoe_result.message[:500] if pppoe_result.message else None
-                    )
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = message[:500]
             else:
                 needs_input.append(
                     f"PPPoE credentials missing for WAN service '{service_label}'."
@@ -1591,201 +1558,6 @@ def push_pppoe_omci(
     result = StepResult("push_pppoe_omci", ok, msg, ms)
     _record_step(db, ctx.ont, "push_pppoe_omci", result)
     return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Push PPPoE credentials via TR-069
-# ---------------------------------------------------------------------------
-
-
-def push_pppoe_tr069(
-    db: Session,
-    ont_id: str,
-    *,
-    username: str,
-    password: str,
-    instance_index: int = 1,
-    retry: bool = True,
-) -> StepResult:
-    """Push PPPoE credentials to ONT via TR-069/ACS.
-
-    Includes task reachability wait and retry logic.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        username: PPPoE username.
-        password: PPPoE password.
-        instance_index: WAN instance index (default 1, must be 1-8).
-        retry: Whether to retry on failure (default True).
-    """
-    t0 = time.monotonic()
-
-    # Validate instance_index early
-    if instance_index < 1 or instance_index > 8:
-        return StepResult(
-            "push_pppoe_tr069",
-            False,
-            f"Invalid WAN instance index: {instance_index} (must be 1-8)",
-            0,
-        )
-    # Get configurable retry settings from DomainSettings (or use defaults)
-    max_attempts = get_pppoe_push_max_attempts(db) if retry else 1
-    retry_delay = get_pppoe_push_retry_delay(db)
-    last_result = None
-
-    for attempt in range(1, max_attempts + 1):
-        last_result = _acs_config_writer().set_pppoe_credentials(
-            db, ont_id, username, password, instance_index=instance_index
-        )
-        if last_result.success or getattr(last_result, "waiting", False):
-            break
-        if attempt >= max_attempts:
-            break
-        logger.info(
-            "Retrying PPPoE push for ONT %s (attempt %d): %s",
-            ont_id,
-            attempt,
-            last_result.message,
-        )
-        time.sleep(retry_delay)
-
-    ms = int((time.monotonic() - t0) * 1000)
-    if last_result is None:
-        return StepResult(
-            "push_pppoe_tr069", False, "No result from PPPoE push attempts", ms
-        )
-    result = StepResult(
-        "push_pppoe_tr069",
-        last_result.success,
-        last_result.message,
-        ms,
-        waiting=getattr(last_result, "waiting", False),
-        data=getattr(last_result, "data", None),
-    )
-    ont = db.get(OntUnit, ont_id)
-    if ont:
-        _record_step(db, ont, "push_pppoe_tr069", result)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Configure WAN mode via TR-069
-# ---------------------------------------------------------------------------
-
-
-def configure_wan_tr069(
-    db: Session,
-    ont_id: str,
-    *,
-    wan_mode: str = "pppoe",
-    wan_vlan: int | str | None = None,
-    ip_address: str | None = None,
-    subnet_mask: str | None = None,
-    gateway: str | None = None,
-    dns_servers: str | None = None,
-    instance_index: int = 1,
-) -> StepResult:
-    """Configure WAN connection mode on ONT via TR-069.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        wan_mode: WAN mode — "pppoe", "dhcp", "static", or "bridge".
-        wan_vlan: WAN VLAN ID (optional).
-        ip_address: Static WAN IP address when wan_mode is "static".
-        subnet_mask: Static WAN subnet mask when wan_mode is "static".
-        gateway: Static WAN gateway when wan_mode is "static".
-        dns_servers: Comma-separated DNS servers when wan_mode is "static".
-        instance_index: WAN instance index (default 1).
-    """
-    t0 = time.monotonic()
-    resolved_wan_vlan = (
-        int(wan_vlan)
-        if isinstance(wan_vlan, str) and wan_vlan.strip().isdigit()
-        else wan_vlan
-    )
-    if isinstance(resolved_wan_vlan, str):
-        resolved_wan_vlan = None
-
-    action_result = _acs_config_writer().configure_wan_config(
-        db,
-        ont_id,
-        wan_mode=wan_mode,
-        wan_vlan=resolved_wan_vlan,
-        ip_address=ip_address,
-        subnet_mask=subnet_mask,
-        gateway=gateway,
-        dns_servers=dns_servers,
-        instance_index=instance_index,
-    )
-    ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult(
-        "configure_wan_tr069",
-        action_result.success,
-        action_result.message,
-        ms,
-        critical=False,
-        waiting=getattr(action_result, "waiting", False),
-        data=getattr(action_result, "data", None),
-    )
-    ont = db.get(OntUnit, ont_id)
-    if ont:
-        _record_step(db, ont, "configure_wan_tr069", result)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Enable IPv6 dual-stack via TR-069
-# ---------------------------------------------------------------------------
-
-
-def enable_ipv6(
-    db: Session,
-    ont_id: str,
-    *,
-    wan_instance: int | None = None,
-) -> StepResult:
-    """Enable IPv6 dual-stack on the ONT WAN interface via TR-069.
-
-    When ``wan_instance`` is omitted, the underlying network call
-    auto-discovers the WANConnectionDevice hosting an existing
-    WANPPPConnection.
-    """
-    t0 = time.monotonic()
-    try:
-        writer_kwargs: dict[str, object] = {}
-        if wan_instance is not None:
-            writer_kwargs["wan_instance"] = wan_instance
-        v6_result = _acs_config_writer().enable_ipv6_on_wan(
-            db,
-            ont_id,
-            **writer_kwargs,
-        )
-        ms = int((time.monotonic() - t0) * 1000)
-        result = StepResult(
-            "enable_ipv6", v6_result.success, v6_result.message, ms, critical=False
-        )
-        ont = db.get(OntUnit, ont_id)
-        if ont:
-            _record_step(db, ont, "enable_ipv6", result)
-        return result
-    except Exception as exc:
-        logger.error("IPv6 enable failed for ONT %s: %s", ont_id, exc)
-        ms = int((time.monotonic() - t0) * 1000)
-        result = StepResult(
-            "enable_ipv6", False, f"IPv6 enable failed: {exc}", ms, critical=False
-        )
-        ont = db.get(OntUnit, ont_id)
-        if ont:
-            try:
-                _record_step(db, ont, "enable_ipv6", result)
-            except Exception:
-                logger.debug(
-                    "Failed to record enable_ipv6 step after IPv6 enable error",
-                    exc_info=True,
-                )
-        return result
 
 
 # ---------------------------------------------------------------------------

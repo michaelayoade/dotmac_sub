@@ -19,16 +19,16 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.network.provisioning_events import (
-    current_provisioning_correlation_key,
+from app.services.network.ont_config_overrides import (
+    is_bundle_managed_ont,
+    upsert_ont_config_override,
 )
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
 )
-from app.services.network.ont_config_overrides import (
-    is_bundle_managed_ont,
-    upsert_ont_config_override,
+from app.services.network.provisioning_events import (
+    current_provisioning_correlation_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,121 +161,6 @@ class OntWriteService:
             db, "ont.config_updated", {"ont_id": str(ont.id), "field": "speed_profile"}
         )
         return ActionResult(success=True, message="Speed profile updated.")
-
-    @staticmethod
-    def update_wan_config(
-        db: Session,
-        ont_id: str,
-        *,
-        wan_mode: str,
-        vlan_id: str | None = None,
-        pppoe_username: str | None = None,
-        pppoe_password: str | None = None,
-    ) -> ActionResult:
-        """Change WAN mode via TR-069 or SSH, then persist."""
-        ont, err = get_ont_or_error(db, ont_id)
-        if err:
-            return err
-        if ont is None:
-            return ActionResult(success=False, message="ONT not found.")
-
-        # Try setting PPPoE via TR-069 if applicable
-        if wan_mode == "pppoe" and pppoe_username and pppoe_password:
-            try:
-                from app.services.acs_client import create_acs_config_writer
-
-                result = create_acs_config_writer().set_pppoe_credentials(
-                    db, ont_id, pppoe_username, pppoe_password
-                )
-                if not result.success:
-                    return ActionResult(
-                        success=False,
-                        message=(
-                            "WAN configuration was not saved because PPPoE push failed: "
-                            f"{result.message}"
-                        ),
-                    )
-            except Exception as exc:
-                logger.warning("TR-069 PPPoE set error for ONT %s: %s", ont_id, exc)
-                return ActionResult(
-                    success=False,
-                    message=(
-                        "WAN configuration was not saved because PPPoE push errored: "
-                        f"{exc}"
-                    ),
-                )
-
-        # Persist desired state
-        from app.models.network import WanMode
-
-        try:
-            ont.wan_mode = WanMode(wan_mode)
-        except ValueError:
-            return ActionResult(success=False, message=f"Invalid wan_mode: {wan_mode}")
-        ctx = None
-        if vlan_id:
-            ctx, context_err = _strict_olt_write_context(db, ont_id)
-            if context_err:
-                return context_err
-            if ctx is None:
-                return ActionResult(
-                    success=False, message="ONT OLT context is incomplete."
-                )
-        bundle_managed = is_bundle_managed_ont(db, ont)
-        if pppoe_username:
-            if bundle_managed:
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wan.pppoe_username",
-                    value=pppoe_username,
-                    reason="ont_write.update_wan_config",
-                )
-                ont.pppoe_username = None
-            else:
-                ont.pppoe_username = pppoe_username
-        if pppoe_password:
-            from app.services.credential_crypto import encrypt_credential
-
-            ont.pppoe_password = encrypt_credential(pppoe_password)
-        if vlan_id:
-            from app.services.common import coerce_uuid
-
-            vlan, vlan_err = _resolve_ont_scoped_vlan(
-                db,
-                vlan_id=vlan_id,
-                olt_id=getattr(ctx.olt, "id", None),
-                field_label="WAN",
-            )
-            if vlan_err:
-                return vlan_err
-            if bundle_managed:
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wan.vlan_tag",
-                    value=vlan.tag,
-                    reason="ont_write.update_wan_config",
-                )
-                ont.wan_vlan_id = None
-            else:
-                ont.wan_vlan_id = coerce_uuid(str(vlan.id))
-        if bundle_managed:
-            upsert_ont_config_override(
-                db,
-                ont=ont,
-                field_name="wan.wan_mode",
-                value=wan_mode,
-                reason="ont_write.update_wan_config",
-            )
-            ont.wan_mode = None
-        _set_sync_meta(ont, "api")
-        db.commit()
-        db.refresh(ont)
-        _emit_ont_event(
-            db, "ont.config_updated", {"ont_id": str(ont.id), "field": "wan_config"}
-        )
-        return ActionResult(success=True, message="WAN configuration updated.")
 
     @staticmethod
     def update_management_ip(

@@ -15,7 +15,6 @@ from app.services.network.ont_config_overrides import (
     is_bundle_managed_ont,
     upsert_ont_config_override,
 )
-from app.services.network.ont_scope import can_manage_ont_from_request
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
     _log_action_audit,
@@ -298,118 +297,6 @@ def set_lan_config(
             "dhcp_start": dhcp_start,
             "dhcp_end": dhcp_end,
         },
-    )
-    return result
-
-
-def configure_wan_config(
-    db: Session,
-    ont_id: str,
-    *,
-    wan_mode: str,
-    wan_vlan: int | None = None,
-    ip_address: str | None = None,
-    subnet_mask: str | None = None,
-    gateway: str | None = None,
-    dns_servers: str | None = None,
-    instance_index: int = 1,
-    request: Request | None = None,
-) -> ActionResult:
-    """Legacy flat WAN push endpoint retained only as a compatibility stub."""
-    if request is not None and not can_manage_ont_from_request(request, db, ont_id):
-        return ActionResult(
-            success=False,
-            message="ONT WAN configuration scope check failed.",
-            waiting=False,
-        )
-    result = ActionResult(
-        success=False,
-        message=(
-            "Legacy WAN TR-069 pushes are disabled. Update the active WAN "
-            "service instance and provision that instance instead."
-        ),
-        waiting=False,
-    )
-    _log_action_audit(
-        db,
-        request=request,
-        action="configure_wan_config",
-        ont_id=ont_id,
-        metadata={
-            "success": result.success,
-            "wan_mode": wan_mode,
-            "wan_vlan": wan_vlan,
-            "instance_index": instance_index,
-        },
-    )
-    return result
-
-
-def configure_wan_with_pppoe(
-    db: Session,
-    ont_id: str,
-    *,
-    wan_mode: str,
-    wan_vlan: int | None = None,
-    ip_address: str | None = None,
-    subnet_mask: str | None = None,
-    gateway: str | None = None,
-    dns_servers: str | None = None,
-    instance_index: int = 1,
-    pppoe_username: str | None = None,
-    pppoe_password: str | None = None,
-    request: Request | None = None,
-) -> ActionResult:
-    """Legacy combined WAN/PPPoE push endpoint retained as a compatibility stub."""
-    return configure_wan_config(
-        db,
-        ont_id,
-        wan_mode=wan_mode,
-        wan_vlan=wan_vlan,
-        ip_address=ip_address,
-        subnet_mask=subnet_mask,
-        gateway=gateway,
-        dns_servers=dns_servers,
-        instance_index=instance_index,
-        request=request,
-    )
-
-
-def set_pppoe_credentials(
-    db: Session,
-    ont_id: str,
-    username: str,
-    password: str,
-    *,
-    instance_index: int | None = None,
-    wan_vlan: int | None = None,
-    initiated_by: str | None = None,
-    request: Request | None = None,
-) -> ActionResult:
-    """Legacy flat PPPoE push endpoint retained only as a compatibility stub."""
-    result = ActionResult(
-        success=False,
-        message=(
-            "Legacy PPPoE TR-069 pushes are disabled. Update the active WAN "
-            "service instance credentials and provision that instance instead."
-        ),
-        waiting=False,
-    )
-    waiting = getattr(result, "waiting", False)
-    _log_action_audit(
-        db,
-        request=request,
-        action="set_pppoe_credentials",
-        ont_id=ont_id,
-        metadata={
-            "result": "success"
-            if result.success
-            else ("waiting" if waiting else "error"),
-            "message": result.message,
-            "username": username,
-        },
-        status_code=200 if result.success else (202 if waiting else 500),
-        is_success=result.success or waiting,
     )
     return result
 

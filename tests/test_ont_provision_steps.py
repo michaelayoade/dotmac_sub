@@ -419,9 +419,6 @@ class TestApplySavedServiceConfig:
         )
 
         class FakeAcsWriter:
-            def configure_wan_config(self, db, ont_id, **kwargs):
-                return SimpleNamespace(success=True, waiting=False, message="ok")
-
             def set_wifi_config(self, db, ont_id, **kwargs):
                 return SimpleNamespace(success=True, waiting=False, message="ok")
 
@@ -508,23 +505,6 @@ class TestApplySavedServiceConfig:
         calls: list[tuple[str, dict[str, object]]] = []
 
         class FakeAcsWriter:
-            def configure_wan_config(self, db, ont_id, **kwargs):
-                calls.append(("configure_wan_config", kwargs))
-                return SimpleNamespace(success=True, waiting=False, message="ok")
-
-            def set_pppoe_credentials(self, db, ont_id, username, password, **kwargs):
-                calls.append(
-                    (
-                        "set_pppoe_credentials",
-                        {
-                            "username": username,
-                            "password": password,
-                            **kwargs,
-                        },
-                    )
-                )
-                return SimpleNamespace(success=True, waiting=False, message="ok")
-
             def set_wifi_config(self, db, ont_id, **kwargs):
                 calls.append(("set_wifi_config", kwargs))
                 return SimpleNamespace(success=True, waiting=False, message="ok")
@@ -571,13 +551,13 @@ class TestApplySavedServiceConfig:
         ):
             result = apply_saved_service_config(db_session, str(ont.id))
 
-        assert result.success is True
+        assert result.success is False
         by_step = {name: payload for name, payload in calls}
-        assert by_step["configure_wan_config"]["wan_mode"] == "pppoe"
-        assert by_step["configure_wan_config"]["wan_vlan"] == 203
-        assert by_step["set_pppoe_credentials"]["username"] == "effective-user"
-        assert by_step["set_pppoe_credentials"]["password"] == "pppoe-secret"
-        assert by_step["set_pppoe_credentials"]["wan_vlan"] == 203
+        assert any(
+            step["step"] == "provision_wan_service_instance:Internet"
+            and step["success"] is False
+            for step in result.data["steps"]
+        )
         assert by_step["set_wifi_config"]["enabled"] is True
         assert by_step["set_wifi_config"]["ssid"] == "effective-ssid"
         assert by_step["set_wifi_config"]["channel"] == 11
@@ -695,112 +675,6 @@ class TestPushPppoeOmci:
         )
         assert not result.success
         assert result.step_name == "push_pppoe_omci"
-
-
-class TestPushPppoeTr069:
-    """Test push_pppoe_tr069 step."""
-
-    def test_delegates_to_ont_action(self, db_session) -> None:
-        from types import SimpleNamespace
-
-        from app.services.network.ont_provision_steps import push_pppoe_tr069
-
-        mock_result = SimpleNamespace(success=True, message="PPPoE set OK")
-
-        with patch(
-            "app.services.network.ont_action_network.set_pppoe_credentials",
-            return_value=mock_result,
-        ):
-            result = push_pppoe_tr069(
-                db_session,
-                str(uuid.uuid4()),
-                username="test",
-                password="pass",
-                retry=False,
-            )
-
-        assert result.success
-        assert result.step_name == "push_pppoe_tr069"
-
-    def test_waiting_result_preserves_task_data_and_pending_step_state(
-        self, db_session
-    ) -> None:
-        from app.models.network import OntUnit
-        from app.services.network.ont_provision_steps import push_pppoe_tr069
-
-        ont = OntUnit(serial_number="TEST-PPPOE-WAIT")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        mock_result = SimpleNamespace(
-            success=False,
-            waiting=True,
-            message="Queued PPPoE push.",
-            data={"task_id": "task-123", "delivery": "queued"},
-        )
-
-        with patch(
-            "app.services.network.ont_action_network.set_pppoe_credentials",
-            return_value=mock_result,
-        ):
-            result = push_pppoe_tr069(
-                db_session,
-                str(ont.id),
-                username="test",
-                password="pass",
-                retry=False,
-            )
-
-        assert result.waiting is True
-        assert result.data == {"task_id": "task-123", "delivery": "queued"}
-
-
-class TestConfigureWanTr069:
-    """Test configure_wan_tr069 step."""
-
-    def test_delegates_to_ont_action(self, db_session) -> None:
-        from app.services.network.ont_provision_steps import configure_wan_tr069
-
-        mock_result = SimpleNamespace(
-            success=True,
-            waiting=False,
-            message="WAN config updated",
-            data={"queued": True},
-        )
-        ont_id = str(uuid.uuid4())
-
-        with patch(
-            "app.services.network.ont_action_network.configure_wan_config",
-            return_value=mock_result,
-        ) as configure_wan_config:
-            result = configure_wan_tr069(
-                db_session,
-                ont_id,
-                wan_mode="static",
-                wan_vlan="203",
-                ip_address="172.16.203.50",
-                subnet_mask="255.255.255.0",
-                gateway="172.16.203.1",
-                dns_servers="8.8.8.8,1.1.1.1",
-                instance_index=2,
-            )
-
-        assert result.success is True
-        assert result.step_name == "configure_wan_tr069"
-        assert result.critical is False
-        assert result.data == {"queued": True}
-        configure_wan_config.assert_called_once_with(
-            db_session,
-            ont_id,
-            wan_mode="static",
-            wan_vlan=203,
-            ip_address="172.16.203.50",
-            subnet_mask="255.255.255.0",
-            gateway="172.16.203.1",
-            dns_servers="8.8.8.8,1.1.1.1",
-            instance_index=2,
-        )
 
 
 class TestRollbackServicePorts:

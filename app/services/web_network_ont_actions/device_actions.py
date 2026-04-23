@@ -213,26 +213,6 @@ def execute_omci_reboot(
     return ok, msg
 
 
-def execute_enable_ipv6(
-    db: Session,
-    ont_id: str,
-    *,
-    initiated_by: str | None = None,
-    request: Request | None = None,
-) -> ActionResult:
-    """Enable IPv6 dual-stack on ONT with operation tracking."""
-    initiated_by = initiated_by or actor_name_from_request(request)
-    return run_tracked_action(
-        db,
-        NetworkOperationType.ont_enable_ipv6,
-        NetworkOperationTargetType.ont,
-        ont_id,
-        lambda: _acs_config_writer().enable_ipv6_on_wan(db, ont_id),
-        correlation_key=f"ont_enable_ipv6:{ont_id}",
-        initiated_by=initiated_by,
-    )
-
-
 def execute_connection_request(
     db: Session,
     ont_id: str,
