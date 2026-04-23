@@ -23,8 +23,8 @@ from app.models.network import (
     PonPort,
     Vlan,
 )
-from app.services import web_admin as web_admin_service
 from app.services import network as network_service
+from app.services import web_admin as web_admin_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
@@ -554,6 +554,25 @@ def olt_detail(
 
 
 @router.get(
+    "/olts/{olt_id}/events",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_device_events(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Lazy panel: ONT device events for this OLT."""
+    data = olt_detail_adapter.events_context(db, olt_id=olt_id)
+    context = _base_context(request, db, active_page="olts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/olts/_events_partial.html", context
+    )
+
+
+@router.get(
     "/olts/{olt_id}/preview",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
@@ -592,25 +611,6 @@ def olt_detail_preview(
         }
     )
     return templates.TemplateResponse("admin/network/olts/detail.html", context)
-
-
-@router.get(
-    "/olts/{olt_id}/events",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def olt_device_events(
-    request: Request,
-    olt_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: ONT device events (online/offline/signal) for this OLT."""
-    data = olt_detail_adapter.events_context(db, olt_id=olt_id)
-    context = _base_context(request, db, active_page="olts")
-    context.update(data)
-    return templates.TemplateResponse(
-        "admin/network/olts/_events_partial.html", context
-    )
 
 
 @router.post(

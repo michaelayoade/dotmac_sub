@@ -567,27 +567,6 @@ def ont_service_port_clone(
     )
 
 
-# -- Unified Configuration Page Routes -----------------------------------------
-
-
-@router.get(
-    "/onts/{ont_id}/unified-config",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_unified_config(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: Unified configuration page with accordion sections."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(web_network_ont_actions_service.unified_config_context(db, ont_id))
-    return templates.TemplateResponse(
-        "admin/network/onts/_unified_config.html", context
-    )
-
-
 @router.get(
     "/onts/{ont_id}/config/wan",
     response_class=HTMLResponse,

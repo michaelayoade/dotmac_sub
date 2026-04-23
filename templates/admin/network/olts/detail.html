@@ -8,7 +8,6 @@
 <div class="space-y-6" x-data="{
     activeTab: 'overview',
     ontSearch: '',
-    profilesLoaded: false,
     eventsLoaded: false,
     normalizeTab(tab) {
         const aliases = {
@@ -32,28 +31,23 @@
     },
     init() {
         this.activeTab = this.normalizeTab(new URLSearchParams(window.location.search).get('tab'));
-        this.$nextTick(() => {
-            if (this.activeTab === 'provisioning') this.loadProfiles();
-            if (this.activeTab === 'operations') this.loadEvents();
-        });
+        if (this.activeTab === 'operations') {
+            this.loadEvents();
+        }
     },
     setTab(tab) {
         this.activeTab = this.normalizeTab(tab);
         const url = new URL(window.location);
         url.searchParams.set('tab', this.activeTab);
         history.replaceState(null, '', url);
-        if (this.activeTab === 'provisioning') this.loadProfiles();
-        if (this.activeTab === 'operations') this.loadEvents();
-    },
-    loadProfiles() {
-        if (this.profilesLoaded || typeof htmx === 'undefined') return;
-        this.profilesLoaded = true;
-        htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/profiles/line', {target: '#profiles-content', swap: 'innerHTML'});
+        if (this.activeTab === 'operations') {
+            this.loadEvents();
+        }
     },
     loadEvents() {
         if (this.eventsLoaded || typeof htmx === 'undefined') return;
         this.eventsLoaded = true;
-        htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/events', {target: '#olt-events-content', swap: 'innerHTML'});
+        htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/events', { target: '#olt-events-content', swap: 'innerHTML' });
     }
 }">
     {% if ssh_test_message %}
@@ -592,67 +586,61 @@
                 {% endcall %}
                 {% endif %}
 
-                {# Actions #}
-                {% call card("Actions", color="slate") %}
-                <div class="space-y-3">
-                    <a href="{{ detail_actions.sidebar.edit.url }}" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                        Edit Device
-                    </a>
-                    <a href="{{ detail_actions.sidebar.onts.url }}" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                        View All ONTs
-                    </a>
-                    <form method="POST" action="{{ detail_actions.sidebar.test_ssh.url }}">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
-                            Test SSH Connection
+                {# Quick Actions #}
+                {% call card("Quick Actions", color="blue") %}
+                <div class="space-y-4">
+                    <div class="grid grid-cols-2 gap-2">
+                        <button type="button"
+                                @click="setTab('provisioning'); setTimeout(() => { document.querySelector('[data-autofind-scan]')?.click(); }, 100)"
+                                class="col-span-2 inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                            Scan unregistered ONTs
                         </button>
-                    </form>
-                    <form method="POST" action="{{ detail_actions.sidebar.test_snmp.url }}">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m2-4h.01M4 7h16M4 12h16M4 17h16"/></svg>
-                            Test SNMP Connection
-                        </button>
-                    </form>
-                    {% if detail_actions.sidebar.test_netconf.visible %}
-                    <form method="POST" action="{{ detail_actions.sidebar.test_netconf.url }}">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                            Test NETCONF Connection
-                        </button>
-                    </form>
-                    {% endif %}
-                    <form method="POST" action="{{ detail_actions.sidebar.sync_onts.url }}">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h11M9 21V3m7 10h5m-2-2l2 2-2 2"/></svg>
-                            Sync ONU Telemetry (SNMP)
-                        </button>
-                    </form>
-                    <form method="POST" action="{{ detail_actions.sidebar.repair_pon_ports.url }}">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m14.836 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.164 15m14.255 0H15"/></svg>
-                            Repair PON Port Inventory
-                        </button>
-                    </form>
+                        <a href="{{ detail_actions.sidebar.onts.url }}" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            View ONTs
+                        </a>
+                        <a href="{{ detail_actions.sidebar.edit.url }}" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            Edit OLT
+                        </a>
+                    </div>
                     <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
-                        <p class="mb-2 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Backups</p>
-                        <form method="POST" action="{{ detail_actions.sidebar.backup_create.url }}">
+                        <p class="mb-2 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Connection checks</p>
+                        <div class="grid grid-cols-2 gap-2">
+                            <form method="POST" action="{{ detail_actions.sidebar.test_ssh.url }}">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                    Test SSH
+                                </button>
+                            </form>
+                            <form method="POST" action="{{ detail_actions.sidebar.test_snmp.url }}">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                    Test SNMP
+                                </button>
+                            </form>
+                            {% if detail_actions.sidebar.test_netconf.visible %}
+                            <form method="POST" action="{{ detail_actions.sidebar.test_netconf.url }}" class="col-span-2">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                    Test NETCONF
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 gap-2 border-t border-slate-200 pt-3 dark:border-slate-700">
+                        <form method="POST" action="{{ detail_actions.sidebar.sync_onts.url }}">
                             {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
-                                Create Config Backup
+                            <button type="submit" class="w-full rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                                Sync ONU telemetry
                             </button>
                         </form>
-                        <a href="{{ detail_actions.sidebar.backup_history.url }}" class="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
-                            View Backup History
-                        </a>
+                        <form method="POST" action="{{ detail_actions.sidebar.repair_pon_ports.url }}">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                                Repair PON inventory
+                            </button>
+                        </form>
                     </div>
                 </div>
                 {% endcall %}
@@ -1134,9 +1122,9 @@
     {% endif %}
 
         <div id="profiles-content">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading OLT profiles...</span>
+            <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                <p class="font-medium text-slate-900 dark:text-white">OLT profile reads are manual.</p>
+                <p class="mt-1">This tab shows configured bundles from the database without opening a device session. Use the buttons below only when you need a fresh OLT read.</p>
             </div>
         </div>
         <div class="mt-4 flex gap-3">
@@ -1552,9 +1540,9 @@
         {% endcall %}
 
         <div id="olt-events-content">
-            <div class="flex items-center justify-center py-12">
-                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device events...</span>
+            <div class="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                <p class="font-medium text-slate-900 dark:text-white">Device events load when Operations is opened.</p>
+                <p class="mt-1">This keeps the initial OLT detail page DB-focused and avoids building hidden tab content before operators need it.</p>
             </div>
         </div>
     </div>

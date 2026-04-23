@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-import httpx
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -51,8 +49,6 @@ from app.services.web_network_core_devices_inventory import (
 )
 
 logger = logging.getLogger(__name__)
-
-_VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
 
 
 def _nas_status_to_monitoring_status(status: NasDeviceStatus | None) -> DeviceStatus:
@@ -424,155 +420,6 @@ def _extract_pon_hint(value: str | None) -> str | None:
     return None
 
 
-def _parse_composite_index(raw_index: str) -> tuple[str, ...]:
-    """Parse dotted SNMP table index into numeric components."""
-    parts = [p for p in str(raw_index).strip().split(".") if p.isdigit()]
-    return tuple(parts)
-
-
-def _snmp_index_to_fsp(
-    raw_index: str, packed_fsp_map: dict[str, str] | None = None
-) -> str | None:
-    """Best-effort map SNMP composite index to frame/slot/port string."""
-    parts = _parse_composite_index(raw_index)
-    if len(parts) >= 3:
-        return f"{parts[0]}/{parts[1]}/{parts[2]}"
-    if len(parts) == 2 and packed_fsp_map:
-        return packed_fsp_map.get(parts[0])
-    return None
-
-
-def _parse_snmp_signal_dbm(
-    raw_value: str | None, *, scale: float = 0.01
-) -> float | None:
-    """Parse SNMP integer optical power into dBm."""
-    if not raw_value:
-        return None
-    match = re.search(r"(-?\d+)", str(raw_value))
-    if not match:
-        return None
-    try:
-        raw_int = int(match.group(1))
-    except ValueError:
-        return None
-    dbm = raw_int * scale
-    if -50.0 <= dbm <= 10.0:
-        return dbm
-    if -50.0 <= raw_int <= 10.0:
-        return float(raw_int)
-    return None
-
-
-def _parse_walk_composite(
-    lines: Sequence[str], *, suffix_parts: int = 4
-) -> dict[str, str]:
-    """Parse SNMP walk lines while preserving composite table indexes."""
-    parsed: dict[str, str] = {}
-    for line in lines:
-        if " = " not in line:
-            continue
-        oid_part, value_part = line.split(" = ", 1)
-        oid_tokens = [p for p in oid_part.split(".") if p.isdigit()]
-        if not oid_tokens:
-            continue
-        if len(oid_tokens) >= 2 and int(oid_tokens[-2]) > 1_000_000:
-            # Huawei packed index format: <packed_fsp>.<onu_id>
-            index = f"{oid_tokens[-2]}.{oid_tokens[-1]}"
-        else:
-            index = (
-                ".".join(oid_tokens[-suffix_parts:])
-                if len(oid_tokens) >= suffix_parts
-                else oid_tokens[-1]
-            )
-        value = value_part.split(": ", 1)[-1].strip().strip('"')
-        if value.lower().startswith("no such"):
-            continue
-        parsed[index] = value
-    return parsed
-
-
-def _pon_sort_key(hint: str) -> tuple[int, int, int]:
-    parts = hint.split("/")
-    try:
-        return int(parts[0]), int(parts[1]), int(parts[2])
-    except Exception:
-        return (10**9, 10**9, 10**9)
-
-
-def _build_packed_fsp_map(
-    indexes: Sequence[str], pon_hints: Sequence[str]
-) -> dict[str, str]:
-    packed_values: list[int] = []
-    for idx in indexes:
-        parts = [p for p in str(idx).split(".") if p.isdigit()]
-        if len(parts) == 2:
-            try:
-                packed_values.append(int(parts[0]))
-            except ValueError:
-                continue
-    unique_packed = sorted(set(packed_values))
-    sorted_hints = sorted({h for h in pon_hints if h}, key=_pon_sort_key)
-    return {str(p): h for p, h in zip(unique_packed, sorted_hints, strict=False)}
-
-
-def _huawei_snmp_pon_live_stats(
-    monitoring_device: object | None,
-    pon_hints: Sequence[str] | None = None,
-) -> tuple[dict[str, int], dict[str, float]]:
-    """Return per-PON ONU count and average OLT RX dBm using Huawei SNMP OIDs."""
-    if monitoring_device is None or not getattr(
-        monitoring_device, "snmp_enabled", False
-    ):
-        return {}, {}
-    vendor = str(getattr(monitoring_device, "vendor", "") or "").lower()
-    if "huawei" not in vendor:
-        return {}, {}
-
-    try:
-        from app.services.snmp_discovery import _run_snmpwalk
-
-        # Huawei GPON: ONU run status and OLT RX power per ONU.
-        status_rows = _parse_walk_composite(
-            _run_snmpwalk(monitoring_device, ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15")
-        )
-        olt_rx_rows = _parse_walk_composite(
-            _run_snmpwalk(monitoring_device, ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4")
-        )
-    except Exception:
-        return {}, {}
-
-    onu_count_by_fsp: dict[str, int] = {}
-    signal_sums: dict[str, float] = {}
-    signal_counts: dict[str, int] = {}
-    packed_fsp_map = _build_packed_fsp_map(
-        list(status_rows.keys()) + list(olt_rx_rows.keys()),
-        list(pon_hints or []),
-    )
-
-    for raw_index in status_rows:
-        fsp = _snmp_index_to_fsp(raw_index, packed_fsp_map)
-        if not fsp:
-            continue
-        onu_count_by_fsp[fsp] = onu_count_by_fsp.get(fsp, 0) + 1
-
-    for raw_index, raw_value in olt_rx_rows.items():
-        fsp = _snmp_index_to_fsp(raw_index, packed_fsp_map)
-        if not fsp:
-            continue
-        dbm = _parse_snmp_signal_dbm(raw_value, scale=0.01)
-        if dbm is None:
-            continue
-        signal_sums[fsp] = signal_sums.get(fsp, 0.0) + dbm
-        signal_counts[fsp] = signal_counts.get(fsp, 0) + 1
-
-    avg_signal_by_fsp = {
-        fsp: (signal_sums[fsp] / signal_counts[fsp])
-        for fsp in signal_counts
-        if signal_counts[fsp] > 0
-    }
-    return onu_count_by_fsp, avg_signal_by_fsp
-
-
 def _ont_pon_hints(ont: object) -> set[str]:
     """Build possible F/S/P hints from ONT fields."""
     hints: set[str] = set()
@@ -594,81 +441,6 @@ def _ont_pon_hints(ont: object) -> set[str]:
         hints.add(board_raw)
 
     return {h for h in hints if h}
-
-
-def _get_olt_health(olt_name: str) -> dict[str, Any]:
-    """Fetch latest OLT health metrics from VictoriaMetrics.
-
-    Returns a dict with cpu, temperature, memory, uptime values
-    and formatted display strings. Gracefully returns empty on error.
-    """
-    result: dict[str, Any] = {
-        "has_data": False,
-        "cpu_percent": None,
-        "temperature_c": None,
-        "memory_percent": None,
-        "uptime_seconds": None,
-        "cpu_display": None,
-        "temperature_display": None,
-        "memory_display": None,
-        "uptime_display": None,
-        "temperature_status": "normal",
-    }
-
-    metrics = {
-        "cpu_percent": f'olt_cpu_percent{{olt_name="{olt_name}"}}',
-        "temperature_c": f'olt_temperature_celsius{{olt_name="{olt_name}"}}',
-        "memory_percent": f'olt_memory_percent{{olt_name="{olt_name}"}}',
-        "uptime_seconds": f'olt_uptime_seconds{{olt_name="{olt_name}"}}',
-    }
-
-    for key, query in metrics.items():
-        try:
-            resp = httpx.get(
-                f"{_VM_URL}/api/v1/query",
-                params={"query": query},
-                timeout=5,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict) and data.get("status") == "success":
-                results = data.get("data", {}).get("result", [])
-                if results and results[0].get("value"):
-                    val = float(results[0]["value"][1])
-                    result[key] = val
-                    result["has_data"] = True
-        except Exception:
-            logger.debug("Skipping metric %s for OLT %s", key, olt_name, exc_info=True)
-            continue
-
-    # Build display strings
-    if result["cpu_percent"] is not None:
-        result["cpu_display"] = f"{result['cpu_percent']:.0f}%"
-
-    if result["temperature_c"] is not None:
-        temp = result["temperature_c"]
-        result["temperature_display"] = f"{temp:.0f}\u00b0C"
-        if temp > 65:
-            result["temperature_status"] = "critical"
-        elif temp > 50:
-            result["temperature_status"] = "warning"
-
-    if result["memory_percent"] is not None:
-        result["memory_display"] = f"{result['memory_percent']:.0f}%"
-
-    if result["uptime_seconds"] is not None:
-        secs = int(result["uptime_seconds"])
-        days = secs // 86400
-        hours = (secs % 86400) // 3600
-        minutes = (secs % 3600) // 60
-        if days > 0:
-            result["uptime_display"] = f"{days}d {hours}h {minutes}m"
-        elif hours > 0:
-            result["uptime_display"] = f"{hours}h {minutes}m"
-        else:
-            result["uptime_display"] = f"{minutes}m"
-
-    return result
 
 
 def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
@@ -699,17 +471,33 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     assignment_by_ont_id: dict[str, object] = {}
     port_stats: dict[str, dict[str, int]] = {}
 
-    for port_idx, port in enumerate(pon_ports):
-        port_assignments = network_service.ont_assignments.list(
-            db=db,
-            pon_port_id=str(port.id),
-            ont_unit_id=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=100,
-            offset=0,
+    from app.models.network import OntAssignment
+
+    pon_port_ids = [port.id for port in pon_ports]
+    assignments_by_port_id: dict[str, list[object]] = {
+        str(port.id): [] for port in pon_ports
+    }
+    if pon_port_ids:
+        port_assignments = list(
+            db.scalars(
+                select(OntAssignment)
+                .where(OntAssignment.pon_port_id.in_(pon_port_ids))
+                .where(OntAssignment.active.is_(True))
+                .options(
+                    joinedload(OntAssignment.ont_unit),
+                    joinedload(OntAssignment.pon_port),
+                )
+                .order_by(OntAssignment.created_at.desc())
+            ).all()
         )
-        active_assignments = [a for a in port_assignments if a.active]
+        for assignment in port_assignments:
+            if assignment.pon_port_id is not None:
+                assignments_by_port_id.setdefault(
+                    str(assignment.pon_port_id), []
+                ).append(assignment)
+
+    for port_idx, port in enumerate(pon_ports):
+        active_assignments = assignments_by_port_id.get(str(port.id), [])
         ont_assignments.extend(active_assignments)
         for a in active_assignments:
             if getattr(a, "ont_unit_id", None):
@@ -891,8 +679,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "low_signal": total_low_signal,
     }
 
-    # Fetch OLT hardware health from VictoriaMetrics
-    olt_health = _get_olt_health(olt.name)
+    # Keep detail rendering DB-only. Live health reads belong in explicit
+    # monitoring/operations panels so page load does not depend on device latency.
+    olt_health = {"has_data": False}
 
     # Fetch recent config backups
     from app.models.network import OltConfigBackup
@@ -967,142 +756,10 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             if any(token in text for token in ("pon", "gpon", "epon", "xgpon", "xgs")):
                 pon_interfaces.append(item)
 
-        snmp_system: dict[str, object] | None = None
-        if monitoring_device.snmp_enabled:
-            try:
-                from app.services.snmp_discovery import (
-                    _parse_scalar,
-                    _parse_walk,
-                    _run_snmpbulkwalk,
-                    _run_snmpwalk,
-                )
-
-                sys_name = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.5.0")
-                )
-                sys_descr = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.1.0")
-                )
-                sys_object_id = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.2.0")
-                )
-                sys_uptime = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.3.0")
-                )
-                sys_contact = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.4.0")
-                )
-                sys_location = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.6.0")
-                )
-                if_number = _parse_scalar(
-                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.2.1.0")
-                )
-
-                snmp_system = {
-                    "sys_name": sys_name,
-                    "sys_descr": sys_descr,
-                    "sys_object_id": sys_object_id,
-                    "sys_uptime": sys_uptime,
-                    "sys_contact": sys_contact,
-                    "sys_location": sys_location,
-                    "if_number": if_number,
-                }
-
-                ent_class = _parse_walk(
-                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.5")
-                )
-                ent_name = _parse_walk(
-                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.7")
-                )
-                ent_descr = _parse_walk(
-                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.2")
-                )
-                ent_model = _parse_walk(
-                    _run_snmpbulkwalk(monitoring_device, ".1.3.6.1.2.1.47.1.1.1.1.13")
-                )
-
-                for idx, cls_raw in ent_class.items():
-                    cls = re.search(r"(\d+)", cls_raw or "")
-                    cls_code = int(cls.group(1)) if cls else None
-                    name = (ent_name.get(idx) or "").strip()
-                    descr = (ent_descr.get(idx) or "").strip()
-                    model = (ent_model.get(idx) or "").strip()
-                    merged = f"{name} {descr} {model}".strip()
-                    if not merged:
-                        continue
-                    lowered = merged.lower()
-                    looks_optics_like = any(
-                        t in lowered
-                        for t in (
-                            "optic",
-                            "sfp",
-                            "qsfp",
-                            "xfp",
-                            "gpon_uni",
-                            " epon_uni",
-                            " tx ",
-                            " rx ",
-                            "nm",
-                            "km",
-                            " sc",
-                            " lc",
-                            "connector",
-                        )
-                    )
-                    looks_chassis_like = any(
-                        t in lowered
-                        for t in (
-                            "rack",
-                            "subrack",
-                            "chassis",
-                            "frame",
-                            "cabinet",
-                            "shelf",
-                            "enclosure",
-                            "backplane",
-                        )
-                    )
-                    slot_match = re.search(r"slot\s*([0-9]+)", lowered)
-                    looks_like_card = any(
-                        t in lowered
-                        for t in (
-                            "board",
-                            " card",
-                            "slot",
-                            "service board",
-                            "control board",
-                            "main board",
-                            "mpu",
-                            "subrack",
-                            "rack",
-                        )
-                    ) or (
-                        cls_code in {9}
-                        and not looks_optics_like
-                        and not looks_chassis_like
-                    )
-                    if looks_chassis_like and not slot_match:
-                        looks_like_card = False
-                    if not looks_like_card:
-                        continue
-                    live_board_inventory.append(
-                        {
-                            "index": idx,
-                            "slot_number": int(slot_match.group(1))
-                            if slot_match
-                            else None,
-                            "card_type": merged[:120],
-                            "category": "card",
-                        }
-                    )
-            except Exception:
-                snmp_system = None
-
         monitoring_data = {
             "interfaces": monitoring_interfaces,
             "pon_interfaces": pon_interfaces,
-            "snmp_system": snmp_system,
+            "snmp_system": None,
         }
 
     live_board_inventory = _dedupe_live_board_inventory(live_board_inventory)
@@ -1261,15 +918,6 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         )
 
     if not pon_port_table_rows and isinstance(monitoring_data, dict):
-        snmp_onu_count_by_fsp, snmp_avg_signal_by_fsp = _huawei_snmp_pon_live_stats(
-            monitoring_device,
-            [
-                h
-                for iface in monitoring_data.get("pon_interfaces", [])
-                if (h := _extract_pon_hint(str(iface.get("name") or "")))
-            ],
-        )
-
         ont_candidates = list(onts_on_olt)
 
         for iface_idx, iface in enumerate(monitoring_data.get("pon_interfaces", [])):
@@ -1291,8 +939,6 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             avg_signal_dbm = (
                 sum(signal_values) / len(signal_values) if signal_values else None
             )
-            if avg_signal_dbm is None and pon_hint:
-                avg_signal_dbm = snmp_avg_signal_by_fsp.get(pon_hint)
 
             distance_values = [
                 int(ont.distance_meters)
@@ -1325,9 +971,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                     "type": port_type,
                     "admin_state": "N/A",
                     "status": str(iface.get("status") or "unknown").lower(),
-                    "onus": len(matched_onts)
-                    if matched_onts
-                    else int(snmp_onu_count_by_fsp.get(str(pon_hint or ""), 0)),
+                    "onus": len(matched_onts),
                     "avg_signal_dbm": avg_signal_dbm,
                     "description": description,
                     "range_display": range_display,

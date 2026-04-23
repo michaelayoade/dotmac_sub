@@ -266,7 +266,7 @@ class OltDetailAdapter:
             bundles = list(
                 db.scalars(
                     select(OntProvisioningProfile)
-                    .where(OntProvisioningProfile.olt_device_id == getattr(olt, "id"))
+                    .where(OntProvisioningProfile.olt_device_id == olt.id)
                     .order_by(
                         OntProvisioningProfile.is_default.desc(),
                         OntProvisioningProfile.name.asc(),
