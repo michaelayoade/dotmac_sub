@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models.network import (
+    DeviceStatus,
     OltCard,
     OltCardPort,
     OLTDevice,
@@ -336,6 +337,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
             {"olt_id": str(device.id), "name": device.name},
             actor="system",
         )
+        device.status = DeviceStatus.retired
         super().delete(db, device_id)
 
     @staticmethod

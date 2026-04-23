@@ -10,11 +10,21 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.network import OLTDevice
+from app.models.network import (
+    IpPool,
+    OLTDevice,
+    OntAssignment,
+    OntProvisioningProfile,
+    OntUnit,
+    PonPort,
+    Vlan,
+)
 from app.services import web_admin as web_admin_service
+from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
@@ -120,6 +130,72 @@ def _log_olt_action_result(
         message=message,
         metadata=metadata,
     )
+
+
+def _olt_delete_impact(db: Session, olt: OLTDevice) -> dict[str, object]:
+    active_onts = (
+        db.scalar(
+            select(func.count(OntUnit.id))
+            .where(OntUnit.olt_device_id == olt.id)
+            .where(OntUnit.is_active.is_(True))
+        )
+        or 0
+    )
+    active_assignments = (
+        db.scalar(
+            select(func.count(OntAssignment.id))
+            .join(PonPort, OntAssignment.pon_port_id == PonPort.id)
+            .where(PonPort.olt_id == olt.id)
+            .where(OntAssignment.active.is_(True))
+        )
+        or 0
+    )
+    linked_vlans = (
+        db.scalar(select(func.count(Vlan.id)).where(Vlan.olt_device_id == olt.id)) or 0
+    )
+    linked_ip_pools = (
+        db.scalar(select(func.count(IpPool.id)).where(IpPool.olt_device_id == olt.id))
+        or 0
+    )
+    provisioning_profiles = (
+        db.scalar(
+            select(func.count(OntProvisioningProfile.id)).where(
+                OntProvisioningProfile.olt_device_id == olt.id
+            )
+        )
+        or 0
+    )
+
+    blocking_reasons = []
+    if active_onts:
+        blocking_reasons.append(
+            f"{active_onts} active ONT(s) are still linked to this OLT."
+        )
+    if active_assignments:
+        blocking_reasons.append(
+            f"{active_assignments} active ONT assignment(s) still use this OLT."
+        )
+
+    warnings = []
+    if linked_vlans:
+        warnings.append("OLT-scoped VLANs remain preserved for audit and restore.")
+    if linked_ip_pools:
+        warnings.append("OLT-scoped IP pools remain preserved for audit and restore.")
+    if provisioning_profiles:
+        warnings.append("Provisioning profiles scoped to this OLT remain linked.")
+
+    return {
+        "olt_id": str(olt.id),
+        "olt_name": olt.name,
+        "can_delete": not blocking_reasons,
+        "blocking_reasons": blocking_reasons,
+        "active_onts": active_onts,
+        "active_assignments": active_assignments,
+        "vlans_to_orphan": linked_vlans,
+        "ip_pools_to_orphan": linked_ip_pools,
+        "provisioning_profiles": provisioning_profiles,
+        "warnings": warnings,
+    }
 
 
 @router.get(
@@ -351,6 +427,90 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
     if olt is None:
         raise HTTPException(status_code=500, detail="OLT update returned no object")
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
+
+
+@router.get(
+    "/olts/{olt_id}/delete-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_delete_preview(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "OLT not found"},
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="olts")
+    context["impact"] = _olt_delete_impact(db, olt)
+    return templates.TemplateResponse(
+        "admin/network/olts/_delete_preview.html", context
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_delete(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return RedirectResponse(
+            "/admin/network/olts?delete_status=error&delete_message=OLT+not+found",
+            status_code=303,
+        )
+
+    impact = _olt_delete_impact(db, olt)
+    if not impact["can_delete"]:
+        message = quote_plus("Resolve active ONTs or assignments before archiving OLT.")
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="archive_olt",
+            ok=False,
+            message="OLT archive blocked by active dependencies.",
+            metadata=impact,
+        )
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={message}",
+            status_code=303,
+        )
+
+    try:
+        network_service.olt_devices.delete(db, olt_id)
+    except HTTPException as exc:
+        detail = quote_plus(str(exc.detail))
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="archive_olt",
+            ok=False,
+            message=str(exc.detail),
+            metadata=impact,
+        )
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={detail}",
+            status_code=303,
+        )
+
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="archive_olt",
+        ok=True,
+        message="OLT archived.",
+        metadata=impact,
+    )
+    message = quote_plus(f"OLT {olt.name} archived.")
+    return RedirectResponse(
+        f"/admin/network/olts?delete_status=success&delete_message={message}",
+        status_code=303,
+    )
 
 
 @router.get(
@@ -909,6 +1069,17 @@ def olt_autofind_scan(
         }
         for e in entries
     ]
+    # Load authorization presets for this OLT (includes global presets)
+    from app.services.network.authorization_presets import authorization_presets
+
+    presets = authorization_presets.list(
+        db,
+        is_active=True,
+        olt_device_id=olt_id,
+        include_global=True,
+        order_by="priority",
+        order_dir="desc",
+    )
     return templates.TemplateResponse(
         "admin/network/olts/_autofind_results.html",
         {
@@ -917,6 +1088,7 @@ def olt_autofind_scan(
             "autofind_ok": ok,
             "autofind_message": message,
             "autofind_entries": autofind_data,
+            "authorization_presets": presets,
         },
     )
 
@@ -1021,6 +1193,7 @@ def olt_authorize_ont(
     ont_id: str = Form(""),
     return_to: str = Form(""),
     force_reauthorize: str = Form(""),
+    preset_id: str = Form(""),
     db: Session = Depends(get_db),
 ) -> Response:
     """Authorize a discovered ONT on the OLT via SSH."""
@@ -1104,6 +1277,8 @@ def olt_authorize_ont(
         )
 
     force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
+    # Normalize preset_id: empty string means no preset selected
+    effective_preset_id = preset_id.strip() if preset_id else None
     initiated_by = None
     try:
         initiated_by = actor_label(request)
@@ -1116,6 +1291,7 @@ def olt_authorize_ont(
             serial_number=serial_number,
             force_reauthorize=force,
             initiated_by=initiated_by,
+            preset_id=effective_preset_id,
             request=request,
         )
         )
@@ -1148,6 +1324,7 @@ def olt_authorize_ont(
                 "fsp": fsp,
                 "serial_number": serial_number,
                 "force_reauthorize": force,
+                "preset_id": effective_preset_id,
                 "follow_up_operation_id": operation_id,
                 "initiated_by": initiated_by,
             },

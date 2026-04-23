@@ -1,5 +1,15 @@
-{# HTMX partial: OLT deletion impact preview #}
+{# HTMX partial: OLT archive impact preview #}
 
+<div x-data="{ show: true }"
+     x-show="show"
+     x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="olt-delete-title"
+     @keydown.escape.window="show = false; setTimeout(() => document.getElementById('olt-delete-modal').innerHTML = '', 200)"
+     @click.self="show = false; setTimeout(() => document.getElementById('olt-delete-modal').innerHTML = '', 200)">
+<div class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
 <div class="space-y-4">
     <div class="flex items-center gap-3">
         <div class="flex h-10 w-10 items-center justify-center rounded-lg
@@ -10,18 +20,24 @@
                       d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
             </svg>
         </div>
-        <div>
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
-                Delete OLT: {{ impact.olt_name }}
+        <div class="min-w-0 flex-1">
+            <h3 id="olt-delete-title" class="text-lg font-semibold text-slate-900 dark:text-white">
+                Archive OLT: {{ impact.olt_name }}
             </h3>
             <p class="text-sm text-slate-500 dark:text-slate-400">
                 {% if impact.can_delete %}
-                Review the impact before confirming deletion
+                Review the impact before archiving this OLT
                 {% else %}
-                This OLT cannot be deleted until blocking items are resolved
+                This OLT cannot be archived until blocking items are resolved
                 {% endif %}
             </p>
         </div>
+        <button type="button"
+                aria-label="Close archive preview"
+                @click="show = false; setTimeout(() => document.getElementById('olt-delete-modal').innerHTML = '', 200)"
+                class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
     </div>
 
     {# Blocking reasons #}
@@ -31,7 +47,7 @@
             <svg class="inline h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
-            Deletion Blocked
+            Archive Blocked
         </h4>
         <ul class="text-sm text-rose-700 dark:text-rose-400 space-y-1">
             {% for reason in impact.blocking_reasons %}
@@ -60,13 +76,13 @@
                 </span>
             </div>
             <div class="flex items-center justify-between px-4 py-3">
-                <span class="text-sm text-slate-600 dark:text-slate-400">VLANs to Orphan</span>
+                <span class="text-sm text-slate-600 dark:text-slate-400">Linked VLANs Preserved</span>
                 <span class="text-sm font-medium {% if impact.vlans_to_orphan > 0 %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}">
                     {{ impact.vlans_to_orphan }}
                 </span>
             </div>
             <div class="flex items-center justify-between px-4 py-3">
-                <span class="text-sm text-slate-600 dark:text-slate-400">IP Pools to Orphan</span>
+                <span class="text-sm text-slate-600 dark:text-slate-400">Linked IP Pools Preserved</span>
                 <span class="text-sm font-medium {% if impact.ip_pools_to_orphan > 0 %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}">
                     {{ impact.ip_pools_to_orphan }}
                 </span>
@@ -108,14 +124,14 @@
                     @click="confirming = true"
                     class="inline-flex items-center gap-2 rounded-lg border border-rose-300 bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:border-rose-800 dark:bg-rose-700 dark:hover:bg-rose-800 dark:focus:ring-offset-slate-900">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-7 4h14a2 2 0 001.8-2.9l-7-14a2 2 0 00-3.6 0l-7 14A2 2 0 005 19z"/></svg>
-                Delete OLT
+                Archive OLT
             </button>
             <div x-show="confirming" x-cloak class="flex items-center gap-2">
                 <span class="text-sm text-slate-600 dark:text-slate-400">Are you sure?</span>
                 <button type="submit"
                         class="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 dark:border-rose-800 dark:bg-rose-700 dark:hover:bg-rose-800">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-7 4h14a2 2 0 001.8-2.9l-7-14a2 2 0 00-3.6 0l-7 14A2 2 0 005 19z"/></svg>
-                    Yes, Delete
+                    Yes, Archive
                 </button>
                 <button type="button"
                         @click="confirming = false"
@@ -126,8 +142,10 @@
         </form>
         {% else %}
         <p class="text-sm text-slate-500 dark:text-slate-400">
-            Resolve the blocking items above before deletion is allowed.
+            Resolve the blocking items above before archiving is allowed.
         </p>
         {% endif %}
     </div>
+</div>
+</div>
 </div>

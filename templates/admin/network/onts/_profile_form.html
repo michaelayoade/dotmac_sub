@@ -8,10 +8,10 @@
       class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
     {% include "components/forms/csrf_input.html" %}
     <div class="flex-1">
-        <label class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
+        <label for="ont_bundle_apply_id" class="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-300">
             Bundle <span class="text-red-500" aria-hidden="true">*</span>
         </label>
-        <select name="bundle_id" required
+        <select id="ont_bundle_apply_id" name="bundle_id" required
             class="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <option value="">Select bundle...</option>
             {% for p in available_profile_templates %}
