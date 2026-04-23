@@ -344,6 +344,7 @@ def _unified_summary_context(
             ),
         },
         "wan_summary": {
+            "ip_protocol": desired_wan.get("ip_protocol"),
             "pppoe_user": (
                 observed_wan.get("pppoe_username")
                 if isinstance(observed_wan, dict)

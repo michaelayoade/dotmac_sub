@@ -334,7 +334,7 @@ def test_ont_detail_page_data_uses_effective_bundle_values_in_summaries(db_sessi
         wifi_ssid_template="bundle-ssid",
         wifi_channel="6",
         config_method=ConfigMethod.tr069,
-        ip_protocol=IpProtocol.ipv4,
+        ip_protocol=IpProtocol.dual_stack,
         is_active=True,
     )
     db_session.add(bundle)
@@ -397,6 +397,7 @@ def test_ont_detail_page_data_uses_effective_bundle_values_in_summaries(db_sessi
     assert rows["Mgmt VLAN"] == "911"
     assert rows["Mgmt IP"] == "10.91.0.2"
     assert rows["WAN mode"] == "pppoe"
+    assert rows["IP protocol"] == "Dual Stack (IPv4 + IPv6)"
     assert rows["WAN VLAN"] == "912"
     assert rows["PPPoE user"] == "override-user"
     assert rows["SSID"] == "bundle-ssid"
@@ -792,6 +793,13 @@ def test_ont_index_view_toggles_are_navigation_links() -> None:
 def test_ont_detail_uses_all_config_operator_view() -> None:
     template = Path("templates/admin/network/onts/detail.html").read_text()
     unified_template = Path("templates/admin/network/onts/_unified_config.html").read_text()
+    wan_template = Path("templates/admin/network/onts/_config_wan.html").read_text()
+    profile_form_template = Path(
+        "templates/admin/network/provisioning-profiles/form.html"
+    ).read_text()
+    profile_preview_template = Path(
+        "templates/admin/network/onts/_profile_preview.html"
+    ).read_text()
 
     assert "default('summary')" in template
     assert "Effective Config" in template
@@ -806,6 +814,11 @@ def test_ont_detail_uses_all_config_operator_view() -> None:
     assert "Loading device configuration..." not in template
     assert "OLT / Service Path" in unified_template
     assert "Observed Service Ports" in unified_template
+    assert "Dual-stack IPv4/IPv6 with DHCPv6-PD intent" in unified_template
+    assert "IPv6 PD" in unified_template
+    assert "IPv4 + IPv6 using DHCPv6 prefix delegation" in wan_template
+    assert "Dual Stack (IPv4 + IPv6 DHCPv6-PD)" in profile_form_template
+    assert "Dual Stack (IPv4 + IPv6 DHCPv6-PD)" in profile_preview_template
     assert '_config_wan.html' in unified_template
     assert '_config_tr069_profile.html' in unified_template
     assert '_config_wifi.html' in unified_template

@@ -2491,8 +2491,8 @@ def _ont_last_config_summary(
         "active_ports": None,
         "metrics": [],
         "details": [],
-        "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
-        "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=effective-config",
+        "query_url": f"/admin/network/onts/{ont_id}?tab=observed-state",
     }
     tracked_index = acs_observed_intent.get("tracked_point_index", {})
     tracked_index = tracked_index if isinstance(tracked_index, dict) else {}
@@ -2608,8 +2608,8 @@ def _ont_last_config_summary(
         "active_ports": active_ports,
         "metrics": metrics,
         "details": details,
-        "configure_url": f"/admin/network/onts/{ont_id}?tab=device-config",
-        "query_url": f"/admin/network/onts/{ont_id}?tab=diagnostics",
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=effective-config",
+        "query_url": f"/admin/network/onts/{ont_id}?tab=observed-state",
     }
 
 
@@ -2618,6 +2618,15 @@ def _display_config_value(value: object) -> str:
         return "Yes" if value else "No"
     text = str(value or "").strip()
     return text or "-"
+
+
+def _display_ip_protocol(value: object) -> str:
+    text = _enum_or_text(value)
+    if text == "dual_stack":
+        return "Dual Stack (IPv4 + IPv6)"
+    if text == "ipv4":
+        return "IPv4"
+    return _display_config_value(text)
 
 
 def _secret_status(value: object) -> str:
@@ -2698,6 +2707,13 @@ def _ont_desired_config_summary(
             "value_class": "",
         },
         {
+            "label": "IP protocol",
+            "value": _display_ip_protocol(
+                values.get("ip_protocol") or wan.get("ip_protocol")
+            ),
+            "value_class": "",
+        },
+        {
             "label": "WAN VLAN",
             "value": _display_config_value(
                 wan_vlan or wan.get("wan_vlan") or pppoe.get("vlan_id")
@@ -2760,7 +2776,7 @@ def _ont_desired_config_summary(
     return {
         "rows": rows,
         "configured_count": sum(1 for row in rows if row["value"] != "-"),
-        "configure_url": f"/admin/network/onts/{getattr(ont, 'id', '')}?tab=device-config",
+        "configure_url": f"/admin/network/onts/{getattr(ont, 'id', '')}?tab=effective-config",
     }
 
 

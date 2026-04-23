@@ -252,7 +252,9 @@
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">WAN / PPPoE</h3>
                     <p class="text-xs text-slate-500 dark:text-slate-400">
                         {% if wan_summary.pppoe_user %}
-                        PPPoE: {{ wan_summary.pppoe_user }}{% if wan_summary.wan_ip %} &middot; {{ wan_summary.wan_ip }}{% endif %}
+                        PPPoE: {{ wan_summary.pppoe_user }}{% if wan_summary.wan_ip %} &middot; {{ wan_summary.wan_ip }}{% endif %}{% if wan_summary.ip_protocol == 'dual_stack' %} &middot; IPv6 DHCPv6-PD{% endif %}
+                        {% elif wan_summary.ip_protocol == 'dual_stack' %}
+                        Dual-stack IPv4/IPv6 with DHCPv6-PD intent
                         {% else %}
                         Configure WAN connection and PPPoE credentials
                         {% endif %}
@@ -263,6 +265,11 @@
                 {% if wan_summary.status %}
                 <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if wan_summary.status == 'connected' else 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400' }}">
                     {{ wan_summary.status | title }}
+                </span>
+                {% endif %}
+                {% if wan_summary.ip_protocol == 'dual_stack' %}
+                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                    IPv6 PD
                 </span>
                 {% endif %}
                 <svg :class="openSection === 'wan' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>

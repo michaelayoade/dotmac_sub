@@ -44,7 +44,8 @@
         <div>
             <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">IP Protocol</dt>
             <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
-                {{ profile.ip_protocol.value | replace('_', ' ') | title if profile.ip_protocol else 'IPv4' }}
+                {% set profile_ip_protocol = profile.ip_protocol.value if profile.ip_protocol else 'ipv4' %}
+                {% if profile_ip_protocol == 'dual_stack' %}Dual Stack (IPv4 + IPv6 DHCPv6-PD){% elif profile_ip_protocol == 'ipv4' %}IPv4{% else %}{{ profile_ip_protocol | replace('_', ' ') | title }}{% endif %}
             </dd>
         </div>
         <div>
