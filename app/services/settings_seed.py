@@ -1635,26 +1635,9 @@ def seed_provisioning_workflows(db: Session) -> None:
             },
         },
         {
-            "name": "Push WAN Config via TR-069",
-            "step_type": ProvisioningStepType.push_tr069_wan_config,
-            "order_index": 30,
-            "config": {
-                "wan_mode": "pppoe",
-                "description": "Configure ONT WAN mode to PPPoE via GenieACS",
-            },
-        },
-        {
-            "name": "Push PPPoE Credentials via TR-069",
-            "step_type": ProvisioningStepType.push_tr069_pppoe_credentials,
-            "order_index": 40,
-            "config": {
-                "description": "Push subscriber PPPoE username/password to ONT via GenieACS",
-            },
-        },
-        {
             "name": "Confirm Subscriber Online",
             "step_type": ProvisioningStepType.confirm_up,
-            "order_index": 50,
+            "order_index": 30,
             "config": {
                 "description": "Verify subscriber has connected and is online via RADIUS",
             },

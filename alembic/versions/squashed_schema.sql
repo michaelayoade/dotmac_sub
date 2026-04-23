@@ -1698,9 +1698,8 @@ CREATE TYPE public.provisioningsteptype AS ENUM (
     'push_ont_profile',
     'verify_ont_config',
     'create_olt_service_port',
-    'ensure_nas_vlan',
-    'push_tr069_wan_config',
-    'push_tr069_pppoe_credentials'
+    'restore_olt_from_backup',
+    'ensure_nas_vlan'
 );
 
 

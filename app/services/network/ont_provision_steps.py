@@ -1188,14 +1188,15 @@ def _provision_wan_service_instances(
         steps.append(
             {
                 "step": f"provision_wan_service_instance:{service_label}",
-                "success": False,
-                "waiting": False,
+                "success": True,
+                "waiting": True,
                 "message": message,
             }
         )
-        hard_failures.append(
-            f"provision_wan_service_instance:{service_label}: {message}"
-        )
+        from app.models.network import WanServiceProvisioningStatus
+
+        instance.provisioning_status = WanServiceProvisioningStatus.pending
+        instance.last_error = message[:500]
 
         # Validate PPPoE credentials if applicable. Writes are handled by the
         # service-instance endpoint executor, not the legacy flat PPP action.
@@ -1208,12 +1209,7 @@ def _provision_wan_service_instances(
                 except Exception:
                     pppoe_password = None
 
-            if pppoe_username and pppoe_password:
-                from app.models.network import WanServiceProvisioningStatus
-
-                instance.provisioning_status = WanServiceProvisioningStatus.failed
-                instance.last_error = message[:500]
-            else:
+            if not (pppoe_username and pppoe_password):
                 needs_input.append(
                     f"PPPoE credentials missing for WAN service '{service_label}'."
                 )

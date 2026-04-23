@@ -64,8 +64,6 @@ class ProvisioningStepType(enum.Enum):
     create_olt_service_port = "create_olt_service_port"
     restore_olt_from_backup = "restore_olt_from_backup"
     ensure_nas_vlan = "ensure_nas_vlan"
-    push_tr069_wan_config = "push_tr069_wan_config"
-    push_tr069_pppoe_credentials = "push_tr069_pppoe_credentials"
 
 
 class ProvisioningRunStatus(enum.Enum):

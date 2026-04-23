@@ -551,11 +551,13 @@ class TestApplySavedServiceConfig:
         ):
             result = apply_saved_service_config(db_session, str(ont.id))
 
-        assert result.success is False
+        assert result.success is True
+        assert result.waiting is True
         by_step = {name: payload for name, payload in calls}
         assert any(
             step["step"] == "provision_wan_service_instance:Internet"
-            and step["success"] is False
+            and step["success"] is True
+            and step["waiting"] is True
             for step in result.data["steps"]
         )
         assert by_step["set_wifi_config"]["enabled"] is True
