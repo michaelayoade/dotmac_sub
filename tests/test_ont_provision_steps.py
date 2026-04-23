@@ -349,16 +349,63 @@ class TestWaitTr069Bootstrap:
 class TestApplySavedServiceConfig:
     """Test deferred TR-069 service config behavior."""
 
-    def test_missing_pppoe_password_is_needs_input_not_failure(
-        self, db_session
-    ) -> None:
+    def test_missing_active_bundle_fails_without_legacy_fallback(self, db_session) -> None:
         from app.models.network import OntUnit
         from app.services.network.ont_provision_steps import apply_saved_service_config
 
-        ont = OntUnit(serial_number="TEST-SVC-NEEDS-INPUT", pppoe_username="cust")
+        ont = OntUnit(
+            serial_number="TEST-SVC-NO-BUNDLE",
+            pppoe_username="legacy-user",
+        )
         db_session.add(ont)
         db_session.commit()
-        db_session.refresh(ont)
+
+        result = apply_saved_service_config(db_session, str(ont.id))
+
+        assert result.success is False
+        assert result.message == "ONT has no active configuration bundle"
+
+    def test_missing_pppoe_password_is_needs_input_not_failure(
+        self, db_session
+    ) -> None:
+        from app.models.network import (
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
+            OntProvisioningProfile,
+            OntUnit,
+            OntWanServiceInstance,
+            WanConnectionType,
+            WanServiceProvisioningStatus,
+            WanServiceType,
+        )
+        from app.services.network.ont_provision_steps import apply_saved_service_config
+
+        bundle = OntProvisioningProfile(name="Needs Input Bundle", is_active=True)
+        ont = OntUnit(serial_number="TEST-SVC-NEEDS-INPUT")
+        db_session.add_all([bundle, ont])
+        db_session.flush()
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=bundle.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            OntWanServiceInstance(
+                ont_id=ont.id,
+                service_type=WanServiceType.internet,
+                name="Internet",
+                connection_type=WanConnectionType.pppoe,
+                pppoe_username="cust",
+                pppoe_password=None,
+                s_vlan=203,
+                provisioning_status=WanServiceProvisioningStatus.pending,
+                is_active=True,
+            )
+        )
+        db_session.commit()
 
         # Mock capability probing to return a capable device (has PPP WAN)
         mock_cap_result = SimpleNamespace(
@@ -370,14 +417,30 @@ class TestApplySavedServiceConfig:
                 "supports_tr069_set_ppp_credentials": True,
             },
         )
+
+        class FakeAcsWriter:
+            def configure_wan_config(self, db, ont_id, **kwargs):
+                return SimpleNamespace(success=True, waiting=False, message="ok")
+
+            def set_wifi_config(self, db, ont_id, **kwargs):
+                return SimpleNamespace(success=True, waiting=False, message="ok")
+
         with (
             patch(
                 "app.services.network.ont_service_intent.load_ont_plan_for_ont",
-                return_value={"push_pppoe_tr069": {"username": "cust"}},
+                return_value={},
+            ),
+            patch(
+                "app.services.network.ont_provision_steps._acs_config_writer",
+                return_value=FakeAcsWriter(),
             ),
             patch(
                 "app.services.network.ont_action_network.probe_wan_capabilities",
                 return_value=mock_cap_result,
+            ),
+            patch(
+                "app.services.network.ont_provision_steps.get_pppoe_provisioning_method",
+                return_value="tr069",
             ),
         ):
             result = apply_saved_service_config(db_session, str(ont.id))
@@ -385,8 +448,8 @@ class TestApplySavedServiceConfig:
         assert result.success is True
         assert result.step_name == "apply_saved_service_config"
         assert result.data is not None
-        assert result.data["needs_input"] == [
-            "PPPoE username and password are required."
+        assert "PPPoE credentials missing for WAN service 'Internet'." in result.data[
+            "needs_input"
         ]
         # Steps now includes capability probing
         assert any(
@@ -397,20 +460,50 @@ class TestApplySavedServiceConfig:
     def test_uses_effective_bundle_values_when_flat_fields_are_cleared(
         self, db_session
     ) -> None:
-        from app.models.network import OntUnit
+        from app.models.network import (
+            OntBundleAssignment,
+            OntBundleAssignmentStatus,
+            OntProvisioningProfile,
+            OntUnit,
+            OntWanServiceInstance,
+            WanConnectionType,
+            WanServiceProvisioningStatus,
+            WanServiceType,
+        )
         from app.services.credential_crypto import encrypt_credential
         from app.services.network.ont_provision_steps import apply_saved_service_config
 
+        bundle = OntProvisioningProfile(name="Instance Bundle", is_active=True)
         ont = OntUnit(
             serial_number="TEST-SVC-EFFECTIVE",
             pppoe_username=None,
             wifi_ssid=None,
-            pppoe_password=encrypt_credential("pppoe-secret"),
             wifi_password=encrypt_credential("wifi-secret"),
         )
-        db_session.add(ont)
+        db_session.add_all([bundle, ont])
+        db_session.flush()
+        db_session.add(
+            OntBundleAssignment(
+                ont_unit_id=ont.id,
+                bundle_id=bundle.id,
+                status=OntBundleAssignmentStatus.applied,
+                is_active=True,
+            )
+        )
+        db_session.add(
+            OntWanServiceInstance(
+                ont_id=ont.id,
+                service_type=WanServiceType.internet,
+                name="Internet",
+                connection_type=WanConnectionType.pppoe,
+                pppoe_username="effective-user",
+                pppoe_password=encrypt_credential("pppoe-secret"),
+                s_vlan=203,
+                provisioning_status=WanServiceProvisioningStatus.pending,
+                is_active=True,
+            )
+        )
         db_session.commit()
-        db_session.refresh(ont)
 
         calls: list[tuple[str, dict[str, object]]] = []
 
@@ -437,10 +530,6 @@ class TestApplySavedServiceConfig:
                 return SimpleNamespace(success=True, waiting=False, message="ok")
 
         with (
-            patch(
-                "app.services.network.ont_provision_steps._provision_wan_service_instances",
-                return_value=([], [], []),
-            ),
             patch(
                 "app.services.network.ont_provision_steps._acs_config_writer",
                 return_value=FakeAcsWriter(),
@@ -474,6 +563,10 @@ class TestApplySavedServiceConfig:
                         "supports_tr069_set_ppp_credentials": True,
                     },
                 ),
+            ),
+            patch(
+                "app.services.network.ont_provision_steps.get_pppoe_provisioning_method",
+                return_value="tr069",
             ),
         ):
             result = apply_saved_service_config(db_session, str(ont.id))

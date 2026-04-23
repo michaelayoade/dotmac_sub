@@ -223,7 +223,6 @@ class TestApplyProfileCreatesWanInstances:
 
     def test_apply_profile_creates_wan_service_instances(self, db_session) -> None:
         from app.models.network import (
-            OntConfigOverride,
             OntProfileWanService,
             OntProvisioningProfile,
             OntUnit,
@@ -293,8 +292,6 @@ class TestApplyProfileCreatesWanInstances:
 
     def test_apply_profile_uses_effective_pppoe_username_fallback(self, db_session) -> None:
         from app.models.network import (
-            OntBundleAssignment,
-            OntBundleAssignmentStatus,
             OntConfigOverride,
             OntProfileWanService,
             OntProvisioningProfile,

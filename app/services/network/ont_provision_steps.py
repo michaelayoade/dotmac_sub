@@ -28,8 +28,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
 from app.services.network._common import NasTarget
-from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -793,7 +793,6 @@ def _provision_wan_service_instances(
     from sqlalchemy import select
 
     from app.models.network import (
-        OntProvisioningProfile,
         OntUnit,
         OntWanServiceInstance,
         WanConnectionType,
@@ -1258,26 +1257,37 @@ def _provision_wan_service_instances(
 def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     """Apply saved TR-069 service intent once the ONT is visible in ACS.
 
-    This function first checks for OntWanServiceInstance records (Phase 2+3
-    architecture). If found, it provisions from those instances which provide
-    grouped L2/L3 configuration with resolved credentials.
-
-    If no WAN service instances exist, falls back to the legacy flat-field
-    approach using ont_plan and OntUnit fields for backward compatibility.
+    WAN service provisioning is bundle-first and instance-backed:
+    active OntBundleAssignment -> OntProvisioningProfile -> OntWanServiceInstance.
+    Legacy flat ONT WAN fields and saved WAN plan sections are not provisioning
+    sources. Missing instances are compiled from the active bundle before writes.
 
     Missing operator inputs are reported in ``data["needs_input"]`` and do not
     fail the bootstrap operation; they can be supplied later and retried.
     """
+    from sqlalchemy import select
+
+    from app.models.network import OntWanServiceInstance
     from app.services.credential_crypto import decrypt_credential
     from app.services.network.ont_action_network import (
         probe_wan_capabilities,
     )
+    from app.services.network.ont_profile_apply import apply_bundle_to_ont
     from app.services.network.ont_service_intent import load_ont_plan_for_ont
+    from app.services.network_subscriber_bridge import default_subscriber_validator
 
     t0 = time.monotonic()
     ont = db.get(OntUnit, ont_id)
     if ont is None:
         return StepResult("apply_saved_service_config", False, "ONT not found")
+    profile = resolve_assigned_bundle(db, ont)
+    if profile is None:
+        return StepResult(
+            "apply_saved_service_config",
+            False,
+            "ONT has no active configuration bundle",
+            critical=False,
+        )
     acs_config_adapter = _acs_config_writer()
 
     ont_plan: dict[str, object] = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
@@ -1289,10 +1299,6 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     def _section(name: str) -> dict[str, object]:
         value = ont_plan.get(name)
         return value if isinstance(value, dict) else {}
-
-    def _optional_int(value: object) -> int | None:
-        text = str(value or "").strip()
-        return int(text) if text.isdigit() else None
 
     def _append(name: str, result) -> None:
         nonlocal waiting
@@ -1311,7 +1317,6 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             hard_failures.append(f"{name}: {message}")
 
     bind_plan = _section("bind_tr069")
-    profile = resolve_assigned_bundle(db, ont)
     cr_username = getattr(profile, "cr_username", None) if profile else None
     cr_password = getattr(profile, "cr_password", None) if profile else None
     if cr_password:
@@ -1332,80 +1337,48 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     probe_result = probe_wan_capabilities(db, ont_id)
     _append("probe_wan_capabilities", probe_result)
 
-    # Phase 2+3: Check for WAN service instances first
-    # If instances exist, use them for WAN/PPPoE provisioning (grouped L2/L3)
+    has_wan_instances = db.scalar(
+        select(OntWanServiceInstance.id)
+        .where(OntWanServiceInstance.ont_id == ont.id)
+        .where(OntWanServiceInstance.is_active.is_(True))
+        .limit(1)
+    )
+    if has_wan_instances is None:
+        apply_result = apply_bundle_to_ont(
+            db,
+            ont_id,
+            str(profile.id),
+            create_wan_instances=True,
+            subscriber_context_provider=default_subscriber_validator,
+        )
+        if not apply_result.success:
+            hard_failures.append(f"compile_wan_service_instances: {apply_result.message}")
+        else:
+            steps.append(
+                {
+                    "step": "compile_wan_service_instances",
+                    "success": True,
+                    "waiting": False,
+                    "message": apply_result.message,
+                }
+            )
+
     wan_instance_steps, wan_instance_needs, wan_instance_failures = (
         _provision_wan_service_instances(db, ont_id)
     )
-    use_wan_instances = bool(wan_instance_steps or wan_instance_needs)
-
-    if use_wan_instances:
-        # Use WAN service instances (Phase 2+3 architecture)
-        for step in wan_instance_steps:
-            steps.append(step)
-            if step.get("waiting"):
-                waiting = True
-        needs_input.extend(wan_instance_needs)
-        hard_failures.extend(wan_instance_failures)
-        logger.info(
-            "ONT %s: Provisioned %d WAN service instance steps",
-            ont.serial_number,
-            len(wan_instance_steps),
-        )
-    else:
-        # Legacy fallback: use flat fields and ont_plan
-        effective = resolve_effective_ont_config(db, ont)
-        effective_values = (
-            effective.get("values", {}) if isinstance(effective, dict) else {}
-        )
-        wan_plan = _section("configure_wan_tr069")
-        wan_mode = wan_plan.get("wan_mode") or effective_values.get("wan_mode")
-        if wan_mode == "static_ip":
-            wan_mode = "static"
-        if wan_mode:
-            wan_vlan = wan_plan.get("wan_vlan")
-            if wan_vlan is None:
-                wan_vlan = effective_values.get("wan_vlan")
-            _append(
-                "configure_wan_tr069",
-                acs_config_adapter.configure_wan_config(
-                    db,
-                    ont_id,
-                    wan_mode=str(wan_mode),
-                    wan_vlan=_optional_int(wan_vlan),
-                    ip_address=str(wan_plan.get("ip_address") or "") or None,
-                    subnet_mask=str(wan_plan.get("subnet_mask") or "") or None,
-                    gateway=str(wan_plan.get("gateway") or "") or None,
-                    dns_servers=str(wan_plan.get("dns_servers") or "") or None,
-                ),
-            )
-
-        pppoe_plan = _section("push_pppoe_tr069")
-        pppoe_username = (
-            pppoe_plan.get("username")
-            or pppoe_plan.get("pppoe_username")
-            or effective_values.get("pppoe_username")
-        )
-        pppoe_password = (
-            decrypt_credential(ont.pppoe_password)
-            if getattr(ont, "pppoe_password", None)
-            else None
-        )
-        if pppoe_username and pppoe_password:
-            # Pass wan_vlan so PPP WAN service can be auto-created if missing
-            pppoe_wan_vlan = _optional_int(wan_vlan)
-            _append(
-                "push_pppoe_tr069",
-                acs_config_adapter.set_pppoe_credentials(
-                    db,
-                    ont_id,
-                    str(pppoe_username),
-                    str(pppoe_password),
-                    wan_vlan=pppoe_wan_vlan,
-                ),
-            )
-        elif pppoe_plan or wan_mode == "pppoe":
-            needs_input.append("PPPoE username and password are required.")
+    for step in wan_instance_steps:
+        steps.append(step)
+        if step.get("waiting"):
+            waiting = True
+    needs_input.extend(wan_instance_needs)
+    hard_failures.extend(wan_instance_failures)
+    if not (wan_instance_steps or wan_instance_needs or wan_instance_failures):
+        needs_input.append("Active configuration bundle has no active WAN services.")
+    logger.info(
+        "ONT %s: Provisioned %d WAN service instance steps",
+        ont.serial_number,
+        len(wan_instance_steps),
+    )
 
     lan_plan = _section("configure_lan_tr069")
     lan_values = {
