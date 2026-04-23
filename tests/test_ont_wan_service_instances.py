@@ -290,7 +290,9 @@ class TestApplyProfileCreatesWanInstances:
         assert internet_inst.connection_type == WanConnectionType.pppoe
         assert internet_inst.s_vlan == 203
 
-    def test_apply_profile_uses_effective_pppoe_username_fallback(self, db_session) -> None:
+    def test_apply_profile_does_not_use_effective_pppoe_username_fallback(
+        self, db_session
+    ) -> None:
         from app.models.network import (
             OntConfigOverride,
             OntProfileWanService,
@@ -344,7 +346,7 @@ class TestApplyProfileCreatesWanInstances:
         db_session.refresh(ont)
         instances = ont.wan_service_instances
         assert len(instances) == 1
-        assert instances[0].pppoe_username == "effective-user@isp.local"
+        assert instances[0].pppoe_username is None
 
     def test_apply_profile_replaces_existing_instances(self, db_session) -> None:
         from sqlalchemy import select

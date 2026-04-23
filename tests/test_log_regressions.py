@@ -282,7 +282,13 @@ def test_olt_detail_template_defaults_missing_acs_prefill() -> None:
 def test_olt_detail_template_uses_operator_focused_tabs() -> None:
     template = Path("templates/admin/network/olts/detail.html").read_text()
 
-    for tab in ("overview", "subscribers", "provisioning", "operations", "settings"):
+    for tab in (
+        "overview",
+        "network-resources",
+        "inventory",
+        "provisioning",
+        "operations",
+    ):
         assert f"activeTab === '{tab}'" in template
         assert template.count(f"x-show=\"activeTab === '{tab}'\"") == 1
 
@@ -292,6 +298,8 @@ def test_olt_detail_template_uses_operator_focused_tabs() -> None:
         "autofind",
         "tr069",
         "config",
+        "settings",
+        "subscribers",
         "terminal",
         "activity",
         "events",

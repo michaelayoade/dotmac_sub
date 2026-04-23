@@ -157,48 +157,19 @@ def test_push_wan_config_fails_without_device() -> None:
     result = execute_push_tr069_wan_config(db, {}, {})
     assert result.status == "failed"
     assert result.detail is not None
-    assert "ONT or CPE" in result.detail
+    assert "disabled" in result.detail
 
 
 # ── execute_push_tr069_pppoe_credentials ──
 
 
-def test_push_pppoe_fails_without_credentials() -> None:
-    db = MagicMock()
-    db.scalars.return_value.first.return_value = None
-    result = execute_push_tr069_pppoe_credentials(db, {"subscriber_id": "sub2"}, {})
-    assert result.status == "failed"
-    assert result.detail is not None
-    assert "credentials not found" in result.detail
-
-
-def test_push_pppoe_skips_cpe_devices() -> None:
+def test_push_pppoe_executor_is_disabled() -> None:
     db = MagicMock()
     result = execute_push_tr069_pppoe_credentials(
         db,
-        {"cpe_device_id": "cpe1"},
+        {"ont_unit_id": "ont1", "subscriber_id": "sub2"},
         {"pppoe_username": "user", "pppoe_password": "pass"},
     )
-    assert result.status == "ok"
+    assert result.status == "failed"
     assert result.detail is not None
-    assert "CPE" in result.detail
-    assert result.payload is not None
-    assert result.payload["tr069_pppoe_skipped_cpe"] is True
-
-
-@patch("app.services.network.ont_action_network.set_pppoe_credentials")
-def test_push_pppoe_delegates_to_ont_action(mock_set: MagicMock) -> None:
-    from app.services.network.ont_action_common import ActionResult
-
-    db = MagicMock()
-    mock_set.return_value = ActionResult(success=True, message="PPPoE pushed")
-
-    result = execute_push_tr069_pppoe_credentials(
-        db,
-        {"ont_unit_id": "ont1"},
-        {"pppoe_username": "100025913", "pppoe_password": "secret123"},
-    )
-    assert result.status == "ok"
-    # Verify username is NOT in the payload (security fix)
-    assert "pppoe_username" not in (result.payload or {})
-    mock_set.assert_called_once_with(db, "ont1", "100025913", "secret123")
+    assert "disabled" in result.detail

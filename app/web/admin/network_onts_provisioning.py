@@ -613,20 +613,15 @@ def step_push_pppoe_tr069(
     instance_index: int = Form(default=1),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Push PPPoE credentials via TR-069/ACS."""
-    result = steps.push_pppoe_tr069(
-        db,
-        ont_id,
-        username=username,
-        password=password,
-        instance_index=instance_index,
-        retry=False,
-    )
-    _update_service_order_execution_context_for_ont(
-        db,
-        ont_id,
-        "push_pppoe_tr069",
-        {"username": username, "instance_index": instance_index},
+    """Reject legacy PPPoE pushes; provision WAN service instances instead."""
+    result = StepResult(
+        step_name="push_pppoe_tr069",
+        success=False,
+        message=(
+            "Legacy PPPoE TR-069 pushes are disabled. Provision the active WAN "
+            "service instance instead."
+        ),
+        data={"disabled": True, "replacement": "provision_wan_service_instance"},
     )
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -648,31 +643,15 @@ def step_configure_wan_tr069(
     instance_index: int = Form(default=1),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Configure WAN connection mode via TR-069."""
-    result = steps.configure_wan_tr069(
-        db,
-        ont_id,
-        wan_mode=wan_mode,
-        wan_vlan=wan_vlan,
-        ip_address=ip_address,
-        subnet_mask=subnet_mask,
-        gateway=gateway,
-        dns_servers=dns_servers,
-        instance_index=instance_index,
-    )
-    _update_service_order_execution_context_for_ont(
-        db,
-        ont_id,
-        "configure_wan_tr069",
-        {
-            "wan_mode": wan_mode,
-            "wan_vlan": wan_vlan,
-            "ip_address": ip_address,
-            "subnet_mask": subnet_mask,
-            "gateway": gateway,
-            "dns_servers": dns_servers,
-            "instance_index": instance_index,
-        },
+    """Reject legacy WAN pushes; provision WAN service instances instead."""
+    result = StepResult(
+        step_name="configure_wan_tr069",
+        success=False,
+        message=(
+            "Legacy WAN TR-069 pushes are disabled. Provision the active WAN "
+            "service instance instead."
+        ),
+        data={"disabled": True, "replacement": "provision_wan_service_instance"},
     )
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)

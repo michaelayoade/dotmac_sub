@@ -8,11 +8,6 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OntUnit
-from app.models.network_operation import (
-    NetworkOperationTargetType,
-    NetworkOperationType,
-)
-from app.services import network as network_service
 from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
@@ -21,12 +16,10 @@ from app.services.network.ont_config_overrides import (
     upsert_ont_config_override,
 )
 from app.services.network.ont_scope import can_manage_ont_from_request
-from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
     _log_action_audit,
     _persist_ont_plan_step,
-    _persist_wan_intent,
     actor_name_from_request,
 )
 

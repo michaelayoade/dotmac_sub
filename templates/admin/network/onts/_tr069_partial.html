@@ -428,7 +428,7 @@
         <div @click.outside="showPppoeModal = false"
              class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
             <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Set PPPoE Credentials</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Push PPPoE username and password to the CPE via TR-069.</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Direct PPPoE pushes are disabled. Update and provision the active WAN service instance instead.</p>
             <div class="mt-4 space-y-3">
                 <div>
                     <label for="pppoe-user-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
@@ -448,11 +448,9 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="if (!confirm('Push PPPoE credentials to this ONT via TR-069?')) return; const fd = new FormData(); fd.append('username', pppoeUser); fd.append('password', pppoePass); submitAction('/admin/network/onts/{{ tr069.ont_id }}/pppoe-credentials', {method:'POST', body: fd}, 'Applying PPPoE credentials...').then(ok => { if (ok) { showPppoeModal = false; pppoePass = ''; } })"
-                        :disabled="actionPending"
-                        :class="actionPending && 'opacity-75 cursor-wait'"
-                        class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-wait">
-                    <span x-text="actionPending ? 'Pushing...' : 'Push Credentials'"></span>
+                <button disabled
+                        class="cursor-not-allowed rounded-lg bg-slate-300 px-4 py-2 text-sm font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+                    Push Credentials via Instance
                 </button>
             </div>
         </div>

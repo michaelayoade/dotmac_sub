@@ -21,6 +21,7 @@ from app.services.network.ont_scope import can_manage_ont_from_request
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.web.request_parsing import parse_form_data_sync
 from app.web.templates import templates
+
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-actions"])
 
 
@@ -690,48 +691,19 @@ def ont_set_voip_config(
 def ont_set_wan_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Set WAN mode, VLAN, ONU mode, and static IP settings via GenieACS TR-069."""
+    """Reject legacy WAN pushes; WAN services are provisioned from bundle instances."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    form = parse_form_data_sync(request)
-    vlan_raw = _form_str(form, "wan_vlan").strip()
-    instance_raw = _form_str(form, "instance_index", "1").strip()
-    onu_mode_raw = _form_str(form, "onu_mode").strip()
-    ip_protocol_raw = _form_str(form, "ip_protocol").strip()
-
-    # Update ONU mode and IP protocol on the ONT record if provided
-    if onu_mode_raw in ("routing", "bridging") or ip_protocol_raw in ("ipv4", "dual_stack"):
-        from app.models.network import IpProtocol, OnuMode, OntUnit
-        from app.services.common import coerce_uuid
-
-        ont = db.get(OntUnit, coerce_uuid(ont_id))
-        if ont:
-            if onu_mode_raw in ("routing", "bridging"):
-                ont.onu_mode = OnuMode(onu_mode_raw)
-            if ip_protocol_raw in ("ipv4", "dual_stack"):
-                ont.ip_protocol = IpProtocol(ip_protocol_raw)
-            db.flush()
-
-    result = web_network_ont_actions_service.configure_wan_with_pppoe(
-        db,
-        ont_id,
-        wan_mode=_form_str(form, "wan_mode", "pppoe").strip() or "pppoe",
-        wan_vlan=int(vlan_raw) if vlan_raw.isdigit() else None,
-        ip_address=_form_str(form, "ip_address").strip() or None,
-        subnet_mask=_form_str(form, "subnet_mask").strip() or None,
-        gateway=_form_str(form, "gateway").strip() or None,
-        dns_servers=_form_str(form, "dns_servers").strip() or None,
-        instance_index=int(instance_raw) if instance_raw.isdigit() else 1,
-        pppoe_username=_form_str(form, "pppoe_username").strip() or None,
-        pppoe_password=_form_str(form, "pppoe_password").strip() or None,
-        request=request,
-    )
-    return _action_result_response(
-        result=result,
+    return _action_json_response(
+        success=False,
+        message=(
+            "Legacy WAN TR-069 pushes are disabled. Provision the active WAN "
+            "service instance instead."
+        ),
+        action="Set WAN Config",
         request=request,
         ont_id=ont_id,
-        action="Set WAN Config",
     )
 
 
@@ -774,8 +746,8 @@ def ont_running_config(
 
     from app.models.network import OntUnit
     from app.services.common import coerce_uuid
-    from app.services.network.olt_ssh import run_cli_command
     from app.services.network.olt_read_cache import olt_cache
+    from app.services.network.olt_ssh import run_cli_command
 
     ont = db.get(OntUnit, coerce_uuid(ont_id))
     if not ont:
@@ -841,7 +813,7 @@ def ont_running_config(
         elif not ok and cached:
             from_cache = True
             config_lines.append(cached)
-            error_msg = f"OLT unreachable - showing cached config"
+            error_msg = "OLT unreachable - showing cached config"
         else:
             error_msg = msg
 
@@ -861,7 +833,7 @@ def ont_running_config(
         elif not ok and cached:
             from_cache = True
             config_lines.append(cached)
-            error_msg = f"OLT unreachable - showing cached config"
+            error_msg = "OLT unreachable - showing cached config"
         else:
             error_msg = msg
 
@@ -896,20 +868,19 @@ def ont_set_pppoe_credentials(
     password: str = Form(""),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Push PPPoE credentials to ONT via TR-069."""
+    """Reject legacy PPPoE pushes; credentials live on WAN service instances."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = web_network_ont_actions_service.set_pppoe_credentials(
-        db, ont_id, username, password, request=request
-    )
     return _action_json_response(
-        success=result.success,
-        message=result.message,
+        success=False,
+        message=(
+            "Legacy PPPoE TR-069 pushes are disabled. Update and provision the "
+            "active WAN service instance instead."
+        ),
         action="Push PPPoE Credentials",
         request=request,
         ont_id=ont_id,
-        waiting=getattr(result, "waiting", False),
     )
 
 

@@ -874,9 +874,7 @@ def test_update_ont_config_treats_active_assignment_as_bundle_managed_without_le
     assert "wan.vlan_tag" not in overrides
 
 
-def test_update_ont_config_push_to_device_uses_effective_pppoe_values(
-    db_session, region, monkeypatch
-):
+def test_update_ont_config_push_to_device_rejects_legacy_wan_push(db_session, region):
     olt = OLTDevice(name="OLT-Push-Effective", mgmt_ip="198.51.100.93", is_active=True)
     db_session.add(olt)
     db_session.flush()
@@ -911,45 +909,6 @@ def test_update_ont_config_push_to_device_uses_effective_pppoe_values(
     db_session.add(ont)
     db_session.commit()
 
-    calls: list[dict[str, object]] = []
-
-    monkeypatch.setattr(
-        "app.services.credential_crypto.decrypt_credential",
-        lambda value: "resolved-secret",
-    )
-
-    def fake_configure_wan_config(db, ont_id, wan_mode, wan_vlan, request=None):
-        calls.append(
-            {
-                "ont_id": str(ont_id),
-                "wan_mode": wan_mode,
-                "wan_vlan": wan_vlan,
-            }
-        )
-        return SimpleNamespace(success=True, message="wan pushed")
-
-    def fake_set_pppoe_credentials(
-        db, ont_id, username, password, wan_vlan=None, request=None
-    ):
-        calls.append(
-            {
-                "ont_id": str(ont_id),
-                "wan_vlan": wan_vlan,
-                "username": username,
-                "password": password,
-            }
-        )
-        return SimpleNamespace(success=True, message="pppoe pushed")
-
-    monkeypatch.setattr(
-        "app.services.web_network_ont_actions.db_config.configure_wan_config",
-        fake_configure_wan_config,
-    )
-    monkeypatch.setattr(
-        "app.services.web_network_ont_actions.db_config.set_pppoe_credentials",
-        fake_set_pppoe_credentials,
-    )
-
     result = update_ont_config(
         db_session,
         str(ont.id),
@@ -962,22 +921,10 @@ def test_update_ont_config_push_to_device_uses_effective_pppoe_values(
         push_to_device=True,
     )
 
-    assert result.success is True
+    assert result.success is False
+    assert "direct WAN/PPPoE pushes are disabled" in result.message
     db_session.refresh(ont)
     assert ont.pppoe_username is None
-    assert calls == [
-        {
-            "ont_id": str(ont.id),
-            "wan_mode": "pppoe",
-            "wan_vlan": 805,
-        },
-        {
-            "ont_id": str(ont.id),
-            "wan_vlan": 805,
-            "username": "override-user",
-            "password": "inline-secret",
-        }
-    ]
 
 
 def test_management_ip_choices_prefers_expected_olt_management_network_from_name_alias(

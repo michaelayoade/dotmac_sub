@@ -149,10 +149,13 @@ def toggle_lan_port(
 def set_pppoe_credentials(
     ont_id: str, payload: OntPPPoERequest, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    result = ont_actions.set_pppoe_credentials(
-        db, ont_id, payload.username, payload.password
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Legacy PPPoE credential writes are disabled. Update and provision the "
+            "active WAN service instance instead."
+        ),
     )
-    return _action_response(result)
 
 
 @router.post(
@@ -333,17 +336,13 @@ def update_ont_speed_profile(
 def update_ont_wan_config(
     ont_id: str, payload: OntWanConfigUpdate, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    from app.services.network.ont_write import ont_write
-
-    result = ont_write.update_wan_config(
-        db,
-        ont_id,
-        wan_mode=payload.wan_mode,
-        vlan_id=payload.vlan_id,
-        pppoe_username=payload.pppoe_username,
-        pppoe_password=payload.pppoe_password,
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Legacy WAN configuration writes are disabled. Update and provision the "
+            "active WAN service instance instead."
+        ),
     )
-    return _action_response(result)
 
 
 @router.put(
