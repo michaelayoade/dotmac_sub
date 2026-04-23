@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,6 +15,19 @@ from app.models.network import (
     OntProvisioningProfile,
     OntUnit,
 )
+
+
+def is_config_ready_bundle_assignment(
+    assignment: OntBundleAssignment | None,
+) -> bool:
+    """Return True when an active assignment may drive desired config."""
+    return (
+        assignment is not None
+        and assignment.status == OntBundleAssignmentStatus.applied
+        and getattr(assignment.bundle, "is_active", False)
+    )
+
+
 def get_active_bundle_assignment(
     db: Session,
     ont: OntUnit | str,
@@ -43,8 +58,10 @@ def resolve_assigned_bundle(
     2. OLT default provisioning profile
     """
     assignment = get_active_bundle_assignment(db, ont)
-    if assignment and assignment.bundle and assignment.bundle.is_active:
-        return assignment.bundle
+    if assignment is not None:
+        if is_config_ready_bundle_assignment(assignment):
+            return assignment.bundle
+        return None
 
     olt_obj = olt
     if olt_obj is None:
@@ -72,6 +89,8 @@ def assign_bundle_to_ont(
 ) -> OntBundleAssignment:
     """Create or refresh the active bundle assignment for an ONT.
     """
+    if not bundle.is_active:
+        raise ValueError(f"Cannot assign inactive bundle {bundle.id} to ONT {ont.id}")
     now = datetime.now(UTC)
     active_assignment = get_active_bundle_assignment(db, ont)
 

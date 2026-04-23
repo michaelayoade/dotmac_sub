@@ -27,14 +27,14 @@ from app.services import web_network_olt_profiles as web_network_olt_profiles_se
 from app.services import web_network_onts as web_network_onts_service
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
-from app.services.network.ont_provisioning.preflight import validate_prerequisites
-from app.services.network.ont_provisioning.result import StepResult
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_bundle_assignments import assign_bundle_to_ont
 from app.services.network.ont_config_overrides import (
     clear_bundle_managed_legacy_projection,
     upsert_ont_config_override,
 )
-from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_provisioning.preflight import validate_prerequisites
+from app.services.network.ont_provisioning.result import StepResult
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
 logger = logging.getLogger(__name__)
@@ -979,6 +979,15 @@ def save_provision_settings(
         if profile_uuid is not None:
             profile = db.get(OntProvisioningProfile, profile_uuid)
             if profile is not None:
+                if not profile.is_active:
+                    db.rollback()
+                    return JsonActionResult(
+                        status_code=400,
+                        content={
+                            "success": False,
+                            "message": f"Provisioning bundle '{profile.name}' is inactive",
+                        },
+                    )
                 assign_bundle_to_ont(
                     db,
                     ont=ont,

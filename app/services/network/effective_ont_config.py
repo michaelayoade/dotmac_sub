@@ -1,13 +1,18 @@
 """Resolve ONT desired state as bundle + sparse overrides.
 
 Mental model:
-- Primary source is one assigned bundle
-- Overrides are the explicit fields stored for this ONT
-- Legacy OntUnit flat fields are consulted only when no bundle is assigned
+- Primary source is one active, applied bundle assignment.
+- Overrides are explicit ONT-level fields that win over bundle values.
+- Legacy OntUnit flat fields are consulted only when no bundle is assigned.
+- Active assignments that are not applied, or point to inactive bundles, block
+  legacy fallback so broken bundle state is not silently ignored.
+
+TODO: Retire legacy OntUnit desired-state fallback after bundle backfill is complete.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -15,11 +20,17 @@ from sqlalchemy.orm import Session
 
 from app.models.network import (
     OLTDevice,
+    OntAssignment,
+    OntBundleAssignment,
+    OntBundleAssignmentStatus,
     OntConfigOverride,
     OntProfileWanService,
+    OntProvisioningProfile,
     OntUnit,
 )
 from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
+
+logger = logging.getLogger(__name__)
 
 _CANONICAL_OVERRIDE_KEYS = {
     "config_method": ("config_method",),
@@ -48,18 +59,39 @@ def _coerce_override_value(raw: Any) -> Any:
     return raw
 
 
-def _resolve_assigned_bundle(
+def _assignment_blocked_reason(assignment: OntBundleAssignment | None) -> str | None:
+    if assignment is None:
+        return None
+    if assignment.status != OntBundleAssignmentStatus.applied:
+        return f"assignment_status_{_enum_or_raw(assignment.status)}"
+    assigned_bundle = assignment.bundle
+    if assigned_bundle is None:
+        return "missing_bundle"
+    if not assigned_bundle.is_active:
+        return "inactive_bundle"
+    return None
+
+
+def _resolve_ready_bundle(
     db: Session,
     ont: OntUnit,
     *,
     olt: OLTDevice | None = None,
-) -> OntProvisioningProfile | None:
+) -> tuple[OntBundleAssignment | None, OntProvisioningProfile | None, str | None]:
     assignment = get_active_bundle_assignment(db, ont)
-    assigned_bundle = assignment.bundle if assignment is not None else None
-    if assigned_bundle and assigned_bundle.is_active:
-        return assigned_bundle
+    blocked_reason = _assignment_blocked_reason(assignment)
+    if blocked_reason is not None:
+        logger.warning(
+            "ONT %s active bundle assignment is not config-ready: %s",
+            getattr(ont, "serial_number", None) or getattr(ont, "id", None),
+            blocked_reason,
+        )
+        return assignment, None, blocked_reason
 
-    return None
+    if assignment is not None:
+        return assignment, assignment.bundle, None
+
+    return None, None, None
 
 
 def _first_active_wan_service(
@@ -101,7 +133,61 @@ def _canonicalize_overrides(raw_overrides: dict[str, Any]) -> dict[str, Any]:
     return canonical
 
 
-def _bundle_values(bundle: OntProvisioningProfile | None) -> dict[str, Any]:
+def _resolve_template(template: str | None, context: dict[str, str]) -> str | None:
+    if not template:
+        return None
+    result = template
+    for key in (
+        "subscriber_code",
+        "subscriber_name",
+        "serial_number",
+        "offer_name",
+        "ont_id_short",
+    ):
+        result = result.replace(f"{{{key}}}", context.get(key, ""))
+    return result
+
+
+def _subscriber_template_context(db: Session, ont: OntUnit) -> dict[str, str]:
+    context = {
+        "subscriber_code": "",
+        "subscriber_name": "",
+        "serial_number": getattr(ont, "serial_number", None) or "",
+        "offer_name": "",
+        "ont_id_short": str(ont.id)[:8] if getattr(ont, "id", None) else "",
+    }
+    active_assignment = db.scalars(
+        select(OntAssignment)
+        .where(OntAssignment.ont_unit_id == ont.id)
+        .where(OntAssignment.active.is_(True))
+        .limit(1)
+    ).first()
+    if not active_assignment or not active_assignment.subscriber_id:
+        return context
+
+    try:
+        from app.services.network_subscriber_bridge import default_subscriber_validator
+
+        context.update(
+            default_subscriber_validator.get_template_context(
+                db,
+                subscriber_id=active_assignment.subscriber_id,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - template context must not abort reads
+        logger.warning(
+            "Could not resolve subscriber template context for ONT %s: %s",
+            getattr(ont, "serial_number", None) or getattr(ont, "id", None),
+            exc,
+        )
+    return context
+
+
+def _bundle_values(
+    bundle: OntProvisioningProfile | None,
+    *,
+    template_context: dict[str, str],
+) -> dict[str, Any]:
     primary_wan = _first_active_wan_service(bundle)
     return {
         "config_method": _enum_or_raw(getattr(bundle, "config_method", None)),
@@ -109,12 +195,18 @@ def _bundle_values(bundle: OntProvisioningProfile | None) -> dict[str, Any]:
         "ip_protocol": _enum_or_raw(getattr(bundle, "ip_protocol", None)),
         "wan_mode": _enum_or_raw(getattr(primary_wan, "connection_type", None)),
         "wan_vlan": getattr(primary_wan, "s_vlan", None),
-        "pppoe_username": getattr(primary_wan, "pppoe_username_template", None),
+        "pppoe_username": _resolve_template(
+            getattr(primary_wan, "pppoe_username_template", None),
+            template_context,
+        ),
         "mgmt_ip_mode": _enum_or_raw(getattr(bundle, "mgmt_ip_mode", None)),
         "mgmt_vlan": getattr(bundle, "mgmt_vlan_tag", None),
         "mgmt_ip_address": None,
         "wifi_enabled": getattr(bundle, "wifi_enabled", None),
-        "wifi_ssid": getattr(bundle, "wifi_ssid_template", None),
+        "wifi_ssid": _resolve_template(
+            getattr(bundle, "wifi_ssid_template", None),
+            template_context,
+        ),
         "wifi_channel": getattr(bundle, "wifi_channel", None),
         "wifi_security_mode": getattr(bundle, "wifi_security_mode", None),
         "primary_wan_service": primary_wan,
@@ -146,18 +238,28 @@ def resolve_effective_ont_config(
     *,
     olt: OLTDevice | None = None,
 ) -> dict[str, Any]:
-    """Return effective ONT config as bundle + sparse overrides."""
-    bundle = _resolve_assigned_bundle(db, ont, olt=olt)
+    """Return effective ONT config as applied bundle + sparse overrides."""
+    assignment, bundle, blocked_reason = _resolve_ready_bundle(db, ont, olt=olt)
     raw_overrides = _load_raw_overrides(db, ont)
     overrides = _canonicalize_overrides(raw_overrides)
-    using_legacy_fallback = bundle is None
+    using_legacy_fallback = assignment is None and bundle is None
 
-    values = _legacy_values(ont) if using_legacy_fallback else _bundle_values(bundle)
+    if using_legacy_fallback:
+        values = _legacy_values(ont)
+    else:
+        values = _bundle_values(
+            bundle,
+            template_context=_subscriber_template_context(db, ont),
+        )
     for key, value in overrides.items():
         values[key] = value
 
     return {
         "bundle": bundle,
+        "bundle_assignment": assignment,
+        "bundle_assignment_status": getattr(getattr(assignment, "status", None), "value", None),
+        "bundle_assignment_blocked_reason": blocked_reason,
+        "config_ready": blocked_reason is None,
         "overrides": sorted(overrides.keys()),
         "values": values,
         "using_legacy_fallback": using_legacy_fallback,

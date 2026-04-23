@@ -13,6 +13,8 @@ from app.models.network import (
     Vlan,
 )
 from app.services import network as network_service
+from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_bundle_assignments import (
     assign_bundle_to_ont,
     clear_active_bundle_assignment,
@@ -21,8 +23,6 @@ from app.services.network.ont_bundle_assignments import (
 from app.services.network.ont_config_overrides import (
     clear_bundle_managed_legacy_projection,
 )
-from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_actions import ActionResult
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
     _persist_ont_plan_step,
@@ -120,13 +120,15 @@ def _persist_bundle_authoring_state(
         clear_active_bundle_assignment(db, ont=ont)
     elif bundle_id:
         active_bundle = db.get(OntProvisioningProfile, bundle_id)
-        if active_bundle is not None:
+        if active_bundle is not None and active_bundle.is_active:
             assign_bundle_to_ont(
                 db,
                 ont=ont,
                 bundle=active_bundle,
                 assigned_reason="configure_form",
             )
+        elif active_bundle is not None:
+            raise ValueError(f"Provisioning bundle '{active_bundle.name}' is inactive")
 
     if active_bundle is None:
         active_assignment = get_active_bundle_assignment(db, ont)
@@ -356,23 +358,29 @@ def update_ont_config(
         vlan = db.get(Vlan, ont.mgmt_vlan_id)
         mgmt_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
 
-    _persist_bundle_authoring_state(
-        db,
-        ont=ont,
-        bundle_id=bundle_id,
-        wan_mode=wan_mode,
-        wan_vlan_tag=wan_vlan_tag,
-        config_method=config_method,
-        ip_protocol=ip_protocol,
-        pppoe_username=pppoe_username.strip() if pppoe_username is not None else None,
-        mgmt_ip_mode=mgmt_ip_mode,
-        mgmt_vlan_tag=mgmt_vlan_tag,
-        mgmt_ip_address=mgmt_ip_address.strip() if mgmt_ip_address is not None else None,
-        wifi_enabled=wifi_enabled,
-        wifi_ssid=wifi_ssid.strip() if wifi_ssid is not None else None,
-        wifi_channel=wifi_channel,
-        wifi_security_mode=wifi_security_mode,
-    )
+    try:
+        _persist_bundle_authoring_state(
+            db,
+            ont=ont,
+            bundle_id=bundle_id,
+            wan_mode=wan_mode,
+            wan_vlan_tag=wan_vlan_tag,
+            config_method=config_method,
+            ip_protocol=ip_protocol,
+            pppoe_username=pppoe_username.strip() if pppoe_username is not None else None,
+            mgmt_ip_mode=mgmt_ip_mode,
+            mgmt_vlan_tag=mgmt_vlan_tag,
+            mgmt_ip_address=mgmt_ip_address.strip()
+            if mgmt_ip_address is not None
+            else None,
+            wifi_enabled=wifi_enabled,
+            wifi_ssid=wifi_ssid.strip() if wifi_ssid is not None else None,
+            wifi_channel=wifi_channel,
+            wifi_security_mode=wifi_security_mode,
+        )
+    except ValueError as exc:
+        db.rollback()
+        return ActionResult(success=False, message=str(exc))
     if get_active_bundle_assignment(db, ont) is not None:
         clear_bundle_managed_legacy_projection(ont)
 

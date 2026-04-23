@@ -14,6 +14,7 @@ from app.models.network import (
     OntConfigOverride,
     OntConfigOverrideSource,
     OntProvisioningProfile,
+    OntProvisioningStatus,
     OntUnit,
 )
 from app.services.network.ont_bundle_assignments import assign_bundle_to_ont
@@ -104,6 +105,15 @@ def _has_any_legacy_desired_state(ont: OntUnit) -> bool:
     return any(_normalize(value) is not None for value in _legacy_values(ont).values())
 
 
+def _has_provisioning_history(ont: OntUnit) -> bool:
+    return getattr(ont, "provisioning_status", None) in {
+        OntProvisioningStatus.partial,
+        OntProvisioningStatus.provisioned,
+        OntProvisioningStatus.drift_detected,
+        OntProvisioningStatus.failed,
+    }
+
+
 def _active_assignment(db: Session, ont: OntUnit) -> OntBundleAssignment | None:
     return db.scalars(
         select(OntBundleAssignment)
@@ -148,6 +158,16 @@ def build_backfill_plan(db: Session, ont: OntUnit) -> OntBackfillPlan:
                 serial_number=ont.serial_number or "",
                 outcome="manual_review",
                 reason="legacy ONT has desired-state fields but no assigned bundle",
+            )
+        if _has_provisioning_history(ont):
+            return OntBackfillPlan(
+                ont_id=str(ont.id),
+                serial_number=ont.serial_number or "",
+                outcome="manual_review",
+                reason=(
+                    "ONT has provisioning history but no bundle assignment or "
+                    "legacy desired-state config"
+                ),
             )
         return OntBackfillPlan(
             ont_id=str(ont.id),

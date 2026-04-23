@@ -13,6 +13,7 @@ from app.models.network import (
     OntConfigOverrideSource,
     OntProfileWanService,
     OntProvisioningProfile,
+    OntProvisioningStatus,
     OntUnit,
     Vlan,
     WanConnectionType,
@@ -217,3 +218,20 @@ def test_run_backfill_classifies_manual_review_and_unconfigured(db_session):
     assert by_serial["BF-UNCONFIG-001"].outcome == "unconfigured"
     assert result.counts["manual_review"] >= 1
     assert result.counts["unconfigured"] >= 1
+
+
+def test_build_backfill_plan_flags_cleared_projection_with_history_for_review(
+    db_session,
+):
+    ont = OntUnit(
+        serial_number="BF-PARTIAL-001",
+        is_active=True,
+        provisioning_status=OntProvisioningStatus.provisioned,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    plan = build_backfill_plan(db_session, ont)
+
+    assert plan.outcome == "manual_review"
+    assert "provisioning history" in plan.reason

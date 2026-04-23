@@ -16,10 +16,9 @@ from app.models.network import (
     OnuOnlineStatus,
     Vlan,
     WanConnectionType,
-    WanMode,
 )
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_profile_apply import detect_drift
+from app.services.network.ont_profile_apply import apply_bundle_to_ont, detect_drift
 from app.services.network.ont_profile_push import OntProfilePushService
 from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
 from app.services.network.provisioning_enforcement import ProvisioningEnforcement
@@ -122,6 +121,124 @@ def test_effective_config_does_not_treat_legacy_profile_fk_as_bundle_assignment(
     assert resolved["values"]["mgmt_ip_mode"] == "dhcp"
     assert resolved["values"]["mgmt_ip_address"] == "10.10.10.2"
     assert resolved["values"]["wifi_ssid"] == "legacy-ssid"
+
+
+def test_effective_config_resolves_bundle_templates_before_enforcement(db_session):
+    bundle = OntProvisioningProfile(
+        name="Template Bundle",
+        wifi_ssid_template="DOTMAC-{serial_number}",
+        is_active=True,
+    )
+    db_session.add(bundle)
+    db_session.flush()
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            connection_type=WanConnectionType.pppoe,
+            pppoe_username_template="{serial_number}@isp.example",
+            is_active=True,
+        )
+    )
+    ont = OntUnit(serial_number="TPL-001", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    resolved = resolve_effective_ont_config(db_session, ont)
+
+    assert resolved["config_ready"] is True
+    assert resolved["values"]["pppoe_username"] == "TPL-001@isp.example"
+    assert resolved["values"]["wifi_ssid"] == "DOTMAC-TPL-001"
+
+
+def test_inactive_bundle_assignment_blocks_legacy_fallback(db_session):
+    bundle = OntProvisioningProfile(name="Inactive Bundle", is_active=False)
+    ont = OntUnit(
+        serial_number="INACTIVE-BUNDLE-001",
+        is_active=True,
+        pppoe_username="legacy-user",
+    )
+    db_session.add_all([bundle, ont])
+    db_session.flush()
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.applied,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    resolved = resolve_effective_ont_config(db_session, ont)
+
+    assert resolved["config_ready"] is False
+    assert resolved["bundle_assignment_blocked_reason"] == "inactive_bundle"
+    assert resolved["using_legacy_fallback"] is False
+    assert resolved["values"]["pppoe_username"] is None
+
+
+def test_detect_gaps_skips_non_applied_bundle_assignments(db_session):
+    olt = OLTDevice(
+        name="OLT-NON-APPLIED",
+        mgmt_ip="198.51.100.201",
+        is_active=True,
+        tr069_acs_server_id=None,
+    )
+    bundle = OntProvisioningProfile(
+        name="Planned Bundle",
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    db_session.add_all([olt, bundle])
+    db_session.flush()
+    db_session.add(
+        OntProfileWanService(
+            profile_id=bundle.id,
+            name="Internet",
+            connection_type=WanConnectionType.pppoe,
+            pppoe_username_template="planned-user",
+            is_active=True,
+        )
+    )
+    ont = OntUnit(serial_number="PLANNED-001", is_active=True, olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntBundleAssignment(
+            ont_unit_id=ont.id,
+            bundle_id=bundle.id,
+            status=OntBundleAssignmentStatus.planned,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    gaps = ProvisioningEnforcement.detect_gaps(db_session, olt_id=str(olt.id))
+
+    assert all(str(ont.id) not in ont_ids for ont_ids in gaps.values())
+
+
+def test_apply_bundle_to_ont_rejects_inactive_bundle(db_session):
+    bundle = OntProvisioningProfile(name="Do Not Apply", is_active=False)
+    ont = OntUnit(serial_number="REJECT-INACTIVE-001", is_active=True)
+    db_session.add_all([bundle, ont])
+    db_session.commit()
+
+    result = apply_bundle_to_ont(db_session, str(ont.id), str(bundle.id))
+
+    assert result.success is False
+    assert "inactive" in result.message
+    assert resolve_effective_ont_config(db_session, ont)["bundle_assignment"] is None
 
 
 def test_count_onts_by_profile_uses_active_bundle_assignments_only(db_session):

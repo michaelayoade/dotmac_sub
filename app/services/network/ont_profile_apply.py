@@ -34,6 +34,7 @@ from app.models.network import (
 )
 from app.services.common import coerce_uuid
 from app.services.network._common import SubscriberTemplateContextProvider
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_bundle_assignments import (
     assign_bundle_to_ont,
     get_active_bundle_assignment,
@@ -42,7 +43,6 @@ from app.services.network.ont_bundle_assignments import (
 from app.services.network.ont_config_overrides import (
     clear_bundle_managed_legacy_projection,
 )
-from app.services.network.effective_ont_config import resolve_effective_ont_config
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +397,11 @@ def apply_bundle_to_ont(
     profile = db.scalars(stmt).first()
     if not profile:
         return ApplyResult(success=False, message="Provisioning bundle not found")
+    if not profile.is_active:
+        return ApplyResult(
+            success=False,
+            message=f"Provisioning bundle '{profile.name}' is inactive",
+        )
     mismatch_reason = _profile_scope_mismatch_reason(db, profile, ont)
     if mismatch_reason == "olt_scope":
         return ApplyResult(

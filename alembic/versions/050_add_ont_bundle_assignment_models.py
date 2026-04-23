@@ -19,6 +19,31 @@ branch_labels = None
 depends_on = None
 
 
+def _index_exists(inspector, table_name: str, index_name: str) -> bool:
+    return any(index["name"] == index_name for index in inspector.get_indexes(table_name))
+
+
+def _validate_single_active_bundle_assignment(bind) -> None:
+    violations = bind.execute(
+        sa.text(
+            """
+            SELECT ont_unit_id, COUNT(*) AS active_count
+            FROM ont_bundle_assignments
+            WHERE is_active
+            GROUP BY ont_unit_id
+            HAVING COUNT(*) > 1
+            LIMIT 10
+            """
+        )
+    ).fetchall()
+    if violations:
+        sample = ", ".join(f"{row.ont_unit_id}={row.active_count}" for row in violations)
+        raise RuntimeError(
+            "Cannot create uq_ont_bundle_assignments_active_ont: "
+            f"duplicate active ONT bundle assignments exist ({sample})."
+        )
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
@@ -219,16 +244,34 @@ def upgrade() -> None:
                 ondelete="SET NULL",
             ),
         )
+
+    inspector = inspect(bind)
+    if not _index_exists(
+        inspector,
+        "ont_bundle_assignments",
+        "ix_ont_bundle_assignments_ont_status",
+    ):
         op.create_index(
             "ix_ont_bundle_assignments_ont_status",
             "ont_bundle_assignments",
             ["ont_unit_id", "status"],
         )
+    if not _index_exists(
+        inspector,
+        "ont_bundle_assignments",
+        "ix_ont_bundle_assignments_bundle_status",
+    ):
         op.create_index(
             "ix_ont_bundle_assignments_bundle_status",
             "ont_bundle_assignments",
             ["bundle_id", "status"],
         )
+    if not _index_exists(
+        inspector,
+        "ont_bundle_assignments",
+        "uq_ont_bundle_assignments_active_ont",
+    ):
+        _validate_single_active_bundle_assignment(bind)
         op.create_index(
             "uq_ont_bundle_assignments_active_ont",
             "ont_bundle_assignments",
