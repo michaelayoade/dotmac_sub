@@ -295,6 +295,7 @@ def ont_detail(
         "service",
         "device-config",
         "diagnostics",
+        "topology",
         "history",
     }
     tab_aliases = {

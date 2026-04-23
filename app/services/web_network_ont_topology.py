@@ -258,8 +258,7 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
             url=f"/admin/network/fdh-cabinets/{fdh.id}",
             details={
                 "code": fdh.code,
-                "address": fdh.address,
-                "capacity": fdh.capacity,
+                "notes": fdh.notes,
             },
         )
         # Insert after PON port
@@ -279,16 +278,16 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
 
     # Add Splitter node
     if splitter:
-        splitter_label = splitter.name or f"1:{splitter.ratio}" if splitter.ratio else "Splitter"
+        splitter_label = splitter.name or f"1:{splitter.splitter_ratio}" if splitter.splitter_ratio else "Splitter"
         splitter_node = TopologyNode(
             node_type="splitter",
             id=str(splitter.id),
-            name=splitter.name or f"Splitter 1:{splitter.ratio}",
+            name=splitter.name or f"Splitter 1:{splitter.splitter_ratio}",
             label=splitter_label,
             status="online" if splitter.is_active else "offline",
             url=f"/admin/network/splitters/{splitter.id}",
             details={
-                "ratio": f"1:{splitter.ratio}" if splitter.ratio else None,
+                "ratio": f"1:{splitter.splitter_ratio}" if splitter.splitter_ratio else None,
                 "port": splitter_port.port_number if splitter_port else None,
             },
         )
