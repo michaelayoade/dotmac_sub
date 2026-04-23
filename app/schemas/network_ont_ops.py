@@ -48,7 +48,7 @@ class OntTracerouteRequest(BaseModel):
 class OntConnectionRequestCredentials(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=64)
-    periodic_inform_interval: int = Field(default=3600, ge=60, le=86400)
+    periodic_inform_interval: int = Field(default=300, ge=60, le=86400)
 
 
 class OntFirmwareRequest(BaseModel):

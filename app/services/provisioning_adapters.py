@@ -348,7 +348,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         if cwmp_password:
             params[f"{prefix}.Password"] = cwmp_password
 
-        inform_interval = str(config.get("periodic_inform_interval", 3600))
+        inform_interval = str(config.get("periodic_inform_interval", 300))
         params[f"{prefix}.PeriodicInformEnable"] = "true"
         params[f"{prefix}.PeriodicInformInterval"] = inform_interval
 

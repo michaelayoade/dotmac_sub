@@ -315,7 +315,7 @@ class GenieAcsConfigWriter:
         username: str,
         password: str,
         *,
-        periodic_inform_interval: int = 3600,
+        periodic_inform_interval: int = 300,
         **metadata: Any,
     ) -> AcsConfigQueueResult:
         return self.queue_config_action(
@@ -334,7 +334,7 @@ class GenieAcsConfigWriter:
         username: str,
         password: str,
         *,
-        periodic_inform_interval: int = 3600,
+        periodic_inform_interval: int = 300,
     ) -> ActionResult:
         from app.services.network.ont_action_network import (
             set_connection_request_credentials,

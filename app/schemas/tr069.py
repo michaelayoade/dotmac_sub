@@ -17,8 +17,8 @@ class Tr069AcsServerBase(BaseModel):
     connection_request_password: str = Field(min_length=1, max_length=255)
     base_url: str = Field(min_length=1, max_length=255)
     periodic_inform_interval: int = Field(
-        default=3600, ge=60, le=86400
-    )  # 1 min to 24 hours
+        default=300, ge=60, le=86400
+    )  # 5 minutes default, range 1 min to 24 hours
     is_active: bool = True
     notes: str | None = None
 

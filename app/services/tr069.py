@@ -1728,7 +1728,7 @@ def _build_acs_provision_script(
     cwmp_url: str,
     cwmp_username: str | None = None,
     cwmp_password: str | None = None,
-    periodic_inform_interval: int = 3600,  # 1 hour (fleet-aligned default)
+    periodic_inform_interval: int = 300,  # 5 minutes (fleet-aligned default)
 ) -> str:
     """Build GenieACS provision script that enforces ACS URL on every inform.
 
@@ -1740,7 +1740,7 @@ def _build_acs_provision_script(
         cwmp_url: The ACS CWMP URL to enforce
         cwmp_username: Optional CWMP username
         cwmp_password: Optional CWMP password
-        periodic_inform_interval: Inform interval in seconds (default 3600)
+        periodic_inform_interval: Inform interval in seconds (default 300)
 
     Returns:
         JavaScript provision script
@@ -1912,7 +1912,7 @@ def push_acs_enforcement_preset(
         cwmp_url=server.cwmp_url,
         cwmp_username=server.cwmp_username,
         cwmp_password=cwmp_password,
-        periodic_inform_interval=server.periodic_inform_interval or 3600,
+        periodic_inform_interval=server.periodic_inform_interval or 300,
     )
 
     # Build preset

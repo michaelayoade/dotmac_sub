@@ -210,7 +210,7 @@ class AcsConfigWriter(Protocol):
         username: str,
         password: str,
         *,
-        periodic_inform_interval: int = 3600,
+        periodic_inform_interval: int = 300,
     ) -> Any: ...
 
     def send_connection_request(self, db: Session, ont_id: str) -> Any: ...

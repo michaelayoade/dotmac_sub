@@ -54,8 +54,8 @@ class Tr069AcsServer(Base):
     connection_request_password: Mapped[str | None] = mapped_column(String(512))
     base_url: Mapped[str] = mapped_column(String(255), nullable=False)
     periodic_inform_interval: Mapped[int] = mapped_column(
-        Integer, default=3600, nullable=False, server_default="3600"
-    )  # seconds, default 1 hour
+        Integer, default=300, nullable=False, server_default="300"
+    )  # seconds, default 5 minutes
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
