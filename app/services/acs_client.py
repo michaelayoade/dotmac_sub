@@ -222,8 +222,7 @@ class AcsConfigWriter(Protocol):
         parameters: dict[str, Any],
         *,
         expected: dict[str, Any] | None = None,
-        connection_request_attempts: int = 3,
-        connection_request_backoff_sec: float = 1.0,
+        timeout_sec: int = 30,
     ) -> Any: ...
 
     def download(

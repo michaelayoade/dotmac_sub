@@ -216,79 +216,97 @@ def _delete_task_quietly(client: Any, task_result: dict[str, object] | None) -> 
         logger.debug("Failed to delete ACS task %s", task_id, exc_info=True)
 
 
+def _wait_for_task(
+    client: Any,
+    device_id: str,
+    task_id: str,
+    *,
+    timeout_sec: int = 30,
+    poll_interval_sec: float = 2.0,
+) -> tuple[bool, str]:
+    """Poll until a task completes or times out.
+
+    Args:
+        client: ACS client.
+        device_id: Device ID.
+        task_id: Task ID to monitor.
+        timeout_sec: Maximum seconds to wait.
+        poll_interval_sec: Seconds between polls.
+
+    Returns:
+        Tuple of (completed, message).
+    """
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        try:
+            pending = client.get_pending_tasks(device_id)
+            task_still_pending = any(t.get("_id") == task_id for t in pending)
+            if not task_still_pending:
+                return True, "Task completed"
+        except Exception as exc:
+            logger.debug("Error polling task %s: %s", task_id, exc)
+        time.sleep(poll_interval_sec)
+    return False, f"Task {task_id} did not complete within {timeout_sec}s"
+
+
 def set_and_verify(
     client: Any,
     device_id: str,
     params: dict[str, str],
     *,
     expected: dict[str, str] | None = None,
-    connection_request_attempts: int = 3,
-    connection_request_backoff_sec: float = 1.0,
+    timeout_sec: int = 30,
+    skip_verification: bool = False,
 ) -> dict[str, object]:
-    """Apply params via setParameterValues and verify against a live device read.
+    """Apply params via setParameterValues and poll until completion.
 
-    Chains two tasks:
-      1. setParameterValues (queued).
-      2. getParameterValues (queued, triggers direct CR via adapter).
+    Uses a polling approach:
+      1. Create setParameterValues task.
+      2. Poll pending tasks until SPV completes or times out.
+      3. Optionally verify values from cache match expected.
 
-    The adapter triggers a direct connection request after task creation,
-    so the device applies the writes and returns live values immediately.
-    The GPV populates the GenieACS model cache from the live device read,
-    so the subsequent cache readback reflects what the device actually has.
+    Args:
+        client: ACS client.
+        device_id: Device ID.
+        params: Dict of parameter path -> value.
+        expected: Expected values for verification (defaults to params).
+        timeout_sec: Max seconds to wait for task completion.
+        skip_verification: If True, skip cache verification after completion.
 
-    Raises GenieACSError when any target parameter's cached value after the
-    chained session does not match the requested value. Returns the SPV task
-    result on full verification.
+    Returns:
+        The SPV task result dict.
 
-    ``expected`` defaults to ``params``; pass a subset or a differently-cased
-    mapping when some written parameters (booleans, security-mode aliases)
-    need a different cache comparison.
+    Raises:
+        GenieACSError: If task times out or verification fails.
     """
     from app.services.genieacs import GenieACSError  # local import avoids cycle
 
     if not params:
         raise GenieACSError("set_and_verify called with no parameters")
+
     expected_values = expected if expected is not None else params
 
+    # Create SPV task
     spv_result: dict[str, object] = client.set_parameter_values(device_id, params)
-    readback_paths = list(expected_values.keys())
-    if not readback_paths:
+    task_id = spv_result.get("_id", "")
+
+    if not task_id:
+        # Task accepted immediately (no pending task created)
+        logger.debug("SPV accepted without task ID for %s", device_id)
         return spv_result
 
-    attempts = max(1, int(connection_request_attempts))
-    readback_tasks: list[dict[str, object]] = []
-    last_connection_error: str | None = None
-    try:
-        for attempt in range(1, attempts + 1):
-            task_result = client.get_parameter_values(device_id, readback_paths)
-            last_connection_error = _connection_request_error(task_result)
-            if last_connection_error is None:
-                readback_tasks.append(task_result)
-                break
-            _delete_task_quietly(client, task_result)
-            logger.warning(
-                "ACS connection request failed for %s during verified write "
-                "(attempt %d/%d): %s",
-                device_id,
-                attempt,
-                attempts,
-                last_connection_error,
-            )
-            if attempt < attempts:
-                time.sleep(connection_request_backoff_sec * (2 ** (attempt - 1)))
-        else:
-            raise GenieACSError(
-                "Connection request failed after "
-                f"{attempts} attempts: {last_connection_error or 'unknown error'}"
-            )
-    except GenieACSError as exc:
+    # Poll until task completes
+    completed, msg = _wait_for_task(
+        client, device_id, task_id, timeout_sec=timeout_sec
+    )
+    if not completed:
         _delete_task_quietly(client, spv_result)
-        for task_result in readback_tasks:
-            _delete_task_quietly(client, task_result)
-        raise GenieACSError(
-            f"Readback getParameterValues failed after SPV: {exc}"
-        ) from exc
+        raise GenieACSError(f"setParameterValues task timed out: {msg}")
 
+    if skip_verification or not expected_values:
+        return spv_result
+
+    # Verify values from cache
     mismatches: list[str] = []
     for path, want in expected_values.items():
         got, _ = read_param_from_cache(client, device_id, path)
@@ -297,7 +315,6 @@ def set_and_verify(
         mismatches.append(f"{path}: expected={want!r} got={got!r}")
 
     if mismatches:
-        _delete_task_quietly(client, spv_result)
         raise GenieACSError(
             "Device did not apply setParameterValues: " + "; ".join(mismatches)
         )

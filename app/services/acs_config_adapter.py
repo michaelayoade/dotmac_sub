@@ -390,8 +390,7 @@ class GenieAcsConfigWriter:
         parameters: dict[str, Any],
         *,
         expected: dict[str, Any] | None = None,
-        connection_request_attempts: int = 3,
-        connection_request_backoff_sec: float = 1.0,
+        timeout_sec: int = 30,
     ) -> ActionResult:
         """Push raw ACS parameters and force immediate device processing."""
         from app.services.genieacs import GenieACSError
@@ -427,8 +426,7 @@ class GenieAcsConfigWriter:
                 device_id,
                 normalized_parameters,
                 expected=normalized_expected,
-                connection_request_attempts=connection_request_attempts,
-                connection_request_backoff_sec=connection_request_backoff_sec,
+                timeout_sec=timeout_sec,
             )
         except GenieACSError as exc:
             return ActionResult(
