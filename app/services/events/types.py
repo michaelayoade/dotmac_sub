@@ -114,6 +114,9 @@ class EventType(enum.Enum):
     # ONT bundle assignment events
     ont_bundle_unassigned = "ont.bundle_unassigned"
 
+    # ONT lifecycle events
+    ont_decommissioned = "ont.decommissioned"
+
     # OLT circuit breaker events
     olt_circuit_opened = "olt.circuit_opened"
     olt_circuit_closed = "olt.circuit_closed"

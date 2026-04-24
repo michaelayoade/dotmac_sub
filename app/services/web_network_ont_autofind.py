@@ -70,11 +70,35 @@ def _find_ont_by_serial(db: Session, serial_number: str | None) -> OntUnit | Non
 def sync_olt_autofind_candidates(
     db: Session,
     olt_id: str,
+    *,
+    skip_if_recent_seconds: int = 0,
 ) -> tuple[bool, str, dict[str, int]]:
-    """Refresh cached autofind candidates for a single OLT."""
+    """Refresh cached autofind candidates for a single OLT.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        skip_if_recent_seconds: If > 0, skip SSH refresh if last sync was within
+            this many seconds. Returns cached data with "skipped" message.
+
+    Returns:
+        Tuple of (success, message, stats dict)
+    """
     olt = db.get(OLTDevice, olt_id)
     if not olt:
         return False, "OLT not found", {}
+
+    # Deduplication: skip if recently synced (Gap 13 fix)
+    if skip_if_recent_seconds > 0 and olt.autofind_last_sync_at:
+        age_seconds = (datetime.now(UTC) - olt.autofind_last_sync_at).total_seconds()
+        if age_seconds < skip_if_recent_seconds:
+            logger.debug(
+                "Skipping autofind refresh for OLT %s - synced %.1fs ago (threshold %ds)",
+                olt.name,
+                age_seconds,
+                skip_if_recent_seconds,
+            )
+            return True, f"Using cached autofind (synced {int(age_seconds)}s ago)", {}
 
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
@@ -84,6 +108,11 @@ def sync_olt_autofind_candidates(
 
     entries = result.data.get("autofind_entries", [])
     stats = sync_olt_autofind_entries(db, olt_id=olt_id, entries=entries)
+
+    # Record sync time for deduplication
+    olt.autofind_last_sync_at = datetime.now(UTC)
+    db.flush()
+
     return True, result.message, stats
 
 

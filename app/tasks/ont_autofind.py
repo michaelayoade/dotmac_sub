@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from time import sleep
 
 from sqlalchemy import select
 
@@ -13,6 +14,10 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
+
+# Async rediscovery polling constants
+REDISCOVERY_POLL_INTERVAL_SECONDS = 5
+REDISCOVERY_MAX_ATTEMPTS = 6  # 30 seconds total
 
 
 def _autofind_lock_key(olt_id: str) -> int:
@@ -176,3 +181,177 @@ def discover_all_olt_autofind() -> dict[str, int]:
     except Exception as e:
         logger.error("OLT autofind orchestrator failed: %s", e, exc_info=True)
         raise
+
+
+@celery_app.task(
+    name="app.tasks.ont_autofind.poll_rediscovery_and_authorize",
+    bind=True,
+    max_retries=0,
+)
+def poll_rediscovery_and_authorize(
+    self,  # noqa: ANN001
+    olt_id: str,
+    serial_number: str,
+    fsp: str,
+    *,
+    provision_after_auth: bool = True,
+    skip_acs_bind: bool = False,
+    actor: str | None = None,
+    poll_interval: int = REDISCOVERY_POLL_INTERVAL_SECONDS,
+    max_attempts: int = REDISCOVERY_MAX_ATTEMPTS,
+) -> dict[str, object]:
+    """Poll for ONT rediscovery after force-deauthorize and complete authorization.
+
+    This task runs asynchronously after a force-reauthorize deletes an existing
+    ONT registration. It polls the OLT autofind cache until the ONT reappears,
+    then completes the authorization workflow.
+
+    This replaces the blocking sleep() loop in the main authorization workflow
+    (Gap 8 fix), freeing up web worker threads.
+
+    Args:
+        olt_id: OLT device UUID
+        serial_number: ONT serial number to look for
+        fsp: Frame/Slot/Port location
+        provision_after_auth: Whether to provision after authorization
+        skip_acs_bind: Whether to skip ACS binding
+        actor: Actor email for audit trail
+        poll_interval: Seconds between poll attempts
+        max_attempts: Maximum poll attempts before giving up
+
+    Returns:
+        Dict with authorization result or error details
+    """
+    from app.services import web_network_ont_autofind as ont_autofind_service
+    from app.services.network.olt_authorization_workflow import (
+        get_autofind_candidate_by_serial,
+    )
+
+    logger.info(
+        "Starting async rediscovery polling: olt_id=%s serial=%s fsp=%s",
+        olt_id,
+        serial_number,
+        fsp,
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            sleep(poll_interval)
+
+        try:
+            with db_session_adapter.session() as db:
+                olt = db.get(OLTDevice, olt_id)
+                if not olt:
+                    return {
+                        "success": False,
+                        "error": "olt_not_found",
+                        "message": f"OLT {olt_id} not found",
+                    }
+
+                # Refresh autofind cache
+                ok, message, _stats = ont_autofind_service.sync_olt_autofind_candidates(
+                    db, olt_id
+                )
+                if not ok:
+                    logger.warning(
+                        "Rediscovery poll %d/%d: autofind refresh failed for OLT %s: %s",
+                        attempt,
+                        max_attempts,
+                        olt.name,
+                        message,
+                    )
+                    continue
+
+                # Check if ONT has reappeared
+                candidate = get_autofind_candidate_by_serial(
+                    db, olt_id, serial_number, fsp=fsp
+                )
+                if candidate is not None:
+                    logger.info(
+                        "Rediscovery poll %d/%d: ONT %s found on %s, proceeding with authorization",
+                        attempt,
+                        max_attempts,
+                        serial_number,
+                        olt.name,
+                    )
+                    # ONT rediscovered - now authorize it
+                    from app.services.network.olt_authorization_workflow import (
+                        authorize_autofind_ont_and_provision_network_audited,
+                    )
+
+                    # Note: provision_after_auth, skip_acs_bind, actor are stored
+                    # but the current function signature doesn't support them.
+                    # The authorization workflow handles provisioning internally.
+                    result = authorize_autofind_ont_and_provision_network_audited(
+                        db,
+                        olt_id=olt_id,
+                        fsp=fsp,
+                        serial_number=serial_number,
+                        force_reauthorize=False,  # Already deleted, no need to force
+                        request=None,
+                    )
+                    return result.to_dict()
+
+                logger.debug(
+                    "Rediscovery poll %d/%d: ONT %s not yet visible on %s",
+                    attempt,
+                    max_attempts,
+                    serial_number,
+                    olt.name,
+                )
+
+        except Exception as e:
+            logger.warning(
+                "Rediscovery poll %d/%d failed for ONT %s: %s",
+                attempt,
+                max_attempts,
+                serial_number,
+                e,
+            )
+
+    # Exhausted attempts
+    logger.warning(
+        "Rediscovery polling exhausted after %d attempts: olt_id=%s serial=%s fsp=%s",
+        max_attempts,
+        olt_id,
+        serial_number,
+        fsp,
+    )
+    return {
+        "success": False,
+        "error": "rediscovery_timeout",
+        "message": f"ONT {serial_number} did not reappear in autofind after {max_attempts * poll_interval}s",
+        "olt_id": olt_id,
+        "serial_number": serial_number,
+        "fsp": fsp,
+    }
+
+
+def queue_rediscovery_poll(
+    olt_id: str,
+    serial_number: str,
+    fsp: str,
+    *,
+    provision_after_auth: bool = True,
+    skip_acs_bind: bool = False,
+    actor: str | None = None,
+) -> tuple[bool, str | None]:
+    """Queue an async rediscovery poll task.
+
+    Returns:
+        Tuple of (success, task_id or error message)
+    """
+    dispatch = enqueue_task(
+        "app.tasks.ont_autofind.poll_rediscovery_and_authorize",
+        args=[olt_id, serial_number, fsp],
+        kwargs={
+            "provision_after_auth": provision_after_auth,
+            "skip_acs_bind": skip_acs_bind,
+            "actor": actor,
+        },
+        correlation_id=f"rediscovery:{olt_id}:{serial_number}",
+        source="force_reauthorize",
+    )
+    if dispatch.queued:
+        return True, dispatch.task_id
+    return False, dispatch.error

@@ -102,6 +102,9 @@ class AutofindValidationResult:
         tuple[str, bool, str, float]
     ]  # (name, success, message, started_at)
     error_message: str | None = None
+    # Async rediscovery support (Gap 8 fix)
+    pending_rediscovery: bool = False
+    rediscovery_task_id: str | None = None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -769,14 +772,25 @@ def _validate_autofind_candidate(
     deleted_existing: bool,
     reauthorize_attempts: int,
     reauthorize_retry_delay: float,
+    use_async_rediscovery: bool = True,
+    provision_after_auth: bool = True,
+    skip_acs_bind: bool = False,
+    actor: str | None = None,
 ) -> AutofindValidationResult:
     """Validate autofind candidate, refreshing cache if needed.
 
     This handles the complex retry logic when force_reauthorize deletes an
     existing registration and we need to wait for the ONT to reappear in autofind.
 
+    Args:
+        use_async_rediscovery: If True (default), queue a Celery task for
+            rediscovery polling instead of blocking with sleep(). This frees
+            up web worker threads (Gap 8 fix).
+
     Returns:
         AutofindValidationResult with candidate if found, or error details.
+        If pending_rediscovery=True, a Celery task was queued and the caller
+        should return a "pending" status to the UI.
     """
     from app.services.web_network_ont_autofind import sync_olt_autofind_candidates
 
@@ -809,7 +823,10 @@ def _validate_autofind_candidate(
         )
 
     refresh_started_at = monotonic()
-    sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(db, olt_id)
+    # Use 5s deduplication window to avoid redundant SSH queries during concurrent auths
+    sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(
+        db, olt_id, skip_if_recent_seconds=5
+    )
     if not sync_ok:
         steps.append(
             (
@@ -841,8 +858,53 @@ def _validate_autofind_candidate(
             steps_added=steps,
         )
 
-    # Still not usable — if we deleted an existing registration, retry
+    # Still not usable — if we deleted an existing registration, need to wait for rediscovery
     if deleted_existing:
+        # Gap 8 fix: Use async Celery task instead of blocking sleep loop
+        if use_async_rediscovery:
+            from app.tasks.ont_autofind import queue_rediscovery_poll
+
+            queued_at = monotonic()
+            queued_ok, task_id_or_error = queue_rediscovery_poll(
+                olt_id,
+                serial_number,
+                fsp,
+                provision_after_auth=provision_after_auth,
+                skip_acs_bind=skip_acs_bind,
+                actor=actor,
+            )
+            if queued_ok:
+                steps.append(
+                    (
+                        "Queue async rediscovery",
+                        True,
+                        f"Queued rediscovery poll task {task_id_or_error}",
+                        queued_at,
+                    )
+                )
+                logger.info(
+                    "Queued async rediscovery poll for force-reauthorize: olt_id=%s serial=%s fsp=%s task_id=%s",
+                    olt_id,
+                    serial_number,
+                    fsp,
+                    task_id_or_error,
+                )
+                return AutofindValidationResult(
+                    success=False,  # Not immediately successful, but pending
+                    candidate=None,
+                    steps_added=steps,
+                    error_message=None,
+                    pending_rediscovery=True,
+                    rediscovery_task_id=task_id_or_error,
+                )
+            else:
+                # Failed to queue - fall back to blocking mode
+                logger.warning(
+                    "Failed to queue rediscovery task, falling back to blocking mode: %s",
+                    task_id_or_error,
+                )
+
+        # Blocking fallback (or use_async_rediscovery=False)
         for attempt in range(2, reauthorize_attempts + 1):
             sleep(reauthorize_retry_delay)
             retry_started_at = monotonic()
@@ -942,6 +1004,9 @@ class AuthorizationWorkflowResult:
     completed_authorization: bool = False
     follow_up_operation_id: str | None = None
     duration_ms: int = 0
+    # Async rediscovery support (Gap 8 fix)
+    pending_rediscovery: bool = False
+    rediscovery_task_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Serialize result to a JSON-safe dict."""
@@ -954,6 +1019,8 @@ class AuthorizationWorkflowResult:
             "completed_authorization": self.completed_authorization,
             "follow_up_operation_id": self.follow_up_operation_id,
             "duration_ms": self.duration_ms,
+            "pending_rediscovery": self.pending_rediscovery,
+            "rediscovery_task_id": self.rediscovery_task_id,
             "steps": [
                 {
                     "step": s.step,
@@ -1369,6 +1436,11 @@ def authorize_autofind_ont(
         deleted_existing=deleted_existing,
         reauthorize_attempts=reauthorize_attempts,
         reauthorize_retry_delay=reauthorize_retry_delay,
+        # Pass context for async rediscovery task (Gap 8 fix)
+        use_async_rediscovery=True,
+        provision_after_auth=run_post_auth_sync,
+        skip_acs_bind=not run_post_auth_sync,
+        actor=None,  # Will be set by caller if needed
     )
 
     # Apply steps from validation (refresh cache retries, etc.)
@@ -1385,6 +1457,25 @@ def authorize_autofind_ont(
                 ),
                 failure_detail=step_message,
             )
+
+    # Handle async rediscovery (Gap 8 fix)
+    if validation.pending_rediscovery:
+        _append_step(
+            "Validate discovered ONT row",
+            True,
+            "Queued async rediscovery poll - authorization will complete in background.",
+            step_started_at=validate_started_at,
+        )
+        return _finalize(
+            AuthorizationWorkflowResult(
+                success=False,  # Not immediately successful
+                message="Force reauthorize deleted existing registration. Authorization will complete once ONT reappears in autofind.",
+                steps=steps,
+                status="pending_rediscovery",
+                pending_rediscovery=True,
+                rediscovery_task_id=validation.rediscovery_task_id,
+            ),
+        )
 
     if not validation.success:
         return _fail(
