@@ -400,7 +400,7 @@ def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
     if matched_ont:
         candidate.ont_unit_id = matched_ont.id
     candidate.last_seen_at = datetime.now(UTC)
-    db.commit()
+    db.flush()
     logger.info(
         "autofind_candidate_restored",
         extra={
@@ -447,19 +447,21 @@ def build_unconfigured_onts_page_data(
     if selected_resolution not in {"authorized", "disappeared"}:
         selected_resolution = ""
 
-    query = db.query(OltAutofindCandidate, OLTDevice).join(
-        OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id
+    # Build query using SQLAlchemy 2.0 select() pattern
+    stmt = (
+        select(OltAutofindCandidate, OLTDevice)
+        .join(OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id)
     )
     if selected_view == "active":
-        query = query.filter(OltAutofindCandidate.is_active.is_(True))
+        stmt = stmt.where(OltAutofindCandidate.is_active.is_(True))
     elif selected_view == "history":
-        query = query.filter(OltAutofindCandidate.is_active.is_(False))
+        stmt = stmt.where(OltAutofindCandidate.is_active.is_(False))
     if selected_resolution:
-        query = query.filter(
+        stmt = stmt.where(
             OltAutofindCandidate.resolution_reason == selected_resolution
         )
     if olt_id:
-        query = query.filter(OltAutofindCandidate.olt_id == olt_id)
+        stmt = stmt.where(OltAutofindCandidate.olt_id == olt_id)
     if search:
         terms = [
             f"%{candidate}%"
@@ -482,15 +484,16 @@ def build_unconfigured_onts_page_data(
                 ]
             )
         if search_filters:
-            query = query.filter(or_(*search_filters))
+            stmt = stmt.where(or_(*search_filters))
 
-    rows = query.order_by(
+    stmt = stmt.order_by(
         func.coalesce(
             OltAutofindCandidate.resolved_at, OltAutofindCandidate.last_seen_at
         ).desc(),
         OLTDevice.name.asc(),
         OltAutofindCandidate.fsp.asc(),
-    ).all()
+    )
+    rows = db.execute(stmt).all()
     entries = [
         {
             "id": str(candidate.id),

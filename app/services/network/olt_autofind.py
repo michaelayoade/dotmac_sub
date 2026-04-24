@@ -115,7 +115,7 @@ def persist_authorized_ont_inventory(
         candidate.resolution_reason = "authorized"
         candidate.resolved_at = now
 
-    db.commit()
+    db.flush()
 
 
 def get_autofind_onts(db: Session, olt_id: str) -> tuple[bool, str, list[object]]:
