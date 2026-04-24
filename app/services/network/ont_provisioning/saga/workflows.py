@@ -135,7 +135,7 @@ def _configure_management_ip(ctx: SagaContext) -> StepResult:
     return ont_provision_steps.configure_management_ip(
         ctx.db,
         ctx.ont_id,
-        vlan_id=vlan_id,
+        vlan_id=int(str(vlan_id)),
         ip_mode=ctx.step_data.get("mgmt_ip_mode", "dhcp"),
         ip_address=ctx.step_data.get("mgmt_ip_address"),
         subnet=ctx.step_data.get("mgmt_subnet"),

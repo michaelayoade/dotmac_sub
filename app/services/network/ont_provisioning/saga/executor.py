@@ -10,8 +10,6 @@ This module provides the SagaExecutor class that orchestrates saga execution:
 from __future__ import annotations
 
 import logging
-import signal
-import threading
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -88,6 +86,8 @@ class SagaExecutor:
         Returns:
             SagaResult with execution outcome and compensation history.
         """
+        from app.services.locking import serial_advisory_lock
+
         self._start_time = datetime.now(UTC)
         if self.timeout_seconds is not None:
             self._deadline_monotonic = time.monotonic() + max(
@@ -101,6 +101,34 @@ class SagaExecutor:
             status=SagaExecutionStatus.running,
             started_at=self._start_time,
         )
+
+        # Acquire advisory lock to prevent concurrent saga execution for same ONT.
+        # This prevents two Celery workers from executing the same saga concurrently.
+        lock_key = (
+            self.context.correlation_key
+            or f"saga:{self.saga.name}:{self.context.ont_id}"
+        )
+        if not serial_advisory_lock(self.context.db, lock_key, nowait=True):
+            logger.warning(
+                "Saga '%s' already running for ONT %s, aborting concurrent execution",
+                self.saga.name,
+                self.context.ont_id,
+                extra={
+                    "event": "saga_lock_conflict",
+                    "saga_name": self.saga.name,
+                    "saga_execution_id": self.context.saga_execution_id,
+                    "ont_id": self.context.ont_id,
+                },
+            )
+            return SagaResult(
+                saga_name=self.saga.name,
+                saga_execution_id=self.context.saga_execution_id,
+                success=False,
+                message=f"Saga '{self.saga.name}' already running for this ONT",
+                status=SagaExecutionStatus.failed,
+                started_at=self._start_time,
+                completed_at=datetime.now(UTC),
+            )
 
         logger.info(
             "Starting saga execution: %s (execution_id=%s, ont_id=%s)",
@@ -178,6 +206,43 @@ class SagaExecutor:
                                 "step": step.name,
                             },
                         )
+
+                        # Partial rollback: compensate this single step if requested
+                        if step.rollback_on_failure and step.compensate:
+                            try:
+                                comp_result = step.compensate(self.context, step_result)
+                                if comp_result.success:
+                                    logger.info(
+                                        "Partial rollback succeeded for non-critical step: %s",
+                                        step.name,
+                                        extra={
+                                            "event": "saga_partial_rollback_success",
+                                            "saga_name": self.saga.name,
+                                            "step": step.name,
+                                        },
+                                    )
+                                else:
+                                    logger.warning(
+                                        "Partial rollback failed for step %s: %s",
+                                        step.name,
+                                        comp_result.message,
+                                        extra={
+                                            "event": "saga_partial_rollback_failed",
+                                            "saga_name": self.saga.name,
+                                            "step": step.name,
+                                        },
+                                    )
+                            except Exception as exc:
+                                logger.error(
+                                    "Partial rollback exception for step %s: %s",
+                                    step.name,
+                                    exc,
+                                    extra={
+                                        "event": "saga_partial_rollback_error",
+                                        "saga_name": self.saga.name,
+                                        "step": step.name,
+                                    },
+                                )
 
                 # Track completed step for potential compensation
                 if step_result.success and step.compensate:
@@ -337,7 +402,11 @@ class SagaExecutor:
             )
 
     def _execute_step(self, step: SagaStep) -> StepResult:
-        """Execute a single step with timing and error handling.
+        """Execute a single step with timing, error handling, and optional savepoint.
+
+        For critical steps, creates a database savepoint for transaction isolation.
+        If the step fails with an exception, the savepoint is rolled back to
+        prevent partial DB changes from affecting subsequent steps or compensation.
 
         Args:
             step: The step to execute.
@@ -346,6 +415,19 @@ class SagaExecutor:
             StepResult from the step action.
         """
         start_time = time.monotonic()
+
+        # Create savepoint for critical step isolation
+        # This allows partial rollback of DB changes on step failure
+        savepoint = None
+        if step.critical:
+            try:
+                savepoint = self.context.db.begin_nested()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create savepoint for step %s: %s",
+                    step.name,
+                    exc,
+                )
 
         logger.debug(
             "Executing saga step: %s",
@@ -364,6 +446,17 @@ class SagaExecutor:
             if result.duration_ms == 0:
                 result.duration_ms = elapsed_ms
 
+            # Commit savepoint on success
+            if savepoint is not None and result.success:
+                try:
+                    savepoint.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to commit savepoint for step %s: %s",
+                        step.name,
+                        exc,
+                    )
+
             logger.info(
                 "Saga step completed: %s - %s (%dms)",
                 step.name,
@@ -381,6 +474,12 @@ class SagaExecutor:
             return result
 
         except SagaTimeoutError as exc:
+            # Rollback savepoint on timeout
+            if savepoint is not None:
+                try:
+                    savepoint.rollback()
+                except Exception:
+                    pass
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             logger.error(
                 "Saga step timed out: %s - %s",
@@ -400,6 +499,12 @@ class SagaExecutor:
                 critical=True,
             )
         except Exception as exc:
+            # Rollback savepoint on exception
+            if savepoint is not None:
+                try:
+                    savepoint.rollback()
+                except Exception:
+                    pass
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             logger.error(
                 "Saga step error: %s - %s",
@@ -468,6 +573,14 @@ class SagaExecutor:
         )
 
     def _run_step_with_timeout(self, step: SagaStep) -> StepResult:
+        """Execute a step with timeout enforcement.
+
+        Uses ThreadPoolExecutor instead of SIGALRM for cross-thread timeout
+        that works on Celery workers (where SIGALRM only works on main thread).
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+
         remaining = self._remaining_timeout_seconds()
         if remaining is None:
             return step.action(self.context)
@@ -475,25 +588,20 @@ class SagaExecutor:
             raise SagaTimeoutError(
                 f"Saga '{self.saga.name}' timed out before step '{step.name}'"
             )
-        if threading.current_thread() is not threading.main_thread():
-            return step.action(self.context)
 
-        def _handle_timeout(_signum: int, _frame: object) -> None:
-            raise SagaTimeoutError(
-                f"Saga '{self.saga.name}' timed out while executing step '{step.name}'"
-            )
-
-        previous_handler = signal.getsignal(signal.SIGALRM)
-        previous_timer = signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, _handle_timeout)
-        signal.setitimer(signal.ITIMER_REAL, max(0.001, remaining))
-        try:
-            return step.action(self.context)
-        finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, previous_handler)
-            if previous_timer[0] > 0:
-                signal.setitimer(signal.ITIMER_REAL, previous_timer[0], previous_timer[1])
+        # ThreadPoolExecutor works on any thread (including Celery workers)
+        # where SIGALRM would silently fail since it only works on main thread.
+        # Note: The step runs in a separate thread but shares the same DB session.
+        # This is safe because SQLAlchemy sessions are thread-local by design,
+        # and we're only running one step at a time with the pool size of 1.
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="saga_step") as pool:
+            future = pool.submit(step.action, self.context)
+            try:
+                return future.result(timeout=remaining)
+            except FuturesTimeoutError:
+                raise SagaTimeoutError(
+                    f"Saga '{self.saga.name}' timed out during step '{step.name}'"
+                ) from None
 
     def _rollback_and_fail(
         self,

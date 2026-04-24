@@ -66,6 +66,9 @@ class OltOperationResult(AdapterResult):
     # If fallback occurred, the reason
     fallback_reason: str | None = None
 
+    # For create_service_port: the assigned service-port index
+    service_port_index: int | None = None
+
 
 @dataclass
 class ProtocolCapabilities:
@@ -915,6 +918,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 message=message,
                 data={"port_index": created_index} if created_index else {},
                 protocol_used=OltProtocol.SSH,
+                service_port_index=created_index,
             )
         except Exception as exc:
             return OltOperationResult.from_exception(
@@ -1766,6 +1770,7 @@ class NetconfProtocolAdapter(BaseProtocolAdapter):
                 message=message,
                 data={"port_index": assigned_port} if assigned_port else {},
                 protocol_used=OltProtocol.NETCONF,
+                service_port_index=assigned_port,
             )
         except Exception as exc:
             logger.exception("NETCONF create_service_port failed")

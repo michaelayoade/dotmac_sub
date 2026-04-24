@@ -15,8 +15,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
-from typing import TypeVar
+from typing import Any, TypeGuard, TypeVar
 from uuid import UUID
 
 from sqlalchemy import select
@@ -59,8 +58,11 @@ def build_service_port_correlation_key(
     )
 
 
-def _is_replayable_allocation(allocation: ServicePortAllocation | None) -> bool:
-    return bool(
+def _is_replayable_allocation(
+    allocation: ServicePortAllocation | None,
+) -> TypeGuard[ServicePortAllocation]:
+    """Check if allocation exists and can be replayed (already provisioned with result)."""
+    return (
         allocation is not None
         and allocation.provisioned_at is not None
         and isinstance(allocation.result_payload, dict)
@@ -528,6 +530,8 @@ def with_allocated_service_port(
                 "Returning cached service-port allocation result for correlation key %s",
                 correlation_key,
             )
+            # _is_replayable_allocation verifies result_payload is a dict
+            assert isinstance(existing.result_payload, dict)
             return deserialize_result(existing.result_payload)
 
     allocation = allocate_service_port(

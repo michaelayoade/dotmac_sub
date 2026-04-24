@@ -288,7 +288,7 @@ def set_and_verify(
 
     # Create SPV task
     spv_result: dict[str, object] = client.set_parameter_values(device_id, params)
-    task_id = spv_result.get("_id", "")
+    task_id = str(spv_result.get("_id", ""))
 
     if not task_id:
         # Task accepted immediately (no pending task created)

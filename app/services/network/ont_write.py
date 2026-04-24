@@ -429,7 +429,7 @@ class OntWriteService:
                         success=bool(payload.get("success")),
                         message=str(payload.get("message") or ""),
                         data=(
-                            dict(payload.get("data"))
+                            payload.get("data")
                             if isinstance(payload.get("data"), dict)
                             else None
                         ),

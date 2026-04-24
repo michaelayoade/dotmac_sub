@@ -175,11 +175,12 @@ class ProvisioningEnforcement:
             ):
                 gaps["mgmt_pending_push"].append(str(ont.id))
 
+            runtime_updated = getattr(ont, "observed_runtime_updated_at", None)
             if (
                 getattr(ont, "observed_wan_ip", None) is not None
                 and getattr(ont, "effective_status", None) == OnuOnlineStatus.offline
-                and getattr(ont, "observed_runtime_updated_at", None) is not None
-                and ont.observed_runtime_updated_at < stale_cutoff
+                and runtime_updated is not None
+                and runtime_updated < stale_cutoff
             ):
                 gaps["stale_wan_ip"].append(str(ont.id))
 
@@ -417,7 +418,7 @@ class ProvisioningEnforcement:
                 mgmt_vlan_tag = 201
                 effective_mgmt_vlan = _effective_field(db, ont, "mgmt_vlan")
                 if effective_mgmt_vlan not in (None, ""):
-                    mgmt_vlan_tag = int(effective_mgmt_vlan)
+                    mgmt_vlan_tag = int(str(effective_mgmt_vlan))
                 elif ont.mgmt_vlan_id:
                     vlan = db.get(Vlan, str(ont.mgmt_vlan_id))
                     if vlan:
@@ -598,7 +599,7 @@ class ProvisioningEnforcement:
                 expected_vlan: int | None = None
                 effective_wan_vlan = _effective_field(db, ont, "wan_vlan")
                 if effective_wan_vlan not in (None, ""):
-                    expected_vlan = int(effective_wan_vlan)
+                    expected_vlan = int(str(effective_wan_vlan))
                 elif ont.wan_vlan and ont.wan_vlan.tag:
                     expected_vlan = ont.wan_vlan.tag
                 elif ont.user_vlan and ont.user_vlan.tag:

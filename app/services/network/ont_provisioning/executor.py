@@ -516,6 +516,74 @@ def _parse_service_port_index(output: str) -> int | None:
     return None
 
 
+def _query_created_service_port_index(
+    session: OltSession,
+    fsp: str,
+    olt_ont_id: int,
+    vlan_id: int,
+    gem_index: int,
+) -> int | None:
+    """Query OLT to find newly created service-port index.
+
+    When the service-port creation output doesn't include the assigned index,
+    query the OLT's service-port table to find it by matching criteria.
+
+    Args:
+        session: The OLT SSH session.
+        fsp: Frame/Slot/Port (e.g., "0/2/1").
+        olt_ont_id: The ONT-ID assigned by the OLT.
+        vlan_id: VLAN ID of the service-port.
+        gem_index: GEM port index.
+
+    Returns:
+        The service-port index if found, None otherwise.
+    """
+    from app.services.network.olt_ssh import _parse_service_port_table
+
+    try:
+        # Query service-ports for this specific ONT on this port
+        cmd = f"display service-port port {fsp} ont {olt_ont_id}"
+        cmd_result = session.run_command(cmd)
+
+        if not cmd_result.success:
+            logger.debug(
+                "Failed to query service-port table for ONT %d: %s",
+                olt_ont_id,
+                cmd_result.message,
+            )
+            return None
+
+        entries = _parse_service_port_table(cmd_result.output)
+
+        # Find the entry matching our VLAN and GEM index
+        for entry in entries:
+            if entry.vlan_id == vlan_id and entry.gem_index == gem_index:
+                logger.debug(
+                    "Found service-port index %d for VLAN %d GEM %d on ONT %d",
+                    entry.index,
+                    vlan_id,
+                    gem_index,
+                    olt_ont_id,
+                )
+                return entry.index
+
+        logger.debug(
+            "No matching service-port found for VLAN %d GEM %d on ONT %d",
+            vlan_id,
+            gem_index,
+            olt_ont_id,
+        )
+        return None
+
+    except Exception as exc:
+        logger.warning(
+            "Error querying service-port index for ONT %d: %s",
+            olt_ont_id,
+            exc,
+        )
+        return None
+
+
 def _execute_create_service_port(
     session: OltSession,
     fsp: str,
@@ -544,26 +612,42 @@ def _execute_create_service_port(
 
     if cmd_result.success or cmd_result.is_idempotent_success:
         step_name = f"create_service_port_vlan_{desired_port.vlan_id}"
-        result.steps_completed.append(step_name)
+
+        # IMPORTANT: Register compensation BEFORE marking step complete.
+        # If process crashes between marking complete and registering compensation,
+        # the service-port would exist with no undo record. Safe order:
+        # 1. Parse index
+        # 2. Register compensation
+        # 3. Mark step complete
 
         # Try to parse the assigned service-port index for reliable rollback
         sp_index = _parse_service_port_index(cmd_result.output)
 
-        # Register compensation using index-based deletion (preferred) or fallback
+        # If parsing fails, query the OLT to find the newly created service-port
+        if sp_index is None:
+            sp_index = _query_created_service_port_index(
+                session, fsp, olt_ont_id, desired_port.vlan_id, desired_port.gem_index
+            )
+
+        # Register compensation using index-based deletion (preferred)
         if sp_index is not None:
             undo_cmd = f"undo service-port {sp_index}"
             resource_id = str(sp_index)
         else:
-            # Fallback: query and delete by matching criteria
-            # This is less reliable but works when index isn't returned
-            undo_cmd = (
-                f"undo service-port {sp_index}"
-                if sp_index
-                else f"undo service-port port {fsp} ont {olt_ont_id}"
+            # Cannot determine index - record for manual cleanup instead of
+            # using wildcard deletion which would delete ALL service ports
+            logger.warning(
+                "Could not determine service-port index for VLAN %d GEM %d on ONT %d; "
+                "recording for manual cleanup",
+                desired_port.vlan_id,
+                desired_port.gem_index,
+                olt_ont_id,
             )
-            resource_id = f"vlan_{desired_port.vlan_id}_gem_{desired_port.gem_index}"
-            logger.debug(
-                "Could not parse service-port index from output, using fallback deletion"
+            # Use a targeted description but no auto-deletion command
+            resource_id = f"vlan_{desired_port.vlan_id}_gem_{desired_port.gem_index}_manual"
+            undo_cmd = (
+                f"# MANUAL: Find and delete service-port for "
+                f"port {fsp} ont {olt_ont_id} vlan {desired_port.vlan_id} gem {desired_port.gem_index}"
             )
 
         result.compensation_log.append(
@@ -574,6 +658,9 @@ def _execute_create_service_port(
                 resource_id=resource_id,
             )
         )
+
+        # Mark step complete AFTER compensation is registered
+        result.steps_completed.append(step_name)
 
         logger.info(
             "Created service-port VLAN %d GEM %d for ONT %d (index: %s)",
