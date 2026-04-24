@@ -1605,18 +1605,11 @@ def ont_decommission_preview(
     ont_id: str,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """Show decommission preview modal with confirmation form.
-
-    Displays what will be affected and requires explicit confirmation.
-    """
-    from app.services.network.ont_decommission import (
-        DECOMMISSION_REASONS,
-        preview_decommission,
-    )
+    """Show simplified decommission confirmation modal."""
+    from app.services.network.ont_decommission import preview_decommission
 
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        # Return error in modal format
         context = _base_context(request, db, active_page="onts")
         context["error"] = "ONT scope check failed"
         return templates.TemplateResponse(
@@ -1627,7 +1620,6 @@ def ont_decommission_preview(
     context = _base_context(request, db, active_page="onts")
     context.update({
         "preview": preview.to_dict(),
-        "reasons": DECOMMISSION_REASONS,
         "ont_id": ont_id,
     })
     return templates.TemplateResponse(
@@ -1642,16 +1634,15 @@ def ont_decommission_preview(
 def ont_decommission_execute(
     request: Request,
     ont_id: str,
-    reason: str = Form(...),
-    confirm: bool = Form(False),
+    reason: str = Form("hardware_fault"),
     remove_from_acs: bool = Form(True),
     deauthorize_on_olt: bool = Form(True),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Execute ONT decommission after confirmation.
+    """Execute ONT decommission.
 
-    This is a destructive operation that permanently decommissions hardware.
-    Requires network:admin permission and explicit confirm=true.
+    Simplified flow - single click decommission for NOC efficiency.
+    Requires network:admin permission.
     """
     from app.services.network.ont_decommission import decommission_ont_audited
 
@@ -1659,21 +1650,11 @@ def ont_decommission_execute(
     if denied is not None:
         return denied
 
-    if not confirm:
-        return JSONResponse(
-            {
-                "success": False,
-                "message": "Decommission requires explicit confirmation checkbox",
-            },
-            status_code=400,
-            headers=_toast_headers("Confirmation required", "error"),
-        )
-
     result = decommission_ont_audited(
         db,
         ont_id,
         reason=reason,
-        confirm=True,  # Already verified above
+        confirm=True,  # Simplified flow - modal click is confirmation
         remove_from_acs=remove_from_acs,
         deauthorize_on_olt=deauthorize_on_olt,
         request=request,

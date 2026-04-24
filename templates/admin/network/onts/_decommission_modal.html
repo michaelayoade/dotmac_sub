@@ -2,33 +2,33 @@
      role="dialog"
      aria-modal="true"
      aria-labelledby="decommission-modal-title"
-     x-data="{ open: true, confirmed: false }"
+     x-data="{ open: true }"
      x-show="open" x-transition
      @keydown.escape.window="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())">
-    <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
+    <div class="w-full max-w-md rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
          @click.outside="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())">
-        <div class="flex items-center justify-between mb-4">
-            <h3 id="decommission-modal-title" class="text-lg font-bold text-rose-600 dark:text-rose-400">Decommission ONT</h3>
-            <button @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"
-                    aria-label="Close modal"
-                    class="rounded-lg p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-            </button>
-        </div>
 
         {% if error %}
-        <div class="rounded-lg bg-rose-50 border border-rose-200 p-4 text-sm text-rose-700 dark:bg-rose-900/20 dark:border-rose-800 dark:text-rose-300">
+        <div class="rounded-lg bg-rose-50 border border-rose-200 p-4 text-sm text-rose-700 dark:bg-rose-900/20 dark:border-rose-800 dark:text-rose-300 mb-4">
             {{ error }}
         </div>
+        <button @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"
+                class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+            Close
+        </button>
         {% elif not preview.can_decommission %}
-        <div class="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-700 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">
-            <p class="font-medium">Cannot decommission this ONT</p>
+        <div class="rounded-lg bg-amber-50 border border-amber-200 p-4 text-sm text-amber-700 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300 mb-4">
+            <p class="font-medium">Cannot decommission</p>
             <ul class="mt-2 list-disc list-inside">
                 {% for warning in preview.warnings %}
                 <li>{{ warning }}</li>
                 {% endfor %}
             </ul>
         </div>
+        <button @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"
+                class="w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+            Close
+        </button>
         {% else %}
         <form method="POST" action="/admin/network/onts/{{ ont_id }}/decommission"
               hx-post="/admin/network/onts/{{ ont_id }}/decommission"
@@ -36,94 +36,47 @@
               @htmx:after-request="if(event.detail.successful && event.detail.xhr.status === 200) { open = false; $nextTick(() => { document.getElementById('modal-container').replaceChildren(); window.location.reload(); }); }">
             {% include "components/forms/csrf_input.html" %}
 
-            {# Warning Banner #}
-            <div class="rounded-lg bg-rose-50 border border-rose-200 p-4 text-sm dark:bg-rose-900/20 dark:border-rose-800 mb-5">
-                <div class="flex items-start gap-3">
-                    <svg class="h-5 w-5 text-rose-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            {# Simple confirmation #}
+            <div class="text-center mb-6">
+                <div class="mx-auto w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center mb-4">
+                    <svg class="h-6 w-6 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                     </svg>
-                    <div class="text-rose-700 dark:text-rose-300">
-                        <p class="font-medium">This action cannot be undone</p>
-                        <p class="mt-1 text-xs">Decommissioning permanently removes this ONT from service. Use this only for faulty or retired hardware.</p>
-                    </div>
                 </div>
+                <h3 id="decommission-modal-title" class="text-lg font-bold text-slate-900 dark:text-white mb-2">
+                    Decommission ONT?
+                </h3>
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Remove <span class="font-mono font-medium text-slate-900 dark:text-white">{{ preview.serial_number }}</span> from service
+                </p>
+                {% if preview.olt_name %}
+                <p class="text-xs text-slate-500 dark:text-slate-500 mt-1">
+                    OLT: {{ preview.olt_name }}
+                </p>
+                {% endif %}
             </div>
 
-            {# ONT Info #}
-            <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 mb-5 dark:border-slate-700 dark:bg-slate-800/60">
-                <dl class="grid grid-cols-2 gap-2 text-sm">
-                    <dt class="text-slate-500 dark:text-slate-400">Serial Number</dt>
-                    <dd class="font-mono font-medium text-slate-900 dark:text-white">{{ preview.serial_number or 'Unknown' }}</dd>
-                    <dt class="text-slate-500 dark:text-slate-400">OLT</dt>
-                    <dd class="text-slate-900 dark:text-white">{{ preview.olt_name or 'Not assigned' }}</dd>
-                </dl>
-            </div>
-
-            {# What Will Be Affected #}
-            {% if preview.warnings %}
-            <div class="mb-5">
-                <h4 class="text-sm font-medium text-slate-900 dark:text-white mb-2">What will be affected:</h4>
-                <ul class="space-y-1.5 text-sm text-slate-600 dark:text-slate-400">
-                    {% for warning in preview.warnings %}
-                    <li class="flex items-start gap-2">
-                        <svg class="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                        </svg>
-                        <span>{{ warning }}</span>
-                    </li>
-                    {% endfor %}
-                </ul>
+            {# Quick summary if there are impacts #}
+            {% if preview.affected.active_assignments > 0 %}
+            <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300 mb-4">
+                Will close {{ preview.affected.active_assignments }} active assignment(s)
             </div>
             {% endif %}
 
-            {# Reason Selection #}
-            <div class="mb-5">
-                <label for="reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Reason for decommission</label>
-                <select name="reason" id="reason" required
-                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-rose-500 focus:ring-1 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    {% for key, label in reasons.items() %}
-                    <option value="{{ key }}">{{ label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
+            {# Hidden defaults #}
+            <input type="hidden" name="reason" value="hardware_fault">
+            <input type="hidden" name="deauthorize_on_olt" value="true">
+            <input type="hidden" name="remove_from_acs" value="true">
 
-            {# Options #}
-            <div class="space-y-3 mb-5">
-                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                    <input type="checkbox" name="deauthorize_on_olt" value="true" checked
-                           class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 dark:border-slate-600">
-                    Deauthorize on OLT
-                </label>
-                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                    <input type="checkbox" name="remove_from_acs" value="true" checked
-                           class="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 dark:border-slate-600">
-                    Remove from ACS
-                </label>
-            </div>
-
-            {# Confirmation Checkbox #}
-            <div class="rounded-lg border-2 border-rose-200 bg-rose-50/50 p-4 mb-5 dark:border-rose-800 dark:bg-rose-900/10">
-                <label class="flex items-start gap-3 text-sm cursor-pointer">
-                    <input type="checkbox" name="confirm" value="true" x-model="confirmed" required
-                           class="h-5 w-5 rounded border-rose-300 text-rose-600 focus:ring-rose-500 dark:border-rose-600 mt-0.5">
-                    <span class="text-slate-700 dark:text-slate-300">
-                        I understand this will <strong class="text-rose-600 dark:text-rose-400">permanently decommission</strong>
-                        ONT <strong class="font-mono">{{ preview.serial_number }}</strong> and remove all associated records.
-                    </span>
-                </label>
-            </div>
-
-            <div class="flex justify-end gap-3">
+            <div class="flex gap-3">
                 <button type="button"
                         @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"
-                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                        class="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
                     Cancel
                 </button>
                 <button type="submit"
-                        :disabled="!confirmed"
-                        :class="confirmed ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-300 cursor-not-allowed dark:bg-slate-600'"
-                        class="rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors">
-                    Decommission ONT
+                        class="flex-1 rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-rose-700 transition-colors">
+                    Decommission
                 </button>
             </div>
         </form>
