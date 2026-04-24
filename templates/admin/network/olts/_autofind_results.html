@@ -52,6 +52,22 @@
             <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">{{ entry.software_version or '&mdash;' }}</td>
             <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ entry.autofind_time or '&mdash;' }}</td>
             <td class="px-6 py-3 whitespace-nowrap text-right">
+                {# Check for auto-authorization result first #}
+                {% if entry.auth_result %}
+                    {% if entry.auth_result.success %}
+                    <a href="/admin/network/onts/{{ entry.auth_result.ont_id }}"
+                       class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Auto-Authorized
+                        <svg class="h-3 w-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </a>
+                    {% else %}
+                    <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" title="{{ entry.auth_result.message }}">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        Failed
+                    </span>
+                    {% endif %}
+                {% else %}
                 {# Show success badge with link if operation completed #}
                 <template x-if="getRowStatus('{{ entry.serial_number }}') === 'succeeded'">
                     <a :href="getRowViewUrl('{{ entry.serial_number }}') || '#'"
@@ -112,6 +128,7 @@
                         </button>
                     </form>
                 </template>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}

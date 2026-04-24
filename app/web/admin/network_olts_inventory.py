@@ -368,6 +368,8 @@ def olt_edit(
             status_code=404,
         )
     context = _base_context(request, db, active_page="olts")
+    # Get VLANs and IP pools assigned to this OLT for Config Pack section
+    ipam_context = ipam_adapter.olt_scope_context(db, olt=olt)
     context.update(
         {
             "olt": olt_web_forms_service.build_form_model(db, olt),
@@ -382,6 +384,8 @@ def olt_edit(
             "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
                 db
             ),
+            "olt_vlans": ipam_context.get("olt_vlans", []),
+            "olt_ip_pools": ipam_context.get("olt_ip_pools", []),
         }
     )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -402,6 +406,8 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
         )
     values = olt_web_forms_service.parse_form_values(parse_form_data_sync(request))
     error = olt_web_forms_service.validate_values(db, values, current_olt=olt)
+    # Get VLANs and IP pools for Config Pack section (needed for error re-render)
+    ipam_context = ipam_adapter.olt_scope_context(db, olt=olt)
     if error:
         context = _base_context(request, db, active_page="olts")
         context.update(
@@ -419,6 +425,8 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
                 "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
+                "olt_vlans": ipam_context.get("olt_vlans", []),
+                "olt_ip_pools": ipam_context.get("olt_ip_pools", []),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -439,6 +447,8 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
                 "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
+                "olt_vlans": ipam_context.get("olt_vlans", []),
+                "olt_ip_pools": ipam_context.get("olt_ip_pools", []),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -1054,9 +1064,15 @@ def olt_discover_hardware(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_autofind_scan(
-    request: Request, olt_id: str, db: Session = Depends(get_db)
+    request: Request,
+    olt_id: str,
+    auto_authorize: bool = Form(False),
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """Scan OLT for unregistered ONTs via SSH autofind."""
+    """Scan OLT for unregistered ONTs via SSH autofind.
+
+    If auto_authorize=True, automatically authorize all discovered ONTs.
+    """
     ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
         db, olt_id, request=request
     )
@@ -1067,12 +1083,50 @@ def olt_autofind_scan(
         ok=ok,
         message=message,
     )
+
+    auth_results: list[dict] = []
     if ok:
         web_network_ont_autofind_service.sync_olt_autofind_entries(
             db,
             olt_id=olt_id,
             entries=entries,
         )
+
+        # Auto-authorize if requested
+        if auto_authorize and entries:
+            actor = getattr(getattr(request.state, "user", None), "email", None)
+            for entry in entries:
+                try:
+                    auth_ok, auth_msg, ont_unit_id = olt_operations_service.authorize_ont(
+                        db,
+                        olt_id=olt_id,
+                        fsp=entry.fsp,
+                        serial_number=entry.serial_number,
+                        force_reauthorize=False,
+                        initiated_by=actor,
+                    )
+                    auth_results.append({
+                        "serial_number": entry.serial_number,
+                        "fsp": entry.fsp,
+                        "success": auth_ok,
+                        "message": auth_msg,
+                        "ont_id": ont_unit_id,
+                    })
+                    if auth_ok:
+                        db.commit()
+                except Exception as exc:
+                    auth_results.append({
+                        "serial_number": entry.serial_number,
+                        "fsp": entry.fsp,
+                        "success": False,
+                        "message": str(exc),
+                    })
+            # Update message with auth results
+            success_count = sum(1 for r in auth_results if r["success"])
+            fail_count = len(auth_results) - success_count
+            if success_count > 0 or fail_count > 0:
+                message = f"{message}. Auto-authorized: {success_count} succeeded, {fail_count} failed."
+
     autofind_data = [
         {
             "fsp": e.fsp,
@@ -1084,6 +1138,10 @@ def olt_autofind_scan(
             "mac": e.mac,
             "equipment_sn": e.equipment_sn,
             "autofind_time": _format_autofind_time(e.autofind_time),
+            "auth_result": next(
+                (r for r in auth_results if r["serial_number"] == e.serial_number),
+                None,
+            ),
         }
         for e in entries
     ]
@@ -1107,6 +1165,7 @@ def olt_autofind_scan(
             "autofind_message": message,
             "autofind_entries": autofind_data,
             "authorization_presets": presets,
+            "auto_authorized": auto_authorize and len(auth_results) > 0,
         },
     )
 

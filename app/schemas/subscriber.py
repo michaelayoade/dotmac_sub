@@ -162,8 +162,6 @@ class SubscriberBase(BaseModel):
 
 
 class SubscriberCreate(SubscriberBase):
-    model_config = ConfigDict(extra="forbid")
-
     # Backwards-compat: allow "create" to target an existing person/subscriber row.
     person_id: UUID | None = Field(default=None, exclude=True)
 

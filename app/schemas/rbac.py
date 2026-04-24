@@ -53,7 +53,6 @@ class PermissionBase(BaseModel):
 
 
 class PermissionCreate(PermissionBase):
-    model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")

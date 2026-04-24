@@ -89,7 +89,6 @@ class PortBase(PortFields):
 
 
 class PortCreate(PortFields):
-    model_config = ConfigDict(extra="forbid")
     device_id: UUID | None = None
 
     @model_validator(mode="after")
@@ -406,6 +405,9 @@ class OLTDeviceBase(BaseModel):
     default_cr_username: str | None = Field(default=None, max_length=120)
     default_cr_password: str | None = Field(default=None, max_length=255)
 
+    # Management IP pool for auto-allocation
+    mgmt_ip_pool_id: UUID | None = None
+
 
 class OLTDeviceCreate(OLTDeviceBase):
     pass
@@ -451,6 +453,15 @@ class OLTDeviceUpdate(BaseModel):
     default_cr_username: str | None = Field(default=None, max_length=120)
     default_cr_password: str | None = Field(default=None, max_length=255)
 
+    # GEM port indices by purpose
+    default_internet_gem_index: int | None = None
+    default_mgmt_gem_index: int | None = None
+    default_voip_gem_index: int | None = None
+    default_iptv_gem_index: int | None = None
+
+    # Management IP pool for auto-allocation
+    mgmt_ip_pool_id: UUID | None = None
+
 
 class OLTDeviceRead(OLTDeviceBase):
     model_config = ConfigDict(from_attributes=True)
@@ -474,7 +485,6 @@ class PonPortBase(PonPortFields):
 
 
 class PonPortCreate(PonPortFields):
-    model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=120)
     card_id: UUID | None = Field(default=None, exclude=True)
 
@@ -929,7 +939,6 @@ class FiberStrandBase(FiberStrandFields):
 
 
 class FiberStrandCreate(FiberStrandFields):
-    model_config = ConfigDict(extra="forbid")
     cable_name: str | None = Field(default=None, min_length=1, max_length=160)
     segment_id: UUID | None = Field(default=None, exclude=True)
 
@@ -1027,7 +1036,6 @@ class FiberSpliceBase(FiberSpliceFields):
 
 
 class FiberSpliceCreate(FiberSpliceFields):
-    model_config = ConfigDict(extra="forbid")
     closure_id: UUID | None = None
     from_strand_id: UUID | None = None
     to_strand_id: UUID | None = None

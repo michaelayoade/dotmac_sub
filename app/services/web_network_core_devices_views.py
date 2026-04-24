@@ -1735,6 +1735,14 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             network_path["olt_name"] = pon_port.olt.name
             network_path["olt_id"] = str(pon_port.olt.id)
             network_path["olt_vendor"] = pon_port.olt.vendor
+            network_path["olt_has_default_profile"] = (
+                pon_port.olt.default_provisioning_profile_id is not None
+            )
+            network_path["olt_default_profile_name"] = (
+                pon_port.olt.default_provisioning_profile.name
+                if pon_port.olt.default_provisioning_profile
+                else None
+            )
         # Check for splitter link
         if hasattr(pon_port, "splitter_link") and pon_port.splitter_link:
             link = pon_port.splitter_link

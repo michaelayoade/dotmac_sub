@@ -229,6 +229,142 @@ def ont_reboot(
 
 
 @router.post(
+    "/onts/{ont_id}/reauthorize",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_reauthorize(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Quick re-authorize ONT on OLT (force mode)."""
+    from app.models.network import OntUnit
+    from app.services.network import olt_operations as olt_operations_service
+
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return _action_json_response(
+            success=False,
+            message="ONT not found",
+            action="Re-authorize ONT",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    if not ont.olt_device_id:
+        return _action_json_response(
+            success=False,
+            message="ONT not assigned to an OLT",
+            action="Re-authorize ONT",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    # Build FSP from board/port
+    fsp = f"{ont.board}/{ont.port}" if ont.board and ont.port else None
+    if not fsp:
+        return _action_json_response(
+            success=False,
+            message="ONT missing port assignment (FSP)",
+            action="Re-authorize ONT",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    # Call authorize with force=True
+    auth_ok, auth_msg, _ = olt_operations_service.authorize_ont(
+        db,
+        olt_id=str(ont.olt_device_id),
+        fsp=fsp,
+        serial_number=ont.serial_number or "",
+        force_reauthorize=True,
+        initiated_by=getattr(getattr(request.state, "user", None), "email", None),
+    )
+
+    if auth_ok:
+        db.commit()
+
+    return _action_json_response(
+        success=auth_ok,
+        message=auth_msg,
+        action="Re-authorize ONT",
+        request=request,
+        ont_id=ont_id,
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/quick-apply-profile",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_quick_apply_profile(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Apply OLT's default profile to ONT without wizard."""
+    from app.models.network import OntUnit
+    from app.services.network.ont_profile_apply import apply_bundle_to_ont
+    from app.services.network_subscriber_bridge import default_subscriber_validator
+
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return _action_json_response(
+            success=False,
+            message="ONT not found",
+            action="Quick Apply Profile",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    olt = ont.olt_device
+    if not olt:
+        return _action_json_response(
+            success=False,
+            message="ONT not assigned to an OLT",
+            action="Quick Apply Profile",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    # Get default profile from OLT
+    default_profile = olt.default_provisioning_profile
+    if not default_profile:
+        return _action_json_response(
+            success=False,
+            message=f"OLT '{olt.name}' has no default provisioning profile configured",
+            action="Quick Apply Profile",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    # Apply the profile
+    result = apply_bundle_to_ont(
+        db,
+        ont_id,
+        str(default_profile.id),
+        create_wan_instances=True,
+        push_to_device=True,
+        subscriber_context_provider=default_subscriber_validator,
+    )
+
+    if result.success:
+        db.commit()
+
+    return _action_json_response(
+        success=result.success,
+        message=result.message if not result.success else f"Applied profile '{default_profile.name}'",
+        action="Quick Apply Profile",
+        request=request,
+        ont_id=ont_id,
+    )
+
+
+@router.post(
     "/onts/{ont_id}/refresh",
     dependencies=[Depends(require_permission("network:write"))],
 )

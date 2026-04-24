@@ -664,6 +664,7 @@ _BULK_ACTIONS = {
     "factory_reset",
     "firmware_upgrade",
     "return_to_inventory",
+    "decommission",
 }
 
 
@@ -687,6 +688,7 @@ def execute_bulk_action(
         Stats dict with succeeded/failed/skipped counts and per-ONT results.
     """
     from app.services.network.ont_actions import OntActions
+    from app.services.network.ont_decommission import decommission_ont
     from app.services.web_network_ont_actions import return_to_inventory
 
     if action not in _BULK_ACTIONS:
@@ -725,6 +727,15 @@ def execute_bulk_action(
                 result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
             elif action == "return_to_inventory":
                 result = return_to_inventory(db, ont_id)
+            elif action == "decommission":
+                result = decommission_ont(
+                    db,
+                    ont_id,
+                    reason="hardware_fault",
+                    confirm=True,
+                    deauthorize_on_olt=True,
+                    remove_from_acs=True,
+                )
             else:
                 continue
 

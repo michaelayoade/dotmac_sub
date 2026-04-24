@@ -102,6 +102,28 @@
                     Configure
                 </a>
               {% endif %}
+              {# Quick-apply default profile button #}
+              {% if authorized_for_configuration and network_path.get('olt_has_default_profile') %}
+                <button type="button"
+                        hx-post="/admin/network/onts/{{ ont.id }}/quick-apply-profile"
+                        hx-swap="none"
+                        hx-disabled-elt="this"
+                        class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+                        title="Apply OLT's default profile ({{ network_path.get('olt_default_profile_name', 'default') }})">
+                    Quick Apply
+                </button>
+              {% endif %}
+              {# Re-authorize button for authorized ONTs #}
+              {% if authorized_for_configuration and fsp %}
+                <button type="button"
+                        hx-post="/admin/network/onts/{{ ont.id }}/reauthorize"
+                        hx-swap="none"
+                        hx-disabled-elt="this"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                        title="Force re-authorize on OLT">
+                    Re-authorize
+                </button>
+              {% endif %}
             </div>
         </div>
 
@@ -1063,7 +1085,6 @@
                     <button type="button"
                             hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
                             hx-swap="none"
-                            hx-confirm="Return this ONT to inventory? Subscriber assignment will be cleared and provisioning status reset."
                             hx-disabled-elt="this"
                             class="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 shadow-sm hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:border-amber-700/50 dark:bg-slate-900 dark:text-amber-400 dark:hover:bg-amber-950/30">
                         Return to inventory

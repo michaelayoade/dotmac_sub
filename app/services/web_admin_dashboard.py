@@ -16,6 +16,7 @@ from app.models.network_monitoring import (
     InterfaceStatus,
     NetworkDevice,
 )
+from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber
 from app.services import (
     settings_spec,
@@ -534,6 +535,18 @@ def dashboard(request: Request, db: Session):
         ont_service_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
         ont_olt_link_summary = {"online": 0, "offline": 0, "unknown": 0, "total": 0}
 
+    # --- Unconfigured ONTs (autofind candidates) ---
+    unconfigured_ont_count = 0
+    try:
+        unconfigured_ont_count = (
+            db.query(func.count(OltAutofindCandidate.id))
+            .filter(OltAutofindCandidate.is_active.is_(True))
+            .scalar()
+            or 0
+        )
+    except Exception:
+        logger.debug("Failed to load unconfigured ONT count for dashboard", exc_info=True)
+
     # --- PON interface status summary ---
     try:
         pon_interface_summary = _build_pon_interface_summary(db)
@@ -629,6 +642,35 @@ def dashboard(request: Request, db: Session):
             {
                 "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
                 "href": "/admin/provisioning",
+                "severity": "info",
+            }
+        )
+
+    # --- ONT attention items ---
+    ont_low_signal = ont_service_summary.get("low_signal", 0)
+    ont_offline = ont_service_summary.get("offline", 0)
+    if ont_low_signal > 0:
+        attention_items.append(
+            {
+                "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
+                "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
+                "severity": "warning",
+            }
+        )
+    if ont_offline > 5:
+        # Only show if significant number of offline ONTs
+        attention_items.append(
+            {
+                "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
+                "href": "/admin/network/onts?view=list&online_status=offline",
+                "severity": "warning",
+            }
+        )
+    if unconfigured_ont_count > 0:
+        attention_items.append(
+            {
+                "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
+                "href": "/admin/network/onts?view=unconfigured",
                 "severity": "info",
             }
         )
