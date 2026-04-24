@@ -48,9 +48,23 @@ class CeleryQueueAdapter:
     """Queue adapter backed by the existing Celery application."""
 
     name = "queue.celery"
+    depends_on: tuple[str, ...] = ()  # No dependencies - foundational
 
     def __init__(self, enqueue_func: Any | None = None) -> None:
         self._enqueue_func = enqueue_func
+
+    def health_check(self) -> tuple[bool, str]:
+        """Verify Celery broker connectivity."""
+        try:
+            from app.celery_app import celery_app
+
+            # Ping the broker with a short timeout
+            conn = celery_app.connection()
+            conn.ensure_connection(max_retries=1, timeout=5)
+            conn.release()
+            return True, "Celery broker connection OK"
+        except Exception as exc:
+            return False, f"Celery broker connection failed: {exc}"
 
     def enqueue(self, message: QueueMessage) -> QueueDispatchResult:
         enqueue_func = self._enqueue_func

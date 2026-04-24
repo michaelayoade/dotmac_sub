@@ -32,6 +32,7 @@ class AuditAdapter:
     """Unified audit writer for operations."""
 
     name = "audit"
+    depends_on: tuple[str, ...] = ("db.session.sqlalchemy",)
 
     def build_payload(self, record: AuditRecord) -> AuditEventCreate:
         return AuditEventCreate(

@@ -509,10 +509,18 @@ class NotificationAdapter:
     """
 
     name = "notification"
+    depends_on: tuple[str, ...] = ()  # Independent - uses external services directly
 
     def __init__(self):
         self._providers: dict[NotificationChannel, ChannelProvider] = {}
         self._register_providers()
+
+    def health_check(self) -> tuple[bool, str]:
+        """Check that at least one notification channel is available."""
+        available = [ch.value for ch in self._providers.keys()]
+        if not available:
+            return False, "No notification channels registered"
+        return True, f"Channels available: {', '.join(available)}"
 
     def _register_providers(self) -> None:
         """Register all available channel providers."""

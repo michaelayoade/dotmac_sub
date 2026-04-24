@@ -13,6 +13,7 @@ class OltActionAdapter:
     """Keep OLT UI flows behind the operational OLT boundary."""
 
     name = "olt_action"
+    depends_on: tuple[str, ...] = ("db.session.sqlalchemy",)
 
     def fetch_running_config(self, olt: object, db: Session | None = None) -> str | None:
         from app.services.network import olt_operations as olt_operations_service

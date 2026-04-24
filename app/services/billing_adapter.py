@@ -57,6 +57,7 @@ class BillingAdapter:
     """Adapter around invoices, payments, and payment gateway events."""
 
     name = "billing"
+    depends_on: tuple[str, ...] = ("db.session.sqlalchemy",)
 
     def __init__(self, billing_service: Any | None = None) -> None:
         self._billing_service = billing_service

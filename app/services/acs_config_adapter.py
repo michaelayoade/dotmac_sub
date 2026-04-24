@@ -35,6 +35,7 @@ class GenieAcsConfigWriter:
     """Write ONT configuration through the current GenieACS/TR-069 backend."""
 
     name = "acs.config"
+    depends_on: tuple[str, ...] = ("queue.celery", "db.session.sqlalchemy")
 
     _QUEUE_TASK = "app.tasks.tr069.apply_acs_config"
     _QUEUE_NAME = "acs"

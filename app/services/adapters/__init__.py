@@ -5,6 +5,7 @@ from app.services.adapters.base import (
     AdapterRegistry,
     AdapterResult,
     AdapterStatus,
+    HealthCheckResult,
 )
 
 adapter_registry = AdapterRegistry()
@@ -14,5 +15,6 @@ __all__ = [
     "AdapterRegistry",
     "AdapterResult",
     "AdapterStatus",
+    "HealthCheckResult",
     "adapter_registry",
 ]

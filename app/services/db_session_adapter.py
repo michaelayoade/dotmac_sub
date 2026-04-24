@@ -41,6 +41,26 @@ class SqlAlchemySessionAdapter:
     """
 
     name = "db.session.sqlalchemy"
+    depends_on: tuple[str, ...] = ()  # No dependencies - this is foundational
+
+    def health_check(self) -> tuple[bool, str]:
+        """Verify database connectivity with a simple query."""
+        db = None
+        try:
+            db = SessionLocal()
+            result = db.execute(text("SELECT 1")).scalar()
+            if result == 1:
+                return True, "Database connection OK"
+            return False, f"Unexpected result from SELECT 1: {result}"
+        except Exception as exc:
+            return False, f"Database connection failed: {exc}"
+        finally:
+            if db is not None:
+                try:
+                    db.rollback()
+                    db.close()
+                except Exception:
+                    pass
 
     def create_session(self) -> Session:
         return SessionLocal()
