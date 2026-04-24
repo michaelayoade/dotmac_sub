@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
@@ -568,37 +569,35 @@ class BlockingOperationError(RuntimeError):
     pass
 
 
+ProgressCallback = Callable[[int, int, str], None]
+
+
 def wait_tr069_bootstrap(
     db: Session,
     ont_id: str,
     *,
-    allow_blocking: bool = False,
+    allow_blocking: bool = True,
+    progress_callback: ProgressCallback | None = None,
 ) -> StepResult:
     """Poll GenieACS until the ONT registers after TR-069 binding.
+
+    This is a SYNCHRONOUS blocking function that polls until the device
+    appears in ACS or timeout is reached. Use for immediate feedback flows.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        allow_blocking: If True, skip the background context check. Use only
-            when you explicitly want blocking behavior (e.g., in tests).
+        allow_blocking: Deprecated, kept for compatibility. Always True now.
+        progress_callback: Optional callback(attempt, max_attempts, message)
+            called on each poll iteration for real-time progress updates.
 
-    Raises:
-        BlockingOperationError: If called from a web request context without
-            allow_blocking=True. Use queue_wait_tr069_bootstrap() instead.
+    Returns:
+        StepResult with success=True if device found, False on timeout.
 
-    Warning:
-        This function blocks with time.sleep() for up to 120 seconds.
-        Call only from a Celery task or background thread, never from
-        a web request handler.
+    Note:
+        This function blocks for up to 120 seconds (configurable).
+        Progress is reported via the callback if provided.
     """
-    # Guard against accidental blocking in web request handlers
-    if not allow_blocking and not _is_background_context():
-        raise BlockingOperationError(
-            "wait_tr069_bootstrap() blocks for up to 120 seconds and should not be "
-            "called from a web request handler. Use queue_wait_tr069_bootstrap() "
-            "to run this operation in the background, or pass allow_blocking=True "
-            "if you explicitly need blocking behavior."
-        )
 
     t0 = time.monotonic()
     ont = db.get(OntUnit, ont_id)
@@ -612,18 +611,31 @@ def wait_tr069_bootstrap(
     try:
         from app.services.network._resolve import resolve_genieacs_with_reason
 
+        # Calculate max attempts for progress reporting
+        max_attempts = max(1, int(bootstrap_timeout / poll_interval))
+
         logger.info(
-            "TR-069 bootstrap wait started: ont_id=%s serial=%s timeout_sec=%s poll_interval_sec=%s",
+            "TR-069 bootstrap wait started: ont_id=%s serial=%s timeout_sec=%s poll_interval_sec=%s max_attempts=%s",
             ont.id,
             ont.serial_number,
             bootstrap_timeout,
             poll_interval,
+            max_attempts,
         )
         deadline = time.monotonic() + bootstrap_timeout
         attempt = 0
         last_poll_error = ""
         while time.monotonic() < deadline:
             attempt += 1
+            progress_msg = f"Waiting for ONT to register with ACS... (attempt {attempt}/{max_attempts})"
+
+            # Emit progress callback
+            if progress_callback:
+                try:
+                    progress_callback(attempt, max_attempts, progress_msg)
+                except Exception as cb_exc:
+                    logger.warning("Progress callback error: %s", cb_exc)
+
             try:
                 resolved, reason = resolve_genieacs_with_reason(db, ont)
             except Exception as exc:
@@ -647,6 +659,12 @@ def wait_tr069_bootstrap(
                     device_id,
                     attempt,
                 )
+                # Emit success via callback
+                if progress_callback:
+                    try:
+                        progress_callback(attempt, max_attempts, "Device registered in ACS")
+                    except Exception:
+                        pass
                 ms = int((time.monotonic() - t0) * 1000)
                 result = StepResult(
                     "wait_tr069_bootstrap", True, "Device registered in ACS", ms
@@ -703,69 +721,29 @@ def queue_wait_tr069_bootstrap(
     ont_id: str,
     *,
     initiated_by: str | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> StepResult:
-    """Queue TR-069 bootstrap polling in the background."""
-    from app.models.network_operation import (
-        NetworkOperationTargetType,
-        NetworkOperationType,
+    """DEPRECATED: Execute TR-069 bootstrap polling synchronously.
+
+    This function previously queued a background task. It now executes
+    synchronously for immediate feedback. The 'queue_' prefix is retained
+    for backward compatibility but the function blocks until completion.
+
+    Use wait_tr069_bootstrap() directly for new code.
+    """
+    import warnings
+
+    warnings.warn(
+        "queue_wait_tr069_bootstrap is deprecated. Use wait_tr069_bootstrap() directly.",
+        DeprecationWarning,
+        stacklevel=2,
     )
-    from app.services.network_operations import network_operations
-
-    op = None
-    try:
-        op = network_operations.start(
-            db,
-            NetworkOperationType.tr069_bootstrap,
-            NetworkOperationTargetType.ont,
-            ont_id,
-            correlation_key=f"tr069_bootstrap:{ont_id}",
-            initiated_by=initiated_by,
-        )
-        network_operations.mark_waiting(
-            db,
-            str(op.id),
-            "Waiting for background TR-069 bootstrap polling to start.",
-        )
-        db.commit()
-        from app.services.queue_adapter import enqueue_task
-
-        dispatch = enqueue_task(
-            "app.tasks.tr069.wait_for_ont_bootstrap",
-            args=[ont_id, str(op.id)],
-            correlation_id=f"tr069_bootstrap:{ont_id}",
-            source="ont_provision_step",
-        )
-        if not dispatch.queued:
-            raise RuntimeError(dispatch.error or "Failed to queue TR-069 bootstrap")
-        return StepResult(
-            "wait_tr069_bootstrap",
-            False,
-            f"Queued TR-069 bootstrap polling in the background (operation {op.id}).",
-            critical=False,
-            waiting=True,
-            data={"operation_id": str(op.id)},
-        )
-    except Exception as exc:
-        if op is not None:
-            try:
-                network_operations.mark_failed(
-                    db,
-                    str(op.id),
-                    f"Failed to queue TR-069 bootstrap polling: {exc}",
-                )
-                db.commit()
-            except Exception:
-                logger.warning(
-                    "Failed to mark bootstrap operation %s as failed after queue error",
-                    getattr(op, "id", None),
-                    exc_info=True,
-                )
-        return StepResult(
-            "wait_tr069_bootstrap",
-            False,
-            f"Failed to queue TR-069 bootstrap polling: {exc}",
-            critical=False,
-        )
+    # Execute synchronously instead of queueing
+    return wait_tr069_bootstrap(
+        db,
+        ont_id,
+        progress_callback=progress_callback,
+    )
 
 
 # ---------------------------------------------------------------------------
