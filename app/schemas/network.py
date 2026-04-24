@@ -392,6 +392,20 @@ class OLTDeviceBase(BaseModel):
     status: str | None = "active"
     is_active: bool = True
 
+    # OLT Config Pack: defaults inherited by ONTs
+    default_line_profile_id: int | None = None
+    default_service_profile_id: int | None = None
+    default_tr069_olt_profile_id: int | None = None
+    internet_vlan_id: UUID | None = None
+    management_vlan_id: UUID | None = None
+    tr069_vlan_id: UUID | None = None
+    voip_vlan_id: UUID | None = None
+    iptv_vlan_id: UUID | None = None
+    default_internet_config_ip_index: int | None = Field(default=0)
+    default_wan_config_profile_id: int | None = Field(default=0)
+    default_cr_username: str | None = Field(default=None, max_length=120)
+    default_cr_password: str | None = Field(default=None, max_length=255)
+
 
 class OLTDeviceCreate(OLTDeviceBase):
     pass
@@ -422,6 +436,20 @@ class OLTDeviceUpdate(BaseModel):
     notes: str | None = None
     status: str | None = None
     is_active: bool | None = None
+
+    # OLT Config Pack: defaults inherited by ONTs
+    default_line_profile_id: int | None = None
+    default_service_profile_id: int | None = None
+    default_tr069_olt_profile_id: int | None = None
+    internet_vlan_id: UUID | None = None
+    management_vlan_id: UUID | None = None
+    tr069_vlan_id: UUID | None = None
+    voip_vlan_id: UUID | None = None
+    iptv_vlan_id: UUID | None = None
+    default_internet_config_ip_index: int | None = None
+    default_wan_config_profile_id: int | None = None
+    default_cr_username: str | None = Field(default=None, max_length=120)
+    default_cr_password: str | None = Field(default=None, max_length=255)
 
 
 class OLTDeviceRead(OLTDeviceBase):

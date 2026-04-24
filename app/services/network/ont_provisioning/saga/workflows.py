@@ -16,6 +16,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_provisioning.saga.types import (
     SagaContext,
@@ -37,6 +38,17 @@ def _effective_value(ctx: SagaContext, key: str) -> object | None:
     return values.get(key)
 
 
+def _olt_config_pack(ctx: SagaContext) -> dict | None:
+    """Get OLT Config Pack as a dictionary for the current OLT.
+
+    Returns None if OLT is not loaded in context.
+    """
+    if ctx.olt is None:
+        return None
+    config = resolve_olt_config_pack(ctx.db, ctx.olt.id)
+    return config.to_dict() if config else None
+
+
 # ---------------------------------------------------------------------------
 # Step Action Wrappers
 # ---------------------------------------------------------------------------
@@ -48,7 +60,7 @@ def _create_service_ports(ctx: SagaContext) -> StepResult:
     """Create service ports for internet VLAN.
 
     Uses step_data keys:
-    - internet_vlan_id: VLAN for internet service (required)
+    - internet_vlan_id: VLAN for internet service (falls back to OLT Config Pack)
     - gem_index: GEM port index (default: 1)
     - user_vlan: User-side VLAN (optional)
     - tag_transform: Tag transform mode (default: "translate")
@@ -56,11 +68,26 @@ def _create_service_ports(ctx: SagaContext) -> StepResult:
     from app.services.network import ont_provision_steps
 
     vlan_id = ctx.step_data.get("internet_vlan_id")
+
+    # Fall back to OLT Config Pack
+    if vlan_id is None:
+        config = _olt_config_pack(ctx)
+        if config:
+            internet_vlan = config.get("internet_vlan", {})
+            vlan_id = internet_vlan.get("tag") if isinstance(internet_vlan, dict) else None
+            if vlan_id is not None:
+                ctx.step_data["internet_vlan_id"] = vlan_id
+                logger.debug(
+                    "Using OLT Config Pack internet VLAN %s for ONT %s",
+                    vlan_id,
+                    ctx.ont_id,
+                )
+
     if vlan_id is None:
         return StepResult(
             step_name="create_service_ports",
             success=False,
-            message="internet_vlan_id not provided in step_data",
+            message="internet_vlan_id not provided and OLT Config Pack has no internet VLAN",
             critical=True,
         )
 
@@ -97,8 +124,8 @@ def _compensate_service_ports(ctx: SagaContext, original: StepResult) -> StepRes
 def _configure_management_ip(ctx: SagaContext) -> StepResult:
     """Configure management IP (IPHOST) for TR-069 access.
 
-    Uses step_data keys:
-    - mgmt_vlan_id: Management VLAN (required)
+    Uses step_data keys (or OLT Config Pack):
+    - mgmt_vlan_id: Management VLAN (from OLT Config Pack)
     - mgmt_ip_mode: "dhcp" or "static" (default: "dhcp")
     - mgmt_ip_address: Static IP (if static mode)
     - mgmt_subnet: Subnet mask (if static mode)
@@ -107,28 +134,21 @@ def _configure_management_ip(ctx: SagaContext) -> StepResult:
     from app.services.network import ont_provision_steps
 
     vlan_id = ctx.step_data.get("mgmt_vlan_id")
+
+    # Get from OLT Config Pack (required)
     if vlan_id is None:
-        # Try to get from provisioning profile
-        resolved_vlan = _effective_value(ctx, "mgmt_vlan")
-        if resolved_vlan not in (None, ""):
-            vlan_id = resolved_vlan
-            ctx.step_data["mgmt_vlan_id"] = vlan_id
-
-    if ctx.step_data.get("mgmt_ip_mode") in (None, ""):
-        resolved_mode = _effective_value(ctx, "mgmt_ip_mode")
-        if resolved_mode not in (None, ""):
-            ctx.step_data["mgmt_ip_mode"] = resolved_mode
-
-    if ctx.step_data.get("mgmt_ip_address") in (None, ""):
-        resolved_ip = _effective_value(ctx, "mgmt_ip_address")
-        if resolved_ip not in (None, ""):
-            ctx.step_data["mgmt_ip_address"] = resolved_ip
+        config = _olt_config_pack(ctx)
+        if config:
+            mgmt_vlan = config.get("management_vlan", {})
+            vlan_id = mgmt_vlan.get("tag") if isinstance(mgmt_vlan, dict) else None
+            if vlan_id is not None:
+                ctx.step_data["mgmt_vlan_id"] = vlan_id
 
     if vlan_id is None:
         return StepResult(
             step_name="configure_management_ip",
             success=False,
-            message="mgmt_vlan_id not provided and no profile default",
+            message="OLT Config Pack missing management VLAN - configure OLT first",
             critical=False,
         )
 
@@ -147,14 +167,22 @@ def _activate_internet_config(ctx: SagaContext) -> StepResult:
     """Activate TCP stack on ONT management WAN.
 
     Uses step_data keys:
-    - internet_config_ip_index: IP index for internet-config (default: 0)
+    - internet_config_ip_index: IP index for internet-config (falls back to OLT Config Pack)
     """
     from app.services.network import ont_provision_steps
+
+    ip_index = ctx.step_data.get("internet_config_ip_index")
+
+    # Fall back to OLT Config Pack
+    if ip_index is None:
+        config = _olt_config_pack(ctx)
+        if config:
+            ip_index = config.get("internet_config_ip_index")
 
     return ont_provision_steps.activate_internet_config(
         ctx.db,
         ctx.ont_id,
-        ip_index=ctx.step_data.get("internet_config_ip_index", 0),
+        ip_index=ip_index if ip_index is not None else 0,
     )
 
 
@@ -162,45 +190,53 @@ def _configure_wan_olt(ctx: SagaContext) -> StepResult:
     """Configure WAN route+NAT mode on OLT side.
 
     Uses step_data keys:
-    - wan_ip_index: IP index for WAN config (default: 0)
-    - wan_profile_id: OLT WAN profile ID (default: 0)
+    - wan_ip_index: IP index for WAN config (falls back to OLT Config Pack)
+    - wan_profile_id: OLT WAN profile ID (falls back to OLT Config Pack)
     """
     from app.services.network import ont_provision_steps
+
+    wan_ip_index = ctx.step_data.get("wan_ip_index")
+    wan_profile_id = ctx.step_data.get("wan_profile_id")
+
+    # Fall back to OLT Config Pack
+    config = _olt_config_pack(ctx)
+    if config:
+        if wan_ip_index is None:
+            wan_ip_index = config.get("internet_config_ip_index")
+        if wan_profile_id is None:
+            wan_profile_id = config.get("wan_config_profile_id")
 
     return ont_provision_steps.configure_wan_olt(
         ctx.db,
         ctx.ont_id,
-        ip_index=ctx.step_data.get("wan_ip_index", 0),
-        profile_id=ctx.step_data.get("wan_profile_id", 0),
+        ip_index=wan_ip_index if wan_ip_index is not None else 0,
+        profile_id=wan_profile_id if wan_profile_id is not None else 0,
     )
 
 
 def _bind_tr069(ctx: SagaContext) -> StepResult:
     """Bind TR-069 server profile to ONT.
 
-    Uses step_data keys:
-    - tr069_olt_profile_id: OLT-level TR-069 profile ID (required)
+    Uses step_data keys (or OLT Config Pack):
+    - tr069_olt_profile_id: OLT-level TR-069 profile ID (from OLT Config Pack)
     """
     from app.services.network import ont_provision_steps
 
     profile_id = ctx.step_data.get("tr069_olt_profile_id")
-    if profile_id is None:
-        # Try to resolve from linked ACS server
-        if ctx.olt is not None:
-            from app.services.network.olt_tr069_admin import (
-                ensure_tr069_profile_for_linked_acs,
-            )
 
-            ok, msg, resolved_id = ensure_tr069_profile_for_linked_acs(ctx.olt)
-            if ok and resolved_id is not None:
-                profile_id = resolved_id
+    # Get from OLT Config Pack (required)
+    if profile_id is None:
+        config = _olt_config_pack(ctx)
+        if config:
+            profile_id = config.get("tr069_olt_profile_id")
+            if profile_id is not None:
                 ctx.step_data["tr069_olt_profile_id"] = profile_id
 
     if profile_id is None:
         return StepResult(
             step_name="bind_tr069",
             success=False,
-            message="tr069_olt_profile_id not available",
+            message="OLT Config Pack missing TR-069 profile ID - configure OLT first",
             critical=False,
         )
 

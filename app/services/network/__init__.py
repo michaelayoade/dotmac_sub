@@ -123,6 +123,13 @@ from app.services.network.zones import (
     NetworkZones,
     network_zones,
 )
+from app.services.network.olt_config_pack import (
+    OltConfigPack,
+    VlanConfig,
+    get_olt_config_pack_or_raise,
+    resolve_olt_config_pack,
+    validate_olt_config_pack,
+)
 
 __all__ = [
     # CPE services
@@ -218,4 +225,10 @@ __all__ = [
     # ONT feature service
     "OntFeatureService",
     "ont_features",
+    # OLT Config Pack
+    "OltConfigPack",
+    "VlanConfig",
+    "resolve_olt_config_pack",
+    "get_olt_config_pack_or_raise",
+    "validate_olt_config_pack",
 ]

@@ -2208,36 +2208,84 @@ def authorize_autofind_ont_and_provision_network(
         wait_started_at = monotonic()
         try:
             from app.services.network.ont_provision_steps import (
-                queue_wait_tr069_bootstrap,
+                wait_tr069_bootstrap,
             )
+            from app.services.notification_adapter import broadcast_websocket
 
-            wait_result = queue_wait_tr069_bootstrap(db, result.ont_unit_id)
+            # Progress callback emits WebSocket events for real-time UI updates
+            def _progress_callback(attempt: int, max_attempts: int, message: str) -> None:
+                broadcast_websocket(
+                    event_type="provisioning_progress",
+                    title="TR-069 Bootstrap",
+                    message=message,
+                    metadata={
+                        "ont_id": result.ont_unit_id,
+                        "serial_number": serial_number,
+                        "step": "wait_tr069_bootstrap",
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                    },
+                )
+
+            # Execute synchronously with progress feedback
+            wait_result = wait_tr069_bootstrap(
+                db,
+                result.ont_unit_id,
+                progress_callback=_progress_callback,
+            )
             _append_step(
-                "Queue ACS bootstrap and service config",
-                wait_result.success or wait_result.waiting,
+                "Wait for ACS bootstrap",
+                wait_result.success,
                 wait_result.message,
                 step_started_at=wait_started_at,
             )
-            if not wait_result.success and not wait_result.waiting:
+            if not wait_result.success:
+                # Bootstrap timeout is a warning, not failure - device may register later
                 return _finish(
                     success=True,
                     status="warning",
                     message=(
                         "ONT authorization and OLT network provisioning completed, "
-                        f"but ACS service config could not be queued: {wait_result.message}"
+                        f"but ACS bootstrap timed out: {wait_result.message}. "
+                        "Device may configure on next Inform."
                     ),
-                    provisioning_status=OntProvisioningStatus.provisioned,
+                    provisioning_status=OntProvisioningStatus.pending_acs_registration,
                 )
+
+            # Bootstrap succeeded - apply service config synchronously
+            config_started_at = monotonic()
+            from app.services.network.ont_provision_steps import (
+                apply_saved_service_config,
+            )
+
+            config_result = apply_saved_service_config(db, result.ont_unit_id)
+            _append_step(
+                "Apply service configuration",
+                config_result.success,
+                config_result.message,
+                step_started_at=config_started_at,
+            )
+            if not config_result.success:
+                return _finish(
+                    success=True,
+                    status="warning",
+                    message=(
+                        "ONT authorization and ACS registration completed, "
+                        f"but service configuration failed: {config_result.message}"
+                    ),
+                    provisioning_status=OntProvisioningStatus.pending_service_config,
+                )
+
         except Exception as exc:
             logger.warning(
-                "Failed to queue ACS service config after authorization for ONT %s: %s",
+                "Failed to complete ACS service config after authorization for ONT %s: %s",
                 result.ont_unit_id,
                 exc,
             )
             _append_step(
-                "Queue ACS bootstrap and service config",
+                "ACS bootstrap and service config",
                 False,
-                f"Failed to queue ACS service config: {exc}",
+                f"Failed: {exc}",
                 step_started_at=wait_started_at,
             )
             return _finish(
@@ -2245,7 +2293,7 @@ def authorize_autofind_ont_and_provision_network(
                 status="warning",
                 message=(
                     "ONT authorization and OLT network provisioning completed, "
-                    f"but ACS service config could not be queued: {exc}"
+                    f"but ACS configuration failed: {exc}"
                 ),
                 provisioning_status=OntProvisioningStatus.provisioned,
             )
@@ -2254,8 +2302,7 @@ def authorize_autofind_ont_and_provision_network(
         success=True,
         status="success",
         message=(
-            "ONT authorization and OLT network provisioning completed. "
-            "Next action: configure ONT."
+            "ONT authorization, ACS registration, and service configuration completed successfully."
         ),
         provisioning_status=OntProvisioningStatus.provisioned,
     )

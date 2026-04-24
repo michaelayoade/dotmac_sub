@@ -12,7 +12,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntProvisioningProfile, OnuType
@@ -257,49 +256,53 @@ def resolve_authorization_profiles_from_db(
     *,
     profile: OntProvisioningProfile | None = None,
 ) -> tuple[bool, str, AuthorizationProfileResolution | None]:
-    """Resolve OLT-local authorization profile IDs from stored DB config."""
-    if profile is not None:
-        if not profile.is_active:
-            return (
-                False,
-                f"Provisioning profile '{profile.name}' is inactive.",
-                None,
-            )
-        if profile.olt_device_id and profile.olt_device_id != olt.id:
-            return (
-                False,
-                (
-                    f"Provisioning profile '{profile.name}' belongs to another OLT. "
-                    "Select an OLT-scoped profile for this device."
-                ),
-                None,
-            )
-        return _build_configured_resolution(profile)
+    """Resolve OLT-local authorization profile IDs from OLT Config Pack.
 
-    stmt = (
-        select(OntProvisioningProfile)
-        .where(
-            OntProvisioningProfile.olt_device_id == olt.id,
-            OntProvisioningProfile.is_active.is_(True),
-        )
-        .order_by(
-            desc(OntProvisioningProfile.is_default),
-            desc(OntProvisioningProfile.updated_at),
-            desc(OntProvisioningProfile.created_at),
-        )
-    )
-    configured_profile = db.scalars(stmt).first()
-    if configured_profile is None:
+    The OLT Config Pack fields (default_line_profile_id, default_service_profile_id)
+    are required for authorization. These must be configured on the OLT before
+    any ONT authorization can proceed.
+
+    Args:
+        db: Database session (unused, kept for API compatibility)
+        olt: OLT device with config pack fields
+        profile: Deprecated, ignored. Use OLT config pack fields instead.
+
+    Returns:
+        Tuple of (success, message, AuthorizationProfileResolution or None)
+    """
+    olt_line_profile = getattr(olt, "default_line_profile_id", None)
+    olt_service_profile = getattr(olt, "default_service_profile_id", None)
+
+    if olt_line_profile is None or olt_service_profile is None:
+        missing = []
+        if olt_line_profile is None:
+            missing.append("default_line_profile_id")
+        if olt_service_profile is None:
+            missing.append("default_service_profile_id")
         return (
             False,
             (
-                f"No active provisioning profile is scoped to OLT '{olt.name}'. "
-                "Create or select the OLT profile before authorizing ONTs."
+                f"OLT '{olt.name}' is missing required config pack fields: {', '.join(missing)}. "
+                "Configure these in OLT settings before authorizing ONTs."
             ),
             None,
         )
 
-    return _build_configured_resolution(configured_profile)
+    return (
+        True,
+        (
+            f"Using OLT config pack for '{olt.name}': "
+            f"line {olt_line_profile}, service {olt_service_profile}."
+        ),
+        AuthorizationProfileResolution(
+            line_profile_id=olt_line_profile,
+            service_profile_id=olt_service_profile,
+            message=(
+                f"Using OLT config pack for '{olt.name}': "
+                f"line {olt_line_profile}, service {olt_service_profile}."
+            ),
+        ),
+    )
 
 
 def resolve_authorization_profiles(

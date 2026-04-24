@@ -289,6 +289,8 @@ class OntProvisioningStatus(enum.Enum):
     provisioned = "provisioned"
     drift_detected = "drift_detected"
     failed = "failed"
+    pending_acs_registration = "pending_acs_registration"  # Waiting for ACS bootstrap
+    pending_service_config = "pending_service_config"  # ACS registered, config pending
 
 
 class OntBundleAssignmentStatus(enum.Enum):
@@ -466,7 +468,9 @@ class Vlan(Base):
 
     port_links = relationship("PortVlan", back_populates="vlan")
     region = relationship("RegionZone")
-    olt_device = relationship("OLTDevice", back_populates="vlans")
+    olt_device = relationship(
+        "OLTDevice", back_populates="vlans", foreign_keys=[olt_device_id]
+    )
     ip_pools = relationship("IpPool", back_populates="vlan")
 
 
@@ -788,6 +792,75 @@ class OLTDevice(Base):
     # Rate limiting (operations per minute)
     rate_limit_ops_per_minute: Mapped[int | None] = mapped_column(Integer, default=10)
 
+    # -------------------------------------------------------------------------
+    # OLT Config Pack: defaults inherited by all ONTs on this OLT
+    # -------------------------------------------------------------------------
+
+    # Authorization profiles (OLT-local IDs used during ont-add)
+    default_line_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="OLT-local ont-lineprofile profile-id for authorization",
+    )
+    default_service_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="OLT-local ont-srvprofile profile-id for authorization",
+    )
+
+    # TR-069 binding (OLT-local profile ID for tr069-server-profile bind)
+    default_tr069_olt_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="OLT-local TR-069 server profile ID for ACS binding",
+    )
+
+    # VLAN assignments (purpose-based, inherited by ONTs)
+    internet_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        doc="Default internet/data VLAN for ONTs",
+    )
+    management_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        doc="Default management VLAN for ONT IPHOST",
+    )
+    tr069_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        doc="VLAN for TR-069/ACS traffic (often same as management)",
+    )
+    voip_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        doc="Default VoIP VLAN (optional)",
+    )
+    iptv_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        doc="Default IPTV/multicast VLAN (optional)",
+    )
+
+    # OLT-side provisioning knobs
+    default_internet_config_ip_index: Mapped[int | None] = mapped_column(
+        Integer,
+        default=0,
+        doc="ip-index for ont internet-config command (activates TCP stack)",
+    )
+    default_wan_config_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        default=0,
+        doc="profile-id for ont wan-config command (sets route+NAT mode)",
+    )
+
+    # TR-069 connection request credentials (inherited by ONTs)
+    default_cr_username: Mapped[str | None] = mapped_column(
+        String(120),
+        doc="Default connection request username for ACS on-demand management",
+    )
+    default_cr_password: Mapped[str | None] = mapped_column(
+        String(512),
+        doc="Default connection request password (encrypted at rest)",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -806,8 +879,15 @@ class OLTDevice(Base):
     default_provisioning_profile = relationship(
         "OntProvisioningProfile", foreign_keys=[default_provisioning_profile_id]
     )
-    vlans = relationship("Vlan", back_populates="olt_device")
+    vlans = relationship("Vlan", back_populates="olt_device", foreign_keys="[Vlan.olt_device_id]")
     ip_pools = relationship("IpPool", back_populates="olt_device")
+
+    # Config Pack VLAN relationships
+    internet_vlan = relationship("Vlan", foreign_keys=[internet_vlan_id])
+    management_vlan = relationship("Vlan", foreign_keys=[management_vlan_id])
+    tr069_vlan = relationship("Vlan", foreign_keys=[tr069_vlan_id])
+    voip_vlan = relationship("Vlan", foreign_keys=[voip_vlan_id])
+    iptv_vlan = relationship("Vlan", foreign_keys=[iptv_vlan_id])
 
     @property
     def is_reachable(self) -> bool:

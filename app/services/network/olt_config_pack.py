@@ -1,0 +1,266 @@
+"""OLT Config Pack resolver for centralized ONT provisioning defaults.
+
+The OLT Config Pack provides a single source of truth for all default
+configuration values that ONTs inherit from their parent OLT. This includes:
+
+- Authorization profile IDs (line/service profiles)
+- TR-069 binding profile ID
+- VLAN assignments by purpose (internet, management, TR-069)
+- Provisioning knobs (ip-index, wan-config profile)
+- Connection request credentials
+
+Usage:
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
+
+    config = resolve_olt_config_pack(db, olt_id)
+    # Use config.line_profile_id, config.internet_vlan_tag, etc.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from app.models.network import Vlan
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VlanConfig:
+    """Resolved VLAN configuration with both ID and tag."""
+
+    id: str | None = None
+    tag: int | None = None
+    name: str | None = None
+    purpose: str | None = None
+
+    @classmethod
+    def from_vlan(cls, vlan: Vlan | None) -> VlanConfig:
+        if vlan is None:
+            return cls()
+        return cls(
+            id=str(vlan.id) if vlan.id else None,
+            tag=vlan.tag,
+            name=vlan.name,
+            purpose=vlan.purpose.value if vlan.purpose else None,
+        )
+
+
+@dataclass(frozen=True)
+class OltConfigPack:
+    """Complete OLT configuration pack for ONT provisioning.
+
+    All values are resolved and ready to use. None values indicate
+    the setting is not configured at the OLT level.
+    """
+
+    # OLT identity
+    olt_id: str
+    olt_name: str
+
+    # Authorization profiles (OLT-local IDs)
+    line_profile_id: int | None = None
+    service_profile_id: int | None = None
+
+    # TR-069 configuration
+    tr069_acs_server_id: str | None = None
+    tr069_olt_profile_id: int | None = None
+
+    # VLANs by purpose (resolved with tags)
+    internet_vlan: VlanConfig = field(default_factory=VlanConfig)
+    management_vlan: VlanConfig = field(default_factory=VlanConfig)
+    tr069_vlan: VlanConfig = field(default_factory=VlanConfig)
+    voip_vlan: VlanConfig = field(default_factory=VlanConfig)
+    iptv_vlan: VlanConfig = field(default_factory=VlanConfig)
+
+    # OLT-side provisioning knobs
+    internet_config_ip_index: int = 0
+    wan_config_profile_id: int = 0
+
+    # TR-069 connection request credentials
+    cr_username: str | None = None
+    cr_password: str | None = None
+
+    # Default provisioning profile (bundle)
+    default_provisioning_profile_id: str | None = None
+
+    @property
+    def has_authorization_profiles(self) -> bool:
+        """True if both line and service profiles are configured."""
+        return self.line_profile_id is not None and self.service_profile_id is not None
+
+    @property
+    def has_tr069_config(self) -> bool:
+        """True if TR-069 ACS and OLT profile are configured."""
+        return (
+            self.tr069_acs_server_id is not None
+            and self.tr069_olt_profile_id is not None
+        )
+
+    @property
+    def has_vlans(self) -> bool:
+        """True if at least internet and management VLANs are configured."""
+        return (
+            self.internet_vlan.tag is not None
+            and self.management_vlan.tag is not None
+        )
+
+    @property
+    def is_complete(self) -> bool:
+        """True if all essential config pack fields are populated."""
+        return (
+            self.has_authorization_profiles
+            and self.has_vlans
+        )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "olt_id": self.olt_id,
+            "olt_name": self.olt_name,
+            "line_profile_id": self.line_profile_id,
+            "service_profile_id": self.service_profile_id,
+            "tr069_acs_server_id": self.tr069_acs_server_id,
+            "tr069_olt_profile_id": self.tr069_olt_profile_id,
+            "internet_vlan": {
+                "id": self.internet_vlan.id,
+                "tag": self.internet_vlan.tag,
+                "name": self.internet_vlan.name,
+            },
+            "management_vlan": {
+                "id": self.management_vlan.id,
+                "tag": self.management_vlan.tag,
+                "name": self.management_vlan.name,
+            },
+            "tr069_vlan": {
+                "id": self.tr069_vlan.id,
+                "tag": self.tr069_vlan.tag,
+                "name": self.tr069_vlan.name,
+            },
+            "internet_config_ip_index": self.internet_config_ip_index,
+            "wan_config_profile_id": self.wan_config_profile_id,
+            "cr_username": self.cr_username,
+            "default_provisioning_profile_id": self.default_provisioning_profile_id,
+            "is_complete": self.is_complete,
+        }
+
+
+def resolve_olt_config_pack(
+    db: Session,
+    olt_id: str | UUID,
+) -> OltConfigPack | None:
+    """Build complete OLT config pack from OLT and related entities.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID (string or UUID)
+
+    Returns:
+        OltConfigPack with all resolved values, or None if OLT not found
+    """
+    from app.models.network import OLTDevice
+
+    olt = db.get(OLTDevice, str(olt_id))
+    if olt is None:
+        return None
+
+    return OltConfigPack(
+        olt_id=str(olt.id),
+        olt_name=olt.name or "",
+        # Authorization profiles
+        line_profile_id=olt.default_line_profile_id,
+        service_profile_id=olt.default_service_profile_id,
+        # TR-069 config
+        tr069_acs_server_id=str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None,
+        tr069_olt_profile_id=olt.default_tr069_olt_profile_id,
+        # VLANs (resolve relationships)
+        internet_vlan=VlanConfig.from_vlan(olt.internet_vlan),
+        management_vlan=VlanConfig.from_vlan(olt.management_vlan),
+        tr069_vlan=VlanConfig.from_vlan(olt.tr069_vlan),
+        voip_vlan=VlanConfig.from_vlan(olt.voip_vlan),
+        iptv_vlan=VlanConfig.from_vlan(olt.iptv_vlan),
+        # Provisioning knobs
+        internet_config_ip_index=olt.default_internet_config_ip_index or 0,
+        wan_config_profile_id=olt.default_wan_config_profile_id or 0,
+        # Connection request credentials
+        cr_username=olt.default_cr_username,
+        cr_password=olt.default_cr_password,
+        # Default bundle
+        default_provisioning_profile_id=(
+            str(olt.default_provisioning_profile_id)
+            if olt.default_provisioning_profile_id
+            else None
+        ),
+    )
+
+
+def get_olt_config_pack_or_raise(
+    db: Session,
+    olt_id: str | UUID,
+) -> OltConfigPack:
+    """Get OLT config pack, raising HTTPException if not found.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+
+    Returns:
+        OltConfigPack
+
+    Raises:
+        HTTPException: If OLT not found
+    """
+    from fastapi import HTTPException
+
+    config = resolve_olt_config_pack(db, olt_id)
+    if config is None:
+        raise HTTPException(status_code=404, detail="OLT device not found")
+    return config
+
+
+def validate_olt_config_pack(
+    config: OltConfigPack,
+    *,
+    require_authorization: bool = True,
+    require_vlans: bool = True,
+    require_tr069: bool = False,
+) -> list[str]:
+    """Validate OLT config pack for provisioning readiness.
+
+    Args:
+        config: OLT config pack to validate
+        require_authorization: Check line/service profiles
+        require_vlans: Check internet/management VLANs
+        require_tr069: Check TR-069 ACS and profile
+
+    Returns:
+        List of validation error messages (empty if valid)
+    """
+    errors: list[str] = []
+
+    if require_authorization:
+        if config.line_profile_id is None:
+            errors.append("OLT missing default line profile ID")
+        if config.service_profile_id is None:
+            errors.append("OLT missing default service profile ID")
+
+    if require_vlans:
+        if config.internet_vlan.tag is None:
+            errors.append("OLT missing internet VLAN")
+        if config.management_vlan.tag is None:
+            errors.append("OLT missing management VLAN")
+
+    if require_tr069:
+        if config.tr069_acs_server_id is None:
+            errors.append("OLT missing TR-069 ACS server")
+        if config.tr069_olt_profile_id is None:
+            errors.append("OLT missing TR-069 OLT profile ID")
+
+    return errors
