@@ -1588,3 +1588,108 @@ def ont_set_http_management(
         ont_id=ont_id,
         action="Set HTTP Management",
     )
+
+
+# =============================================================================
+# ONT Decommission Routes
+# =============================================================================
+
+
+@router.get(
+    "/onts/{ont_id}/decommission",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:admin"))],
+)
+def ont_decommission_preview(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Show decommission preview modal with confirmation form.
+
+    Displays what will be affected and requires explicit confirmation.
+    """
+    from app.services.network.ont_decommission import (
+        DECOMMISSION_REASONS,
+        preview_decommission,
+    )
+
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        # Return error in modal format
+        context = _base_context(request, db, active_page="onts")
+        context["error"] = "ONT scope check failed"
+        return templates.TemplateResponse(
+            "admin/network/onts/_decommission_modal.html", context
+        )
+
+    preview = preview_decommission(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update({
+        "preview": preview.to_dict(),
+        "reasons": DECOMMISSION_REASONS,
+        "ont_id": ont_id,
+    })
+    return templates.TemplateResponse(
+        "admin/network/onts/_decommission_modal.html", context
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/decommission",
+    dependencies=[Depends(require_permission("network:admin"))],
+)
+def ont_decommission_execute(
+    request: Request,
+    ont_id: str,
+    reason: str = Form(...),
+    confirm: bool = Form(False),
+    remove_from_acs: bool = Form(True),
+    deauthorize_on_olt: bool = Form(True),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Execute ONT decommission after confirmation.
+
+    This is a destructive operation that permanently decommissions hardware.
+    Requires network:admin permission and explicit confirm=true.
+    """
+    from app.services.network.ont_decommission import decommission_ont_audited
+
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+
+    if not confirm:
+        return JSONResponse(
+            {
+                "success": False,
+                "message": "Decommission requires explicit confirmation checkbox",
+            },
+            status_code=400,
+            headers=_toast_headers("Confirmation required", "error"),
+        )
+
+    result = decommission_ont_audited(
+        db,
+        ont_id,
+        reason=reason,
+        confirm=True,  # Already verified above
+        remove_from_acs=remove_from_acs,
+        deauthorize_on_olt=deauthorize_on_olt,
+        request=request,
+    )
+
+    if result.success:
+        db.commit()
+        return JSONResponse(
+            result.to_dict(),
+            status_code=200,
+            headers=_toast_headers(result.message, "success"),
+        )
+    else:
+        db.rollback()
+        return JSONResponse(
+            result.to_dict(),
+            status_code=400,
+            headers=_toast_headers(result.message, "error"),
+        )

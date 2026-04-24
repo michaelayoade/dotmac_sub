@@ -49,11 +49,152 @@ class DecommissionResult:
         }
 
 
+# Valid decommission reasons
+DECOMMISSION_REASONS = {
+    "hardware_fault": "Hardware Fault",
+    "lost": "Lost/Missing",
+    "stolen": "Stolen",
+    "damaged": "Physical Damage",
+    "obsolete": "Obsolete/End of Life",
+    "rma": "Return to Manufacturer (RMA)",
+    "other": "Other",
+}
+
+
+@dataclass
+class DecommissionPreview:
+    """Preview of what decommission will affect (dry run)."""
+
+    ont_id: str
+    serial_number: str | None
+    olt_name: str | None
+    can_decommission: bool
+    warnings: list[str]
+    affected: dict[str, int]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ont_id": self.ont_id,
+            "serial_number": self.serial_number,
+            "olt_name": self.olt_name,
+            "can_decommission": self.can_decommission,
+            "warnings": self.warnings,
+            "affected": self.affected,
+        }
+
+
+def preview_decommission(db: Session, ont_id: str) -> DecommissionPreview:
+    """Preview what would be affected by decommissioning an ONT.
+
+    Use this before decommission_ont() to show users what will be deleted.
+    Does not modify any data.
+
+    Returns:
+        DecommissionPreview with affected counts and warnings.
+    """
+    from app.models.ont_bundle import OntBundleAssignment
+    from app.models.tr069 import Tr069CpeDevice
+
+    warnings: list[str] = []
+    affected: dict[str, int] = {
+        "active_assignments": 0,
+        "bundle_assignments": 0,
+        "service_port_allocations": 0,
+        "acs_devices": 0,
+    }
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return DecommissionPreview(
+            ont_id=ont_id,
+            serial_number=None,
+            olt_name=None,
+            can_decommission=False,
+            warnings=["ONT not found"],
+            affected=affected,
+        )
+
+    serial_number = ont.serial_number
+    olt = ont.olt_device
+    olt_name = olt.name if olt else None
+
+    # Check if already decommissioned
+    if not ont.is_active:
+        warnings.append("ONT is already inactive/decommissioned")
+
+    # Count active assignments
+    active_assignments = db.scalars(
+        select(OntAssignment).where(
+            OntAssignment.ont_unit_id == ont_id,
+            OntAssignment.active.is_(True),
+        )
+    ).all()
+    affected["active_assignments"] = len(active_assignments)
+    if active_assignments:
+        warnings.append(
+            f"Will close {len(active_assignments)} active customer assignment(s)"
+        )
+
+    # Count bundle assignments
+    bundle_count = db.scalar(
+        select(OntBundleAssignment)
+        .where(
+            OntBundleAssignment.ont_id == ont_id,
+            OntBundleAssignment.is_active.is_(True),
+        )
+        .with_only_columns(OntBundleAssignment.id)
+        .limit(100)
+    )
+    # Count properly
+    bundles = db.scalars(
+        select(OntBundleAssignment).where(
+            OntBundleAssignment.ont_id == ont_id,
+            OntBundleAssignment.is_active.is_(True),
+        )
+    ).all()
+    affected["bundle_assignments"] = len(bundles)
+    if bundles:
+        warnings.append(f"Will deactivate {len(bundles)} bundle assignment(s)")
+
+    # Count service port allocations
+    try:
+        from app.services.network.service_port_allocator import (
+            get_allocations_for_ont,
+        )
+
+        allocations = get_allocations_for_ont(db, ont_id)
+        affected["service_port_allocations"] = len(allocations)
+    except Exception:
+        pass  # Service port allocator may not be available
+
+    # Check TR-069 device
+    tr069_device = db.scalars(
+        select(Tr069CpeDevice).where(Tr069CpeDevice.ont_unit_id == ont_id)
+    ).first()
+    if tr069_device:
+        affected["acs_devices"] = 1
+        warnings.append("Will unlink TR-069/ACS device record")
+
+    # Check if still registered on OLT
+    if ont.external_id and olt:
+        warnings.append(f"Will deauthorize from OLT '{olt_name}'")
+
+    return DecommissionPreview(
+        ont_id=ont_id,
+        serial_number=serial_number,
+        olt_name=olt_name,
+        can_decommission=True,
+        warnings=warnings,
+        affected=affected,
+    )
+
+
 def decommission_ont(
     db: Session,
     ont_id: str,
     *,
     reason: str = "hardware_fault",
+    confirm: bool = False,
     remove_from_acs: bool = True,
     deauthorize_on_olt: bool = True,
     actor: str | None = None,
@@ -70,10 +211,14 @@ def decommission_ont(
 
     Use this for faulty hardware that should never be reused.
 
+    SAFETY: The `confirm` parameter MUST be True or the operation will be rejected.
+    Use preview_decommission() first to show users what will be affected.
+
     Args:
         db: Database session
         ont_id: UUID of the ONT to decommission
-        reason: Reason for decommission (e.g., "hardware_fault", "lost", "stolen")
+        reason: Reason for decommission (must be a key from DECOMMISSION_REASONS)
+        confirm: MUST be True to execute - prevents accidental decommission
         remove_from_acs: If True, delete the device from ACS entirely
         deauthorize_on_olt: If True, deauthorize the ONT on the OLT
         actor: Actor email for audit trail
@@ -81,6 +226,21 @@ def decommission_ont(
     Returns:
         DecommissionResult with cleanup statistics and any errors
     """
+    # Safety check: require explicit confirmation
+    if not confirm:
+        return DecommissionResult(
+            success=False,
+            message="Decommission requires explicit confirmation. Set confirm=True after reviewing preview_decommission() output.",
+            ont_id=ont_id,
+        )
+
+    # Validate reason
+    if reason not in DECOMMISSION_REASONS:
+        return DecommissionResult(
+            success=False,
+            message=f"Invalid reason '{reason}'. Valid reasons: {', '.join(DECOMMISSION_REASONS.keys())}",
+            ont_id=ont_id,
+        )
     from app.models.ont_bundle import OntBundleAssignment, OntBundleAssignmentStatus
     from app.models.tr069 import Tr069CpeDevice
     from app.services.events.dispatcher import emit_event
@@ -293,6 +453,7 @@ def decommission_ont_audited(
     ont_id: str,
     *,
     reason: str = "hardware_fault",
+    confirm: bool = False,
     remove_from_acs: bool = True,
     deauthorize_on_olt: bool = True,
     request: Request | None = None,
@@ -301,6 +462,8 @@ def decommission_ont_audited(
     """Decommission an ONT with audit logging.
 
     Wrapper around decommission_ont that adds audit event logging.
+
+    SAFETY: The `confirm` parameter MUST be True or the operation will be rejected.
     """
     from app.services.network.olt_web_audit import log_olt_audit_event
 
@@ -313,6 +476,7 @@ def decommission_ont_audited(
         db,
         ont_id,
         reason=reason,
+        confirm=confirm,
         remove_from_acs=remove_from_acs,
         deauthorize_on_olt=deauthorize_on_olt,
         actor=actor,

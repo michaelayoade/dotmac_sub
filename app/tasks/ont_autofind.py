@@ -355,3 +355,38 @@ def queue_rediscovery_poll(
     if dispatch.queued:
         return True, dispatch.task_id
     return False, dispatch.error
+
+
+def is_async_rediscovery_available() -> dict[str, object]:
+    """Check if async rediscovery mode is available (Redis/Celery operational).
+
+    Returns:
+        Dict with availability status and details for UI display.
+    """
+    from app.services.redis_client import redis_health_check
+
+    health = redis_health_check()
+    available = health.get("available", False)
+    circuit_open = health.get("circuit_open", False)
+
+    if available:
+        return {
+            "available": True,
+            "mode": "async",
+            "message": "Background processing enabled",
+            "details": f"Redis {health.get('version', 'unknown')} connected",
+        }
+    elif circuit_open:
+        return {
+            "available": False,
+            "mode": "blocking",
+            "message": "Background processing temporarily unavailable",
+            "details": "Redis circuit breaker open - using synchronous mode",
+        }
+    else:
+        return {
+            "available": False,
+            "mode": "blocking",
+            "message": "Background processing unavailable",
+            "details": health.get("error", "Redis connection failed"),
+        }
