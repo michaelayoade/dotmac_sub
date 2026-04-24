@@ -1201,7 +1201,7 @@ def unconfigured_onts_scan_now() -> RedirectResponse:
     )
     return RedirectResponse(
         "/admin/network/onts?view=unconfigured&status=success&message="
-        + quote_plus("Aggregated OLT autofind scan queued."),
+        + quote_plus("Scanning"),
         status_code=303,
     )
 

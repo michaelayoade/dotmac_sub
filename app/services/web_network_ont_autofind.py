@@ -537,6 +537,14 @@ def build_unconfigured_onts_page_data(
         )
         or 0
     )
+    olts_with_candidates = (
+        db.scalar(
+            select(func.count(func.distinct(OltAutofindCandidate.olt_id)))
+            .select_from(OltAutofindCandidate)
+            .where(OltAutofindCandidate.is_active.is_(True))
+        )
+        or 0
+    )
     olts = list(
         db.scalars(
             select(OLTDevice)
@@ -554,7 +562,7 @@ def build_unconfigured_onts_page_data(
         "stats": {
             "active_candidates": int(active_total),
             "history_candidates": int(history_total),
-            "olts_with_candidates": len({entry["olt_id"] for entry in entries}),
+            "olts_with_candidates": int(olts_with_candidates),
             "last_seen_at": last_seen,
         },
     }
