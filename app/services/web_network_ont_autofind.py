@@ -298,7 +298,7 @@ def sync_olt_autofind_entries(
         candidate.resolved_at = now
         resolved += 1
 
-    db.commit()
+    db.flush()  # Let caller control transaction boundary
     return {
         "discovered": len(entry_list),
         "created": created,
@@ -314,15 +314,23 @@ def resolve_candidate_authorized(
     fsp: str,
     serial_number: str,
 ) -> None:
-    """Mark a cached autofind candidate as authorized/resolved."""
+    """Mark a cached autofind candidate as authorized/resolved.
+
+    Uses SELECT FOR UPDATE with skip_locked to prevent race conditions
+    when multiple authorization workflows target the same candidate.
+    """
     candidate = db.scalars(
-        select(OltAutofindCandidate).where(
+        select(OltAutofindCandidate)
+        .where(
             OltAutofindCandidate.olt_id == olt_id,
             OltAutofindCandidate.fsp == fsp,
             OltAutofindCandidate.serial_number == serial_number,
+            OltAutofindCandidate.is_active.is_(True),  # Only resolve active candidates
         )
+        .with_for_update(skip_locked=True)
     ).first()
     if not candidate:
+        # Either not found, already resolved, or locked by another transaction
         return
     candidate.is_active = False
     candidate.resolution_reason = "authorized"
@@ -330,7 +338,7 @@ def resolve_candidate_authorized(
     matched_ont = _find_ont_by_serial(db, serial_number)
     if matched_ont:
         candidate.ont_unit_id = matched_ont.id
-    db.commit()
+    db.flush()  # Let caller control transaction boundary
 
 
 def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:

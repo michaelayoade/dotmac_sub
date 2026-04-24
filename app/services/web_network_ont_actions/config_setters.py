@@ -372,3 +372,371 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
             )
             message = f"{message}; failed to queue ACS inform wait: {exc}"
     return ok, message
+
+
+# ---------------------------------------------------------------------------
+# WAN Configuration Setters (TR-069)
+# ---------------------------------------------------------------------------
+
+
+def set_pppoe_credentials(
+    db: Session,
+    ont_id: str,
+    *,
+    username: str,
+    password: str,
+    instance_index: int = 1,
+    ensure_instance: bool = True,
+    wan_vlan: int | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Push PPPoE credentials to ONT via TR-069."""
+    from app.services.network.ont_action_wan import (
+        set_pppoe_credentials as _set_pppoe_credentials,
+    )
+
+    result = _set_pppoe_credentials(
+        db,
+        ont_id,
+        username=username,
+        password=password,
+        instance_index=instance_index,
+        ensure_instance=ensure_instance,
+        wan_vlan=wan_vlan,
+    )
+
+    if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont:
+            ont.pppoe_username = username
+            ont.pppoe_password = encrypt_credential(password)
+            db.flush()
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "set_pppoe_credentials_tr069",
+            {
+                "username": username,
+                "password_set": True,
+                "instance_index": instance_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        emit_event(
+            db,
+            EventType.ont_pppoe_credentials_set,
+            {
+                "ont_id": ont_id,
+                "ont_serial": ont.serial_number if ont else None,
+                "wan_mode": "pppoe",
+                "pppoe_username": username,
+                "method": "tr069",
+                "result": "success",
+            },
+            actor=actor_name_from_request(request),
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_pppoe_credentials",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "waiting": result.waiting,
+            "username": username,
+            "instance_index": instance_index,
+            "wan_vlan": wan_vlan,
+        },
+    )
+    return result
+
+
+def set_wan_dhcp(
+    db: Session,
+    ont_id: str,
+    *,
+    instance_index: int = 1,
+    ensure_instance: bool = True,
+    wan_vlan: int | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Configure WAN for DHCP mode via TR-069."""
+    from app.services.network.ont_action_wan import set_wan_dhcp as _set_wan_dhcp
+
+    result = _set_wan_dhcp(
+        db,
+        ont_id,
+        instance_index=instance_index,
+        ensure_instance=ensure_instance,
+        wan_vlan=wan_vlan,
+    )
+
+    if result.success:
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "set_wan_dhcp_tr069",
+            {
+                "instance_index": instance_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wan_dhcp",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "waiting": result.waiting,
+            "instance_index": instance_index,
+            "wan_vlan": wan_vlan,
+        },
+    )
+    return result
+
+
+def set_wan_static(
+    db: Session,
+    ont_id: str,
+    *,
+    ip_address: str,
+    subnet_mask: str,
+    gateway: str,
+    dns_servers: list[str] | None = None,
+    instance_index: int = 1,
+    request: Request | None = None,
+) -> ActionResult:
+    """Configure WAN for static IP mode via TR-069."""
+    from app.services.network.ont_action_wan import set_wan_static as _set_wan_static
+
+    result = _set_wan_static(
+        db,
+        ont_id,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
+    )
+
+    if result.success:
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "set_wan_static_tr069",
+            {
+                "ip_address": ip_address,
+                "subnet_mask": subnet_mask,
+                "gateway": gateway,
+                "dns_servers": dns_servers,
+                "instance_index": instance_index,
+            },
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wan_static",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "waiting": result.waiting,
+            "ip_address": ip_address,
+            "instance_index": instance_index,
+        },
+    )
+    return result
+
+
+def set_wan_config(
+    db: Session,
+    ont_id: str,
+    *,
+    wan_mode: str,
+    pppoe_username: str | None = None,
+    pppoe_password: str | None = None,
+    ip_address: str | None = None,
+    subnet_mask: str | None = None,
+    gateway: str | None = None,
+    dns_servers: list[str] | None = None,
+    instance_index: int = 1,
+    ensure_instance: bool = True,
+    wan_vlan: int | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Unified WAN configuration via TR-069."""
+    from app.services.network.ont_action_wan import set_wan_config as _set_wan_config
+
+    result = _set_wan_config(
+        db,
+        ont_id,
+        wan_mode=wan_mode,
+        pppoe_username=pppoe_username,
+        pppoe_password=pppoe_password,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
+        ensure_instance=ensure_instance,
+        wan_vlan=wan_vlan,
+    )
+
+    if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont and wan_mode == "pppoe" and pppoe_username and pppoe_password:
+            ont.pppoe_username = pppoe_username
+            ont.pppoe_password = encrypt_credential(pppoe_password)
+            db.flush()
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "set_wan_config_tr069",
+            {
+                "wan_mode": wan_mode,
+                "pppoe_username": pppoe_username,
+                "password_set": bool(pppoe_password),
+                "ip_address": ip_address,
+                "instance_index": instance_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wan_config",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "waiting": result.waiting,
+            "wan_mode": wan_mode,
+            "instance_index": instance_index,
+            "wan_vlan": wan_vlan,
+        },
+    )
+    return result
+
+
+def probe_wan_instance(
+    db: Session,
+    ont_id: str,
+    *,
+    instance_index: int = 1,
+    wan_mode: str = "pppoe",
+    request: Request | None = None,
+) -> ActionResult:
+    """Probe whether a WAN instance exists on the ONT."""
+    from app.services.network.ont_action_wan import (
+        probe_wan_instance as _probe_wan_instance,
+    )
+
+    result = _probe_wan_instance(
+        db,
+        ont_id,
+        instance_index=instance_index,
+        wan_mode=wan_mode,
+    )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="probe_wan_instance",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "instance_index": instance_index,
+            "wan_mode": wan_mode,
+            "data": result.data,
+        },
+    )
+    return result
+
+
+def ensure_wan_instance(
+    db: Session,
+    ont_id: str,
+    *,
+    instance_index: int = 1,
+    wan_mode: str = "pppoe",
+    wan_vlan: int | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Ensure a WAN instance exists on the ONT, creating if needed."""
+    from app.services.network.ont_action_wan import (
+        ensure_wan_instance as _ensure_wan_instance,
+    )
+
+    result = _ensure_wan_instance(
+        db,
+        ont_id,
+        instance_index=instance_index,
+        wan_mode=wan_mode,
+        wan_vlan=wan_vlan,
+    )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="ensure_wan_instance",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "waiting": result.waiting,
+            "instance_index": instance_index,
+            "wan_mode": wan_mode,
+            "wan_vlan": wan_vlan,
+        },
+    )
+    return result
+
+
+def set_http_management(
+    db: Session,
+    ont_id: str,
+    *,
+    enabled: bool,
+    port: int = 80,
+    request: Request | None = None,
+) -> ActionResult:
+    """Enable or disable HTTP management interface via TR-069."""
+    from app.services.network.ont_action_wan import (
+        set_http_management as _set_http_management,
+    )
+
+    result = _set_http_management(
+        db,
+        ont_id,
+        enabled=enabled,
+        port=port,
+    )
+
+    if result.success:
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "set_http_management_tr069",
+            {
+                "enabled": enabled,
+                "port": port,
+            },
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_http_management",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "enabled": enabled,
+            "port": port,
+        },
+    )
+    return result

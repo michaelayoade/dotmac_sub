@@ -121,10 +121,14 @@
 <div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
      x-data="{ wanMode: '{{ current_wan_mode }}', onuMode: '{{ current_onu_mode }}', ipProtocol: '{{ current_ip_protocol }}' }">
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WAN Service</h4>
-    <div class="space-y-4">
-        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200">
-            Direct WAN pushes are disabled. Edit and provision the active WAN service instance instead.
-        </div>
+    <form hx-post="/admin/network/onts/{{ ont_id }}/wan/config"
+          hx-swap="none"
+          hx-confirm="Apply WAN configuration via TR-069?"
+          data-network-action
+          data-loading-label="Applying WAN config..."
+          class="space-y-4">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="ensure_instance" value="true">
         {# ONU Mode Toggle - Routing vs Bridging #}
         <div class="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50/50 px-4 py-3 dark:border-slate-700 dark:bg-slate-800/50">
             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">ONU Mode</span>
@@ -237,11 +241,13 @@
                        class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
         </div>
-        <button type="button" disabled
-                class="inline-flex cursor-not-allowed items-center gap-2 rounded-lg bg-slate-300 px-4 py-2 text-sm font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">
-            Apply WAN Service via Instance
+        <button type="submit"
+                {% if not tr069_available %}disabled{% endif %}
+                class="inline-flex items-center gap-2 rounded-lg {% if tr069_available %}bg-blue-600 hover:bg-blue-700 text-white{% else %}cursor-not-allowed bg-slate-300 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %} px-4 py-2 text-sm font-medium">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            Apply WAN via TR-069
         </button>
-    </div>
+    </form>
 </div>
 
 <div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/10"
@@ -301,20 +307,25 @@
 {# PPPoE Credentials Form #}
 <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50"
      x-data="{ showPassword: false }">
-    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Credentials Only</h4>
-    <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">Use this only when a PPP WAN service already exists on the ONT. For new PPPoE service setup, use the Create PPPoE WAN Service form.</p>
-
-	    <div class="space-y-4">
-            <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200">
-                Direct PPPoE credential pushes are disabled. Update the active WAN service instance instead.
-            </div>
-	        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Push PPPoE Credentials via TR-069</h4>
+    <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">Use this only when a PPP WAN service already exists on the ONT. For new PPPoE service setup, use the Create PPPoE WAN Service form above.</p>
+    <form hx-post="/admin/network/onts/{{ ont_id }}/wan/pppoe-credentials"
+          hx-swap="none"
+          hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Pushing PPPoE credentials..."
+          class="space-y-4">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="ensure_instance" value="true">
+        <input type="hidden" name="instance_index" value="1">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
                 <label for="wan_credentials_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Username</label>
                 <input type="text"
                        id="wan_credentials_username"
-                       name="username"
+                       name="pppoe_username"
                        value="{{ current_pppoe_user or '' }}"
+                       required
                        placeholder="e.g. 100014919"
                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
@@ -323,9 +334,10 @@
                 <div class="relative">
                     <input :type="showPassword ? 'text' : 'password'"
                            id="wan_credentials_password"
-                           name="password"
+                           name="pppoe_password"
                            autocomplete="new-password"
                            placeholder="Enter new password"
+                           required
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <button type="button"
                             @click="showPassword = !showPassword"
@@ -338,11 +350,12 @@
             </div>
         </div>
         <div class="flex justify-end">
-            <button type="button" disabled
-                    class="inline-flex cursor-not-allowed items-center gap-2 rounded-lg bg-slate-300 px-4 py-2 text-sm font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+            <button type="submit"
+                    {% if not tr069_available %}disabled{% endif %}
+                    class="inline-flex items-center gap-2 rounded-lg {% if tr069_available %}bg-blue-600 hover:bg-blue-700 text-white{% else %}cursor-not-allowed bg-slate-300 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %} px-4 py-2 text-sm font-medium">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                Push Credentials via Instance
+                Push PPPoE Credentials
             </button>
         </div>
-    </div>
+    </form>
 </div>

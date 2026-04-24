@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
@@ -16,7 +17,10 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult
-from app.services.network.ont_inventory import reset_ont_service_state
+from app.services.network.ont_inventory import (
+    emit_bundle_unassignment_events,
+    reset_ont_service_state,
+)
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
     _resolve_return_olt_context,
@@ -92,6 +96,13 @@ def _cleanup_olt_state_for_return(
             return False, completed, errors
         completed.append(f"Removed service-port {service_port.index}")
 
+    # Release service-port DB allocations to prevent pool exhaustion
+    from app.services.network.service_port_allocator import release_all_for_ont
+
+    released_allocations = release_all_for_ont(db, ont_id)
+    if released_allocations:
+        completed.append(f"Released {released_allocations} service-port allocation(s)")
+
     deauth_result = adapter.deauthorize_ont(fsp, olt_ont_id)
     if not deauth_result.success:
         errors.append(f"Failed to deauthorize ONT: {deauth_result.message}")
@@ -162,6 +173,17 @@ def return_to_inventory(
         except Exception as e:
             logger.warning("Failed to emit ont_service_port_deleted event: %s", e)
 
+    # Release service-port DB allocations to prevent pool exhaustion
+    from app.services.network.service_port_allocator import release_all_for_ont
+
+    released_allocations = release_all_for_ont(db, ont_id)
+    if released_allocations:
+        logger.info(
+            "Released %d service-port allocation(s) for ONT %s",
+            released_allocations,
+            ont_id,
+        )
+
     deauth_result = adapter.deauthorize_ont(fsp, olt_ont_id)
     if not deauth_result.success:
         return ActionResult(
@@ -187,29 +209,71 @@ def return_to_inventory(
     except Exception as e:
         logger.warning("Failed to emit ont_deauthorized event: %s", e)
 
-    active_assignment = db.scalars(
-        select(OntAssignment)
-        .where(
-            OntAssignment.ont_unit_id == ont.id,
-            OntAssignment.active.is_(True),
+    # Clean up TR-069/ACS binding to prevent configuration leakage
+    try:
+        from app.models.tr069 import Tr069CpeDevice
+
+        tr069_device = db.scalars(
+            select(Tr069CpeDevice).where(Tr069CpeDevice.ont_unit_id == ont.id)
+        ).first()
+        if tr069_device:
+            tr069_device.ont_unit_id = None
+            logger.info(
+                "Cleared TR-069 device %s association for returned ONT %s",
+                tr069_device.id,
+                ont_id,
+            )
+    except Exception as e:
+        logger.warning("Failed to clear TR-069 device association: %s", e)
+
+    # Use savepoint to enable rollback on partial failure
+    deferred_bundle_events: list[dict] = []
+    try:
+        with db.begin_nested():
+            active_assignment = db.scalars(
+                select(OntAssignment)
+                .where(
+                    OntAssignment.ont_unit_id == ont.id,
+                    OntAssignment.active.is_(True),
+                )
+                .order_by(OntAssignment.created_at.desc())
+                .limit(1)
+                .with_for_update()  # Lock to prevent concurrent modifications
+            ).first()
+
+            if active_assignment is not None:
+                active_assignment.active = False
+                active_assignment.released_at = datetime.now(UTC)
+                active_assignment.release_reason = "returned_to_inventory"
+
+            ont.is_active = True  # Keep active for re-use (use decommission for full removal)
+            ont.olt_device_id = None
+            ont.board = None
+            ont.port = None
+            ont.external_id = None
+            # Defer event emission to avoid commit inside savepoint
+            deferred_bundle_events = reset_ont_service_state(
+                db, ont, reason="return_to_inventory", emit_events=False
+            )
+            db.flush()
+            ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Failed to update DB state during return-to-inventory for ONT %s: %s",
+            ont_id,
+            exc,
         )
-        .order_by(OntAssignment.created_at.desc())
-        .limit(1)
-    ).first()
+        return ActionResult(
+            success=False,
+            message=f"OLT cleanup succeeded but DB update failed: {exc}. Manual cleanup may be required.",
+        )
 
-    if active_assignment is not None:
-        active_assignment.active = False
+    # Emit deferred bundle unassignment events after successful commit
+    if deferred_bundle_events:
+        emit_bundle_unassignment_events(db, deferred_bundle_events)
 
-    ont.is_active = True  # Keep active for re-use (use decommission for full removal)
-    ont.olt_device_id = None
-    ont.board = None
-    ont.port = None
-    ont.external_id = None
-    reset_ont_service_state(db, ont)
-    db.flush()
-    ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
-
-    db.commit()
     db.refresh(ont)
 
     from app.services.web_network_ont_autofind import refresh_returned_ont_autofind

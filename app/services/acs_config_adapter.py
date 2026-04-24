@@ -50,6 +50,16 @@ class GenieAcsConfigWriter:
             "push_config_urgent",
             "download",
             "firmware_upgrade",
+            # WAN TR-069 actions
+            "probe_wan_instance",
+            "ensure_wan_instance",
+            "set_pppoe_credentials",
+            "set_wan_dhcp",
+            "set_wan_static",
+            "set_wan_config",
+            "set_wan_ipv6_config",
+            "set_http_management",
+            "delete_wan_instance",
         }
     )
 
@@ -569,6 +579,397 @@ class GenieAcsConfigWriter:
             ),
             data=data,
         )
+
+    # -------------------------------------------------------------------------
+    # WAN TR-069 Actions
+    # -------------------------------------------------------------------------
+
+    def queue_probe_wan_instance(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        wan_type: str = "ppp",
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "probe_wan_instance",
+            ont_id,
+            kwargs={"instance_index": instance_index, "wan_type": wan_type},
+            **metadata,
+        )
+
+    def probe_wan_instance(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        wan_type: str = "ppp",
+    ) -> ActionResult:
+        """Probe whether a WAN instance exists on the ONT."""
+        from app.services.network.ont_action_wan import probe_wan_instance
+
+        return probe_wan_instance(
+            db, ont_id, instance_index=instance_index, wan_type=wan_type
+        )
+
+    def queue_ensure_wan_instance(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        wan_type: str = "ppp",
+        wan_vlan: int | None = None,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "ensure_wan_instance",
+            ont_id,
+            kwargs={
+                "instance_index": instance_index,
+                "wan_type": wan_type,
+                "wan_vlan": wan_vlan,
+            },
+            **metadata,
+        )
+
+    def ensure_wan_instance(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        wan_type: str = "ppp",
+        wan_vlan: int | None = None,
+    ) -> ActionResult:
+        """Ensure a WAN instance exists, creating via addObject if needed."""
+        from app.services.network.ont_action_wan import ensure_wan_instance
+
+        return ensure_wan_instance(
+            db,
+            ont_id,
+            instance_index=instance_index,
+            wan_type=wan_type,
+            wan_vlan=wan_vlan,
+        )
+
+    def queue_set_pppoe_credentials(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        username: str,
+        password: str,
+        instance_index: int = 1,
+        ensure_instance: bool = True,
+        wan_vlan: int | None = None,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "set_pppoe_credentials",
+            ont_id,
+            kwargs={
+                "username": username,
+                "password": password,
+                "instance_index": instance_index,
+                "ensure_instance": ensure_instance,
+                "wan_vlan": wan_vlan,
+            },
+            **metadata,
+        )
+
+    def set_pppoe_credentials(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        username: str,
+        password: str,
+        instance_index: int = 1,
+        ensure_instance: bool = True,
+        wan_vlan: int | None = None,
+    ) -> ActionResult:
+        """Set PPPoE credentials on an ONT via TR-069."""
+        from app.services.network.ont_action_wan import set_pppoe_credentials
+
+        return set_pppoe_credentials(
+            db,
+            ont_id,
+            username=username,
+            password=password,
+            instance_index=instance_index,
+            ensure_instance=ensure_instance,
+            wan_vlan=wan_vlan,
+        )
+
+    def queue_set_wan_dhcp(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        ensure_instance: bool = True,
+        wan_vlan: int | None = None,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "set_wan_dhcp",
+            ont_id,
+            kwargs={
+                "instance_index": instance_index,
+                "ensure_instance": ensure_instance,
+                "wan_vlan": wan_vlan,
+            },
+            **metadata,
+        )
+
+    def set_wan_dhcp(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        ensure_instance: bool = True,
+        wan_vlan: int | None = None,
+    ) -> ActionResult:
+        """Configure WAN interface for DHCP mode."""
+        from app.services.network.ont_action_wan import set_wan_dhcp
+
+        return set_wan_dhcp(
+            db,
+            ont_id,
+            instance_index=instance_index,
+            ensure_instance=ensure_instance,
+            wan_vlan=wan_vlan,
+        )
+
+    def queue_set_wan_static(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        ip_address: str,
+        subnet_mask: str,
+        gateway: str,
+        dns_servers: str | None = None,
+        instance_index: int = 1,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "set_wan_static",
+            ont_id,
+            kwargs={
+                "ip_address": ip_address,
+                "subnet_mask": subnet_mask,
+                "gateway": gateway,
+                "dns_servers": dns_servers,
+                "instance_index": instance_index,
+            },
+            **metadata,
+        )
+
+    def set_wan_static(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        ip_address: str,
+        subnet_mask: str,
+        gateway: str,
+        dns_servers: str | None = None,
+        instance_index: int = 1,
+    ) -> ActionResult:
+        """Configure WAN interface with static IP."""
+        from app.services.network.ont_action_wan import set_wan_static
+
+        return set_wan_static(
+            db,
+            ont_id,
+            ip_address=ip_address,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            dns_servers=dns_servers,
+            instance_index=instance_index,
+        )
+
+    def queue_set_wan_config(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        wan_mode: str,
+        instance_index: int = 1,
+        wan_vlan: int | None = None,
+        pppoe_username: str | None = None,
+        pppoe_password: str | None = None,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        gateway: str | None = None,
+        dns_servers: str | None = None,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "set_wan_config",
+            ont_id,
+            kwargs={
+                "wan_mode": wan_mode,
+                "instance_index": instance_index,
+                "wan_vlan": wan_vlan,
+                "pppoe_username": pppoe_username,
+                "pppoe_password": pppoe_password,
+                "ip_address": ip_address,
+                "subnet_mask": subnet_mask,
+                "gateway": gateway,
+                "dns_servers": dns_servers,
+            },
+            **metadata,
+        )
+
+    def set_wan_config(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        wan_mode: str,
+        instance_index: int = 1,
+        wan_vlan: int | None = None,
+        pppoe_username: str | None = None,
+        pppoe_password: str | None = None,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        gateway: str | None = None,
+        dns_servers: str | None = None,
+    ) -> ActionResult:
+        """Unified entry point for WAN configuration."""
+        from app.services.network.ont_action_wan import set_wan_config
+
+        return set_wan_config(
+            db,
+            ont_id,
+            wan_mode=wan_mode,
+            instance_index=instance_index,
+            wan_vlan=wan_vlan,
+            pppoe_username=pppoe_username,
+            pppoe_password=pppoe_password,
+            ip_address=ip_address,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            dns_servers=dns_servers,
+        )
+
+    def queue_set_wan_ipv6_config(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        ipv6_enabled: bool = True,
+        dhcpv6_pd_enabled: bool = True,
+        instance_index: int = 1,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "set_wan_ipv6_config",
+            ont_id,
+            kwargs={
+                "ipv6_enabled": ipv6_enabled,
+                "dhcpv6_pd_enabled": dhcpv6_pd_enabled,
+                "instance_index": instance_index,
+            },
+            **metadata,
+        )
+
+    def set_wan_ipv6_config(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        ipv6_enabled: bool = True,
+        dhcpv6_pd_enabled: bool = True,
+        instance_index: int = 1,
+    ) -> ActionResult:
+        """Configure IPv6 settings on WAN interface."""
+        from app.services.network.ont_action_wan import set_wan_ipv6_config
+
+        return set_wan_ipv6_config(
+            db,
+            ont_id,
+            ipv6_enabled=ipv6_enabled,
+            dhcpv6_pd_enabled=dhcpv6_pd_enabled,
+            instance_index=instance_index,
+        )
+
+    def queue_set_http_management(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        enabled: bool,
+        port: int = 80,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "set_http_management",
+            ont_id,
+            kwargs={"enabled": enabled, "port": port},
+            **metadata,
+        )
+
+    def set_http_management(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        enabled: bool,
+        port: int = 80,
+    ) -> ActionResult:
+        """Enable or disable HTTP management interface on ONT."""
+        from app.services.network.ont_action_wan import set_http_management
+
+        return set_http_management(db, ont_id, enabled=enabled, port=port)
+
+    def queue_delete_wan_instance(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        wan_type: str = "ppp",
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "delete_wan_instance",
+            ont_id,
+            kwargs={"instance_index": instance_index, "wan_type": wan_type},
+            **metadata,
+        )
+
+    def delete_wan_instance(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        instance_index: int = 1,
+        wan_type: str = "ppp",
+    ) -> ActionResult:
+        """Delete a WAN instance via TR-069 deleteObject."""
+        from app.services.network.ont_action_wan import delete_wan_instance
+
+        return delete_wan_instance(
+            db, ont_id, instance_index=instance_index, wan_type=wan_type
+        )
+
 
 AcsConfigAdapter = GenieAcsConfigWriter
 acs_config_adapter = GenieAcsConfigWriter()

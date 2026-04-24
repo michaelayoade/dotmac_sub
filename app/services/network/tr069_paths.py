@@ -79,12 +79,34 @@ _TR181_PATHS: dict[str, str] = {
     "wan.dns_servers": "DNS.Client.Server.1.DNSServer",
     "wan.gateway": "Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
     "wan.dhcp_ip": "DHCPv4.Client.{i}.IPAddress",
+    # ── WAN PPP Control (TR-181) ────────────────────────────────────────
+    "wan.ppp.enable": "PPP.Interface.{i}.Enable",
+    "wan.ppp.connection_trigger": "PPP.Interface.{i}.ConnectionTrigger",
+    "wan.ppp.lower_layers": "PPP.Interface.{i}.LowerLayers",
+    "wan.ppp.connection_status": "PPP.Interface.{i}.ConnectionStatus",
+    # ── WAN IP Interface (TR-181) ───────────────────────────────────────
+    "wan.ip.enable": "IP.Interface.{i}.Enable",
+    "wan.ip.type": "IP.Interface.{i}.Type",
+    "wan.ip.lower_layers": "IP.Interface.{i}.LowerLayers",
+    "wan.ip.ipv4_enable": "IP.Interface.{i}.IPv4Enable",
+    "wan.ip.static_address": "IP.Interface.{i}.IPv4Address.1.IPAddress",
+    "wan.ip.static_subnet": "IP.Interface.{i}.IPv4Address.1.SubnetMask",
+    # ── VLAN Termination (TR-181) ───────────────────────────────────────
+    "wan.vlan.id": "Ethernet.VLANTermination.{i}.VLANID",
+    "wan.vlan.enable": "Ethernet.VLANTermination.{i}.Enable",
+    "wan.vlan.lower_layers": "Ethernet.VLANTermination.{i}.LowerLayers",
+    # ── DHCPv4 Client ───────────────────────────────────────────────────
+    "wan.dhcp.enable": "DHCPv4.Client.{i}.Enable",
+    "wan.dhcp.interface": "DHCPv4.Client.{i}.Interface",
     # ── WAN IPv6 ────────────────────────────────────────────────────────
     "wan.ipv6_enable": "IP.Interface.{i}.IPv6Enable",
     "wan.dhcpv6_enable": "DHCPv6.Client.{i}.Enable",
     "wan.dhcpv6_request_addresses": "DHCPv6.Client.{i}.RequestAddresses",
     "wan.dhcpv6_request_prefixes": "DHCPv6.Client.{i}.RequestPrefixes",
     "wan.router_advertisement_enable": "RouterAdvertisement.InterfaceSettings.{i}.Enable",
+    # ── HTTP/Web Management (vendor-specific) ───────────────────────────
+    "http_mgmt.enable": "X_HW_UserInterface.WebUIEnable",
+    "http_mgmt.port": "X_HW_UserInterface.WebUIPort",
     # ── LAN ─────────────────────────────────────────────────────────────
     "lan.ip_address": "IP.Interface.2.IPv4Address.1.IPAddress",
     "lan.subnet_mask": "IP.Interface.2.IPv4Address.1.SubnetMask",
@@ -166,6 +188,23 @@ _TR098_PATHS: dict[str, str] = {
     "wan.gateway": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.DefaultGateway",
     "wan.gateway_ip": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.DefaultGateway",
     "wan.dhcp_ip": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.ExternalIPAddress",
+    # ── WAN PPP Control (TR-098) ────────────────────────────────────────
+    "wan.ppp.enable": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.Enable",
+    "wan.ppp.nat_enabled": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.NATEnabled",
+    "wan.ppp.connection_type": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.ConnectionType",
+    "wan.ppp.vlan": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.X_HW_VLAN",
+    "wan.ppp.service_list": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.X_HW_SERVICELIST",
+    "wan.ppp.name": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.1.Name",
+    "wan.ppp.num_entries": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnectionNumberOfEntries",
+    # ── WAN IP Control (TR-098) ─────────────────────────────────────────
+    "wan.ip.enable": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.Enable",
+    "wan.ip.nat_enabled": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.NATEnabled",
+    "wan.ip.connection_type": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.ConnectionType",
+    "wan.ip.addressing_type": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.AddressingType",
+    "wan.ip.num_entries": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnectionNumberOfEntries",
+    # ── HTTP/Web Management (vendor-specific) ───────────────────────────
+    "http_mgmt.enable": "X_HW_UserInterface.WebUIEnable",
+    "http_mgmt.port": "X_HW_UserInterface.WebUIPort",
     # ── WAN IPv6 ────────────────────────────────────────────────────────
     "wan.ipv6_enable": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.1.X_IPv6Enabled",
     # ── LAN ─────────────────────────────────────────────────────────────
@@ -237,6 +276,29 @@ _TR098_OBJECT_BASES: dict[str, str] = {
 _OBJECT_BASES: dict[str, dict[str, str]] = {
     TR069_ROOT_DEVICE: _TR181_OBJECT_BASES,
     TR069_ROOT_IGD: _TR098_OBJECT_BASES,
+}
+
+
+# ---------------------------------------------------------------------------
+# WAN Object Container Paths — for addObject operations
+# ---------------------------------------------------------------------------
+
+_TR181_WAN_OBJECT_CONTAINERS: dict[str, str] = {
+    "ppp": "PPP.Interface.",
+    "ip": "IP.Interface.",
+    "vlan": "Ethernet.VLANTermination.",
+    "dhcp_client": "DHCPv4.Client.",
+    "dhcpv6_client": "DHCPv6.Client.",
+}
+
+_TR098_WAN_OBJECT_CONTAINERS: dict[str, str] = {
+    "ppp": "WANDevice.1.WANConnectionDevice.{i}.WANPPPConnection.",
+    "ip": "WANDevice.1.WANConnectionDevice.{i}.WANIPConnection.",
+}
+
+_WAN_OBJECT_CONTAINERS: dict[str, dict[str, str]] = {
+    TR069_ROOT_DEVICE: _TR181_WAN_OBJECT_CONTAINERS,
+    TR069_ROOT_IGD: _TR098_WAN_OBJECT_CONTAINERS,
 }
 
 # Object field suffixes (appended after instance number)

@@ -73,10 +73,15 @@ class EventDispatcher:
         Each handler is called in sequence. Failed handlers are tracked
         for later retry.
 
+        IMPORTANT: Event persistence uses a SEPARATE database session to avoid
+        committing the caller's pending transaction. This ensures event emission
+        doesn't break transaction isolation for callers.
+
         Args:
             db: Database session for handlers that need DB access
             event: The event to dispatch
         """
+        from app.db import SessionLocal
         from app.models.event_store import EventStatus, EventStore
 
         logger.info(
@@ -84,33 +89,47 @@ class EventDispatcher:
             extra=_event_extra(event, handler_count=len(self._handlers)),
         )
 
-        # 1. Persist event before processing
-        event_record: EventStore | None = EventStore(
-            event_id=event.event_id,
-            event_type=event.event_type.value,
-            payload=event.payload,
-            status=EventStatus.processing,
-            actor=event.actor,
-            subscriber_id=event.subscriber_id,
-            account_id=event.account_id,
-            subscription_id=event.subscription_id,
-            invoice_id=event.invoice_id,
-            service_order_id=event.service_order_id,
-        )
-        db.add(event_record)
+        # 1. Persist event before processing using SEPARATE session
+        # This avoids committing the caller's pending transaction
+        event_record_id: UUID | None = None
         try:
-            db.commit()
-        except Exception as persist_exc:
-            # If we can't persist, still try to process but log the error
+            event_session = SessionLocal()
+            try:
+                event_record = EventStore(
+                    event_id=event.event_id,
+                    event_type=event.event_type.value,
+                    payload=event.payload,
+                    status=EventStatus.processing,
+                    actor=event.actor,
+                    subscriber_id=event.subscriber_id,
+                    account_id=event.account_id,
+                    subscription_id=event.subscription_id,
+                    invoice_id=event.invoice_id,
+                    service_order_id=event.service_order_id,
+                )
+                event_session.add(event_record)
+                event_session.commit()
+                event_record_id = event_record.id
+            except Exception as persist_exc:
+                # If we can't persist, still try to process but log the error
+                logger.warning(
+                    "event_persist_failed",
+                    extra={
+                        **_event_extra(event, handler_count=len(self._handlers)),
+                        "error": str(persist_exc),
+                    },
+                )
+                event_session.rollback()
+            finally:
+                event_session.close()
+        except Exception as session_exc:
             logger.warning(
-                "event_persist_failed",
+                "event_session_failed",
                 extra={
                     **_event_extra(event, handler_count=len(self._handlers)),
-                    "error": str(persist_exc),
+                    "error": str(session_exc),
                 },
             )
-            db.rollback()
-            event_record = None
 
         # 2. Process all handlers, tracking failures
         failed_handlers: list[dict[str, str]] = []
@@ -134,32 +153,46 @@ class EventDispatcher:
                     }
                 )
 
-        # 3. Update event status
-        if event_record:
+        # 3. Update event status using SEPARATE session
+        if event_record_id:
             try:
-                if failed_handlers:
-                    event_record.status = EventStatus.failed
-                    event_record.failed_handlers = failed_handlers
-                    event_record.error = json.dumps(
-                        [fh["error"] for fh in failed_handlers]
+                update_session = SessionLocal()
+                try:
+                    stored_event = update_session.get(EventStore, event_record_id)
+                    if stored_event:
+                        if failed_handlers:
+                            stored_event.status = EventStatus.failed
+                            stored_event.failed_handlers = failed_handlers
+                            stored_event.error = json.dumps(
+                                [fh["error"] for fh in failed_handlers]
+                            )
+                        else:
+                            stored_event.status = EventStatus.completed
+                        stored_event.processed_at = datetime.now(UTC)
+                        update_session.commit()
+                except Exception as update_exc:
+                    logger.warning(
+                        "event_status_update_failed",
+                        extra={
+                            **_event_extra(
+                                event,
+                                handler_count=len(self._handlers),
+                                failed_handlers=failed_handlers,
+                            ),
+                            "error": str(update_exc),
+                        },
                     )
-                else:
-                    event_record.status = EventStatus.completed
-                event_record.processed_at = datetime.now(UTC)
-                db.commit()
-            except Exception as update_exc:
+                    update_session.rollback()
+                finally:
+                    update_session.close()
+            except Exception as session_exc:
                 logger.warning(
-                    "event_status_update_failed",
+                    "event_update_session_failed",
                     extra={
-                        **_event_extra(
-                            event,
-                            handler_count=len(self._handlers),
-                            failed_handlers=failed_handlers,
-                        ),
-                        "error": str(update_exc),
+                        **_event_extra(event, handler_count=len(self._handlers)),
+                        "error": str(session_exc),
                     },
                 )
-                db.rollback()
         logger.info(
             "event_dispatch_complete",
             extra=_event_extra(

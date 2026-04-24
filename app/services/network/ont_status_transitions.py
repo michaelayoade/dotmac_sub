@@ -107,7 +107,8 @@ def set_authorization_status(
     if current == next_status:
         return
     allowed = _AUTHORIZATION_TRANSITIONS.get(current, set())
-    if next_status not in allowed:
+    is_valid_transition = next_status in allowed
+    if not is_valid_transition:
         message = (
             f"Illegal ONT authorization status transition: "
             f"{current.value if current else 'none'} -> {next_status.value}"
@@ -115,6 +116,18 @@ def set_authorization_status(
         if strict:
             raise ValueError(message)
         logger.warning(message)
+    # Log transition for audit trail
+    logger.info(
+        "ont_status_transition",
+        extra={
+            "event": "ont_status_transition",
+            "ont_id": str(ont.id),
+            "field": "authorization_status",
+            "from": current.value if current else None,
+            "to": next_status.value,
+            "valid": is_valid_transition,
+        },
+    )
     ont.authorization_status = next_status
 
 
@@ -129,7 +142,8 @@ def set_provisioning_status(
     if current == next_status:
         return
     allowed = _PROVISIONING_TRANSITIONS.get(current, set())
-    if next_status not in allowed:
+    is_valid_transition = next_status in allowed
+    if not is_valid_transition:
         message = (
             f"Illegal ONT provisioning status transition: "
             f"{current.value if current else 'none'} -> {next_status.value}"
@@ -137,4 +151,16 @@ def set_provisioning_status(
         if strict:
             raise ValueError(message)
         logger.warning(message)
+    # Log transition for audit trail
+    logger.info(
+        "ont_status_transition",
+        extra={
+            "event": "ont_status_transition",
+            "ont_id": str(ont.id),
+            "field": "provisioning_status",
+            "from": current.value if current else None,
+            "to": next_status.value,
+            "valid": is_valid_transition,
+        },
+    )
     ont.provisioning_status = next_status

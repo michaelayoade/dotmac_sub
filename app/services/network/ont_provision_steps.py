@@ -1138,6 +1138,8 @@ def _provision_wan_service_instances(
                     service_label,
                 )
 
+        # Try to detect the appropriate WAN instance index for IGD devices
+        detected_index: int | None = None
         if (
             wan_mode == "pppoe"
             and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice"
@@ -1165,28 +1167,11 @@ def _provision_wan_service_instances(
                 instance.last_error = message[:500]
                 _mark_ppp_wan_requires_precreated()
                 continue
-        message = (
-            "ACS WAN writes require service-instance endpoint resolution and are "
-            "not executed through legacy flat TR-069 actions."
-        )
-        steps.append(
-            {
-                "step": f"provision_wan_service_instance:{service_label}",
-                "success": False,
-                "message": message,
-            }
-        )
+        # TR-069 WAN provisioning based on connection type
         from app.models.network import WanServiceProvisioningStatus
 
-        instance.provisioning_status = WanServiceProvisioningStatus.failed
-        instance.last_error = message[:500]
-        hard_failures.append(
-            f"provision_wan_service_instance:{service_label}: {message}"
-        )
-
-        # Validate PPPoE credentials if applicable. Writes are handled by the
-        # service-instance endpoint executor, not the legacy flat PPP action.
         if instance.connection_type == WanConnectionType.pppoe:
+            # Get PPPoE credentials
             pppoe_username = instance.pppoe_username
             pppoe_password = None
             if instance.pppoe_password:
@@ -1196,9 +1181,179 @@ def _provision_wan_service_instances(
                     pppoe_password = None
 
             if not (pppoe_username and pppoe_password):
-                needs_input.append(
-                    f"PPPoE credentials missing for WAN service '{service_label}'."
+                missing_msg = f"PPPoE credentials missing for WAN service '{service_label}'."
+                needs_input.append(missing_msg)
+                steps.append(
+                    {
+                        "step": f"provision_wan_service_instance:{service_label}",
+                        "success": False,
+                        "message": "PPPoE credentials not configured",
+                    }
                 )
+                # Sync-only semantics: can't proceed without credentials
+                hard_failures.append(
+                    f"provision_wan_service_instance:{service_label}: {missing_msg}"
+                )
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = missing_msg[:500]
+                continue
+
+            # Push PPPoE credentials via TR-069
+            from app.services.network.ont_action_wan import set_pppoe_credentials
+
+            tr069_result = set_pppoe_credentials(
+                db,
+                ont_id,
+                username=pppoe_username,
+                password=pppoe_password,
+                instance_index=detected_index or 1,
+                ensure_instance=True,
+                wan_vlan=wan_vlan,
+            )
+
+            steps.append(
+                {
+                    "step": f"provision_wan_service_instance:{service_label}",
+                    "success": tr069_result.success,
+                    "message": tr069_result.message,
+                }
+            )
+
+            if tr069_result.success:
+                instance.provisioning_status = WanServiceProvisioningStatus.provisioned
+                instance.last_error = None
+                logger.info(
+                    "TR-069 PPPoE credentials pushed successfully for ONT %s service %s",
+                    ont.serial_number,
+                    service_label,
+                )
+            elif tr069_result.waiting:
+                # addObject pending - will retry on next inform
+                instance.provisioning_status = WanServiceProvisioningStatus.pending
+                instance.last_error = tr069_result.message[:500]
+                logger.info(
+                    "TR-069 PPPoE provisioning pending for ONT %s service %s: %s",
+                    ont.serial_number,
+                    service_label,
+                    tr069_result.message,
+                )
+            else:
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = tr069_result.message[:500]
+                hard_failures.append(
+                    f"provision_wan_service_instance:{service_label}: {tr069_result.message}"
+                )
+                logger.warning(
+                    "TR-069 PPPoE provisioning failed for ONT %s service %s: %s",
+                    ont.serial_number,
+                    service_label,
+                    tr069_result.message,
+                )
+
+        elif instance.connection_type == WanConnectionType.dhcp:
+            # Push DHCP WAN config via TR-069
+            from app.services.network.ont_action_wan import set_wan_dhcp
+
+            tr069_result = set_wan_dhcp(
+                db,
+                ont_id,
+                instance_index=detected_index or 1,
+                ensure_instance=True,
+                wan_vlan=wan_vlan,
+            )
+
+            steps.append(
+                {
+                    "step": f"provision_wan_service_instance:{service_label}",
+                    "success": tr069_result.success,
+                    "message": tr069_result.message,
+                }
+            )
+
+            if tr069_result.success:
+                instance.provisioning_status = WanServiceProvisioningStatus.provisioned
+                instance.last_error = None
+            elif tr069_result.waiting:
+                instance.provisioning_status = WanServiceProvisioningStatus.pending
+                instance.last_error = tr069_result.message[:500]
+            else:
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = tr069_result.message[:500]
+                hard_failures.append(
+                    f"provision_wan_service_instance:{service_label}: {tr069_result.message}"
+                )
+
+        elif instance.connection_type == WanConnectionType.static:
+            # Static IP requires IP address, subnet, gateway
+            static_ip = getattr(instance, "static_ip_address", None)
+            static_subnet = getattr(instance, "static_subnet_mask", None)
+            static_gateway = getattr(instance, "static_gateway", None)
+            static_dns = getattr(instance, "static_dns_servers", None)
+
+            if not (static_ip and static_subnet and static_gateway):
+                needs_input.append(
+                    f"Static IP configuration missing for WAN service '{service_label}'."
+                )
+                steps.append(
+                    {
+                        "step": f"provision_wan_service_instance:{service_label}",
+                        "success": False,
+                        "message": "Static IP configuration not complete",
+                    }
+                )
+                continue
+
+            from app.services.network.ont_action_wan import set_wan_static
+
+            tr069_result = set_wan_static(
+                db,
+                ont_id,
+                ip_address=static_ip,
+                subnet_mask=static_subnet,
+                gateway=static_gateway,
+                dns_servers=static_dns.split(",") if static_dns else None,
+                instance_index=detected_index or 1,
+            )
+
+            steps.append(
+                {
+                    "step": f"provision_wan_service_instance:{service_label}",
+                    "success": tr069_result.success,
+                    "message": tr069_result.message,
+                }
+            )
+
+            if tr069_result.success:
+                instance.provisioning_status = WanServiceProvisioningStatus.provisioned
+                instance.last_error = None
+            elif tr069_result.waiting:
+                instance.provisioning_status = WanServiceProvisioningStatus.pending
+                instance.last_error = tr069_result.message[:500]
+            else:
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = tr069_result.message[:500]
+                hard_failures.append(
+                    f"provision_wan_service_instance:{service_label}: {tr069_result.message}"
+                )
+
+        else:
+            # Bridge mode or unsupported connection type
+            message = (
+                f"TR-069 provisioning not implemented for connection type "
+                f"'{instance.connection_type.value}'"
+            )
+            steps.append(
+                {
+                    "step": f"provision_wan_service_instance:{service_label}",
+                    "success": False,
+                    "message": message,
+                }
+            )
+            instance.provisioning_status = WanServiceProvisioningStatus.failed
+            instance.last_error = message[:500]
+            hard_failures.append(
+                f"provision_wan_service_instance:{service_label}: {message}"
+            )
 
     return steps, needs_input, hard_failures
 

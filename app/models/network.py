@@ -1651,6 +1651,8 @@ class OntAssignment(Base):
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    release_reason: Mapped[str | None] = mapped_column(String(64))
     # Map 'active' property to 'is_active' column in database
     active: Mapped[bool] = mapped_column("is_active", Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)

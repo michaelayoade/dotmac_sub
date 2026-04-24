@@ -1253,3 +1253,338 @@ def ont_delete_config_snapshot(
     return templates.TemplateResponse(
         "admin/network/onts/_config_snapshot_list.html", context
     )
+
+
+# ---------------------------------------------------------------------------
+# TR-069 WAN Configuration Routes
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/onts/{ont_id}/wan/pppoe-credentials",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_pppoe_credentials(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Push PPPoE credentials to ONT via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    username = _form_str(form, "pppoe_username").strip()
+    password = _form_str(form, "pppoe_password").strip()
+    instance_index_raw = _form_str(form, "instance_index").strip()
+    wan_vlan_raw = _form_str(form, "wan_vlan").strip()
+    ensure_instance = _form_str(form, "ensure_instance").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+        "",
+    }
+
+    if not username or not password:
+        return _action_json_response(
+            success=False,
+            message="PPPoE username and password are required",
+            action="Set PPPoE Credentials",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
+
+    result = web_network_ont_actions_service.set_pppoe_credentials(
+        db,
+        ont_id,
+        username=username,
+        password=password,
+        instance_index=instance_index,
+        ensure_instance=ensure_instance,
+        wan_vlan=wan_vlan,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set PPPoE Credentials",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wan/dhcp",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_wan_dhcp(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Configure WAN for DHCP mode via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    instance_index_raw = _form_str(form, "instance_index").strip()
+    wan_vlan_raw = _form_str(form, "wan_vlan").strip()
+    ensure_instance = _form_str(form, "ensure_instance").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+        "",
+    }
+
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
+
+    result = web_network_ont_actions_service.set_wan_dhcp(
+        db,
+        ont_id,
+        instance_index=instance_index,
+        ensure_instance=ensure_instance,
+        wan_vlan=wan_vlan,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WAN DHCP",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wan/static",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_wan_static(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Configure WAN for static IP mode via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    ip_address = _form_str(form, "ip_address").strip()
+    subnet_mask = _form_str(form, "subnet_mask").strip()
+    gateway = _form_str(form, "gateway").strip()
+    dns_servers_raw = _form_str(form, "dns_servers").strip()
+    instance_index_raw = _form_str(form, "instance_index").strip()
+
+    if not ip_address or not subnet_mask or not gateway:
+        return _action_json_response(
+            success=False,
+            message="IP address, subnet mask, and gateway are required",
+            action="Set WAN Static",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    dns_servers = (
+        [s.strip() for s in dns_servers_raw.split(",") if s.strip()]
+        if dns_servers_raw
+        else None
+    )
+
+    result = web_network_ont_actions_service.set_wan_static(
+        db,
+        ont_id,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WAN Static",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wan/config",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_wan_config(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Configure WAN mode and settings via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    wan_mode = _form_str(form, "wan_mode").strip().lower()
+    pppoe_username = _form_str(form, "pppoe_username").strip() or None
+    pppoe_password = _form_str(form, "pppoe_password").strip() or None
+    ip_address = _form_str(form, "ip_address").strip() or None
+    subnet_mask = _form_str(form, "subnet_mask").strip() or None
+    gateway = _form_str(form, "gateway").strip() or None
+    dns_servers_raw = _form_str(form, "dns_servers").strip()
+    instance_index_raw = _form_str(form, "instance_index").strip()
+    wan_vlan_raw = _form_str(form, "wan_vlan").strip()
+    ensure_instance = _form_str(form, "ensure_instance").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+        "",
+    }
+
+    if wan_mode not in {"pppoe", "dhcp", "static", "bridge"}:
+        return _action_json_response(
+            success=False,
+            message="Invalid WAN mode",
+            action="Set WAN Config",
+            request=request,
+            ont_id=ont_id,
+        )
+
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
+    dns_servers = (
+        [s.strip() for s in dns_servers_raw.split(",") if s.strip()]
+        if dns_servers_raw
+        else None
+    )
+
+    result = web_network_ont_actions_service.set_wan_config(
+        db,
+        ont_id,
+        wan_mode=wan_mode,
+        pppoe_username=pppoe_username,
+        pppoe_password=pppoe_password,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
+        ensure_instance=ensure_instance,
+        wan_vlan=wan_vlan,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WAN Config",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wan/probe",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_probe_wan_instance(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Probe whether a WAN instance exists on the ONT."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    instance_index_raw = _form_str(form, "instance_index").strip()
+    wan_mode = _form_str(form, "wan_mode").strip().lower() or "pppoe"
+
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+
+    result = web_network_ont_actions_service.probe_wan_instance(
+        db,
+        ont_id,
+        instance_index=instance_index,
+        wan_mode=wan_mode,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Probe WAN Instance",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wan/ensure-instance",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_ensure_wan_instance(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Ensure a WAN instance exists on the ONT, creating if needed."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    instance_index_raw = _form_str(form, "instance_index").strip()
+    wan_mode = _form_str(form, "wan_mode").strip().lower() or "pppoe"
+    wan_vlan_raw = _form_str(form, "wan_vlan").strip()
+
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
+
+    result = web_network_ont_actions_service.ensure_wan_instance(
+        db,
+        ont_id,
+        instance_index=instance_index,
+        wan_mode=wan_mode,
+        wan_vlan=wan_vlan,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Ensure WAN Instance",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/http-management",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_http_management(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Enable or disable HTTP management interface via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    enabled_raw = _form_str(form, "enabled").strip().lower()
+    port_raw = _form_str(form, "port").strip()
+
+    enabled = enabled_raw in {"true", "1", "yes", "on", "enabled"}
+    port = int(port_raw) if port_raw.isdigit() else 80
+
+    result = web_network_ont_actions_service.set_http_management(
+        db,
+        ont_id,
+        enabled=enabled,
+        port=port,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set HTTP Management",
+    )

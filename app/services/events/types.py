@@ -111,6 +111,9 @@ class EventType(enum.Enum):
     ont_provisioning_drift_detected = "ont.provisioning_drift_detected"
     ont_provisioning_verified = "ont.provisioning_verified"
 
+    # ONT bundle assignment events
+    ont_bundle_unassigned = "ont.bundle_unassigned"
+
     # OLT circuit breaker events
     olt_circuit_opened = "olt.circuit_opened"
     olt_circuit_closed = "olt.circuit_closed"

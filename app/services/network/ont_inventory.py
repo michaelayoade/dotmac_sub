@@ -26,18 +26,59 @@ from app.services.network.ont_actions import ActionResult
 logger = logging.getLogger(__name__)
 
 
-def reset_ont_service_state(db: Session, ont) -> None:
-    """Clear desired-state, bundle state, and runtime cache for a reusable ONT."""
+def reset_ont_service_state(
+    db: Session, ont, *, reason: str = "service_reset", emit_events: bool = True
+) -> list[dict]:
+    """Clear desired-state, bundle state, and runtime cache for a reusable ONT.
+
+    Args:
+        db: Database session
+        ont: ONT unit to reset
+        reason: Reason for the reset (used in event payloads)
+        emit_events: If True, emit bundle unassignment events. Set to False when
+            called inside a savepoint to avoid premature transaction commits,
+            then call emit_bundle_unassignment_events() after commit.
+
+    Returns:
+        List of event payloads for deferred emission when emit_events=False
+    """
     now = datetime.now(UTC)
     active_bundle_assignments = db.scalars(
         select(OntBundleAssignment)
         .where(OntBundleAssignment.ont_unit_id == ont.id)
         .where(OntBundleAssignment.is_active.is_(True))
     ).all()
+
+    deferred_events: list[dict] = []
     for assignment in active_bundle_assignments:
         assignment.is_active = False
         assignment.status = OntBundleAssignmentStatus.superseded
         assignment.superseded_at = now
+
+        event_payload = {
+            "ont_id": str(ont.id),
+            "ont_serial": getattr(ont, "serial_number", None),
+            "bundle_id": str(assignment.bundle_id) if assignment.bundle_id else None,
+            "reason": reason,
+        }
+
+        if emit_events:
+            # Emit immediately - caller is not in a savepoint
+            from app.services.events import emit_event
+            from app.services.events.types import EventType
+
+            try:
+                emit_event(
+                    db,
+                    EventType.ont_bundle_unassigned,
+                    event_payload,
+                    actor="system",
+                )
+            except Exception as e:
+                logger.warning("Failed to emit ont_bundle_unassigned event: %s", e)
+        else:
+            # Defer for caller to emit after transaction commits
+            deferred_events.append(event_payload)
 
     overrides = db.scalars(
         select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
@@ -110,6 +151,29 @@ def reset_ont_service_state(db: Session, ont) -> None:
     ont.ont_bias_current_ma = None
     ont.distance_meters = None
     ont.signal_updated_at = None
+
+    return deferred_events
+
+
+def emit_bundle_unassignment_events(db: Session, event_payloads: list[dict]) -> None:
+    """Emit bundle unassignment events that were deferred from reset_ont_service_state.
+
+    Call this after the transaction commits when reset_ont_service_state was called
+    with emit_events=False.
+    """
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    for payload in event_payloads:
+        try:
+            emit_event(
+                db,
+                EventType.ont_bundle_unassigned,
+                payload,
+                actor="system",
+            )
+        except Exception as e:
+            logger.warning("Failed to emit deferred ont_bundle_unassigned event: %s", e)
 
 
 def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:

@@ -645,6 +645,118 @@ def _configure_management_ip_for_authorization(
     return True, iphost_msg
 
 
+def _cleanup_mgmt_service_port_on_bind_failure(
+    db: Session,
+    olt: OLTDevice | None,
+    fsp: str,
+    ont_id_on_olt: int,
+    *,
+    logger_prefix: str = "ONT",
+) -> None:
+    """Remove orphaned management service port when ACS bind fails.
+
+    When management IP configuration succeeds but subsequent TR-069 bind fails,
+    this function cleans up the service port created for management traffic.
+    This prevents service port pool exhaustion from failed authorization attempts.
+
+    Args:
+        db: Database session
+        olt: OLT device object (may be None)
+        fsp: Frame/Slot/Port string
+        ont_id_on_olt: ONT ID on the OLT
+        logger_prefix: Prefix for log messages
+    """
+    if olt is None:
+        return
+
+    from sqlalchemy import desc, select
+
+    from app.models.network import OntProvisioningProfile
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    # Get the mgmt_vlan_tag from provisioning profile
+    profile = db.scalars(
+        select(OntProvisioningProfile)
+        .where(
+            OntProvisioningProfile.olt_device_id == olt.id,
+            OntProvisioningProfile.is_active.is_(True),
+        )
+        .order_by(
+            desc(OntProvisioningProfile.is_default),
+            desc(OntProvisioningProfile.updated_at),
+            desc(OntProvisioningProfile.created_at),
+        )
+    ).first()
+
+    if profile is None:
+        logger.debug(
+            "%s: No cleanup needed - no provisioning profile for OLT %s",
+            logger_prefix,
+            olt.name,
+        )
+        return
+
+    mgmt_vlan_tag = getattr(profile, "mgmt_vlan_tag", None)
+    if mgmt_vlan_tag is None:
+        logger.debug(
+            "%s: No cleanup needed - profile '%s' has no mgmt_vlan_tag",
+            logger_prefix,
+            profile.name,
+        )
+        return
+
+    # Find the management service port for this ONT
+    try:
+        adapter = get_protocol_adapter(olt)
+        ports_result = adapter.get_service_ports_for_ont(fsp, ont_id_on_olt)
+        if not ports_result.success:
+            logger.warning(
+                "%s: Cannot read service ports for cleanup: %s",
+                logger_prefix,
+                ports_result.message,
+            )
+            return
+
+        service_ports = ports_result.data.get("service_ports", [])
+        if not isinstance(service_ports, list):
+            return
+
+        # Find service port matching mgmt VLAN (gemport 2 is standard for management)
+        mgmt_gemport = 2
+        for sp in service_ports:
+            if sp.vlan_id == int(mgmt_vlan_tag) and sp.gem_index == mgmt_gemport:
+                delete_result = adapter.delete_service_port(sp.index)
+                if delete_result.success:
+                    logger.info(
+                        "%s: Cleaned up orphaned management service-port %d "
+                        "(VLAN %d, GEM %d) after ACS bind failure",
+                        logger_prefix,
+                        sp.index,
+                        mgmt_vlan_tag,
+                        mgmt_gemport,
+                    )
+                else:
+                    logger.warning(
+                        "%s: Failed to cleanup orphaned service-port %d: %s",
+                        logger_prefix,
+                        sp.index,
+                        delete_result.message,
+                    )
+                return
+
+        logger.debug(
+            "%s: No management service-port found for VLAN %d to cleanup",
+            logger_prefix,
+            mgmt_vlan_tag,
+        )
+    except Exception as exc:
+        logger.warning(
+            "%s: Error during service-port cleanup after ACS bind failure: %s",
+            logger_prefix,
+            exc,
+        )
+
+
 def _validate_autofind_candidate(
     db: Session,
     *,
@@ -1084,6 +1196,34 @@ def authorize_autofind_ont(
     can_authorize, block_reason = is_olt_accepting_new_onts(olt)
     if not can_authorize:
         return _fail("Authorize ONT on OLT", block_reason)
+
+    # Verify OLT SSH connectivity before proceeding (fail-fast)
+    connectivity_started_at = monotonic()
+    try:
+        from app.services.network.olt_ssh import test_reachability
+
+        ssh_ok, ssh_msg = test_reachability(olt, timeout_sec=10)
+        if not ssh_ok:
+            return _fail(
+                "Verify OLT connectivity",
+                f"Cannot reach OLT {olt.name} via SSH: {ssh_msg}",
+                step_started_at=connectivity_started_at,
+            )
+        _append_step(
+            "Verify OLT connectivity",
+            True,
+            f"OLT {olt.name} is reachable via SSH",
+            step_started_at=connectivity_started_at,
+        )
+    except Exception as exc:
+        logger.warning(
+            "OLT connectivity check failed for %s: %s", olt.name, exc, exc_info=True
+        )
+        return _fail(
+            "Verify OLT connectivity",
+            f"Connection test failed: {exc}",
+            step_started_at=connectivity_started_at,
+        )
 
     # Load authorization preset if provided
     authorization_preset = None
@@ -2171,6 +2311,10 @@ def run_post_authorization_follow_up(
         bind_msg = f"ACS bind failed: {exc}"
     _add_step("Bind DotMac ACS profile", bind_ok, bind_msg)
     if not bind_ok:
+        # Cleanup orphaned management service port created before ACS bind
+        _cleanup_mgmt_service_port_on_bind_failure(
+            db, olt, fsp, ont_id_on_olt, logger_prefix=f"ONT {ont_unit_id}"
+        )
         return False, bind_msg, steps
 
     try:
@@ -2291,7 +2435,7 @@ def create_or_find_ont_for_authorized_serial(
                 if olt is not None:
                     existing.tr069_acs_server_id = olt.tr069_acs_server_id
             apply_resolved_status_for_model(existing)
-            db.commit()
+            db.flush()  # Let caller control transaction boundary
             return str(
                 existing.id
             ), f"Using existing ONT record {existing.serial_number}."
@@ -2352,7 +2496,7 @@ def create_or_find_ont_for_authorized_serial(
     try:
         db.add(new_ont)
         apply_resolved_status_for_model(new_ont)
-        db.commit()
+        db.flush()  # Let caller control transaction boundary
     except SQLAlchemyError as exc:
         db.rollback()
         return None, f"Failed to create ONT record: {exc}"
