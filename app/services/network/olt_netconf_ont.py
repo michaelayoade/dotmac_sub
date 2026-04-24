@@ -591,3 +591,1579 @@ def _build_iphost_xml(
     </board>
   </gpon>
 </config>"""
+
+
+# ============================================================================
+# ONT Query Operations
+# ============================================================================
+
+
+def find_ont_by_serial(
+    olt: OLTDevice,
+    serial_number: str,
+) -> tuple[bool, str, dict | None]:
+    """Find ONT on OLT by serial number using NETCONF get.
+
+    Args:
+        olt: The OLT device.
+        serial_number: ONT serial number to search for.
+
+    Returns:
+        Tuple of (success, message, ont_info_dict or None).
+    """
+    ok, err = _validate_serial(serial_number)
+    if not ok:
+        return False, err, None
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", None
+
+    clean_serial = serial_number.replace("-", "").upper()
+
+    # Build filter for querying ONT by serial
+    filter_xml = f"""<gpon xmlns="{namespace}">
+  <board>
+    <port>
+      <ont>
+        <serial-number>{clean_serial}</serial-number>
+      </ont>
+    </port>
+  </board>
+</gpon>"""
+
+    try:
+        success, message, data = olt_netconf.get_config_filtered(olt, filter_xml)
+        if not success:
+            return False, f"NETCONF get-config failed: {message}", None
+
+        # Parse the response to extract ONT info
+        ont_info = _parse_ont_info_from_xml(data, clean_serial)
+        if ont_info:
+            return True, f"Found ONT with serial {serial_number}", ont_info
+        return False, f"ONT with serial {serial_number} not found", None
+
+    except RPCError as exc:
+        return False, f"NETCONF error: {exc}", None
+    except Exception as exc:
+        logger.error(
+            "NETCONF find_ont_by_serial error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", None
+
+
+def get_service_ports(
+    olt: OLTDevice,
+    fsp: str,
+) -> tuple[bool, str, list[dict]]:
+    """Get service ports for a PON port via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+
+    Returns:
+        Tuple of (success, message, list_of_service_port_dicts).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err, []
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", []
+
+    parts = fsp.split("/")
+    frame_id = parts[0]
+    slot_id = parts[1]
+    port_id = parts[2]
+
+    filter_xml = f"""<gpon xmlns="{namespace}">
+  <board>
+    <frame-id>{frame_id}</frame-id>
+    <slot-id>{slot_id}</slot-id>
+    <port>
+      <port-id>{port_id}</port-id>
+      <service-port/>
+    </port>
+  </board>
+</gpon>"""
+
+    try:
+        success, message, data = olt_netconf.get_config_filtered(olt, filter_xml)
+        if not success:
+            return False, f"NETCONF get-config failed: {message}", []
+
+        service_ports = _parse_service_ports_from_xml(data)
+        return True, f"Found {len(service_ports)} service ports", service_ports
+
+    except RPCError as exc:
+        return False, f"NETCONF error: {exc}", []
+    except Exception as exc:
+        logger.error(
+            "NETCONF get_service_ports error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", []
+
+
+def get_autofind_onts(
+    olt: OLTDevice,
+) -> tuple[bool, str, list[dict]]:
+    """Get autofind (unauthorized) ONTs via NETCONF.
+
+    Args:
+        olt: The OLT device.
+
+    Returns:
+        Tuple of (success, message, list_of_autofind_ont_dicts).
+    """
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", []
+
+    # Autofind ONTs are typically in a separate container
+    filter_xml = f"""<gpon xmlns="{namespace}">
+  <autofind-ont/>
+</gpon>"""
+
+    try:
+        success, message, data = olt_netconf.get_filtered(olt, filter_xml)
+        if not success:
+            return False, f"NETCONF get failed: {message}", []
+
+        autofind_onts = _parse_autofind_onts_from_xml(data)
+        return True, f"Found {len(autofind_onts)} autofind ONTs", autofind_onts
+
+    except RPCError as exc:
+        return False, f"NETCONF error: {exc}", []
+    except Exception as exc:
+        logger.error(
+            "NETCONF get_autofind_onts error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", []
+
+
+def get_line_profiles(
+    olt: OLTDevice,
+) -> tuple[bool, str, list[dict]]:
+    """Get line profiles via NETCONF.
+
+    Args:
+        olt: The OLT device.
+
+    Returns:
+        Tuple of (success, message, list_of_profile_dicts).
+    """
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", []
+
+    filter_xml = f"""<gpon xmlns="{namespace}">
+  <ont-lineprofile/>
+</gpon>"""
+
+    try:
+        success, message, data = olt_netconf.get_config_filtered(olt, filter_xml)
+        if not success:
+            return False, f"NETCONF get-config failed: {message}", []
+
+        profiles = _parse_profiles_from_xml(data, "ont-lineprofile")
+        return True, f"Found {len(profiles)} line profiles", profiles
+
+    except RPCError as exc:
+        return False, f"NETCONF error: {exc}", []
+    except Exception as exc:
+        logger.error(
+            "NETCONF get_line_profiles error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", []
+
+
+def get_service_profiles(
+    olt: OLTDevice,
+) -> tuple[bool, str, list[dict]]:
+    """Get service profiles via NETCONF.
+
+    Args:
+        olt: The OLT device.
+
+    Returns:
+        Tuple of (success, message, list_of_profile_dicts).
+    """
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", []
+
+    filter_xml = f"""<gpon xmlns="{namespace}">
+  <ont-srvprofile/>
+</gpon>"""
+
+    try:
+        success, message, data = olt_netconf.get_config_filtered(olt, filter_xml)
+        if not success:
+            return False, f"NETCONF get-config failed: {message}", []
+
+        profiles = _parse_profiles_from_xml(data, "ont-srvprofile")
+        return True, f"Found {len(profiles)} service profiles", profiles
+
+    except RPCError as exc:
+        return False, f"NETCONF error: {exc}", []
+    except Exception as exc:
+        logger.error(
+            "NETCONF get_service_profiles error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", []
+
+
+def get_tr069_profiles(
+    olt: OLTDevice,
+) -> tuple[bool, str, list[dict]]:
+    """Get TR-069 management profiles via NETCONF.
+
+    Args:
+        olt: The OLT device.
+
+    Returns:
+        Tuple of (success, message, list_of_profile_dicts).
+    """
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", []
+
+    filter_xml = f"""<gpon xmlns="{namespace}">
+  <tr069-profile/>
+</gpon>"""
+
+    try:
+        success, message, data = olt_netconf.get_config_filtered(olt, filter_xml)
+        if not success:
+            return False, f"NETCONF get-config failed: {message}", []
+
+        profiles = _parse_profiles_from_xml(data, "tr069-profile")
+        return True, f"Found {len(profiles)} TR-069 profiles", profiles
+
+    except RPCError as exc:
+        return False, f"NETCONF error: {exc}", []
+    except Exception as exc:
+        logger.error(
+            "NETCONF get_tr069_profiles error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", []
+
+
+# ============================================================================
+# ONT Configuration Operations
+# ============================================================================
+
+
+def bind_tr069_profile(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    profile_id: int,
+) -> tuple[bool, str]:
+    """Bind TR-069 management profile to ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        profile_id: TR-069 profile ID to bind.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_tr069_bind_xml(namespace, fsp, ont_id, profile_id)
+
+    logger.info(
+        "Binding TR-069 profile via NETCONF: olt=%s fsp=%s ont_id=%d profile_id=%d",
+        olt.name,
+        fsp,
+        ont_id,
+        profile_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"TR-069 profile {profile_id} bound to ONT {ont_id}"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF bind_tr069_profile error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def unbind_tr069_profile(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+) -> tuple[bool, str]:
+    """Unbind TR-069 management profile from ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_tr069_unbind_xml(namespace, fsp, ont_id)
+
+    logger.info(
+        "Unbinding TR-069 profile via NETCONF: olt=%s fsp=%s ont_id=%d",
+        olt.name,
+        fsp,
+        ont_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"TR-069 profile unbound from ONT {ont_id}"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF unbind_tr069_profile error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def create_service_port(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    gem_index: int,
+    vlan_id: int,
+    user_vlan: int | str | None = None,
+    tag_transform: str = "translate",
+    port_index: int | None = None,
+) -> tuple[bool, str, int | None]:
+    """Create service port for ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        gem_index: GEM port index.
+        vlan_id: Service VLAN ID.
+        user_vlan: User-side VLAN (optional).
+        tag_transform: Tag transformation mode (translate, transparent, etc.).
+        port_index: Specific port index (auto-assigned if None).
+
+    Returns:
+        Tuple of (success, message, assigned_port_index or None).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err, None
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT", None
+
+    config_xml = _build_service_port_create_xml(
+        namespace=namespace,
+        fsp=fsp,
+        ont_id=ont_id,
+        gem_index=gem_index,
+        vlan_id=vlan_id,
+        user_vlan=user_vlan,
+        tag_transform=tag_transform,
+        port_index=port_index,
+    )
+
+    logger.info(
+        "Creating service port via NETCONF: olt=%s fsp=%s ont_id=%d gem=%d vlan=%d",
+        olt.name,
+        fsp,
+        ont_id,
+        gem_index,
+        vlan_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}", None
+
+        # Port index is returned only if explicitly set; otherwise OLT assigns
+        return True, f"Service port created (VLAN {vlan_id})", port_index
+
+    except RPCError as exc:
+        error_msg = str(exc)
+        if "already exists" in error_msg.lower():
+            return True, f"Service port already exists (VLAN {vlan_id})", port_index
+        return _handle_rpc_error(exc, str(ont_id)) + (None,)
+    except Exception as exc:
+        logger.error(
+            "NETCONF create_service_port error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}", None
+
+
+def delete_service_port(
+    olt: OLTDevice,
+    port_index: int,
+) -> tuple[bool, str]:
+    """Delete service port via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        port_index: Service port index to delete.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_service_port_delete_xml(namespace, port_index)
+
+    logger.info(
+        "Deleting service port via NETCONF: olt=%s port_index=%d",
+        olt.name,
+        port_index,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"Service port {port_index} deleted"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(port_index))
+    except Exception as exc:
+        logger.error(
+            "NETCONF delete_service_port error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def update_ont_profiles(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    line_profile_id: int | None = None,
+    service_profile_id: int | None = None,
+) -> tuple[bool, str]:
+    """Update ONT line and/or service profile via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        line_profile_id: New line profile ID (optional).
+        service_profile_id: New service profile ID (optional).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    if line_profile_id is None and service_profile_id is None:
+        return False, "At least one of line_profile_id or service_profile_id required"
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_ont_profile_update_xml(
+        namespace=namespace,
+        fsp=fsp,
+        ont_id=ont_id,
+        line_profile_id=line_profile_id,
+        service_profile_id=service_profile_id,
+    )
+
+    logger.info(
+        "Updating ONT profiles via NETCONF: olt=%s fsp=%s ont_id=%d line=%s srv=%s",
+        olt.name,
+        fsp,
+        ont_id,
+        line_profile_id,
+        service_profile_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"ONT {ont_id} profiles updated"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF update_ont_profiles error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+# ============================================================================
+# Extended ONT Configuration
+# ============================================================================
+
+
+def configure_internet_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Configure ONT internet-config via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        ip_index: IP index (default 0).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_internet_config_xml(namespace, fsp, ont_id, ip_index)
+
+    logger.info(
+        "Configuring internet-config via NETCONF: olt=%s fsp=%s ont_id=%d ip_index=%d",
+        olt.name,
+        fsp,
+        ont_id,
+        ip_index,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"Internet config enabled on ONT {ont_id}"
+
+    except RPCError as exc:
+        error_msg = str(exc)
+        if "already" in error_msg.lower():
+            return True, f"Internet config already enabled on ONT {ont_id}"
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF configure_internet_config error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def configure_wan_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+    profile_id: int = 0,
+) -> tuple[bool, str]:
+    """Configure ONT WAN config via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        ip_index: IP index (default 0).
+        profile_id: WAN profile ID (default 0).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_wan_config_xml(namespace, fsp, ont_id, ip_index, profile_id)
+
+    logger.info(
+        "Configuring wan-config via NETCONF: olt=%s fsp=%s ont_id=%d profile=%d",
+        olt.name,
+        fsp,
+        ont_id,
+        profile_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"WAN config enabled on ONT {ont_id}"
+
+    except RPCError as exc:
+        error_msg = str(exc)
+        if "already" in error_msg.lower():
+            return True, f"WAN config already enabled on ONT {ont_id}"
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF configure_wan_config error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def configure_pppoe(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int,
+    vlan_id: int,
+    username: str,
+    password: str,
+) -> tuple[bool, str]:
+    """Configure PPPoE on ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        ip_index: IP index.
+        vlan_id: PPPoE VLAN ID.
+        username: PPPoE username.
+        password: PPPoE password.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_pppoe_config_xml(
+        namespace, fsp, ont_id, ip_index, vlan_id, username, password
+    )
+
+    logger.info(
+        "Configuring PPPoE via NETCONF: olt=%s fsp=%s ont_id=%d vlan=%d user=%s",
+        olt.name,
+        fsp,
+        ont_id,
+        vlan_id,
+        username,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"PPPoE configured on ONT {ont_id} (VLAN {vlan_id})"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF configure_pppoe error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def configure_port_native_vlan(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    eth_port: int,
+    vlan_id: int,
+    priority: int = 0,
+) -> tuple[bool, str]:
+    """Configure native VLAN on ONT Ethernet port via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        eth_port: Ethernet port number.
+        vlan_id: Native VLAN ID.
+        priority: 802.1p priority (default 0).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_port_native_vlan_xml(
+        namespace, fsp, ont_id, eth_port, vlan_id, priority
+    )
+
+    logger.info(
+        "Configuring port native VLAN via NETCONF: olt=%s fsp=%s ont_id=%d eth=%d vlan=%d",
+        olt.name,
+        fsp,
+        ont_id,
+        eth_port,
+        vlan_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"Native VLAN {vlan_id} set on port {eth_port}"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF configure_port_native_vlan error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+# ============================================================================
+# Clear Operations
+# ============================================================================
+
+
+def clear_iphost_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Clear IPHOST configuration from ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        ip_index: IP index to clear (default 0).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_iphost_delete_xml(namespace, fsp, ont_id, ip_index)
+
+    logger.info(
+        "Clearing IPHOST config via NETCONF: olt=%s fsp=%s ont_id=%d ip_index=%d",
+        olt.name,
+        fsp,
+        ont_id,
+        ip_index,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"IPHOST config cleared from ONT {ont_id}"
+
+    except RPCError as exc:
+        error_msg = str(exc)
+        if "does not exist" in error_msg.lower() or "not found" in error_msg.lower():
+            return True, f"IPHOST config already cleared from ONT {ont_id}"
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF clear_iphost_config error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def clear_internet_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Clear internet-config from ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        ip_index: IP index to clear (default 0).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_internet_config_delete_xml(namespace, fsp, ont_id, ip_index)
+
+    logger.info(
+        "Clearing internet-config via NETCONF: olt=%s fsp=%s ont_id=%d",
+        olt.name,
+        fsp,
+        ont_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"Internet config cleared from ONT {ont_id}"
+
+    except RPCError as exc:
+        error_msg = str(exc)
+        if "does not exist" in error_msg.lower() or "not found" in error_msg.lower():
+            return True, f"Internet config already cleared from ONT {ont_id}"
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF clear_internet_config error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def clear_wan_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Clear WAN config from ONT via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+        ip_index: IP index to clear (default 0).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    config_xml = _build_wan_config_delete_xml(namespace, fsp, ont_id, ip_index)
+
+    logger.info(
+        "Clearing wan-config via NETCONF: olt=%s fsp=%s ont_id=%d",
+        olt.name,
+        fsp,
+        ont_id,
+    )
+
+    try:
+        success, message = olt_netconf.edit_config(olt, config_xml)
+        if not success:
+            return False, f"NETCONF edit-config failed: {message}"
+
+        return True, f"WAN config cleared from ONT {ont_id}"
+
+    except RPCError as exc:
+        error_msg = str(exc)
+        if "does not exist" in error_msg.lower() or "not found" in error_msg.lower():
+            return True, f"WAN config already cleared from ONT {ont_id}"
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF clear_wan_config error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+# ============================================================================
+# ONT Lifecycle Operations
+# ============================================================================
+
+
+def reboot_ont(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+) -> tuple[bool, str]:
+    """Reboot ONT via NETCONF RPC.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    rpc_xml = _build_ont_reboot_rpc(namespace, fsp, ont_id)
+
+    logger.info(
+        "Rebooting ONT via NETCONF: olt=%s fsp=%s ont_id=%d",
+        olt.name,
+        fsp,
+        ont_id,
+    )
+
+    try:
+        success, message = olt_netconf.dispatch_rpc(olt, rpc_xml)
+        if not success:
+            return False, f"NETCONF RPC failed: {message}"
+
+        return True, f"ONT {ont_id} reboot initiated"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF reboot_ont error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+def factory_reset_ont(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+) -> tuple[bool, str]:
+    """Factory reset ONT via NETCONF RPC.
+
+    Args:
+        olt: The OLT device.
+        fsp: Frame/Slot/Port string.
+        ont_id: The ONT ID.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    namespace = discover_gpon_namespace(olt)
+    if namespace is None:
+        return False, "Could not discover GPON YANG namespace on OLT"
+
+    rpc_xml = _build_ont_factory_reset_rpc(namespace, fsp, ont_id)
+
+    logger.info(
+        "Factory resetting ONT via NETCONF: olt=%s fsp=%s ont_id=%d",
+        olt.name,
+        fsp,
+        ont_id,
+    )
+
+    try:
+        success, message = olt_netconf.dispatch_rpc(olt, rpc_xml)
+        if not success:
+            return False, f"NETCONF RPC failed: {message}"
+
+        return True, f"ONT {ont_id} factory reset initiated"
+
+    except RPCError as exc:
+        return _handle_rpc_error(exc, str(ont_id))
+    except Exception as exc:
+        logger.error(
+            "NETCONF factory_reset_ont error on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"NETCONF error: {type(exc).__name__}: {exc}"
+
+
+# ============================================================================
+# XML Builder Helpers
+# ============================================================================
+
+
+def _build_tr069_bind_xml(
+    namespace: str, fsp: str, ont_id: int, profile_id: int
+) -> str:
+    """Build XML for binding TR-069 profile to ONT."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <tr069-profile-id>{profile_id}</tr069-profile-id>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_tr069_unbind_xml(namespace: str, fsp: str, ont_id: int) -> str:
+    """Build XML for unbinding TR-069 profile from ONT."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <tr069-profile-id xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" nc:operation="delete"/>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_service_port_create_xml(
+    namespace: str,
+    fsp: str,
+    ont_id: int,
+    gem_index: int,
+    vlan_id: int,
+    user_vlan: int | str | None,
+    tag_transform: str,
+    port_index: int | None,
+) -> str:
+    """Build XML for creating service port."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    port_index_elem = f"<port-index>{port_index}</port-index>" if port_index else ""
+    user_vlan_elem = f"<user-vlan>{user_vlan}</user-vlan>" if user_vlan else ""
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <service-port>
+            {port_index_elem}
+            <gem-index>{gem_index}</gem-index>
+            <vlan-id>{vlan_id}</vlan-id>
+            {user_vlan_elem}
+            <tag-transform>{tag_transform}</tag-transform>
+          </service-port>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_service_port_delete_xml(namespace: str, port_index: int) -> str:
+    """Build XML for deleting service port."""
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <service-port xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" nc:operation="delete">
+      <port-index>{port_index}</port-index>
+    </service-port>
+  </gpon>
+</config>"""
+
+
+def _build_ont_profile_update_xml(
+    namespace: str,
+    fsp: str,
+    ont_id: int,
+    line_profile_id: int | None,
+    service_profile_id: int | None,
+) -> str:
+    """Build XML for updating ONT profiles."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    line_elem = (
+        f"<ont-lineprofile-id>{line_profile_id}</ont-lineprofile-id>"
+        if line_profile_id is not None
+        else ""
+    )
+    srv_elem = (
+        f"<ont-srvprofile-id>{service_profile_id}</ont-srvprofile-id>"
+        if service_profile_id is not None
+        else ""
+    )
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          {line_elem}
+          {srv_elem}
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_internet_config_xml(
+    namespace: str, fsp: str, ont_id: int, ip_index: int
+) -> str:
+    """Build XML for internet-config enable."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <internet-config>
+            <ip-index>{ip_index}</ip-index>
+            <enable>true</enable>
+          </internet-config>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_wan_config_xml(
+    namespace: str, fsp: str, ont_id: int, ip_index: int, profile_id: int
+) -> str:
+    """Build XML for WAN config."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <wan-config>
+            <ip-index>{ip_index}</ip-index>
+            <profile-id>{profile_id}</profile-id>
+          </wan-config>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_pppoe_config_xml(
+    namespace: str,
+    fsp: str,
+    ont_id: int,
+    ip_index: int,
+    vlan_id: int,
+    username: str,
+    password: str,
+) -> str:
+    """Build XML for PPPoE configuration."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <pppoe>
+            <ip-index>{ip_index}</ip-index>
+            <vlan-id>{vlan_id}</vlan-id>
+            <username>{username}</username>
+            <password>{password}</password>
+          </pppoe>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_port_native_vlan_xml(
+    namespace: str,
+    fsp: str,
+    ont_id: int,
+    eth_port: int,
+    vlan_id: int,
+    priority: int,
+) -> str:
+    """Build XML for port native VLAN configuration."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <eth-port>
+            <port-id>{eth_port}</port-id>
+            <native-vlan>{vlan_id}</native-vlan>
+            <priority>{priority}</priority>
+          </eth-port>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_iphost_delete_xml(
+    namespace: str, fsp: str, ont_id: int, ip_index: int
+) -> str:
+    """Build XML for deleting IPHOST config."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <iphost xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" nc:operation="delete">
+            <ip-index>{ip_index}</ip-index>
+          </iphost>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_internet_config_delete_xml(
+    namespace: str, fsp: str, ont_id: int, ip_index: int
+) -> str:
+    """Build XML for deleting internet-config."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <internet-config xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" nc:operation="delete">
+            <ip-index>{ip_index}</ip-index>
+          </internet-config>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_wan_config_delete_xml(
+    namespace: str, fsp: str, ont_id: int, ip_index: int
+) -> str:
+    """Build XML for deleting WAN config."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <gpon xmlns="{namespace}">
+    <board>
+      <frame-id>{frame_id}</frame-id>
+      <slot-id>{slot_id}</slot-id>
+      <port>
+        <port-id>{port_id}</port-id>
+        <ont>
+          <ont-id>{ont_id}</ont-id>
+          <wan-config xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" nc:operation="delete">
+            <ip-index>{ip_index}</ip-index>
+          </wan-config>
+        </ont>
+      </port>
+    </board>
+  </gpon>
+</config>"""
+
+
+def _build_ont_reboot_rpc(namespace: str, fsp: str, ont_id: int) -> str:
+    """Build RPC XML for ONT reboot."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<ont-reboot xmlns="{namespace}">
+  <frame-id>{frame_id}</frame-id>
+  <slot-id>{slot_id}</slot-id>
+  <port-id>{port_id}</port-id>
+  <ont-id>{ont_id}</ont-id>
+</ont-reboot>"""
+
+
+def _build_ont_factory_reset_rpc(namespace: str, fsp: str, ont_id: int) -> str:
+    """Build RPC XML for ONT factory reset."""
+    parts = fsp.split("/")
+    frame_id, slot_id, port_id = parts[0], parts[1], parts[2]
+
+    return f"""<ont-reset xmlns="{namespace}">
+  <frame-id>{frame_id}</frame-id>
+  <slot-id>{slot_id}</slot-id>
+  <port-id>{port_id}</port-id>
+  <ont-id>{ont_id}</ont-id>
+  <factory-reset>true</factory-reset>
+</ont-reset>"""
+
+
+# ============================================================================
+# XML Parsing Helpers
+# ============================================================================
+
+
+def _parse_ont_info_from_xml(xml_data: str, serial: str) -> dict | None:
+    """Parse ONT info from NETCONF get response XML."""
+    import defusedxml.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_data)
+        # Search for ont element with matching serial
+        for ont in root.iter():
+            if ont.tag.endswith("ont"):
+                ont_serial = None
+                ont_id = None
+                fsp = None
+                for child in ont:
+                    tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    if tag == "serial-number":
+                        ont_serial = child.text
+                    elif tag == "ont-id":
+                        ont_id = int(child.text) if child.text else None
+
+                if ont_serial and ont_serial.upper() == serial.upper():
+                    return {
+                        "serial_number": ont_serial,
+                        "ont_id": ont_id,
+                        "fsp": fsp,
+                    }
+    except Exception as exc:
+        logger.warning("Failed to parse ONT info from XML: %s", exc)
+
+    return None
+
+
+def _parse_service_ports_from_xml(xml_data: str) -> list[dict]:
+    """Parse service ports from NETCONF response XML."""
+    import defusedxml.ElementTree as ET
+
+    ports = []
+    try:
+        root = ET.fromstring(xml_data)
+        for sp in root.iter():
+            if sp.tag.endswith("service-port"):
+                port_info = {}
+                for child in sp:
+                    tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    port_info[tag] = child.text
+                if port_info:
+                    ports.append(port_info)
+    except Exception as exc:
+        logger.warning("Failed to parse service ports from XML: %s", exc)
+
+    return ports
+
+
+def _parse_autofind_onts_from_xml(xml_data: str) -> list[dict]:
+    """Parse autofind ONTs from NETCONF response XML."""
+    import defusedxml.ElementTree as ET
+
+    onts = []
+    try:
+        root = ET.fromstring(xml_data)
+        for ont in root.iter():
+            if ont.tag.endswith("autofind-ont") or ont.tag.endswith("ont"):
+                ont_info = {}
+                for child in ont:
+                    tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    ont_info[tag] = child.text
+                if ont_info and "serial-number" in ont_info:
+                    onts.append(ont_info)
+    except Exception as exc:
+        logger.warning("Failed to parse autofind ONTs from XML: %s", exc)
+
+    return onts
+
+
+def _parse_profiles_from_xml(xml_data: str, profile_type: str) -> list[dict]:
+    """Parse profiles from NETCONF response XML."""
+    import defusedxml.ElementTree as ET
+
+    profiles = []
+    try:
+        root = ET.fromstring(xml_data)
+        for profile in root.iter():
+            if profile.tag.endswith(profile_type):
+                profile_info = {}
+                for child in profile:
+                    tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    profile_info[tag] = child.text
+                if profile_info:
+                    profiles.append(profile_info)
+    except Exception as exc:
+        logger.warning("Failed to parse %s from XML: %s", profile_type, exc)
+
+    return profiles

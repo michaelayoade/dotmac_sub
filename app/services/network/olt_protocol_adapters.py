@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -1478,7 +1478,10 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
 
 class NetconfProtocolAdapter(BaseProtocolAdapter):
-    """NETCONF protocol adapter for OLT operations."""
+    """NETCONF protocol adapter for OLT operations.
+
+    Provides full NETCONF support for Huawei OLTs with GPON YANG capabilities.
+    """
 
     @property
     def protocol(self) -> OltProtocol:
@@ -1497,20 +1500,33 @@ class NetconfProtocolAdapter(BaseProtocolAdapter):
 
         can_use, reason = can_authorize_via_netconf(self._olt)
 
+        # All operations are available when NETCONF + GPON is available
         return ProtocolCapabilities(
             protocol=OltProtocol.NETCONF,
             available=can_use,
             reason=reason,
             can_authorize=can_use,
-            # NETCONF currently only supports authorization
-            can_deauthorize=False,
-            can_update_ont_profiles=False,
-            can_find_ont_by_serial=False,
-            can_configure_iphost=False,
-            can_bind_tr069=False,
-            can_create_service_port=False,
-            can_reboot_ont=False,
-            can_factory_reset=False,
+            can_deauthorize=can_use,
+            can_update_ont_profiles=can_use,
+            can_find_ont_by_serial=can_use,
+            can_configure_iphost=can_use,
+            can_bind_tr069=can_use,
+            can_create_service_port=can_use,
+            can_reboot_ont=can_use,
+            can_factory_reset=can_use,
+            can_execute_authorization_batch=False,  # Not implemented via NETCONF
+            can_execute_provisioning_delta=False,  # Not implemented via NETCONF
+            can_configure_internet_config=can_use,
+            can_configure_wan_config=can_use,
+            can_configure_pppoe=can_use,
+            can_configure_port_native_vlan=can_use,
+            can_clear_configs=can_use,
+            can_get_service_ports=can_use,
+            can_get_autofind_onts=can_use,
+            can_get_profiles=can_use,
+            can_create_tr069_profile=False,  # Use SSH for profile creation
+            can_diagnose_service_ports=False,  # Diagnostic commands via SSH
+            can_fetch_running_config=can_use,
         )
 
     def authorize_ont(
@@ -1553,6 +1569,708 @@ class NetconfProtocolAdapter(BaseProtocolAdapter):
                 message=f"NETCONF authorization failed: {exc}",
                 protocol_used=OltProtocol.NETCONF,
             )
+
+    def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Deauthorize ONT via NETCONF."""
+        from app.services.network.olt_netconf_ont import deauthorize_ont as nc_deauth
+
+        try:
+            ok, message = nc_deauth(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF deauthorize_ont failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF deauthorization failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
+        """Find ONT by serial number via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            find_ont_by_serial as nc_find,
+        )
+
+        try:
+            ok, message, ont_info = nc_find(self._olt, serial_number)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"ont_info": ont_info} if ont_info else {},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF find_ont_by_serial failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF find failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def update_ont_profiles(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+    ) -> OltOperationResult:
+        """Update ONT profiles via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            update_ont_profiles as nc_update,
+        )
+
+        try:
+            ok, message = nc_update(
+                self._olt,
+                fsp,
+                ont_id,
+                line_profile_id=line_profile_id,
+                service_profile_id=service_profile_id,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF update_ont_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF profile update failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def configure_iphost(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        mode: str = "dhcp",
+        vlan: int,
+        priority: int | None = None,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        gateway: str | None = None,
+    ) -> OltOperationResult:
+        """Configure ONT IPHOST via NETCONF."""
+        from app.services.network.olt_netconf_ont import configure_ont_iphost
+
+        try:
+            ok, message = configure_ont_iphost(
+                self._olt,
+                fsp,
+                ont_id,
+                vlan_id=vlan,
+                ip_mode=mode,
+                priority=priority,
+                ip_address=ip_address,
+                subnet=subnet_mask,
+                gateway=gateway,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF configure_iphost failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF IPHOST config failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def bind_tr069_profile(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        profile_id: int,
+    ) -> OltOperationResult:
+        """Bind TR-069 profile via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            bind_tr069_profile as nc_bind,
+        )
+
+        try:
+            ok, message = nc_bind(self._olt, fsp, ont_id, profile_id=profile_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF bind_tr069_profile failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF TR-069 bind failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def unbind_tr069_profile(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Unbind TR-069 profile via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            unbind_tr069_profile as nc_unbind,
+        )
+
+        try:
+            ok, message = nc_unbind(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF unbind_tr069_profile failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF TR-069 unbind failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def create_service_port(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        gem_index: int,
+        vlan_id: int,
+        user_vlan: int | str | None = None,
+        tag_transform: str = "translate",
+        port_index: int | None = None,
+    ) -> OltOperationResult:
+        """Create service port via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            create_service_port as nc_create,
+        )
+
+        try:
+            ok, message, assigned_port = nc_create(
+                self._olt,
+                fsp,
+                ont_id,
+                gem_index=gem_index,
+                vlan_id=vlan_id,
+                user_vlan=user_vlan,
+                tag_transform=tag_transform,
+                port_index=port_index,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"port_index": assigned_port} if assigned_port else {},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF create_service_port failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF service port creation failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def delete_service_port(self, port_index: int) -> OltOperationResult:
+        """Delete service port via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            delete_service_port as nc_delete,
+        )
+
+        try:
+            ok, message = nc_delete(self._olt, port_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF delete_service_port failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF service port deletion failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Reboot ONT via NETCONF."""
+        from app.services.network.olt_netconf_ont import reboot_ont as nc_reboot
+
+        try:
+            ok, message = nc_reboot(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF reboot_ont failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF reboot failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Factory reset ONT via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            factory_reset_ont as nc_reset,
+        )
+
+        try:
+            ok, message = nc_reset(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF factory_reset_ont failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF factory reset failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    # Extended configuration operations
+
+    def configure_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Configure internet-config via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            configure_internet_config as nc_config,
+        )
+
+        try:
+            ok, message = nc_config(self._olt, fsp, ont_id, ip_index=ip_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF configure_internet_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF internet config failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def configure_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        profile_id: int = 0,
+    ) -> OltOperationResult:
+        """Configure WAN config via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            configure_wan_config as nc_config,
+        )
+
+        try:
+            ok, message = nc_config(
+                self._olt, fsp, ont_id, ip_index=ip_index, profile_id=profile_id
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF configure_wan_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF WAN config failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def configure_pppoe(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int,
+        vlan_id: int,
+        username: str,
+        password: str,
+    ) -> OltOperationResult:
+        """Configure PPPoE via NETCONF."""
+        from app.services.network.olt_netconf_ont import configure_pppoe as nc_config
+
+        try:
+            ok, message = nc_config(
+                self._olt,
+                fsp,
+                ont_id,
+                ip_index=ip_index,
+                vlan_id=vlan_id,
+                username=username,
+                password=password,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF configure_pppoe failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF PPPoE config failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def configure_port_native_vlan(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        eth_port: int,
+        vlan_id: int,
+        priority: int = 0,
+    ) -> OltOperationResult:
+        """Configure port native VLAN via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            configure_port_native_vlan as nc_config,
+        )
+
+        try:
+            ok, message = nc_config(
+                self._olt,
+                fsp,
+                ont_id,
+                eth_port=eth_port,
+                vlan_id=vlan_id,
+                priority=priority,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF configure_port_native_vlan failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF port native VLAN config failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    # Clear operations
+
+    def clear_iphost_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear IPHOST config via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            clear_iphost_config as nc_clear,
+        )
+
+        try:
+            ok, message = nc_clear(self._olt, fsp, ont_id, ip_index=ip_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF clear_iphost_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF IPHOST clear failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def clear_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear internet-config via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            clear_internet_config as nc_clear,
+        )
+
+        try:
+            ok, message = nc_clear(self._olt, fsp, ont_id, ip_index=ip_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF clear_internet_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF internet config clear failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def clear_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear WAN config via NETCONF."""
+        from app.services.network.olt_netconf_ont import clear_wan_config as nc_clear
+
+        try:
+            ok, message = nc_clear(self._olt, fsp, ont_id, ip_index=ip_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF clear_wan_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF WAN config clear failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    # Read operations
+
+    def get_service_ports(self, fsp: str) -> OltOperationResult:
+        """Get service ports via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            get_service_ports as nc_get,
+        )
+
+        try:
+            ok, message, ports = nc_get(self._olt, fsp)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"service_ports": ports},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF get_service_ports failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF get service ports failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def get_autofind_onts(self) -> OltOperationResult:
+        """Get autofind ONTs via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            get_autofind_onts as nc_get,
+        )
+
+        try:
+            ok, message, onts = nc_get(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"autofind_onts": onts},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF get_autofind_onts failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF get autofind ONTs failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def get_line_profiles(self) -> OltOperationResult:
+        """Get line profiles via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            get_line_profiles as nc_get,
+        )
+
+        try:
+            ok, message, profiles = nc_get(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profiles": profiles},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF get_line_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF get line profiles failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def get_service_profiles(self) -> OltOperationResult:
+        """Get service profiles via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            get_service_profiles as nc_get,
+        )
+
+        try:
+            ok, message, profiles = nc_get(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profiles": profiles},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF get_service_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF get service profiles failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def get_tr069_profiles(self) -> OltOperationResult:
+        """Get TR-069 profiles via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            get_tr069_profiles as nc_get,
+        )
+
+        try:
+            ok, message, profiles = nc_get(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profiles": profiles},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF get_tr069_profiles failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF get TR-069 profiles failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+    def fetch_running_config(self) -> OltOperationResult:
+        """Fetch running config via NETCONF."""
+        from app.services.network import olt_netconf
+
+        try:
+            ok, message, config_text = olt_netconf.get_running_config(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"config_text": config_text},
+                protocol_used=OltProtocol.NETCONF,
+            )
+        except Exception as exc:
+            logger.exception("NETCONF fetch_running_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"NETCONF fetch config failed: {exc}",
+                protocol_used=OltProtocol.NETCONF,
+            )
+
+
+# ============================================================================
+# REST Protocol Adapter
+# ============================================================================
+
+
+class RestProtocolAdapter(BaseProtocolAdapter):
+    """REST API protocol adapter for OLT operations.
+
+    This is a skeletal implementation that returns "not supported" for all
+    operations. It serves as a foundation for vendor-specific REST API
+    implementations.
+
+    REST APIs vary significantly between vendors, so the actual implementation
+    would need to be customized for each vendor's API specification.
+    """
+
+    @property
+    def protocol(self) -> OltProtocol:
+        return OltProtocol.REST
+
+    def get_capabilities(self) -> ProtocolCapabilities:
+        """Check REST API capabilities for the OLT.
+
+        Returns:
+            ProtocolCapabilities with all operations marked as False
+            (skeletal implementation).
+        """
+        # Check if REST is enabled and configured
+        if not getattr(self._olt, "api_enabled", False):
+            return ProtocolCapabilities(
+                protocol=OltProtocol.REST,
+                available=False,
+                reason="REST API not enabled on OLT",
+            )
+
+        # Check for URL configuration
+        api_url = getattr(self._olt, "api_url", None)
+        mgmt_ip = getattr(self._olt, "mgmt_ip", None)
+        if not api_url and not mgmt_ip:
+            return ProtocolCapabilities(
+                protocol=OltProtocol.REST,
+                available=False,
+                reason="No api_url or mgmt_ip configured for REST API",
+            )
+
+        # REST is available but no operations implemented yet
+        return ProtocolCapabilities(
+            protocol=OltProtocol.REST,
+            available=True,
+            reason="REST API available (skeletal implementation)",
+            # All operations are False - placeholder for vendor-specific implementations
+            can_authorize=False,
+            can_deauthorize=False,
+            can_update_ont_profiles=False,
+            can_find_ont_by_serial=False,
+            can_configure_iphost=False,
+            can_bind_tr069=False,
+            can_create_service_port=False,
+            can_reboot_ont=False,
+            can_factory_reset=False,
+            can_execute_authorization_batch=False,
+            can_execute_provisioning_delta=False,
+            can_configure_internet_config=False,
+            can_configure_wan_config=False,
+            can_configure_pppoe=False,
+            can_configure_port_native_vlan=False,
+            can_clear_configs=False,
+            can_get_service_ports=False,
+            can_get_autofind_onts=False,
+            can_get_profiles=False,
+            can_create_tr069_profile=False,
+            can_diagnose_service_ports=False,
+            can_fetch_running_config=False,
+        )
+
+    def authorize_ont(
+        self,
+        fsp: str,
+        serial_number: str,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+        description: str = "",
+    ) -> OltOperationResult:
+        """Authorize ONT via REST API (not implemented)."""
+        return self._not_supported("authorize_ont")
+
+    def fetch_running_config(self) -> OltOperationResult:
+        """Fetch running config via REST API (not implemented)."""
+        return self._not_supported("fetch_running_config")
 
 
 # ============================================================================
@@ -1975,6 +2693,8 @@ def get_protocol_adapter(
         return SshProtocolAdapter(olt)
     elif protocol == OltProtocol.NETCONF:
         return NetconfProtocolAdapter(olt)
+    elif protocol == OltProtocol.REST:
+        return RestProtocolAdapter(olt)
     elif protocol == OltProtocol.AUTO:
         return CompositeProtocolAdapter(olt, prefer_netconf=True)
     else:
@@ -1989,3 +2709,8 @@ def get_ssh_adapter(olt: OLTDevice) -> SshProtocolAdapter:
 def get_netconf_adapter(olt: OLTDevice) -> NetconfProtocolAdapter:
     """Get NETCONF adapter directly (convenience function)."""
     return NetconfProtocolAdapter(olt)
+
+
+def get_rest_adapter(olt: OLTDevice) -> RestProtocolAdapter:
+    """Get REST adapter directly (convenience function)."""
+    return RestProtocolAdapter(olt)

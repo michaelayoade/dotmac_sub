@@ -45,6 +45,18 @@ DEFAULT_MAX_CONNECTIONS_PER_OLT = 2
 DEFAULT_CONNECTION_TTL_SECONDS = 300  # 5 minutes
 DEFAULT_IDLE_TIMEOUT_SECONDS = 60  # Close idle connections after 1 minute
 DEFAULT_MAX_REUSES = 100  # Recycle connection after N uses
+DEFAULT_RATE_LIMIT_OPS_PER_MINUTE = 10  # Default rate limit per OLT
+
+
+class RateLimitExceededError(Exception):
+    """Raised when OLT operation rate limit is exceeded.
+
+    Provides retry_after_seconds to allow callers to implement backoff.
+    """
+
+    def __init__(self, message: str, retry_after_seconds: int | None = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass
@@ -53,7 +65,7 @@ class PooledConnection:
 
     transport: Transport
     channel: Channel
-    policy: "OltSshPolicy"
+    policy: OltSshPolicy
     olt_id: str
     olt_name: str
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -62,7 +74,14 @@ class PooledConnection:
     in_use: bool = False
 
     def is_valid(self, ttl: timedelta, max_reuses: int) -> bool:
-        """Check if connection is still usable."""
+        """Check if connection is still usable.
+
+        Performs comprehensive health checks:
+        1. TTL expiration
+        2. Reuse count limit
+        3. Transport active state
+        4. Channel closed state
+        """
         now = datetime.now(UTC)
 
         # Check TTL
@@ -83,10 +102,30 @@ class PooledConnection:
             )
             return False
 
-        # Check transport health
-        is_active = getattr(self.transport, "is_active", None)
-        if callable(is_active) and not is_active():
-            logger.debug("Connection to %s transport is dead", self.olt_name)
+        # Enhanced transport health check
+        try:
+            if not self.transport.is_active():
+                logger.debug("Connection to %s transport is inactive", self.olt_name)
+                return False
+        except Exception as exc:
+            logger.debug(
+                "Connection to %s transport health check failed: %s",
+                self.olt_name,
+                exc,
+            )
+            return False
+
+        # Check channel state
+        try:
+            if self.channel.closed:
+                logger.debug("Connection to %s channel is closed", self.olt_name)
+                return False
+        except Exception as exc:
+            logger.debug(
+                "Connection to %s channel health check failed: %s",
+                self.olt_name,
+                exc,
+            )
             return False
 
         return True
@@ -148,7 +187,7 @@ class OltSshPool:
             "errors": 0,
         }
 
-    def acquire(self, olt: "OLTDevice") -> PooledConnection:
+    def acquire(self, olt: OLTDevice) -> PooledConnection:
         """Acquire a connection from the pool or create a new one.
 
         Args:
@@ -160,7 +199,11 @@ class OltSshPool:
         Raises:
             SSHException: If connection fails.
             ValueError: If OLT credentials are missing.
+            RateLimitExceededError: If rate limit is exceeded for this OLT.
         """
+        # Check rate limit before acquiring connection
+        self._check_rate_limit(olt)
+
         olt_key = str(olt.id)
 
         with self._lock:
@@ -272,6 +315,43 @@ class OltSshPool:
                 "olts_pooled": len(self._pools),
             }
 
+    def _check_rate_limit(self, olt: OLTDevice) -> None:
+        """Check if rate limit allows this operation.
+
+        Args:
+            olt: OLT device to check rate limit for.
+
+        Raises:
+            RateLimitExceededError: If rate limit is exceeded.
+        """
+        from app.services.rate_limiter_adapter import allow_operation
+
+        olt_key = str(olt.id)
+
+        # Get per-OLT rate limit from model, or use default
+        ops_per_minute = getattr(
+            olt, "rate_limit_ops_per_minute", None
+        ) or DEFAULT_RATE_LIMIT_OPS_PER_MINUTE
+
+        decision = allow_operation(
+            key=f"olt_ssh:{olt_key}",
+            limit=ops_per_minute,
+            window_seconds=60,
+        )
+
+        if not decision.allowed:
+            logger.warning(
+                "OLT %s rate limit exceeded (%d ops/min). Retry after %ds",
+                olt.name,
+                ops_per_minute,
+                decision.retry_after_seconds or 0,
+            )
+            raise RateLimitExceededError(
+                f"OLT {olt.name} rate limit exceeded ({ops_per_minute}/min). "
+                f"Retry after {decision.retry_after_seconds}s",
+                retry_after_seconds=decision.retry_after_seconds,
+            )
+
     def _cleanup_pool(self, olt_key: str) -> None:
         """Remove invalid connections from an OLT's pool (must hold lock)."""
         if olt_key not in self._pools:
@@ -296,7 +376,7 @@ class OltSshPool:
 
         self._pools[olt_key] = valid
 
-    def _create_connection(self, olt: "OLTDevice") -> PooledConnection:
+    def _create_connection(self, olt: OLTDevice) -> PooledConnection:
         """Create a new SSH connection to an OLT."""
         from app.services.network.olt_ssh import _open_shell
 
@@ -323,7 +403,7 @@ atexit.register(ssh_pool.close_all)
 
 
 @contextmanager
-def pooled_ssh_connection(olt: "OLTDevice"):
+def pooled_ssh_connection(olt: OLTDevice):
     """Context manager for pooled SSH connections.
 
     Automatically acquires and releases connections, closing on error.

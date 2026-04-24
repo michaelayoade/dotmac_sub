@@ -38,7 +38,7 @@ ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
         "snmp_priv_secret",
     ),
     "AccessCredential": ("secret_hash",),
-    "OLTDevice": ("ssh_password", "snmp_ro_community", "snmp_rw_community"),
+    "OLTDevice": ("ssh_password", "snmp_ro_community", "snmp_rw_community", "api_password", "api_token"),
     "OntUnit": ("pppoe_password", "wifi_password"),
     "OntProfileWanService": ("pppoe_static_password",),
     "Tr069AcsServer": ("cwmp_password", "connection_request_password"),

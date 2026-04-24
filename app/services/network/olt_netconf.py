@@ -162,3 +162,81 @@ def edit_config(
     except Exception as exc:
         logger.error("NETCONF edit-config error on OLT %s: %s", olt.name, exc)
         return False, f"Error: {type(exc).__name__}: {exc}"
+
+
+def get_config_filtered(
+    olt: OLTDevice,
+    filter_xml: str,
+) -> tuple[bool, str, str]:
+    """Fetch configuration via NETCONF get-config with subtree filter.
+
+    Args:
+        olt: The OLT device.
+        filter_xml: XML subtree filter.
+
+    Returns:
+        Tuple of (success, message, config_xml).
+    """
+    try:
+        with _connect(olt) as mgr:
+            result = mgr.get_config(
+                source="running",
+                filter=("subtree", filter_xml),
+            )
+            config_xml = str(result)
+            return True, "Configuration retrieved via NETCONF", config_xml
+    except SSHError as exc:
+        return False, f"NETCONF SSH error: {exc}", ""
+    except Exception as exc:
+        logger.error("NETCONF get-config error on OLT %s: %s", olt.name, exc)
+        return False, f"Error: {type(exc).__name__}: {exc}", ""
+
+
+def get_filtered(
+    olt: OLTDevice,
+    filter_xml: str,
+) -> tuple[bool, str, str]:
+    """Fetch operational data via NETCONF get with subtree filter.
+
+    Args:
+        olt: The OLT device.
+        filter_xml: XML subtree filter.
+
+    Returns:
+        Tuple of (success, message, data_xml).
+    """
+    try:
+        with _connect(olt) as mgr:
+            result = mgr.get(filter=("subtree", filter_xml))
+            data_xml = str(result)
+            return True, "Operational data retrieved", data_xml
+    except SSHError as exc:
+        return False, f"NETCONF SSH error: {exc}", ""
+    except Exception as exc:
+        logger.error("NETCONF get error on OLT %s: %s", olt.name, exc)
+        return False, f"Error: {type(exc).__name__}: {exc}", ""
+
+
+def dispatch_rpc(
+    olt: OLTDevice,
+    rpc_xml: str,
+) -> tuple[bool, str]:
+    """Dispatch custom RPC via NETCONF.
+
+    Args:
+        olt: The OLT device.
+        rpc_xml: RPC XML payload (inner content without <rpc> wrapper).
+
+    Returns:
+        Tuple of (success, message).
+    """
+    try:
+        with _connect(olt) as mgr:
+            mgr.dispatch(rpc_xml)
+            logger.info("NETCONF RPC dispatched to OLT %s", olt.name)
+            return True, "RPC executed via NETCONF"
+    except SSHError as exc:
+        return False, f"NETCONF SSH error: {exc}"
+    except Exception as exc:
+        logger.error("NETCONF RPC error on OLT %s: %s", olt.name, exc)
+        return False, f"Error: {type(exc).__name__}: {exc}"

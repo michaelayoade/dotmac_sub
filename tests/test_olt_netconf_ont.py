@@ -334,11 +334,15 @@ class TestValidation:
             "0/0/a",
             "",
             "0-0-0",
-            " 0/0/0",
         ]
         for fsp in invalid_fsps:
             ok, _ = olt_netconf_ont._validate_fsp(fsp)
             assert not ok, f"Expected {fsp} to be invalid"
+
+    def test_fsp_with_whitespace_is_normalized(self):
+        # Leading/trailing whitespace is stripped during normalization
+        ok, _ = olt_netconf_ont._validate_fsp(" 0/0/0 ")
+        assert ok, "FSP with surrounding whitespace should be valid after normalization"
 
     def test_valid_serial_formats(self):
         valid_serials = ["HWTC7D4733C3", "HWTC-7D47-33C3", "ABC123", "a-b-c"]

@@ -776,6 +776,18 @@ class OLTDevice(Base):
     # Autofind sync deduplication (prevents redundant SSH queries during concurrent auths)
     autofind_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # REST API configuration
+    api_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    api_url: Mapped[str | None] = mapped_column(String(512))
+    api_port: Mapped[int | None] = mapped_column(Integer, default=443)
+    api_username: Mapped[str | None] = mapped_column(String(120))
+    api_password: Mapped[str | None] = mapped_column(String(512))
+    api_token: Mapped[str | None] = mapped_column(String(1024))
+    api_auth_type: Mapped[str | None] = mapped_column(String(20))
+
+    # Rate limiting (operations per minute)
+    rate_limit_ops_per_minute: Mapped[int | None] = mapped_column(Integer, default=10)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
