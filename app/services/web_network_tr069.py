@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 from starlette.requests import Request
 
+from app.config import settings
 from app.models.network import CPEDevice, OntAssignment, OntUnit
 from app.models.tr069 import Tr069CpeDevice, Tr069Job, Tr069JobStatus
 from app.schemas.network import OntUnitCreate
@@ -153,11 +154,12 @@ _CONFIG_ACTIONS: dict[str, ConfigAction] = {
 
 def parse_acs_form(form) -> dict[str, object]:
     # Parse periodic inform interval with validation
-    interval_str = str(form.get("periodic_inform_interval") or "300").strip()
+    default_interval = settings.tr069_periodic_inform_interval
+    interval_str = str(form.get("periodic_inform_interval") or str(default_interval)).strip()
     try:
         periodic_inform_interval = max(60, min(86400, int(interval_str)))
     except ValueError:
-        periodic_inform_interval = 300
+        periodic_inform_interval = default_interval
 
     return {
         "name": str(form.get("name") or "").strip(),
@@ -228,7 +230,9 @@ def acs_form_snapshot_from_model(server) -> dict[str, object]:
         "connection_request_username": server.connection_request_username,
         "connection_request_password": "",  # nosec
         "base_url": server.base_url,
-        "periodic_inform_interval": getattr(server, "periodic_inform_interval", 300),
+        "periodic_inform_interval": getattr(
+            server, "periodic_inform_interval", settings.tr069_periodic_inform_interval
+        ),
         "is_active": bool(server.is_active),
         "notes": server.notes or "",
     }

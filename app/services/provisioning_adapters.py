@@ -10,9 +10,10 @@ import paramiko
 import routeros_api
 from ncclient import manager
 
+from app.config import settings
 from app.models.provisioning import ProvisioningVendor
-from app.services.adapters.base import AdapterResult
 from app.services.acs_client import create_acs_client
+from app.services.adapters.base import AdapterResult
 from app.services.network.ont_action_common import set_and_verify
 from app.services.response import ListResponseMixin
 
@@ -348,7 +349,9 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         if cwmp_password:
             params[f"{prefix}.Password"] = cwmp_password
 
-        inform_interval = str(config.get("periodic_inform_interval", 300))
+        inform_interval = str(
+            config.get("periodic_inform_interval", settings.tr069_periodic_inform_interval)
+        )
         params[f"{prefix}.PeriodicInformEnable"] = "true"
         params[f"{prefix}.PeriodicInformInterval"] = inform_interval
 

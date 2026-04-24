@@ -8,6 +8,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
@@ -78,7 +79,7 @@ def set_connection_request_credentials(
     username: str,
     password: str,
     *,
-    periodic_inform_interval: int = 300,
+    periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
 ) -> ActionResult:
     """Set TR-069 Connection Request credentials and periodic inform interval."""
     if not username:

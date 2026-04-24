@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.network import OLTDevice, OntProvisioningProfile, OntUnit
 from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice
 from app.models.tr069 import Tr069AcsServer
@@ -429,7 +430,9 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     if not onts:
         return stats
 
-    inform_interval = str(server.periodic_inform_interval or 300)
+    inform_interval = str(
+        server.periodic_inform_interval or settings.tr069_periodic_inform_interval
+    )
     acs_params: dict[str, str] = {
         "Device.ManagementServer.URL": server.cwmp_url,
         "Device.ManagementServer.PeriodicInformEnable": "true",

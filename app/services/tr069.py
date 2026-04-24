@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.network import CPEDevice
 from app.models.tr069 import (
     Tr069AcsServer,
@@ -1728,7 +1729,7 @@ def _build_acs_provision_script(
     cwmp_url: str,
     cwmp_username: str | None = None,
     cwmp_password: str | None = None,
-    periodic_inform_interval: int = 300,  # 5 minutes (fleet-aligned default)
+    periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
 ) -> str:
     """Build GenieACS provision script that enforces ACS URL on every inform.
 
@@ -1912,7 +1913,7 @@ def push_acs_enforcement_preset(
         cwmp_url=server.cwmp_url,
         cwmp_username=server.cwmp_username,
         cwmp_password=cwmp_password,
-        periodic_inform_interval=server.periodic_inform_interval or 300,
+        periodic_inform_interval=server.periodic_inform_interval or settings.tr069_periodic_inform_interval,
     )
 
     # Build preset

@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.network import CPEDevice, Vlan
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
@@ -967,7 +968,7 @@ def set_connection_request_credentials(
     username: str,
     password: str,
     *,
-    periodic_inform_interval: int = 300,
+    periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
 ) -> ActionResult:
     """Set TR-069 Connection Request credentials and periodic inform interval."""
     if not username:

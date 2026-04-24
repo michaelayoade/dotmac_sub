@@ -16,6 +16,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.models.tr069 import Tr069AcsServer
@@ -163,8 +164,12 @@ def ensure_tr069_profile_for_linked_acs(
         acs_url=payload["acs_url"],
         username=payload["username"],
         password=payload["password"],
-        inform_interval=getattr(olt.tr069_acs_server, "periodic_inform_interval", 300)
-        or 300,
+        inform_interval=getattr(
+            olt.tr069_acs_server,
+            "periodic_inform_interval",
+            settings.tr069_periodic_inform_interval,
+        )
+        or settings.tr069_periodic_inform_interval,
     )
     if not ok:
         logger.warning(
@@ -264,7 +269,9 @@ def queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     if not onts:
         return stats
 
-    inform_interval = str(server.periodic_inform_interval or 300)
+    inform_interval = str(
+        server.periodic_inform_interval or settings.tr069_periodic_inform_interval
+    )
     acs_params: dict[str, str] = {
         "Device.ManagementServer.URL": server.cwmp_url,
         "Device.ManagementServer.PeriodicInformEnable": "true",

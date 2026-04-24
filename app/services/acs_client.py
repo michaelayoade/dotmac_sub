@@ -10,6 +10,8 @@ from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
+
 
 class AcsUnavailable(Exception):
     """Raised when an ACS backend is temporarily unreachable."""
@@ -210,7 +212,7 @@ class AcsConfigWriter(Protocol):
         username: str,
         password: str,
         *,
-        periodic_inform_interval: int = 300,
+        periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
     ) -> Any: ...
 
     def send_connection_request(self, db: Session, ont_id: str) -> Any: ...

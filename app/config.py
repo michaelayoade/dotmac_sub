@@ -88,6 +88,11 @@ class Settings:
         os.getenv("ROUTER_TUNNEL_CLEANUP_MIN", "5")
     )
 
+    # TR-069 settings
+    tr069_periodic_inform_interval: int = int(
+        os.getenv("TR069_PERIODIC_INFORM_INTERVAL", "300")
+    )  # seconds, default 5 minutes
+
     # Security: Enforce credential encryption in production
     # Set to "true" to require CREDENTIAL_ENCRYPTION_KEY to be configured
     enforce_credential_encryption: bool = os.getenv(

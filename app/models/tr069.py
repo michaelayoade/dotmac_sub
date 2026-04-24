@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    # Note: settings imported inline below to avoid circular imports
     JSON,
     Boolean,
     DateTime,
@@ -54,8 +55,10 @@ class Tr069AcsServer(Base):
     connection_request_password: Mapped[str | None] = mapped_column(String(512))
     base_url: Mapped[str] = mapped_column(String(255), nullable=False)
     periodic_inform_interval: Mapped[int] = mapped_column(
-        Integer, default=300, nullable=False, server_default="300"
-    )  # seconds, default 5 minutes
+        Integer,
+        default=lambda: __import__("app.config", fromlist=["settings"]).settings.tr069_periodic_inform_interval,
+        nullable=False,
+    )  # seconds, default from settings.tr069_periodic_inform_interval
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.services.adapters import adapter_registry
 from app.services.network.ont_action_common import ActionResult
 
@@ -315,7 +316,7 @@ class GenieAcsConfigWriter:
         username: str,
         password: str,
         *,
-        periodic_inform_interval: int = 300,
+        periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
         **metadata: Any,
     ) -> AcsConfigQueueResult:
         return self.queue_config_action(
@@ -334,7 +335,7 @@ class GenieAcsConfigWriter:
         username: str,
         password: str,
         *,
-        periodic_inform_interval: int = 300,
+        periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
     ) -> ActionResult:
         from app.services.network.ont_action_network import (
             set_connection_request_credentials,

@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config import settings
+
 # ── Action request/response schemas ────────────────────────────────────
 
 
@@ -48,7 +50,9 @@ class OntTracerouteRequest(BaseModel):
 class OntConnectionRequestCredentials(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=64)
-    periodic_inform_interval: int = Field(default=300, ge=60, le=86400)
+    periodic_inform_interval: int = Field(
+        default_factory=lambda: settings.tr069_periodic_inform_interval, ge=60, le=86400
+    )
 
 
 class OntFirmwareRequest(BaseModel):

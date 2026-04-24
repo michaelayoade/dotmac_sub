@@ -7,6 +7,7 @@ import re
 
 from paramiko.ssh_exception import SSHException
 
+from app.config import settings
 from app.models.network import OLTDevice
 from app.services.network._common import encode_to_hex_serial
 from app.services.network.olt_ssh_ont._common import (
@@ -248,7 +249,8 @@ def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
                     "acs_url": server.cwmp_url or "",
                     "username": server.cwmp_username or "",
                     "password": password or "",
-                    "inform_interval": server.periodic_inform_interval or 300,
+                    "inform_interval": server.periodic_inform_interval
+                    or settings.tr069_periodic_inform_interval,
                 }
         except (ImportError, LookupError, AttributeError) as exc:
             logger.warning("Failed to load linked ACS for OLT %s: %s", olt.name, exc)
@@ -266,7 +268,8 @@ def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
         "acs_url": server.cwmp_url or "",
         "username": server.cwmp_username or "",
         "password": password or "",
-        "inform_interval": getattr(server, "periodic_inform_interval", None) or 300,
+        "inform_interval": getattr(server, "periodic_inform_interval", None)
+        or settings.tr069_periodic_inform_interval,
     }
 
 
