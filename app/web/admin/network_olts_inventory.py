@@ -1323,9 +1323,10 @@ def olt_authorize_ont(
         ont_unit_id = None
     status = "success" if auth_ok else "error"
 
-    # On success, redirect to the ONT detail page or ONT list
+    # On success, redirect to ONT inventory list
+    # User can then select the ONT and configure it via provisioning UI
     if auth_ok and ont_unit_id:
-        target = f"/admin/network/onts/{ont_unit_id}"
+        target = f"/admin/network/onts?status=success&message={quote_plus(auth_msg)}"
         if is_htmx:
             return Response(
                 status_code=200,
