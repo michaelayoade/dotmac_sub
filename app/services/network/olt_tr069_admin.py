@@ -33,6 +33,71 @@ _ONU_INDEX_RE = re.compile(r"\.(\d+)$")
 _ONU_NAME_RE = re.compile(r":(\d+)$")
 
 
+def resolve_acs_server_for_ont(
+    db: Session,
+    ont,  # OntUnit or similar
+    *,
+    olt: OLTDevice | None = None,
+) -> Tr069AcsServer | None:
+    """Resolve which ACS server an ONT should use.
+
+    Priority order (first match wins):
+    1. ONT-specific override (ont.tr069_acs_server_id)
+    2. OLT default (olt.tr069_acs_server_id)
+    3. System default ACS (from domain settings)
+    4. Single active ACS server (if only one exists)
+
+    This function documents the dual FK priority: ONT override > OLT default.
+    Use this whenever you need to determine which ACS server applies to an ONT.
+
+    Args:
+        db: Database session
+        ont: ONT unit to resolve ACS for
+        olt: Optional OLT device (will be looked up from ont.olt_device_id if not provided)
+
+    Returns:
+        The ACS server to use, or None if no valid server can be resolved.
+    """
+    # Priority 1: ONT-specific override
+    ont_acs_id = getattr(ont, "tr069_acs_server_id", None)
+    if ont_acs_id:
+        server = db.get(Tr069AcsServer, str(ont_acs_id))
+        if server and server.is_active and server.base_url:
+            logger.debug(
+                "Resolved ACS for ONT %s: using ONT-specific override %s",
+                getattr(ont, "id", "?"),
+                server.name,
+            )
+            return server
+
+    # Priority 2: OLT default
+    if olt is None:
+        olt_device_id = getattr(ont, "olt_device_id", None)
+        if olt_device_id:
+            olt = db.get(OLTDevice, str(olt_device_id))
+
+    if olt is not None:
+        server = resolve_operational_acs_server(db, olt=olt)
+        if server:
+            logger.debug(
+                "Resolved ACS for ONT %s: using OLT %s default %s",
+                getattr(ont, "id", "?"),
+                olt.name,
+                server.name,
+            )
+            return server
+
+    # Priority 3 & 4: System default (handled by resolve_operational_acs_server with no OLT)
+    server = resolve_operational_acs_server(db)
+    if server:
+        logger.debug(
+            "Resolved ACS for ONT %s: using system default %s",
+            getattr(ont, "id", "?"),
+            server.name,
+        )
+    return server
+
+
 def resolve_operational_acs_server(
     db: Session,
     *,
@@ -227,7 +292,47 @@ def ensure_tr069_profile_for_linked_acs_audited(
         entity_id=olt.id,
         metadata={"success": ok, "message": message},
     )
+
+    # Refresh OLT's tr069_profiles_snapshot after profile creation to prevent drift
+    if ok and profile_id is not None:
+        _refresh_olt_profiles_snapshot(db, olt)
+
     return ok, message, profile_id
+
+
+def _refresh_olt_profiles_snapshot(db: Session, olt: OLTDevice) -> None:
+    """Refresh the OLT's tr069_profiles_snapshot from live OLT data.
+
+    Called after creating a profile to ensure the snapshot stays in sync with
+    actual OLT state, preventing drift between cached and live profile data.
+    """
+    from datetime import UTC, datetime
+
+    try:
+        ok, _, profiles = olt_ssh_service.get_tr069_server_profiles(olt)
+        if ok and profiles:
+            from app.services.olt_observed_state_adapter import profile_to_dict
+
+            fetched_at = datetime.now(UTC)
+            payload = {
+                "profiles": [profile_to_dict(p) for p in profiles],
+                "fetched_at": fetched_at.isoformat(),
+            }
+            olt.tr069_profiles_snapshot = payload
+            olt.tr069_profiles_snapshot_at = fetched_at
+            db.add(olt)
+            db.flush()
+            logger.debug(
+                "Refreshed tr069_profiles_snapshot for OLT %s with %d profiles",
+                olt.name,
+                len(profiles),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Failed to refresh tr069_profiles_snapshot for OLT %s: %s",
+            olt.name,
+            exc,
+        )
 
 
 def ensure_tr069_profile_for_olt_audited(

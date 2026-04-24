@@ -6,9 +6,12 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.services.network.olt_ssh_profiles import Tr069ServerProfile
 
 from app.models.network import OLTDevice, OntUnit
 from app.services.adapters import adapter_registry
@@ -53,9 +56,14 @@ def _parse_datetime(value: object) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def _profile_to_dict(profile: object) -> dict[str, object]:
+def profile_to_dict(profile: object) -> dict[str, object]:
+    """Convert a profile object to a dictionary for JSON serialization.
+
+    Used to serialize profiles for the OLT's tr069_profiles_snapshot field.
+    Public API - used by olt_tr069_admin for profile snapshot refresh.
+    """
     if hasattr(profile, "__dataclass_fields__"):
-        return dict(asdict(profile))
+        return dict(asdict(cast(Any, profile)))
     return {
         "profile_id": getattr(profile, "profile_id", None),
         "name": getattr(profile, "name", ""),
@@ -66,11 +74,11 @@ def _profile_to_dict(profile: object) -> dict[str, object]:
     }
 
 
-def _profiles_from_payload(payload: object) -> list[object]:
+def _profiles_from_payload(payload: object) -> list[Tr069ServerProfile]:
     from app.services.network.olt_ssh_profiles import Tr069ServerProfile
 
     profiles = payload if isinstance(payload, list) else []
-    result: list[object] = []
+    result: list[Tr069ServerProfile] = []
     for item in profiles:
         if not isinstance(item, dict):
             continue
@@ -150,7 +158,7 @@ class OltObservedStateAdapter:
         ok, msg, profiles = get_tr069_server_profiles(olt)
         if ok:
             fetched_at = _utc_now()
-            profile_payload = [_profile_to_dict(profile) for profile in profiles]
+            profile_payload = [profile_to_dict(profile) for profile in profiles]
             payload: dict[str, object] = {
                 "profiles": profile_payload,
                 "fetched_at": fetched_at.isoformat(),
