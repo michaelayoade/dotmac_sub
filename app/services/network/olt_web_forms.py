@@ -50,6 +50,18 @@ def integrity_error_message(exc: Exception) -> str:
     return "OLT device could not be saved due to a data conflict"
 
 
+def _parse_int_or_none(raw: str) -> int | None:
+    """Parse string to int, returning None for empty or non-numeric values."""
+    raw = raw.strip() if raw else ""
+    return int(raw) if raw.isdigit() else None
+
+
+def _parse_uuid_or_none(raw: str) -> str | None:
+    """Parse string to UUID string, returning None for empty values."""
+    raw = raw.strip() if raw else ""
+    return raw if raw else None
+
+
 def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
     """Parse OLT form values."""
     ssh_port_raw = str(form.get("ssh_port", "")).strip()
@@ -100,6 +112,52 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "status": form.get("status", "").strip() or "active",
         "notes": form.get("notes", "").strip() or None,
         "is_active": form.get("is_active") == "true",
+        # -------------------------------------------------------------------------
+        # Config Pack fields (ONT Provisioning Defaults)
+        # -------------------------------------------------------------------------
+        # Authorization profiles
+        "default_line_profile_id": _parse_int_or_none(
+            str(form.get("default_line_profile_id", ""))
+        ),
+        "default_service_profile_id": _parse_int_or_none(
+            str(form.get("default_service_profile_id", ""))
+        ),
+        # VLANs by purpose
+        "internet_vlan_id": _parse_uuid_or_none(str(form.get("internet_vlan_id", ""))),
+        "management_vlan_id": _parse_uuid_or_none(
+            str(form.get("management_vlan_id", ""))
+        ),
+        "tr069_vlan_id": _parse_uuid_or_none(str(form.get("tr069_vlan_id", ""))),
+        "voip_vlan_id": _parse_uuid_or_none(str(form.get("voip_vlan_id", ""))),
+        "iptv_vlan_id": _parse_uuid_or_none(str(form.get("iptv_vlan_id", ""))),
+        # GEM indices
+        "default_internet_gem_index": _parse_int_or_none(
+            str(form.get("default_internet_gem_index", ""))
+        ),
+        "default_mgmt_gem_index": _parse_int_or_none(
+            str(form.get("default_mgmt_gem_index", ""))
+        ),
+        "default_voip_gem_index": _parse_int_or_none(
+            str(form.get("default_voip_gem_index", ""))
+        ),
+        "default_iptv_gem_index": _parse_int_or_none(
+            str(form.get("default_iptv_gem_index", ""))
+        ),
+        # Provisioning knobs
+        "default_tr069_olt_profile_id": _parse_int_or_none(
+            str(form.get("default_tr069_olt_profile_id", ""))
+        ),
+        "default_internet_config_ip_index": _parse_int_or_none(
+            str(form.get("default_internet_config_ip_index", ""))
+        ),
+        "default_wan_config_profile_id": _parse_int_or_none(
+            str(form.get("default_wan_config_profile_id", ""))
+        ),
+        # Management IP pool
+        "mgmt_ip_pool_id": _parse_uuid_or_none(str(form.get("mgmt_ip_pool_id", ""))),
+        # Connection request credentials
+        "default_cr_username": form.get("default_cr_username", "").strip() or None,
+        "default_cr_password": form.get("default_cr_password", "").strip() or None,
     }
 
 
@@ -209,6 +267,11 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
     encrypted_password = encrypt_credential(
         ssh_password if isinstance(ssh_password, str) else None
     )
+    # Encrypt CR password if provided
+    cr_password = values.get("default_cr_password")
+    encrypted_cr_password = encrypt_credential(
+        cr_password if isinstance(cr_password, str) else None
+    )
     data: dict[str, object] = {
         "name": values.get("name"),
         "hostname": values.get("hostname"),
@@ -232,6 +295,34 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         ),
         "notes": values.get("notes"),
         "is_active": values.get("is_active"),
+        # -------------------------------------------------------------------------
+        # Config Pack fields (ONT Provisioning Defaults)
+        # -------------------------------------------------------------------------
+        # Authorization profiles
+        "default_line_profile_id": values.get("default_line_profile_id"),
+        "default_service_profile_id": values.get("default_service_profile_id"),
+        # VLANs by purpose
+        "internet_vlan_id": values.get("internet_vlan_id"),
+        "management_vlan_id": values.get("management_vlan_id"),
+        "tr069_vlan_id": values.get("tr069_vlan_id"),
+        "voip_vlan_id": values.get("voip_vlan_id"),
+        "iptv_vlan_id": values.get("iptv_vlan_id"),
+        # GEM indices
+        "default_internet_gem_index": values.get("default_internet_gem_index"),
+        "default_mgmt_gem_index": values.get("default_mgmt_gem_index"),
+        "default_voip_gem_index": values.get("default_voip_gem_index"),
+        "default_iptv_gem_index": values.get("default_iptv_gem_index"),
+        # Provisioning knobs
+        "default_tr069_olt_profile_id": values.get("default_tr069_olt_profile_id"),
+        "default_internet_config_ip_index": values.get(
+            "default_internet_config_ip_index"
+        ),
+        "default_wan_config_profile_id": values.get("default_wan_config_profile_id"),
+        # Management IP pool
+        "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
+        # Connection request credentials
+        "default_cr_username": values.get("default_cr_username"),
+        "default_cr_password": encrypted_cr_password,
     }
     if "supported_pon_types" in values:
         data["supported_pon_types"] = values["supported_pon_types"]
@@ -385,6 +476,28 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         snmp_auth_secret="",
         snmp_priv_protocol=getattr(linked, "snmp_priv_protocol", None),
         snmp_priv_secret="",
+        # Config Pack fields
+        default_line_profile_id=getattr(olt, "default_line_profile_id", None),
+        default_service_profile_id=getattr(olt, "default_service_profile_id", None),
+        internet_vlan_id=getattr(olt, "internet_vlan_id", None),
+        management_vlan_id=getattr(olt, "management_vlan_id", None),
+        tr069_vlan_id=getattr(olt, "tr069_vlan_id", None),
+        voip_vlan_id=getattr(olt, "voip_vlan_id", None),
+        iptv_vlan_id=getattr(olt, "iptv_vlan_id", None),
+        default_internet_gem_index=getattr(olt, "default_internet_gem_index", None),
+        default_mgmt_gem_index=getattr(olt, "default_mgmt_gem_index", None),
+        default_voip_gem_index=getattr(olt, "default_voip_gem_index", None),
+        default_iptv_gem_index=getattr(olt, "default_iptv_gem_index", None),
+        default_tr069_olt_profile_id=getattr(olt, "default_tr069_olt_profile_id", None),
+        default_internet_config_ip_index=getattr(
+            olt, "default_internet_config_ip_index", None
+        ),
+        default_wan_config_profile_id=getattr(
+            olt, "default_wan_config_profile_id", None
+        ),
+        mgmt_ip_pool_id=getattr(olt, "mgmt_ip_pool_id", None),
+        default_cr_username=getattr(olt, "default_cr_username", None),
+        default_cr_password=getattr(olt, "default_cr_password", None),
     )
 
 
@@ -497,6 +610,11 @@ def update_olt(
         payload_values = dict(values)
         if payload_values.get("ssh_password") is None:
             payload_values["ssh_password"] = current.ssh_password
+        # Preserve CR password when form doesn't submit new value
+        if payload_values.get("default_cr_password") is None:
+            payload_values["default_cr_password"] = getattr(
+                current, "default_cr_password", None
+            )
         # Preserve SNMP fields when form doesn't submit new values
         if payload_values.get("snmp_community") is None:
             payload_values["snmp_community"] = getattr(

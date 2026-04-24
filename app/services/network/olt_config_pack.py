@@ -84,6 +84,12 @@ class OltConfigPack:
     internet_config_ip_index: int = 0
     wan_config_profile_id: int = 0
 
+    # GEM port indices by purpose
+    internet_gem_index: int = 1
+    mgmt_gem_index: int = 2
+    voip_gem_index: int = 3
+    iptv_gem_index: int = 4
+
     # TR-069 connection request credentials
     cr_username: str | None = None
     cr_password: str | None = None
@@ -146,6 +152,10 @@ class OltConfigPack:
             },
             "internet_config_ip_index": self.internet_config_ip_index,
             "wan_config_profile_id": self.wan_config_profile_id,
+            "internet_gem_index": self.internet_gem_index,
+            "mgmt_gem_index": self.mgmt_gem_index,
+            "voip_gem_index": self.voip_gem_index,
+            "iptv_gem_index": self.iptv_gem_index,
             "cr_username": self.cr_username,
             "default_provisioning_profile_id": self.default_provisioning_profile_id,
             "is_complete": self.is_complete,
@@ -189,6 +199,11 @@ def resolve_olt_config_pack(
         # Provisioning knobs
         internet_config_ip_index=olt.default_internet_config_ip_index or 0,
         wan_config_profile_id=olt.default_wan_config_profile_id or 0,
+        # GEM indices
+        internet_gem_index=olt.default_internet_gem_index or 1,
+        mgmt_gem_index=olt.default_mgmt_gem_index or 2,
+        voip_gem_index=olt.default_voip_gem_index or 3,
+        iptv_gem_index=olt.default_iptv_gem_index or 4,
         # Connection request credentials
         cr_username=olt.default_cr_username,
         cr_password=olt.default_cr_password,

@@ -606,7 +606,9 @@ class IpPool(Base):
     blocks = relationship("IpBlock", back_populates="pool")
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
-    olt_device = relationship("OLTDevice", back_populates="ip_pools")
+    olt_device = relationship(
+        "OLTDevice", back_populates="ip_pools", foreign_keys=[olt_device_id]
+    )
     vlan = relationship("Vlan", back_populates="ip_pools")
 
 
@@ -652,6 +654,18 @@ class IPv4Address(Base):
     is_reserved: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # Management IP tracking: link to ONT that has this IP assigned
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="SET NULL"),
+        index=True,
+        doc="ONT with this IP as management address",
+    )
+    allocation_type: Mapped[str | None] = mapped_column(
+        String(20),
+        doc="Type of allocation: 'management', 'wan', 'static'",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -665,6 +679,7 @@ class IPv4Address(Base):
         "IPAssignment", back_populates="ipv4_address", uselist=False
     )
     pool = relationship("IpPool", back_populates="ipv4_addresses")
+    ont_unit = relationship("OntUnit", foreign_keys=[ont_unit_id])
 
 
 class IPv6Address(Base):
@@ -861,6 +876,35 @@ class OLTDevice(Base):
         doc="Default connection request password (encrypted at rest)",
     )
 
+    # Management IP pool for auto-allocation during authorization
+    mgmt_ip_pool_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ip_pools.id", ondelete="SET NULL"),
+        doc="IP pool for auto-allocating management IPs to ONTs",
+    )
+
+    # GEM port indices by purpose (GPON transport mapping)
+    default_internet_gem_index: Mapped[int | None] = mapped_column(
+        Integer,
+        default=1,
+        doc="GEM index for internet service ports (typically 1)",
+    )
+    default_mgmt_gem_index: Mapped[int | None] = mapped_column(
+        Integer,
+        default=2,
+        doc="GEM index for management/TR-069 service ports (typically 2)",
+    )
+    default_voip_gem_index: Mapped[int | None] = mapped_column(
+        Integer,
+        default=3,
+        doc="GEM index for VoIP service ports (typically 3)",
+    )
+    default_iptv_gem_index: Mapped[int | None] = mapped_column(
+        Integer,
+        default=4,
+        doc="GEM index for IPTV service ports (typically 4)",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -880,7 +924,9 @@ class OLTDevice(Base):
         "OntProvisioningProfile", foreign_keys=[default_provisioning_profile_id]
     )
     vlans = relationship("Vlan", back_populates="olt_device", foreign_keys="[Vlan.olt_device_id]")
-    ip_pools = relationship("IpPool", back_populates="olt_device")
+    ip_pools = relationship(
+        "IpPool", back_populates="olt_device", foreign_keys="[IpPool.olt_device_id]"
+    )
 
     # Config Pack VLAN relationships
     internet_vlan = relationship("Vlan", foreign_keys=[internet_vlan_id])
@@ -888,6 +934,7 @@ class OLTDevice(Base):
     tr069_vlan = relationship("Vlan", foreign_keys=[tr069_vlan_id])
     voip_vlan = relationship("Vlan", foreign_keys=[voip_vlan_id])
     iptv_vlan = relationship("Vlan", foreign_keys=[iptv_vlan_id])
+    mgmt_ip_pool = relationship("IpPool", foreign_keys=[mgmt_ip_pool_id])
 
     @property
     def is_reachable(self) -> bool:
@@ -2313,6 +2360,61 @@ class OnuType(Base):
     supports_bundle_overrides: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
+
+    # -------------------------------------------------------------------------
+    # ACS Config Pack: TR-069 parameter paths and device-specific defaults
+    # -------------------------------------------------------------------------
+    # TR-069 data model variant (affects parameter paths)
+    tr069_data_model: Mapped[str | None] = mapped_column(
+        String(20),
+        doc="TR-069 data model: 'tr181' (Device.) or 'tr098' (InternetGatewayDevice.)",
+    )
+    # Config method preference for this device type
+    config_method_preference: Mapped[str | None] = mapped_column(
+        String(20),
+        doc="Preferred config method: 'tr069', 'omci', or 'both'",
+    )
+
+    # WiFi TR-069 parameter paths (model-specific)
+    wifi_ssid_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for WiFi SSID parameter"
+    )
+    wifi_password_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for WiFi password/key parameter"
+    )
+    wifi_enabled_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for WiFi enable/disable"
+    )
+    wifi_channel_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for WiFi channel"
+    )
+    wifi_security_mode_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for WiFi security mode"
+    )
+
+    # WAN TR-069 parameter paths (model-specific)
+    wan_pppoe_username_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for PPPoE username"
+    )
+    wan_pppoe_password_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for PPPoE password"
+    )
+    wan_connection_type_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for WAN connection type"
+    )
+
+    # Default WiFi settings for this device type
+    default_wifi_security_mode: Mapped[str | None] = mapped_column(
+        String(50), default="WPA2-Personal", doc="Default WiFi security mode"
+    )
+    default_wifi_channel: Mapped[str | None] = mapped_column(
+        String(10), default="auto", doc="Default WiFi channel"
+    )
+
+    # Firmware baseline
+    min_firmware_version: Mapped[str | None] = mapped_column(
+        String(50), doc="Minimum firmware version required for full feature support"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

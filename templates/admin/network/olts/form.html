@@ -296,6 +296,210 @@
             </div>
         </div>
 
+        {# ONT Provisioning Defaults (Config Pack) - only show when editing existing OLT #}
+        {% if olt %}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">ONT Provisioning Defaults (Config Pack)</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default settings applied to newly authorized ONTs on this OLT</p>
+            </div>
+            <div class="p-6 space-y-6">
+                {# Authorization Profiles #}
+                <div>
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Authorization Profiles</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="default_line_profile_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Line Profile ID</label>
+                            <input type="number" name="default_line_profile_id" id="default_line_profile_id" min="0" max="65535"
+                                value="{{ olt.default_line_profile_id if olt.default_line_profile_id is not none else '' }}"
+                                placeholder="e.g., 10"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OLT-local line-profile ID for ONT authorization</p>
+                        </div>
+                        <div>
+                            <label for="default_service_profile_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Service Profile ID</label>
+                            <input type="number" name="default_service_profile_id" id="default_service_profile_id" min="0" max="65535"
+                                value="{{ olt.default_service_profile_id if olt.default_service_profile_id is not none else '' }}"
+                                placeholder="e.g., 10"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OLT-local srv-profile ID for ONT authorization</p>
+                        </div>
+                    </div>
+                </div>
+
+                {# VLANs by Purpose #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">VLANs by Purpose</h3>
+                    {% if olt_vlans %}
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <div>
+                            <label for="internet_vlan_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Internet VLAN</label>
+                            <select name="internet_vlan_id" id="internet_vlan_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">-- Not Set --</option>
+                                {% for vlan in olt_vlans %}
+                                <option value="{{ vlan.id }}" {% if olt.internet_vlan_id and olt.internet_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="management_vlan_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Management VLAN</label>
+                            <select name="management_vlan_id" id="management_vlan_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">-- Not Set --</option>
+                                {% for vlan in olt_vlans %}
+                                <option value="{{ vlan.id }}" {% if olt.management_vlan_id and olt.management_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="tr069_vlan_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">TR-069 VLAN</label>
+                            <select name="tr069_vlan_id" id="tr069_vlan_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">-- Same as Management --</option>
+                                {% for vlan in olt_vlans %}
+                                <option value="{{ vlan.id }}" {% if olt.tr069_vlan_id and olt.tr069_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="voip_vlan_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">VoIP VLAN</label>
+                            <select name="voip_vlan_id" id="voip_vlan_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">-- Not Set --</option>
+                                {% for vlan in olt_vlans %}
+                                <option value="{{ vlan.id }}" {% if olt.voip_vlan_id and olt.voip_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="iptv_vlan_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">IPTV VLAN</label>
+                            <select name="iptv_vlan_id" id="iptv_vlan_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">-- Not Set --</option>
+                                {% for vlan in olt_vlans %}
+                                <option value="{{ vlan.id }}" {% if olt.iptv_vlan_id and olt.iptv_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                        No VLANs assigned to this OLT yet. <a href="/admin/network/olts/{{ olt.id }}#network-resources" class="underline">Assign VLANs</a> first.
+                    </div>
+                    {% endif %}
+                </div>
+
+                {# GEM Port Indices #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">GEM Port Indices</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">GPON transport mapping for each service type</p>
+                    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                        <div>
+                            <label for="default_internet_gem_index" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Internet</label>
+                            <input type="number" name="default_internet_gem_index" id="default_internet_gem_index" min="0" max="15"
+                                value="{{ olt.default_internet_gem_index if olt.default_internet_gem_index is not none else 1 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                        </div>
+                        <div>
+                            <label for="default_mgmt_gem_index" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Management</label>
+                            <input type="number" name="default_mgmt_gem_index" id="default_mgmt_gem_index" min="0" max="15"
+                                value="{{ olt.default_mgmt_gem_index if olt.default_mgmt_gem_index is not none else 2 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                        </div>
+                        <div>
+                            <label for="default_voip_gem_index" class="block text-sm font-medium text-slate-600 dark:text-slate-400">VoIP</label>
+                            <input type="number" name="default_voip_gem_index" id="default_voip_gem_index" min="0" max="15"
+                                value="{{ olt.default_voip_gem_index if olt.default_voip_gem_index is not none else 3 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                        </div>
+                        <div>
+                            <label for="default_iptv_gem_index" class="block text-sm font-medium text-slate-600 dark:text-slate-400">IPTV</label>
+                            <input type="number" name="default_iptv_gem_index" id="default_iptv_gem_index" min="0" max="15"
+                                value="{{ olt.default_iptv_gem_index if olt.default_iptv_gem_index is not none else 4 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                        </div>
+                    </div>
+                </div>
+
+                {# OLT Provisioning Knobs #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">OLT Provisioning Knobs</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        <div>
+                            <label for="default_tr069_olt_profile_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">TR-069 OLT Profile ID</label>
+                            <input type="number" name="default_tr069_olt_profile_id" id="default_tr069_olt_profile_id" min="0" max="65535"
+                                value="{{ olt.default_tr069_olt_profile_id if olt.default_tr069_olt_profile_id is not none else '' }}"
+                                placeholder="e.g., 1"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">OLT-local TR-069 profile for ACS binding</p>
+                        </div>
+                        <div>
+                            <label for="default_internet_config_ip_index" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Internet Config IP Index</label>
+                            <input type="number" name="default_internet_config_ip_index" id="default_internet_config_ip_index" min="0" max="15"
+                                value="{{ olt.default_internet_config_ip_index if olt.default_internet_config_ip_index is not none else 0 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">ip-index for ont internet-config command</p>
+                        </div>
+                        <div>
+                            <label for="default_wan_config_profile_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">WAN Config Profile ID</label>
+                            <input type="number" name="default_wan_config_profile_id" id="default_wan_config_profile_id" min="0" max="65535"
+                                value="{{ olt.default_wan_config_profile_id if olt.default_wan_config_profile_id is not none else 0 }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white tabular-nums">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">profile-id for ont wan-config command</p>
+                        </div>
+                    </div>
+                </div>
+
+                {# Management IP Pool #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Management IP Pool</h3>
+                    {% if olt_ip_pools %}
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="mgmt_ip_pool_id" class="block text-sm font-medium text-slate-600 dark:text-slate-400">Auto-Allocate Management IPs From</label>
+                            <select name="mgmt_ip_pool_id" id="mgmt_ip_pool_id"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">-- Manual Assignment --</option>
+                                {% for pool in olt_ip_pools %}
+                                <option value="{{ pool.id }}" {% if olt.mgmt_ip_pool_id and olt.mgmt_ip_pool_id|string == pool.id|string %}selected{% endif %}>{{ pool.name }} ({{ pool.cidr }})</option>
+                                {% endfor %}
+                            </select>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">IPs are allocated during ONT authorization</p>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                        No IP pools assigned to this OLT yet. <a href="/admin/network/olts/{{ olt.id }}#network-resources" class="underline">Assign an IP pool</a> first.
+                    </div>
+                    {% endif %}
+                </div>
+
+                {# Connection Request Credentials #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Connection Request Credentials</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">Default credentials for ACS connection requests to ONTs</p>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="default_cr_username" class="block text-sm font-medium text-slate-600 dark:text-slate-400">CR Username</label>
+                            <input type="text" name="default_cr_username" id="default_cr_username" maxlength="120"
+                                value="{{ olt.default_cr_username if olt.default_cr_username else '' }}"
+                                placeholder="e.g., acs"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="default_cr_password" class="block text-sm font-medium text-slate-600 dark:text-slate-400">CR Password</label>
+                            <input type="password" name="default_cr_password" id="default_cr_password" maxlength="255"
+                                value=""
+                                placeholder="{{ 'Saved. Enter new value to replace.' if olt.default_cr_password else 'Connection request password' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="p-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
                 <div>
