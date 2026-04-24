@@ -752,9 +752,62 @@ def _cleanup_mgmt_service_port_on_bind_failure(
             logger_prefix,
             mgmt_vlan_tag,
         )
+
+        # Also attempt to unbind TR-069 profile to prevent orphaned config
+        _cleanup_tr069_profile_on_bind_failure(
+            olt, fsp, ont_id_on_olt, logger_prefix=logger_prefix
+        )
     except Exception as exc:
         logger.warning(
             "%s: Error during service-port cleanup after ACS bind failure: %s",
+            logger_prefix,
+            exc,
+        )
+
+
+def _cleanup_tr069_profile_on_bind_failure(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id_on_olt: int,
+    *,
+    logger_prefix: str = "ONT",
+) -> None:
+    """Attempt to unbind TR-069 profile from ONT after ACS bind failure.
+
+    When ensure_tr069_profile succeeds but the subsequent ACS bind step fails,
+    this function attempts to unbind the profile to leave the ONT in a clean
+    state. This prevents TR-069 profile configuration from persisting on an
+    ONT that didn't complete the full authorization flow.
+
+    Note: This is best-effort cleanup. If unbind fails, we log a warning but
+    don't propagate the error since the primary bind failure is more important.
+    """
+    try:
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+        adapter = get_protocol_adapter(olt)
+        unbind_result = adapter.unbind_tr069_profile(fsp, ont_id_on_olt)
+        if unbind_result.success:
+            logger.info(
+                "%s: Cleaned up orphaned TR-069 profile binding on %s/%s ONT-ID %d after ACS bind failure",
+                logger_prefix,
+                olt.name,
+                fsp,
+                ont_id_on_olt,
+            )
+        else:
+            # Not all OLTs may have a profile bound at this point
+            logger.debug(
+                "%s: TR-069 profile unbind skipped or failed on %s/%s ONT-ID %d: %s",
+                logger_prefix,
+                olt.name,
+                fsp,
+                ont_id_on_olt,
+                unbind_result.message,
+            )
+    except Exception as exc:
+        logger.warning(
+            "%s: Error during TR-069 profile cleanup after ACS bind failure: %s",
             logger_prefix,
             exc,
         )
@@ -1543,6 +1596,36 @@ def authorize_autofind_ont(
 
     authorize_started_at = monotonic()
 
+    # Guard against race condition: verify autofind candidate is still fresh
+    # This catches cases where the OLT state changed during profile resolution
+    time_since_validation = monotonic() - validate_started_at
+    if time_since_validation > 30.0:  # More than 30s since validation
+        logger.warning(
+            "ONT authorization delayed - re-verifying autofind candidate: "
+            "olt=%s fsp=%s serial=%s delay_sec=%.1f",
+            olt.name,
+            fsp,
+            serial_number,
+            time_since_validation,
+        )
+        reverify_started_at = monotonic()
+        reverify_candidate = get_autofind_candidate_by_serial(
+            db, olt_id, serial_number, fsp=fsp
+        )
+        if reverify_candidate is None:
+            return _fail(
+                "Re-verify autofind candidate",
+                f"ONT {serial_number} is no longer in autofind on {fsp} - "
+                "may have been authorized by another session or disconnected",
+                step_started_at=reverify_started_at,
+            )
+        _append_step(
+            "Re-verify autofind candidate",
+            True,
+            "ONT still present in autofind after delay",
+            step_started_at=reverify_started_at,
+        )
+
     # Use protocol adapter for automatic NETCONF/SSH selection with fallback
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
@@ -2263,19 +2346,33 @@ def run_post_authorization_follow_up(
     fsp: str,
     serial_number: str,
     ont_id_on_olt: int,
-    skip_autofind_resolve: bool = False,
+    skip_autofind_resolve: bool = False,  # Deprecated, kept for API compatibility
 ) -> tuple[bool, str, list[dict[str, object]]]:
-    """Run non-critical reconciliation after successful OLT authorization.
+    """Create assignment and PON port link after successful OLT authorization.
 
-    Args:
-        skip_autofind_resolve: If True, skip the autofind candidate resolution step
-            (caller already resolved it in the main authorization workflow).
+    This function performs only the essential database bookkeeping after
+    authorization. All provisioning steps (management IP, TR-069 binding,
+    profile application) are handled separately via the provisioning UI.
+
+    The separation ensures:
+    - Fast authorization response (~2-5s instead of 10-15s)
+    - Clean failure states (authorized OR not, no partial provisioning)
+    - Explicit operator control over when provisioning occurs
+
+    Removed steps (now part of provisioning workflow):
+    - SNMP sync: Use "Refresh from OLT" action or periodic sync
+    - Autofind resolution: Handled by async cleanup task
+    - Apply provisioning profile: Operator-driven from ONT config UI
+    - Configure management IP: Part of provisioning bundle
+    - Bind TR-069 profile: Part of provisioning bundle
+    - Queue bootstrap wait: Triggered after provisioning completes
     """
     steps: list[dict[str, object]] = []
 
     def _add_step(name: str, success: bool, message: str) -> None:
         steps.append({"name": name, "success": success, "message": message})
 
+    # Step 1: Create or link assignment and PON port (essential for topology)
     assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
         db,
         ont_unit_id=ont_unit_id,
@@ -2286,151 +2383,7 @@ def run_post_authorization_follow_up(
     if not assignment_ok:
         return False, assignment_msg, steps
 
-    from app.services.network.olt_targeted_sync import sync_authorized_ont_from_olt_snmp
-
-    sync_ok, sync_msg, _sync_stats = sync_authorized_ont_from_olt_snmp(
-        db,
-        olt_id=olt_id,
-        ont_unit_id=ont_unit_id,
-        fsp=fsp,
-        ont_id_on_olt=ont_id_on_olt,
-        serial_number=serial_number,
-    )
-    _add_step("Sync this ONT from OLT SNMP", sync_ok, sync_msg)
-    if not sync_ok:
-        return False, sync_msg, steps
-
-    # Skip autofind resolution if caller already did it (avoids redundant DB call)
-    if not skip_autofind_resolve:
-        resolve_ok, resolve_msg = _resolve_authorized_autofind_candidate(
-            db,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
-        )
-        _add_step("Resolve autofind candidate", resolve_ok, resolve_msg)
-        if not resolve_ok:
-            return False, resolve_msg, steps
-
-    profile_apply_ok = True
-    profile_apply_msg = "Skipped: ONT already has an active configuration bundle."
-    ont = db.get(OntUnit, ont_unit_id)
-    if ont is not None:
-        from app.services.network.ont_bundle_assignments import (
-            get_active_bundle_assignment,
-        )
-
-        active_assignment = get_active_bundle_assignment(db, ont)
-    else:
-        active_assignment = None
-    if ont is not None and active_assignment is None:
-        from sqlalchemy import desc
-
-        from app.models.network import OntProvisioningProfile
-        from app.services.network.ont_profile_apply import apply_bundle_to_ont
-
-        profile = db.scalars(
-            select(OntProvisioningProfile)
-            .where(
-                OntProvisioningProfile.olt_device_id == olt_id,
-                OntProvisioningProfile.is_active.is_(True),
-            )
-            .order_by(
-                desc(OntProvisioningProfile.is_default),
-                desc(OntProvisioningProfile.updated_at),
-                desc(OntProvisioningProfile.created_at),
-            )
-        ).first()
-        if profile is None:
-            profile_apply_msg = (
-                "Skipped: no active provisioning profile is scoped to this OLT."
-            )
-        else:
-            apply_result = apply_bundle_to_ont(db, ont_unit_id, str(profile.id))
-            profile_apply_ok = apply_result.success
-            profile_apply_msg = apply_result.message
-            if profile_apply_ok:
-                db.commit()
-            else:
-                db.rollback()
-    _add_step("Apply provisioning profile", profile_apply_ok, profile_apply_msg)
-    if not profile_apply_ok:
-        return False, profile_apply_msg, steps
-
-    # Configure management IP so ONT can reach ACS (must happen before TR-069 bind)
-    olt = get_olt_or_none(db, olt_id)
-    if olt is not None:
-        mgmt_ok, mgmt_msg = _configure_management_ip_for_authorization(
-            db,
-            olt=olt,
-            fsp=fsp,
-            ont_id_on_olt=ont_id_on_olt,
-            ont_unit_id=ont_unit_id,
-            serial_number=serial_number,
-        )
-        _add_step("Configure management IP", mgmt_ok, mgmt_msg)
-        # Continue even if management IP config fails - it may already be configured
-        # or the profile may not specify a management VLAN
-
-    try:
-        if olt is not None:
-            from app.services.network.olt_protocol_adapters import get_protocol_adapter
-            from app.services.network.olt_tr069_admin import (
-                ensure_tr069_profile_for_linked_acs,
-            )
-
-            profile_ok, profile_msg, profile_id = ensure_tr069_profile_for_linked_acs(
-                olt
-            )
-            _add_step("Verify DotMac ACS profile", profile_ok, profile_msg)
-            if profile_ok and profile_id is not None:
-                bind_result = get_protocol_adapter(olt).bind_tr069_profile(
-                    fsp,
-                    ont_id_on_olt,
-                    profile_id=profile_id,
-                )
-                bind_ok = bind_result.success
-                bind_msg = bind_result.message
-            else:
-                bind_ok = False
-                bind_msg = profile_msg
-        else:
-            bind_ok, bind_msg = False, "OLT not found for ACS bind."
-    except (OSError, SQLAlchemyError) as exc:
-        logger.warning("ACS bind failed for ONT %s: %s", ont_unit_id, exc)
-        bind_ok = False
-        bind_msg = f"ACS bind failed: {exc}"
-    _add_step("Bind DotMac ACS profile", bind_ok, bind_msg)
-    if not bind_ok:
-        # Cleanup orphaned management service port created before ACS bind
-        _cleanup_mgmt_service_port_on_bind_failure(
-            db, olt, fsp, ont_id_on_olt, logger_prefix=f"ONT {ont_unit_id}"
-        )
-        return False, bind_msg, steps
-
-    try:
-        from app.services.network.ont_provision_steps import queue_wait_tr069_bootstrap
-
-        wait_result = queue_wait_tr069_bootstrap(db, ont_unit_id)
-        _add_step("Wait for ACS inform", True, wait_result.message)
-        logger.info(
-            "Queued TR-069 bootstrap wait after authorization: ont_id=%s serial=%s fsp=%s ont_id_on_olt=%s",
-            ont_unit_id,
-            serial_number,
-            fsp,
-            ont_id_on_olt,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Failed to queue TR-069 bootstrap wait after authorization for ONT %s: %s",
-            ont_unit_id,
-            exc,
-        )
-        message = f"Failed to queue ACS wait: {exc}"
-        _add_step("Wait for ACS inform", False, message)
-        return False, message, steps
-
-    return True, "Post-authorization sync completed successfully.", steps
+    return True, "Authorization follow-up completed. Configure ONT via provisioning UI.", steps
 
 
 def get_autofind_candidate_by_serial(
