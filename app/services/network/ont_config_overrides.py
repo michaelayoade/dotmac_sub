@@ -58,23 +58,3 @@ def upsert_ont_config_override(
         row.source = source
     row.value_json = {"value": normalized}
     row.reason = reason
-
-
-def clear_bundle_managed_legacy_projection(ont: OntUnit) -> None:
-    """Remove legacy desired-state projection fields from a bundle-managed ONT."""
-    ont.config_method = None
-    ont.onu_mode = None
-    ont.ip_protocol = None
-    ont.wan_mode = None
-    ont.wan_vlan_id = None
-    ont.pppoe_username = None
-    ont.mgmt_ip_mode = None
-    ont.mgmt_vlan_id = None
-    ont.mgmt_ip_address = None
-    ont.wifi_ssid = None
-    if hasattr(ont, "wifi_enabled"):
-        ont.wifi_enabled = None
-    if hasattr(ont, "wifi_channel"):
-        ont.wifi_channel = None
-    if hasattr(ont, "wifi_security_mode"):
-        ont.wifi_security_mode = None

@@ -123,15 +123,13 @@ def clear_active_bundle_assignment(
     *,
     ont: OntUnit,
 ) -> bool:
-    """Deactivate the current bundle assignment and clear the legacy link."""
+    """Deactivate the current bundle assignment."""
     active_assignment = get_active_bundle_assignment(db, ont)
     if active_assignment is None:
-        ont.provisioning_profile_id = None
         return False
 
     now = datetime.now(UTC)
     active_assignment.is_active = False
     active_assignment.status = OntBundleAssignmentStatus.superseded
     active_assignment.superseded_at = now
-    ont.provisioning_profile_id = None
     return True

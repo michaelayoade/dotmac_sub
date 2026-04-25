@@ -77,7 +77,6 @@ class ProvisioningEnforcement:
             .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
             .options(
                 joinedload(OntUnit.olt_device),
-                joinedload(OntUnit.wan_vlan),
                 joinedload(OntUnit.user_vlan),
                 selectinload(OntUnit.bundle_assignments),
                 selectinload(OntUnit.config_overrides),
@@ -287,11 +286,12 @@ class ProvisioningEnforcement:
                 skipped += 1
                 continue
 
-            # Decrypt stored password if present
+            # Get password from effective config (stored as override)
             password: str | None = None
-            if ont.wifi_password:
+            wifi_password_override = _effective_field(db, ont, "wifi.password")
+            if wifi_password_override:
                 try:
-                    password = decrypt_credential(ont.wifi_password)
+                    password = decrypt_credential(str(wifi_password_override))
                 except ValueError:
                     logger.warning(
                         "Cannot decrypt WiFi password for ONT %s, pushing SSID only",
@@ -360,7 +360,6 @@ class ProvisioningEnforcement:
         import ipaddress
         import time
 
-        from app.models.network import Vlan
         from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.network.serial_utils import parse_ont_id_on_olt
 
@@ -414,15 +413,11 @@ class ProvisioningEnforcement:
                     skipped += 1
                     continue
 
-                # Resolve VLAN tag
+                # Resolve VLAN tag from effective config
                 mgmt_vlan_tag = 201
                 effective_mgmt_vlan = _effective_field(db, ont, "mgmt_vlan")
                 if effective_mgmt_vlan not in (None, ""):
                     mgmt_vlan_tag = int(str(effective_mgmt_vlan))
-                elif ont.mgmt_vlan_id:
-                    vlan = db.get(Vlan, str(ont.mgmt_vlan_id))
-                    if vlan:
-                        mgmt_vlan_tag = vlan.tag
 
                 # Calculate subnet/gateway from IP (assume /24)
                 ip_addr = str(mgmt_ip_address)
@@ -547,7 +542,7 @@ class ProvisioningEnforcement:
                 OntUnit.port.isnot(None),
                 OntUnit.external_id.isnot(None),
             )
-            .options(joinedload(OntUnit.wan_vlan), joinedload(OntUnit.user_vlan))
+            .options(joinedload(OntUnit.user_vlan))
         )
         onts = db.scalars(stmt).unique().all()
         if not onts:
@@ -595,13 +590,11 @@ class ProvisioningEnforcement:
                     observed_vlans_by_ont.setdefault(sp.ont_id, []).append(sp.vlan_id)
 
             for ont, olt_ont_id in fsp_onts:
-                # Determine expected VLAN (prefer wan_vlan, fallback to user_vlan)
+                # Determine expected VLAN from effective config or user_vlan
                 expected_vlan: int | None = None
                 effective_wan_vlan = _effective_field(db, ont, "wan_vlan")
                 if effective_wan_vlan not in (None, ""):
                     expected_vlan = int(str(effective_wan_vlan))
-                elif ont.wan_vlan and ont.wan_vlan.tag:
-                    expected_vlan = ont.wan_vlan.tag
                 elif ont.user_vlan and ont.user_vlan.tag:
                     expected_vlan = ont.user_vlan.tag
 
@@ -697,7 +690,7 @@ def _resolve_access_credential_password(
     active credential is found or the secret cannot be decrypted.
     """
     effective_pppoe_username = _effective_field(db, ont, "pppoe_username")
-    lookup_username = str(username or effective_pppoe_username or ont.pppoe_username or "").strip()
+    lookup_username = str(username or effective_pppoe_username or "").strip()
     if not lookup_username:
         return ""
 

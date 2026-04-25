@@ -19,10 +19,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.network.ont_config_overrides import (
-    is_bundle_managed_ont,
-    upsert_ont_config_override,
-)
+from app.services.network.ont_config_overrides import upsert_ont_config_override
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
@@ -243,46 +240,35 @@ class OntWriteService:
 
         # Persist desired state
         from app.models.network import MgmtIpMode
-        from app.services.common import coerce_uuid
 
-        bundle_managed = is_bundle_managed_ont(db, ont)
         try:
             parsed_mgmt_mode = MgmtIpMode(mgmt_ip_mode)
         except ValueError:
             parsed_mgmt_mode = None
-        if bundle_managed:
+
+        # Store management IP config as overrides
+        upsert_ont_config_override(
+            db,
+            ont=ont,
+            field_name="management.ip_mode",
+            value=getattr(parsed_mgmt_mode, "value", mgmt_ip_mode),
+            reason="ont_write.update_management_ip",
+        )
+        if vlan_int is not None:
             upsert_ont_config_override(
                 db,
                 ont=ont,
-                field_name="management.ip_mode",
-                value=getattr(parsed_mgmt_mode, "value", mgmt_ip_mode),
+                field_name="management.vlan_tag",
+                value=vlan_int,
                 reason="ont_write.update_management_ip",
             )
-            if vlan_int is not None:
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="management.vlan_tag",
-                    value=vlan_int,
-                    reason="ont_write.update_management_ip",
-                )
-            upsert_ont_config_override(
-                db,
-                ont=ont,
-                field_name="management.ip_address",
-                value=mgmt_ip_address,
-                reason="ont_write.update_management_ip",
-            )
-            ont.mgmt_ip_mode = None
-            ont.mgmt_vlan_id = None
-            ont.mgmt_ip_address = None
-        else:
-            if parsed_mgmt_mode is not None:
-                ont.mgmt_ip_mode = parsed_mgmt_mode
-            if resolved_mgmt_vlan_id:
-                ont.mgmt_vlan_id = coerce_uuid(str(resolved_mgmt_vlan_id))
-            if mgmt_ip_address:
-                ont.mgmt_ip_address = mgmt_ip_address
+        upsert_ont_config_override(
+            db,
+            ont=ont,
+            field_name="management.ip_address",
+            value=mgmt_ip_address,
+            reason="ont_write.update_management_ip",
+        )
         _set_sync_meta(ont, "ssh")
         db.commit()
         db.refresh(ont)

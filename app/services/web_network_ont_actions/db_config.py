@@ -19,9 +19,6 @@ from app.services.network.ont_bundle_assignments import (
     clear_active_bundle_assignment,
     get_active_bundle_assignment,
 )
-from app.services.network.ont_config_overrides import (
-    clear_bundle_managed_legacy_projection,
-)
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
 )
@@ -228,56 +225,14 @@ def update_ont_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Update ONT configuration fields in the database, optionally push to device."""
-    from app.models.network import ConfigMethod, IpProtocol, MgmtIpMode, WanMode
-    from app.services.credential_crypto import encrypt_credential
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     if not ont:
         return ActionResult(success=False, message="ONT not found")
-    active_assignment = get_active_bundle_assignment(db, ont)
-    target_bundle_managed = bool(
-        bundle_id not in (None, "")
-        or (
-            bundle_id is None
-            and active_assignment is not None
-        )
-    )
-    should_project_legacy_fields = not target_bundle_managed
     resolved_wan_vlan = None
     resolved_mgmt_vlan = None
 
-    if should_project_legacy_fields and wan_mode:
-        try:
-            ont.wan_mode = WanMode(wan_mode)
-        except ValueError:
-            pass
-    elif should_project_legacy_fields and wan_mode == "":
-        ont.wan_mode = None
-
-    if should_project_legacy_fields and config_method:
-        try:
-            ont.config_method = ConfigMethod(config_method)
-        except ValueError:
-            pass
-    elif should_project_legacy_fields and config_method == "":
-        ont.config_method = None
-
-    if should_project_legacy_fields and ip_protocol:
-        try:
-            ont.ip_protocol = IpProtocol(ip_protocol)
-        except ValueError:
-            pass
-    elif should_project_legacy_fields and ip_protocol == "":
-        ont.ip_protocol = None
-
-    if should_project_legacy_fields and mgmt_ip_mode:
-        try:
-            ont.mgmt_ip_mode = MgmtIpMode(mgmt_ip_mode)
-        except ValueError:
-            pass
-    elif should_project_legacy_fields and mgmt_ip_mode == "":
-        ont.mgmt_ip_mode = None
-
+    # Resolve VLANs
     if wan_vlan_id:
         vlan, vlan_err = _resolve_ont_scoped_vlan(
             db,
@@ -288,10 +243,6 @@ def update_ont_config(
         if vlan_err:
             return vlan_err
         resolved_wan_vlan = vlan
-        if should_project_legacy_fields:
-            ont.wan_vlan_id = vlan.id if vlan else None
-    elif should_project_legacy_fields and wan_vlan_id == "":
-        ont.wan_vlan_id = None
 
     if mgmt_vlan_id:
         vlan, vlan_err = _resolve_ont_scoped_vlan(
@@ -303,21 +254,8 @@ def update_ont_config(
         if vlan_err:
             return vlan_err
         resolved_mgmt_vlan = vlan
-        if should_project_legacy_fields:
-            ont.mgmt_vlan_id = vlan.id if vlan else None
-    elif should_project_legacy_fields and mgmt_vlan_id == "":
-        ont.mgmt_vlan_id = None
 
-    if should_project_legacy_fields and pppoe_username is not None:
-        ont.pppoe_username = pppoe_username.strip() or None
-    if (
-        should_project_legacy_fields
-        and pppoe_password is not None
-        and pppoe_password.strip()
-    ):
-        ont.pppoe_password = encrypt_credential(pppoe_password.strip())
-    if should_project_legacy_fields and mgmt_ip_address is not None:
-        ont.mgmt_ip_address = mgmt_ip_address.strip() or None
+    # Update non-bundle-managed fields (still on ONT model)
     ont.mgmt_remote_access = mgmt_remote_access
     if lan_gateway_ip is not None:
         ont.lan_gateway_ip = lan_gateway_ip.strip() or None
@@ -330,32 +268,17 @@ def update_ont_config(
         ont.lan_dhcp_end = lan_dhcp_end.strip() or None
     ont.voip_enabled = voip_enabled
 
-    if should_project_legacy_fields and wifi_ssid is not None:
-        ont.wifi_ssid = wifi_ssid.strip() or None
-    if should_project_legacy_fields and hasattr(ont, "wifi_enabled"):
-        ont.wifi_enabled = wifi_enabled
-    if should_project_legacy_fields and wifi_channel is not None and hasattr(ont, "wifi_channel"):
-        ont.wifi_channel = wifi_channel.strip() or None
-    if should_project_legacy_fields and wifi_security_mode is not None and hasattr(ont, "wifi_security_mode"):
-        ont.wifi_security_mode = wifi_security_mode.strip() or None
-
     wan_vlan_tag = None
     if resolved_wan_vlan is not None:
         wan_vlan_tag = (
             int(resolved_wan_vlan.tag) if resolved_wan_vlan.tag is not None else None
         )
-    elif ont.wan_vlan_id:
-        vlan = db.get(Vlan, ont.wan_vlan_id)
-        wan_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
 
     mgmt_vlan_tag = None
     if resolved_mgmt_vlan is not None:
         mgmt_vlan_tag = (
             int(resolved_mgmt_vlan.tag) if resolved_mgmt_vlan.tag is not None else None
         )
-    elif ont.mgmt_vlan_id:
-        vlan = db.get(Vlan, ont.mgmt_vlan_id)
-        mgmt_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
 
     try:
         _persist_bundle_authoring_state(
@@ -380,8 +303,6 @@ def update_ont_config(
     except ValueError as exc:
         db.rollback()
         return ActionResult(success=False, message=str(exc))
-    if get_active_bundle_assignment(db, ont) is not None:
-        clear_bundle_managed_legacy_projection(ont)
 
     db.add(ont)
     db.flush()

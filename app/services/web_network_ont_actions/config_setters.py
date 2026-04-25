@@ -12,7 +12,6 @@ from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_config_overrides import (
-    is_bundle_managed_ont,
     upsert_ont_config_override,
 )
 from app.services.web_network_ont_actions._common import (
@@ -37,17 +36,13 @@ def set_wifi_ssid(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            if is_bundle_managed_ont(db, ont):
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wifi.ssid",
-                    value=ssid,
-                    reason="config_setters.set_wifi_ssid",
-                )
-                ont.wifi_ssid = None
-            else:
-                ont.wifi_ssid = ssid
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wifi.ssid",
+                value=ssid,
+                reason="config_setters.set_wifi_ssid",
+            )
             db.flush()
     _log_action_audit(
         db,
@@ -67,7 +62,13 @@ def set_wifi_password(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            ont.wifi_password = encrypt_credential(password)
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wifi.password",
+                value=encrypt_credential(password),
+                reason="config_setters.set_wifi_password",
+            )
             db.flush()
         # Emit audit event for credential change
         from app.services.events import emit_event
@@ -119,57 +120,47 @@ def set_wifi_config(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            bundle_managed = is_bundle_managed_ont(db, ont)
+            # Store WiFi config as overrides
             if ssid is not None:
-                if bundle_managed:
-                    upsert_ont_config_override(
-                        db,
-                        ont=ont,
-                        field_name="wifi.ssid",
-                        value=ssid,
-                        reason="config_setters.set_wifi_config",
-                    )
-                    ont.wifi_ssid = None
-                else:
-                    ont.wifi_ssid = ssid
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wifi.ssid",
+                    value=ssid,
+                    reason="config_setters.set_wifi_config",
+                )
             if password is not None:
-                ont.wifi_password = encrypt_credential(password)
-            if hasattr(ont, "wifi_enabled"):
-                if bundle_managed:
-                    upsert_ont_config_override(
-                        db,
-                        ont=ont,
-                        field_name="wifi.enabled",
-                        value=enabled,
-                        reason="config_setters.set_wifi_config",
-                    )
-                    ont.wifi_enabled = None
-                else:
-                    ont.wifi_enabled = enabled
-            if channel is not None and hasattr(ont, "wifi_channel"):
-                if bundle_managed:
-                    upsert_ont_config_override(
-                        db,
-                        ont=ont,
-                        field_name="wifi.channel",
-                        value=channel,
-                        reason="config_setters.set_wifi_config",
-                    )
-                    ont.wifi_channel = None
-                else:
-                    ont.wifi_channel = str(channel)
-            if security_mode is not None and hasattr(ont, "wifi_security_mode"):
-                if bundle_managed:
-                    upsert_ont_config_override(
-                        db,
-                        ont=ont,
-                        field_name="wifi.security_mode",
-                        value=security_mode,
-                        reason="config_setters.set_wifi_config",
-                    )
-                    ont.wifi_security_mode = None
-                else:
-                    ont.wifi_security_mode = security_mode
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wifi.password",
+                    value=encrypt_credential(password),
+                    reason="config_setters.set_wifi_config",
+                )
+            if enabled is not None:
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wifi.enabled",
+                    value=enabled,
+                    reason="config_setters.set_wifi_config",
+                )
+            if channel is not None:
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wifi.channel",
+                    value=channel,
+                    reason="config_setters.set_wifi_config",
+                )
+            if security_mode is not None:
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="wifi.security_mode",
+                    value=security_mode,
+                    reason="config_setters.set_wifi_config",
+                )
             db.flush()
         _persist_ont_plan_step(
             db,
@@ -408,8 +399,21 @@ def set_pppoe_credentials(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            ont.pppoe_username = username
-            ont.pppoe_password = encrypt_credential(password)
+            # Store PPPoE credentials as overrides
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wan.pppoe_username",
+                value=username,
+                reason="config_setters.set_pppoe_credentials",
+            )
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wan.pppoe_password",
+                value=encrypt_credential(password),
+                reason="config_setters.set_pppoe_credentials",
+            )
             db.flush()
         _persist_ont_plan_step(
             db,
@@ -591,8 +595,21 @@ def set_wan_config(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont and wan_mode == "pppoe" and pppoe_username and pppoe_password:
-            ont.pppoe_username = pppoe_username
-            ont.pppoe_password = encrypt_credential(pppoe_password)
+            # Store PPPoE credentials as overrides
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wan.pppoe_username",
+                value=pppoe_username,
+                reason="config_setters.set_wan_config",
+            )
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="wan.pppoe_password",
+                value=encrypt_credential(pppoe_password),
+                reason="config_setters.set_wan_config",
+            )
             db.flush()
         _persist_ont_plan_step(
             db,

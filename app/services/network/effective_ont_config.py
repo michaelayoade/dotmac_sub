@@ -213,21 +213,22 @@ def _bundle_values(
     }
 
 
-def _legacy_values(ont: OntUnit) -> dict[str, Any]:
+def _empty_values() -> dict[str, Any]:
+    """Return empty values when no bundle is assigned."""
     return {
-        "config_method": _enum_or_raw(getattr(ont, "config_method", None)),
-        "onu_mode": _enum_or_raw(getattr(ont, "onu_mode", None)),
-        "ip_protocol": _enum_or_raw(getattr(ont, "ip_protocol", None)),
-        "wan_mode": _enum_or_raw(getattr(ont, "wan_mode", None)),
-        "wan_vlan": getattr(getattr(ont, "wan_vlan", None), "tag", None),
-        "pppoe_username": getattr(ont, "pppoe_username", None),
-        "mgmt_ip_mode": _enum_or_raw(getattr(ont, "mgmt_ip_mode", None)),
-        "mgmt_vlan": getattr(getattr(ont, "mgmt_vlan", None), "tag", None),
-        "mgmt_ip_address": getattr(ont, "mgmt_ip_address", None),
-        "wifi_enabled": getattr(ont, "wifi_enabled", None),
-        "wifi_ssid": getattr(ont, "wifi_ssid", None),
-        "wifi_channel": getattr(ont, "wifi_channel", None),
-        "wifi_security_mode": getattr(ont, "wifi_security_mode", None),
+        "config_method": None,
+        "onu_mode": None,
+        "ip_protocol": None,
+        "wan_mode": None,
+        "wan_vlan": None,
+        "pppoe_username": None,
+        "mgmt_ip_mode": None,
+        "mgmt_vlan": None,
+        "mgmt_ip_address": None,
+        "wifi_enabled": None,
+        "wifi_ssid": None,
+        "wifi_channel": None,
+        "wifi_security_mode": None,
         "primary_wan_service": None,
     }
 
@@ -242,15 +243,15 @@ def resolve_effective_ont_config(
     assignment, bundle, blocked_reason = _resolve_ready_bundle(db, ont, olt=olt)
     raw_overrides = _load_raw_overrides(db, ont)
     overrides = _canonicalize_overrides(raw_overrides)
-    using_legacy_fallback = assignment is None and bundle is None
+    has_bundle = assignment is not None or bundle is not None
 
-    if using_legacy_fallback:
-        values = _legacy_values(ont)
-    else:
+    if has_bundle:
         values = _bundle_values(
             bundle,
             template_context=_subscriber_template_context(db, ont),
         )
+    else:
+        values = _empty_values()
     for key, value in overrides.items():
         values[key] = value
 
@@ -262,5 +263,5 @@ def resolve_effective_ont_config(
         "config_ready": blocked_reason is None,
         "overrides": sorted(overrides.keys()),
         "values": values,
-        "using_legacy_fallback": using_legacy_fallback,
+        "using_legacy_fallback": False,
     }

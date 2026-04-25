@@ -39,9 +39,6 @@ from app.services.network.ont_bundle_assignments import (
     get_active_bundle_assignment,
     resolve_assigned_bundle,
 )
-from app.services.network.ont_config_overrides import (
-    clear_bundle_managed_legacy_projection,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -423,7 +420,6 @@ def apply_bundle_to_ont(
         status=OntBundleAssignmentStatus.applied,
         assigned_reason="bundle_apply_service",
     )
-    clear_bundle_managed_legacy_projection(ont)
     ont.provisioning_status = OntProvisioningStatus.partial
     ont.last_provisioned_at = None
 

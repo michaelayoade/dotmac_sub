@@ -1,3 +1,8 @@
+"""Tests for effective ONT config resolution and provisioning enforcement.
+
+These tests verify the bundle-based provisioning system where effective config
+is resolved from bundle assignments + sparse config overrides.
+"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -18,11 +23,11 @@ from app.models.network import (
     WanConnectionType,
 )
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_config_overrides import upsert_ont_config_override
 from app.services.network.ont_profile_apply import apply_bundle_to_ont, detect_drift
 from app.services.network.ont_profile_push import OntProfilePushService
 from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
 from app.services.network.provisioning_enforcement import ProvisioningEnforcement
-from tests.legacy_ont_profile_link import seed_legacy_profile_link
 
 
 def test_detect_gaps_and_counts_use_effective_bundle_values(db_session):
@@ -62,12 +67,16 @@ def test_detect_gaps_and_counts_use_effective_bundle_values(db_session):
         board="0/2",
         port="3",
         external_id="9",
-        mgmt_ip_address="10.91.0.2",
         tr069_acs_server_id=None,
         observed_wan_ip=None,
     )
     db_session.add(ont)
-    db_session.commit()
+    db_session.flush()
+
+    # Set mgmt_ip_address via override
+    upsert_ont_config_override(
+        db_session, ont=ont, field_name="management.ip_address", value="10.91.0.2"
+    )
 
     db_session.add(
         OntBundleAssignment(
@@ -89,38 +98,22 @@ def test_detect_gaps_and_counts_use_effective_bundle_values(db_session):
     assert counts["mgmt_pending_push"] == 1
 
 
-def test_effective_config_does_not_treat_legacy_profile_fk_as_bundle_assignment(
-    db_session,
-):
-    bundle = OntProvisioningProfile(
-        name="Legacy FK Only Bundle",
-        mgmt_ip_mode=MgmtIpMode.static_ip,
-        mgmt_vlan_tag=901,
-        wifi_enabled=True,
-        wifi_ssid_template="bundle-ssid",
-        is_active=True,
-    )
-    db_session.add(bundle)
-    db_session.flush()
-
+def test_effective_config_returns_empty_values_without_bundle(db_session):
+    """ONTs without bundle assignment should have empty effective config."""
     ont = OntUnit(
-        serial_number="ENF-LEGACY-FK-001",
+        serial_number="ENF-NO-BUNDLE-001",
         is_active=True,
-        mgmt_ip_mode=MgmtIpMode.dhcp,
-        mgmt_ip_address="10.10.10.2",
-        wifi_ssid="legacy-ssid",
     )
-    seed_legacy_profile_link(ont, bundle)
     db_session.add(ont)
     db_session.commit()
 
     resolved = resolve_effective_ont_config(db_session, ont)
 
     assert resolved["bundle"] is None
-    assert resolved["using_legacy_fallback"] is True
-    assert resolved["values"]["mgmt_ip_mode"] == "dhcp"
-    assert resolved["values"]["mgmt_ip_address"] == "10.10.10.2"
-    assert resolved["values"]["wifi_ssid"] == "legacy-ssid"
+    assert resolved["using_legacy_fallback"] is False
+    assert resolved["values"]["mgmt_ip_mode"] is None
+    assert resolved["values"]["mgmt_ip_address"] is None
+    assert resolved["values"]["wifi_ssid"] is None
 
 
 def test_effective_config_resolves_bundle_templates_before_enforcement(db_session):
@@ -160,12 +153,12 @@ def test_effective_config_resolves_bundle_templates_before_enforcement(db_sessio
     assert resolved["values"]["wifi_ssid"] == "DOTMAC-TPL-001"
 
 
-def test_inactive_bundle_assignment_blocks_legacy_fallback(db_session):
-    bundle = OntProvisioningProfile(name="Inactive Bundle", is_active=False)
+def test_inactive_bundle_assignment_blocks_config_resolution(db_session):
+    """ONT with inactive bundle should not have effective config."""
+    bundle = OntProvisioningProfile(name="Do Not Apply", is_active=False)
     ont = OntUnit(
         serial_number="INACTIVE-BUNDLE-001",
         is_active=True,
-        pppoe_username="legacy-user",
     )
     db_session.add_all([bundle, ont])
     db_session.flush()
@@ -184,18 +177,18 @@ def test_inactive_bundle_assignment_blocks_legacy_fallback(db_session):
     assert resolved["config_ready"] is False
     assert resolved["bundle_assignment_blocked_reason"] == "inactive_bundle"
     assert resolved["using_legacy_fallback"] is False
-    assert resolved["values"]["pppoe_username"] is None
 
 
-def test_detect_gaps_skips_non_applied_bundle_assignments(db_session):
+def test_detect_gaps_skips_superseded_bundle_assignments(db_session):
+    """Superseded bundle assignments should not be considered for gap detection."""
     olt = OLTDevice(
-        name="OLT-NON-APPLIED",
+        name="OLT-SUPERSEDED",
         mgmt_ip="198.51.100.201",
         is_active=True,
         tr069_acs_server_id=None,
     )
     bundle = OntProvisioningProfile(
-        name="Planned Bundle",
+        name="Superseded Bundle",
         olt_device_id=olt.id,
         is_active=True,
     )
@@ -206,19 +199,19 @@ def test_detect_gaps_skips_non_applied_bundle_assignments(db_session):
             profile_id=bundle.id,
             name="Internet",
             connection_type=WanConnectionType.pppoe,
-            pppoe_username_template="planned-user",
+            pppoe_username_template="superseded-user",
             is_active=True,
         )
     )
-    ont = OntUnit(serial_number="PLANNED-001", is_active=True, olt_device_id=olt.id)
+    ont = OntUnit(serial_number="SUPERSEDED-001", is_active=True, olt_device_id=olt.id)
     db_session.add(ont)
     db_session.flush()
     db_session.add(
         OntBundleAssignment(
             ont_unit_id=ont.id,
             bundle_id=bundle.id,
-            status=OntBundleAssignmentStatus.planned,
-            is_active=True,
+            status=OntBundleAssignmentStatus.superseded,
+            is_active=False,
         )
     )
     db_session.commit()
@@ -243,26 +236,23 @@ def test_apply_bundle_to_ont_rejects_inactive_bundle(db_session):
 
 def test_count_onts_by_profile_uses_active_bundle_assignments_only(db_session):
     active_bundle = OntProvisioningProfile(name="Active Count Bundle", is_active=True)
-    legacy_only_bundle = OntProvisioningProfile(name="Legacy Count Bundle", is_active=True)
-    db_session.add_all([active_bundle, legacy_only_bundle])
+    other_bundle = OntProvisioningProfile(name="Other Count Bundle", is_active=True)
+    db_session.add_all([active_bundle, other_bundle])
     db_session.flush()
 
     assigned_ont = OntUnit(
         serial_number="COUNT-ACTIVE-ASSIGNMENT-001",
         is_active=True,
     )
-    legacy_only_ont = OntUnit(
-        serial_number="COUNT-LEGACY-ONLY-001",
+    unassigned_ont = OntUnit(
+        serial_number="COUNT-UNASSIGNED-001",
         is_active=True,
     )
     inactive_assignment_ont = OntUnit(
         serial_number="COUNT-INACTIVE-ASSIGNMENT-001",
         is_active=True,
     )
-    seed_legacy_profile_link(assigned_ont, legacy_only_bundle)
-    seed_legacy_profile_link(legacy_only_ont, legacy_only_bundle)
-    seed_legacy_profile_link(inactive_assignment_ont, active_bundle)
-    db_session.add_all([assigned_ont, legacy_only_ont, inactive_assignment_ont])
+    db_session.add_all([assigned_ont, unassigned_ont, inactive_assignment_ont])
     db_session.flush()
 
     db_session.add(
@@ -288,18 +278,16 @@ def test_count_onts_by_profile_uses_active_bundle_assignments_only(db_session):
     assert counts == {str(active_bundle.id): 1}
 
 
-def test_profile_push_requires_active_bundle_assignment_not_legacy_profile_fk(
-    db_session,
-):
-    bundle = OntProvisioningProfile(name="Legacy Push Bundle", is_active=True)
+def test_profile_push_requires_active_bundle_assignment(db_session):
+    """ONTs without active bundle assignment cannot have profile pushed."""
+    bundle = OntProvisioningProfile(name="Push Bundle", is_active=True)
     db_session.add(bundle)
     db_session.flush()
 
     ont = OntUnit(
-        serial_number="PROFILE-PUSH-LEGACY-FK-001",
+        serial_number="PROFILE-PUSH-NO-ASSIGNMENT-001",
         is_active=True,
     )
-    seed_legacy_profile_link(ont, bundle)
     db_session.add(ont)
     db_session.commit()
 
@@ -312,18 +300,12 @@ def test_profile_push_requires_active_bundle_assignment_not_legacy_profile_fk(
 def test_resolve_access_credential_password_uses_effective_username_fallback(
     db_session, monkeypatch
 ):
-    from app.models.network import (
-        OntBundleAssignment,
-        OntBundleAssignmentStatus,
-        OntProvisioningProfile,
-        OntUnit,
-    )
     from app.services.network.provisioning_enforcement import (
         _resolve_access_credential_password,
     )
 
     bundle = OntProvisioningProfile(name="Cred Bundle", is_active=True)
-    ont = OntUnit(serial_number="ENF-CRED-001", is_active=True, pppoe_username=None)
+    ont = OntUnit(serial_number="ENF-CRED-001", is_active=True)
     db_session.add_all([bundle, ont])
     db_session.flush()
     db_session.add(
@@ -383,7 +365,7 @@ def test_enforce_wifi_and_management_use_effective_bundle_values(
         is_active=True,
     )
     db_session.add_all([mgmt_vlan, bundle])
-    db_session.commit()
+    db_session.flush()
 
     ont = OntUnit(
         serial_number="ENF-WIFI-001",
@@ -392,12 +374,15 @@ def test_enforce_wifi_and_management_use_effective_bundle_values(
         board="0/1",
         port="1",
         external_id="7",
-        mgmt_ip_address="10.90.0.2",
-        wifi_ssid="legacy-ssid",
         effective_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)
-    db_session.commit()
+    db_session.flush()
+
+    # Set mgmt_ip_address via override
+    upsert_ont_config_override(
+        db_session, ont=ont, field_name="management.ip_address", value="10.90.0.2"
+    )
 
     db_session.add(
         OntBundleAssignment(
@@ -472,7 +457,8 @@ def test_enforce_wifi_and_management_use_effective_bundle_values(
     ]
 
 
-def test_detect_drift_uses_effective_bundle_values_not_cleared_projection(db_session):
+def test_detect_drift_uses_effective_bundle_values(db_session):
+    """Drift detection should use effective bundle values."""
     olt = OLTDevice(name="OLT-DRIFT", mgmt_ip="198.51.100.111", is_active=True)
     db_session.add(olt)
     db_session.flush()
@@ -492,11 +478,7 @@ def test_detect_drift_uses_effective_bundle_values_not_cleared_projection(db_ses
         serial_number="DRIFT-EFFECTIVE-001",
         is_active=True,
         olt_device_id=olt.id,
-        config_method=None,
-        ip_protocol=None,
-        mgmt_ip_mode=None,
     )
-    seed_legacy_profile_link(ont, bundle)
     db_session.add(ont)
     db_session.flush()
 

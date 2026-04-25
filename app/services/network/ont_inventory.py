@@ -92,16 +92,9 @@ def reset_ont_service_state(
     for instance in wan_service_instances:
         db.delete(instance)
 
-    ont.provisioning_profile_id = None
     ont.provisioning_status = OntProvisioningStatus.unprovisioned
     ont.last_provisioned_at = None
     ont.authorization_status = None
-    ont.wan_vlan_id = None
-    ont.wan_mode = None
-    ont.config_method = None
-    ont.ip_protocol = None
-    ont.pppoe_username = None
-    ont.pppoe_password = None
     ont.mac_address = None
     ont.observed_wan_ip = None
     ont.observed_pppoe_status = None
@@ -115,9 +108,6 @@ def reset_ont_service_state(
     ont.olt_observed_snapshot_at = None
     ont.wan_remote_access = False
     ont.tr069_acs_server_id = None
-    ont.mgmt_ip_mode = None
-    ont.mgmt_vlan_id = None
-    ont.mgmt_ip_address = None
     ont.mgmt_remote_access = False
     ont.voip_enabled = False
     ont.lan_gateway_ip = None
@@ -125,14 +115,6 @@ def reset_ont_service_state(
     ont.lan_dhcp_enabled = None
     ont.lan_dhcp_start = None
     ont.lan_dhcp_end = None
-    ont.wifi_ssid = None
-    ont.wifi_password = None
-    if hasattr(ont, "wifi_enabled"):
-        ont.wifi_enabled = None
-    if hasattr(ont, "wifi_channel"):
-        ont.wifi_channel = None
-    if hasattr(ont, "wifi_security_mode"):
-        ont.wifi_security_mode = None
     ont.provisioning_steps_completed = None
     ont.acs_status = OntAcsStatus.unknown
     ont.acs_last_inform_at = None

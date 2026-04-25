@@ -11,7 +11,6 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
-    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -294,12 +293,7 @@ class OntProvisioningStatus(enum.Enum):
 
 
 class OntBundleAssignmentStatus(enum.Enum):
-    draft = "draft"
-    planned = "planned"
-    applying = "applying"
     applied = "applied"
-    drifted = "drifted"
-    failed = "failed"
     superseded = "superseded"
 
 
@@ -1255,16 +1249,6 @@ class OntUnit(Base):
                 "olt_device_id IS NOT NULL AND external_id IS NOT NULL"
             ),
         ),
-        ForeignKeyConstraint(
-            ["olt_device_id", "wan_vlan_id"],
-            ["vlans.olt_device_id", "vlans.id"],
-            name="fk_ont_units_wan_vlan_olt_scope",
-        ),
-        ForeignKeyConstraint(
-            ["olt_device_id", "mgmt_vlan_id"],
-            ["vlans.olt_device_id", "vlans.id"],
-            name="fk_ont_units_mgmt_vlan_olt_scope",
-        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1364,24 +1348,6 @@ class OntUnit(Base):
     use_gps: Mapped[bool] = mapped_column(Boolean, default=False)
     gps_latitude: Mapped[float | None] = mapped_column(Float)
     gps_longitude: Mapped[float | None] = mapped_column(Float)
-    # ONU mode configuration
-    wan_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vlans.id")
-    )
-    wan_mode: Mapped[WanMode | None] = mapped_column(
-        Enum(WanMode, name="wanmode", create_constraint=False),
-    )
-    config_method: Mapped[ConfigMethod | None] = mapped_column(
-        Enum(ConfigMethod, name="configmethod", create_constraint=False),
-    )
-    ip_protocol: Mapped[IpProtocol | None] = mapped_column(
-        Enum(IpProtocol, name="ipprotocol", create_constraint=False),
-    )
-    pppoe_username: Mapped[str | None] = mapped_column(String(120))
-    pppoe_password: Mapped[str | None] = mapped_column(String(512))
-    # Desired WiFi configuration (pushed via TR-069 when ONT connects)
-    wifi_ssid: Mapped[str | None] = mapped_column(String(64))
-    wifi_password: Mapped[str | None] = mapped_column(String(512))
     # Observed/runtime identity and access metrics (SNMP/TR-069 sourced)
     mac_address: Mapped[str | None] = mapped_column(String(64))
     observed_wan_ip: Mapped[str | None] = mapped_column(String(64))
@@ -1401,17 +1367,9 @@ class OntUnit(Base):
         DateTime(timezone=True)
     )
     wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Management IP configuration
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
-    mgmt_ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
-        Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
-    )
-    mgmt_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vlans.id")
-    )
-    mgmt_ip_address: Mapped[str | None] = mapped_column(String(64))
     mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -1422,10 +1380,6 @@ class OntUnit(Base):
     lan_dhcp_start: Mapped[str | None] = mapped_column(String(64))
     lan_dhcp_end: Mapped[str | None] = mapped_column(String(64))
 
-    # Legacy profile link retained only for backfill/compatibility cleanup paths.
-    provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id")
-    )
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
         Enum(
             OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False
@@ -1480,8 +1434,6 @@ class OntUnit(Base):
     onu_type = relationship("OnuType", back_populates="ont_units")
     olt_device = relationship("OLTDevice")
     user_vlan = relationship("Vlan", foreign_keys=[user_vlan_id])
-    wan_vlan = relationship("Vlan", foreign_keys=[wan_vlan_id])
-    mgmt_vlan = relationship("Vlan", foreign_keys=[mgmt_vlan_id])
     splitter = relationship("Splitter")
     splitter_port_rel = relationship("SplitterPort")
     download_speed_profile = relationship(
@@ -1596,8 +1548,8 @@ class OntBundleAssignment(Base):
             create_constraint=False,
         ),
         nullable=False,
-        default=OntBundleAssignmentStatus.draft,
-        server_default=OntBundleAssignmentStatus.draft.value,
+        default=OntBundleAssignmentStatus.applied,
+        server_default=OntBundleAssignmentStatus.applied.value,
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
