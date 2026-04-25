@@ -31,6 +31,7 @@ from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
+from app.services.network.ont_config_overrides import upsert_ont_config_override
 from app.services.network.ont_status_transitions import (
     set_authorization_status,
     set_provisioning_status,
@@ -265,6 +266,7 @@ def _allocate_mgmt_ip_from_pool(
     db: Session,
     pool_id: uuid.UUID,
     ont_serial: str | None = None,
+    ont_unit_id: str | None = None,
 ) -> tuple[bool, str | None, str | None, str | None, str]:
     """Allocate the next available IP from a management IP pool.
 
@@ -275,6 +277,7 @@ def _allocate_mgmt_ip_from_pool(
         db: Database session
         pool_id: UUID of the IP pool to allocate from
         ont_serial: Optional ONT serial for logging/notes
+        ont_unit_id: Optional ONT unit UUID to link the allocation
 
     Returns:
         (success, ip_address, subnet_mask, gateway, message) tuple.
@@ -347,6 +350,8 @@ def _allocate_mgmt_ip_from_pool(
         pool_id=pool_id,
         is_reserved=True,  # Mark as reserved to prevent reallocation
         notes=notes,
+        ont_unit_id=uuid.UUID(ont_unit_id) if ont_unit_id else None,
+        allocation_type="management",
     )
     db.add(address_record)
     db.flush()
@@ -407,7 +412,7 @@ def _configure_management_ip_for_authorization(
     """
     from sqlalchemy import desc, select
 
-    from app.models.network import MgmtIpMode, OntProvisioningProfile, Vlan
+    from app.models.network import OntProvisioningProfile, Vlan
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     # Get the OLT's provisioning profile (is_default first, then most recent)
@@ -603,13 +608,30 @@ def _configure_management_ip_for_authorization(
                 )
             ).first()
 
-            ont.mgmt_ip_mode = (
-                MgmtIpMode.static_ip if mgmt_ip_mode == "static_ip" else MgmtIpMode.dhcp
+            # Store management IP config as overrides
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="management.ip_mode",
+                value=mgmt_ip_mode,
+                reason="olt_authorization_workflow",
             )
             if mgmt_vlan:
-                ont.mgmt_vlan_id = mgmt_vlan.id
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="management.vlan_tag",
+                    value=mgmt_vlan.tag,
+                    reason="olt_authorization_workflow",
+                )
             if allocated_ip:
-                ont.mgmt_ip_address = allocated_ip
+                upsert_ont_config_override(
+                    db,
+                    ont=ont,
+                    field_name="management.ip_address",
+                    value=allocated_ip,
+                    reason="olt_authorization_workflow",
+                )
             ont.mgmt_remote_access = bool(getattr(profile, "mgmt_remote_access", False))
             db.flush()
             logger.info(
@@ -646,6 +668,198 @@ def _configure_management_ip_for_authorization(
         return True, f"{iphost_msg}; {ic_result.message}"
 
     return True, iphost_msg
+
+
+def configure_management_from_config_pack(
+    db: Session,
+    *,
+    olt: OLTDevice,
+    fsp: str,
+    ont_id_on_olt: int,
+    ont_unit_id: str,
+    serial_number: str | None = None,
+) -> tuple[bool, str, dict[str, object]]:
+    """Configure ONT management IP using OLT Config Pack.
+
+    This is the primary function for post-authorization management setup.
+    It uses OLT Config Pack (required fields) instead of provisioning profiles.
+
+    Uses BATCHED SSH execution (single session for all commands) for ~5x faster
+    setup compared to individual SSH calls.
+
+    Steps (all in ONE SSH session):
+    1. Get management VLAN from OLT Config Pack
+    2. Get mgmt_ip_pool from OLT Config Pack
+    3. Allocate next available IP from pool
+    4. Execute batched management setup:
+       - Create management service port (GEM index from config pack)
+       - Configure IPHOST with allocated IP
+       - Activate internet-config (TCP stack)
+       - Configure WAN mode
+       - Bind TR-069 profile
+    5. Update ONT record
+
+    Args:
+        db: Database session
+        olt: OLT device object
+        fsp: Frame/Slot/Port string
+        ont_id_on_olt: ONT ID on the OLT
+        ont_unit_id: ONT unit UUID
+        serial_number: Optional serial number for logging
+
+    Returns:
+        (success, message, details_dict) tuple
+    """
+    from app.models.network import OntUnit, Vlan
+    from app.services.network.olt_batched_mgmt import (
+        create_batched_mgmt_spec_from_config_pack,
+        execute_batched_management_setup,
+    )
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
+
+    details: dict[str, object] = {}
+
+    # Get OLT Config Pack
+    config_pack = resolve_olt_config_pack(db, olt.id)
+    if config_pack is None:
+        return False, "OLT Config Pack not found", details
+
+    # Validate required fields
+    if config_pack.management_vlan.tag is None:
+        return False, "OLT Config Pack missing management VLAN - configure OLT first", details
+
+    mgmt_vlan_tag = config_pack.management_vlan.tag
+    details["mgmt_vlan_tag"] = mgmt_vlan_tag
+
+    # Get management IP pool
+    if not olt.mgmt_ip_pool_id:
+        return False, "OLT Config Pack missing management IP pool - configure OLT first", details
+
+    # Allocate IP from pool
+    alloc_ok, allocated_ip, subnet_mask, gateway, alloc_msg = _allocate_mgmt_ip_from_pool(
+        db,
+        olt.mgmt_ip_pool_id,
+        ont_serial=serial_number,
+        ont_unit_id=ont_unit_id,
+    )
+    if not alloc_ok:
+        return False, f"IP allocation failed: {alloc_msg}", details
+
+    details["allocated_ip"] = allocated_ip
+    details["subnet_mask"] = subnet_mask
+    details["gateway"] = gateway
+    details["mgmt_gem_index"] = config_pack.mgmt_gem_index
+
+    logger.info(
+        "Allocated management IP %s for ONT %s on %s %s",
+        allocated_ip,
+        serial_number or ont_unit_id,
+        olt.name,
+        fsp,
+    )
+
+    # Build batched management specification from config pack
+    batch_spec = create_batched_mgmt_spec_from_config_pack(
+        config_pack,
+        fsp,
+        ont_id_on_olt,
+        allocated_ip=allocated_ip,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+    )
+
+    # Execute all management commands in ONE SSH session
+    batch_result = execute_batched_management_setup(olt, batch_spec)
+
+    # Record batch execution details
+    details["batched_execution"] = True
+    details["steps_completed"] = batch_result.steps_completed
+    details["steps_failed"] = batch_result.steps_failed
+    if batch_result.error_message:
+        details["batch_error"] = batch_result.error_message
+
+    # Map step completion to detail flags for compatibility
+    if "configure_iphost" in batch_result.steps_completed or "configure_iphost (exists)" in batch_result.steps_completed:
+        details["iphost_configured"] = True
+    if "activate_internet_config" in batch_result.steps_completed:
+        details["internet_config_activated"] = True
+    if "configure_wan" in batch_result.steps_completed:
+        details["wan_config_applied"] = True
+    if "bind_tr069" in batch_result.steps_completed or "bind_tr069 (exists)" in batch_result.steps_completed:
+        details["tr069_bound"] = True
+
+    if not batch_result.success:
+        logger.warning(
+            "Batched management setup failed for ONT %s on %s %s: %s",
+            serial_number or ont_unit_id,
+            olt.name,
+            fsp,
+            batch_result.error_message,
+        )
+        return False, f"Management setup failed: {batch_result.error_message}", details
+
+    logger.info(
+        "Batched management setup complete for ONT %s on %s %s: %d steps",
+        serial_number or ont_unit_id,
+        olt.name,
+        fsp,
+        len(batch_result.steps_completed),
+    )
+
+    # Warn if TR-069 profile not configured
+    if config_pack.tr069_olt_profile_id is None:
+        logger.warning("OLT Config Pack missing TR-069 profile ID - ONT may not reach ACS")
+
+    # Update ONT record with management IP as overrides
+    ont = db.get(OntUnit, ont_unit_id)
+    if ont:
+        upsert_ont_config_override(
+            db,
+            ont=ont,
+            field_name="management.ip_mode",
+            value="static_ip",
+            reason="post_authorization_mgmt_ip",
+        )
+        upsert_ont_config_override(
+            db,
+            ont=ont,
+            field_name="management.ip_address",
+            value=allocated_ip,
+            reason="post_authorization_mgmt_ip",
+        )
+
+        # Link to management VLAN record
+        mgmt_vlan = db.scalars(
+            select(Vlan).where(
+                Vlan.tag == mgmt_vlan_tag,
+                Vlan.olt_device_id == olt.id,
+                Vlan.is_active.is_(True),
+            )
+        ).first()
+        if mgmt_vlan:
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="management.vlan_tag",
+                value=mgmt_vlan.tag,
+                reason="post_authorization_mgmt_ip",
+            )
+
+        ont.mgmt_remote_access = True
+        db.flush()
+
+        details["ont_updated"] = True
+        logger.info(
+            "Updated ONT %s with management IP %s",
+            ont_unit_id,
+            allocated_ip,
+        )
+
+    return (
+        True,
+        f"Management configured: IP {allocated_ip} on VLAN {mgmt_vlan_tag}",
+        details,
+    )
 
 
 def _cleanup_mgmt_service_port_on_bind_failure(
@@ -2395,29 +2609,34 @@ def run_post_authorization_follow_up(
     ont_id_on_olt: int,
     skip_autofind_resolve: bool = False,  # Deprecated, kept for API compatibility
 ) -> tuple[bool, str, list[dict[str, object]]]:
-    """Create assignment and PON port link after successful OLT authorization.
+    """Create assignment, PON port link, and apply OLT Config Pack after authorization.
 
-    This function performs only the essential database bookkeeping after
-    authorization. All provisioning steps (management IP, TR-069 binding,
-    profile application) are handled separately via the provisioning UI.
+    This function performs database bookkeeping and automatic management setup
+    after OLT authorization. When OLT Config Pack is configured, it automatically:
+    - Allocates management IP from pool
+    - Creates management service port
+    - Configures IPHOST
+    - Binds TR-069 profile
 
-    The separation ensures:
-    - Fast authorization response (~2-5s instead of 10-15s)
-    - Clean failure states (authorized OR not, no partial provisioning)
-    - Explicit operator control over when provisioning occurs
+    If Config Pack is not fully configured, management setup is skipped and
+    the operator can configure via the provisioning UI later.
 
-    Removed steps (now part of provisioning workflow):
-    - SNMP sync: Use "Refresh from OLT" action or periodic sync
-    - Autofind resolution: Handled by async cleanup task
-    - Apply provisioning profile: Operator-driven from ONT config UI
-    - Configure management IP: Part of provisioning bundle
-    - Bind TR-069 profile: Part of provisioning bundle
-    - Queue bootstrap wait: Triggered after provisioning completes
+    Steps:
+    1. Create/link assignment and PON port (required)
+    2. Apply OLT Config Pack management setup (optional, best-effort)
+
+    Note: If management IP setup fails, authorization is still considered
+    successful - the ONT is on the network and can be configured later.
     """
     steps: list[dict[str, object]] = []
 
-    def _add_step(name: str, success: bool, message: str) -> None:
-        steps.append({"name": name, "success": success, "message": message})
+    def _add_step(
+        name: str, success: bool, message: str, details: dict[str, object] | None = None
+    ) -> None:
+        step_info: dict[str, object] = {"name": name, "success": success, "message": message}
+        if details:
+            step_info["details"] = details
+        steps.append(step_info)
 
     # Step 1: Create or link assignment and PON port (essential for topology)
     assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
@@ -2430,7 +2649,49 @@ def run_post_authorization_follow_up(
     if not assignment_ok:
         return False, assignment_msg, steps
 
-    return True, "Authorization follow-up completed. Configure ONT via provisioning UI.", steps
+    # Step 2: Apply OLT Config Pack management setup (best-effort)
+    # This allocates management IP, creates service port, configures IPHOST, binds TR-069
+    olt = get_olt_or_none(db, olt_id)
+    if olt is None:
+        _add_step(
+            "Configure management from Config Pack",
+            False,
+            "OLT not found - skipping management setup",
+        )
+        return True, "Authorization follow-up completed (OLT lookup failed, configure ONT manually).", steps
+
+    mgmt_ok, mgmt_msg, mgmt_details = configure_management_from_config_pack(
+        db,
+        olt=olt,
+        fsp=fsp,
+        ont_id_on_olt=ont_id_on_olt,
+        ont_unit_id=ont_unit_id,
+        serial_number=serial_number,
+    )
+    _add_step("Configure management from Config Pack", mgmt_ok, mgmt_msg, mgmt_details)
+
+    if mgmt_ok:
+        allocated_ip = mgmt_details.get("allocated_ip", "unknown")
+        return (
+            True,
+            f"Authorization complete. Management IP {allocated_ip} configured.",
+            steps,
+        )
+    else:
+        # Management setup failed but authorization succeeded
+        # Log warning but don't fail the authorization
+        logger.warning(
+            "Post-authorization management setup failed for ONT %s on %s %s: %s",
+            serial_number or ont_unit_id,
+            olt.name,
+            fsp,
+            mgmt_msg,
+        )
+        return (
+            True,
+            f"Authorization complete. Management setup skipped: {mgmt_msg}",
+            steps,
+        )
 
 
 def get_autofind_candidate_by_serial(

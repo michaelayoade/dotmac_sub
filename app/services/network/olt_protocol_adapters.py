@@ -31,6 +31,7 @@ from app.services.adapters.base import AdapterResult
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
     from app.services.network.olt_batched_auth import BatchedAuthorizationSpec
+    from app.services.network.olt_batched_mgmt import BatchedMgmtSpec
     from app.services.network.ont_provisioning.state import (
         DesiredOntState,
         ProvisioningDelta,
@@ -255,6 +256,18 @@ class OltProtocolAdapter(Protocol):
         ...
 
     # ========== Extended Configuration Operations ==========
+
+    def configure_management_batch(
+        self,
+        spec: "BatchedMgmtSpec",
+    ) -> OltOperationResult:
+        """Execute batched management configuration in one session.
+
+        Combines service-port creation, IPHOST config, internet-config,
+        wan-config, and TR-069 binding into a single SSH session for
+        improved performance (~5x faster than individual calls).
+        """
+        ...
 
     def configure_internet_config(
         self,
@@ -538,6 +551,12 @@ class BaseProtocolAdapter(ABC):
         ip_index: int = 0,
     ) -> OltOperationResult:
         return self._not_supported("configure_internet_config")
+
+    def configure_management_batch(
+        self,
+        spec: "BatchedMgmtSpec",
+    ) -> OltOperationResult:
+        return self._not_supported("configure_management_batch")
 
     def configure_wan_config(
         self,
@@ -1077,6 +1096,38 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             return OltOperationResult(
                 success=False,
                 message=f"SSH internet-config failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def configure_management_batch(
+        self,
+        spec: "BatchedMgmtSpec",
+    ) -> OltOperationResult:
+        """Execute batched management configuration in one SSH session.
+
+        Combines service-port creation, IPHOST config, internet-config,
+        wan-config, and TR-069 binding into a single SSH session for
+        improved performance (~5x faster than individual calls).
+        """
+        from app.services.network.olt_batched_mgmt import execute_batched_management_setup
+
+        try:
+            result = execute_batched_management_setup(self._olt, spec)
+            return OltOperationResult(
+                success=result.success,
+                message=result.message,
+                data={
+                    "steps_completed": result.steps_completed,
+                    "steps_failed": result.steps_failed,
+                    "details": result.details,
+                },
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH configure_management_batch failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH batched management configuration failed: {exc}",
                 protocol_used=OltProtocol.SSH,
             )
 

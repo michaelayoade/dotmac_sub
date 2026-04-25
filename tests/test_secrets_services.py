@@ -1,5 +1,6 @@
 """Tests for secrets service."""
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -137,3 +138,46 @@ def test_resolve_openbao_ref_missing_field_error(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         secrets.resolve_openbao_ref("openbao://secret/data/myapp#missing_field")
     assert exc_info.value.status_code == 500
+
+
+def test_resolve_openbao_ref_missing_secret_returns_404(monkeypatch):
+    """Test missing OpenBao secret path is surfaced as not found."""
+    monkeypatch.setenv("OPENBAO_ADDR", "https://vault.test.local:8200")
+    monkeypatch.setenv("OPENBAO_TOKEN", "test-token")
+    monkeypatch.setenv("OPENBAO_KV_VERSION", "2")
+
+    request = httpx.Request("GET", "https://vault.test.local:8200/v1/secret/data/myapp")
+    response = httpx.Response(404, request=request)
+    error = httpx.HTTPStatusError("not found", request=request, response=response)
+
+    def mock_get(url, **kwargs):
+        raise error
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with pytest.raises(HTTPException) as exc_info:
+        secrets.resolve_openbao_ref("openbao://secret/data/myapp#password")
+    assert exc_info.value.status_code == 404
+
+
+def test_get_secret_uses_default_for_missing_secret(monkeypatch, caplog):
+    """Test missing OpenBao secret falls back without error log spam."""
+    monkeypatch.setenv("OPENBAO_ADDR", "https://vault.test.local:8200")
+    monkeypatch.setenv("OPENBAO_TOKEN", "test-token")
+    monkeypatch.setenv("OPENBAO_KV_VERSION", "2")
+
+    request = httpx.Request("GET", "https://vault.test.local:8200/v1/secret/data/zabbix")
+    response = httpx.Response(404, request=request)
+    error = httpx.HTTPStatusError("not found", request=request, response=response)
+
+    def mock_get(url, **kwargs):
+        raise error
+
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    with caplog.at_level("DEBUG"):
+        result = secrets.get_secret("zabbix", "api_token", default="")
+
+    assert result == ""
+    assert "OpenBao secret missing at" in caplog.text
+    assert "OpenBao request failed" not in caplog.text

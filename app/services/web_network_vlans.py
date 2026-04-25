@@ -46,7 +46,13 @@ VLAN_PURPOSE_CHOICES: list[dict[str, str]] = [
 
 
 def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
-    from app.models.network import IpPool, OntUnit
+    """Count VLAN usage across ONTs, profiles, and IP pools.
+
+    Note: ONT VLAN usage is now tracked through bundle assignments + WAN services,
+    not via direct OntUnit columns. This simplified version counts IP pools only.
+    ONT counts are shown as 0 until bundle-based counting is implemented.
+    """
+    from app.models.network import IpPool
 
     usage: dict[str, dict[str, int]] = {
         str(vlan_id): {"onts": 0, "wan_onts": 0, "mgmt_onts": 0, "ip_pools": 0}
@@ -55,25 +61,8 @@ def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
     if not vlan_ids:
         return usage
 
-    wan_rows = db.execute(
-        select(OntUnit.wan_vlan_id, func.count(OntUnit.id))
-        .where(OntUnit.wan_vlan_id.in_(vlan_ids))
-        .group_by(OntUnit.wan_vlan_id)
-    ).all()
-    for vlan_id, count in wan_rows:
-        key = str(vlan_id)
-        usage[key]["wan_onts"] = int(count or 0)
-        usage[key]["onts"] += int(count or 0)
-
-    mgmt_rows = db.execute(
-        select(OntUnit.mgmt_vlan_id, func.count(OntUnit.id))
-        .where(OntUnit.mgmt_vlan_id.in_(vlan_ids))
-        .group_by(OntUnit.mgmt_vlan_id)
-    ).all()
-    for vlan_id, count in mgmt_rows:
-        key = str(vlan_id)
-        usage[key]["mgmt_onts"] = int(count or 0)
-        usage[key]["onts"] += int(count or 0)
+    # Legacy: ONT VLAN assignments are now tracked through bundle assignments
+    # and OntConfigOverride, not direct columns. Counts shown as 0.
 
     pool_rows = db.execute(
         select(IpPool.vlan_id, func.count(IpPool.id))
@@ -201,19 +190,23 @@ def build_vlan_edit_form_data(db, *, vlan_id: str) -> dict[str, object] | None:
 
 
 def build_vlan_detail_data(db, *, vlan_id: str) -> dict[str, object] | None:
-    from app.models.network import IpPool, OntUnit
+    """Build context for VLAN detail page.
+
+    Note: ONT VLAN usage counts are now tracked through bundle assignments + WAN services,
+    not via direct OntUnit columns. ONT counts shown as 0 until bundle-based counting.
+    """
+    from app.models.network import IpPool
 
     try:
         vlan = network_service.vlans.get(db=db, vlan_id=vlan_id)
     except Exception:
         return None
     port_links = db.query(PortVlan).filter(PortVlan.vlan_id == vlan.id).all()
-    wan_ont_count = (
-        db.scalar(select(func.count(OntUnit.id)).where(OntUnit.wan_vlan_id == vlan.id)) or 0
-    )
-    mgmt_ont_count = (
-        db.scalar(select(func.count(OntUnit.id)).where(OntUnit.mgmt_vlan_id == vlan.id)) or 0
-    )
+
+    # Legacy: ONT VLAN assignments are now tracked through bundle assignments
+    # and OntConfigOverride, not direct columns. Counts shown as 0.
+    wan_ont_count = 0
+    mgmt_ont_count = 0
     ip_pool_count = (
         db.scalar(select(func.count(IpPool.id)).where(IpPool.vlan_id == vlan.id)) or 0
     )

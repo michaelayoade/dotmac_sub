@@ -121,28 +121,28 @@ def ont_detail_preview(
             status_code=404,
         )
 
-    allowed_tabs = {
-        "summary",
-        "effective-config",
-        "observed-state",
-        "history",
-    }
+    allowed_tabs = {"status", "config", "history"}
     tab_aliases = {
-        "overview": "summary",
-        "service": "effective-config",
-        "network": "effective-config",
-        "service-ports": "effective-config",
-        "device-config": "effective-config",
-        "configuration": "effective-config",
-        "configure": "effective-config",
-        "device-status": "effective-config",
-        "diagnostics": "observed-state",
-        "topology": "observed-state",
-        "tr069": "observed-state",
-        "charts": "observed-state",
+        # Legacy tab names
+        "summary": "status",
+        "overview": "status",
+        "effective-config": "config",
+        "observed-state": "status",
+        # Convenience aliases
+        "service": "config",
+        "network": "config",
+        "service-ports": "config",
+        "device-config": "config",
+        "configuration": "config",
+        "configure": "config",
+        "device-status": "status",
+        "diagnostics": "status",
+        "topology": "status",
+        "tr069": "history",
+        "charts": "history",
     }
     tab = tab_aliases.get(tab, tab)
-    active_tab = tab if tab in allowed_tabs else "summary"
+    active_tab = tab if tab in allowed_tabs else "status"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
     try:

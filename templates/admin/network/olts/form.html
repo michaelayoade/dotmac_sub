@@ -300,10 +300,34 @@
         {% if olt %}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">ONT Provisioning Defaults (Config Pack)</h2>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default settings applied to newly authorized ONTs on this OLT</p>
+                <div class="flex items-start justify-between">
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">ONT Provisioning Defaults (Config Pack)</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default settings applied to newly authorized ONTs on this OLT</p>
+                    </div>
+                    {# Validation status indicator loaded via HTMX #}
+                    <div id="config-pack-validation"
+                         hx-get="/admin/network/olts/{{ olt.id }}/config-pack-validation"
+                         hx-trigger="load"
+                         hx-swap="innerHTML"
+                         class="flex-shrink-0">
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                            <svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                            </svg>
+                            Checking...
+                        </span>
+                    </div>
+                </div>
             </div>
             <div class="p-6 space-y-6">
+                {# Validation warnings/errors banner - populated by HTMX #}
+                <div id="config-pack-validation-details"
+                     hx-get="/admin/network/olts/{{ olt.id }}/config-pack-validation-details"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                </div>
                 {# Authorization Profiles #}
                 <div>
                     <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Authorization Profiles</h3>

@@ -940,16 +940,19 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     elif wan_protocol == "bridge":
         wan_protocol = "bridged"
 
+    # Get VLAN tags from effective config (stored as overrides or bundle values)
+    mgmt_vlan_tag = effective_values.get("mgmt_vlan")
+    wan_vlan_tag = effective_values.get("wan_vlan")
     provision_gate_issues = validate_provision_form_fields(
         bundle_id=str(profile.id) if profile else None,
         onu_mode=str(effective_values.get("onu_mode") or "routing"),
-        mgmt_vlan_id=str(ont.mgmt_vlan_id) if ont.mgmt_vlan_id else None,
+        mgmt_vlan_id=str(mgmt_vlan_tag) if mgmt_vlan_tag else None,
         mgmt_ip_mode=mgmt_mode,
         mgmt_ip_address=str(effective_values.get("mgmt_ip_address") or "") or None,
         mgmt_subnet=None,
         mgmt_gateway=None,
         wan_protocol=wan_protocol,
-        wan_vlan_id=str(ont.wan_vlan_id) if ont.wan_vlan_id else None,
+        wan_vlan_id=str(wan_vlan_tag) if wan_vlan_tag else None,
         pppoe_username=str(effective_values.get("pppoe_username") or "") or None,
         static_ip_pool_id=None,
         static_ip=None,

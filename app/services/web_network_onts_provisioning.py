@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from ipaddress import IPv4Network, ip_address, ip_network
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.models.network import (
     IPAssignment,
@@ -29,10 +29,7 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_bundle_assignments import assign_bundle_to_ont
-from app.services.network.ont_config_overrides import (
-    clear_bundle_managed_legacy_projection,
-    upsert_ont_config_override,
-)
+from app.services.network.ont_config_overrides import upsert_ont_config_override
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
@@ -94,6 +91,15 @@ def _existing_ipv4_state(
         return {}
     rows = (
         db.query(IPv4Address, IPAssignment)
+        .options(
+            load_only(
+                IPv4Address.id,
+                IPv4Address.address,
+                IPv4Address.pool_id,
+                IPv4Address.is_reserved,
+                IPv4Address.notes,
+            )
+        )
         .outerjoin(
             IPAssignment,
             IPAssignment.ipv4_address_id == IPv4Address.id,
@@ -1071,7 +1077,6 @@ def save_provision_settings(
                     value=wifi_enabled_value,
                     reason="save_provision_settings",
                 )
-                clear_bundle_managed_legacy_projection(ont)
             else:
                 logger.warning(
                     "Skipping legacy provisioning profile sync for ONT %s because profile %s was not found during save_provision_settings",

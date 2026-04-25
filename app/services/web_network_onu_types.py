@@ -126,6 +126,20 @@ def parse_form_values(form: FormData) -> dict[str, object]:
         ),
         "is_active": _form_str(form, "is_active") == "true",
         "notes": _form_str(form, "notes") or None,
+        # ACS Config Pack fields
+        "tr069_data_model": _form_str(form, "tr069_data_model") or None,
+        "config_method_preference": _form_str(form, "config_method_preference") or None,
+        "wifi_ssid_path": _form_str(form, "wifi_ssid_path") or None,
+        "wifi_password_path": _form_str(form, "wifi_password_path") or None,
+        "wifi_enabled_path": _form_str(form, "wifi_enabled_path") or None,
+        "wifi_channel_path": _form_str(form, "wifi_channel_path") or None,
+        "wifi_security_mode_path": _form_str(form, "wifi_security_mode_path") or None,
+        "wan_pppoe_username_path": _form_str(form, "wan_pppoe_username_path") or None,
+        "wan_pppoe_password_path": _form_str(form, "wan_pppoe_password_path") or None,
+        "wan_connection_type_path": _form_str(form, "wan_connection_type_path") or None,
+        "default_wifi_security_mode": _form_str(form, "default_wifi_security_mode") or None,
+        "default_wifi_channel": _form_str(form, "default_wifi_channel") or None,
+        "min_firmware_version": _form_str(form, "min_firmware_version") or None,
     }
 
 
@@ -200,6 +214,20 @@ def handle_create(db: Session, form_data: dict[str, object]) -> OnuType:
         supports_bundle_overrides=bool(form_data.get("supports_bundle_overrides")),
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
+        # ACS Config Pack
+        tr069_data_model=str(form_data["tr069_data_model"]) if form_data.get("tr069_data_model") else None,
+        config_method_preference=str(form_data["config_method_preference"]) if form_data.get("config_method_preference") else None,
+        wifi_ssid_path=str(form_data["wifi_ssid_path"]) if form_data.get("wifi_ssid_path") else None,
+        wifi_password_path=str(form_data["wifi_password_path"]) if form_data.get("wifi_password_path") else None,
+        wifi_enabled_path=str(form_data["wifi_enabled_path"]) if form_data.get("wifi_enabled_path") else None,
+        wifi_channel_path=str(form_data["wifi_channel_path"]) if form_data.get("wifi_channel_path") else None,
+        wifi_security_mode_path=str(form_data["wifi_security_mode_path"]) if form_data.get("wifi_security_mode_path") else None,
+        wan_pppoe_username_path=str(form_data["wan_pppoe_username_path"]) if form_data.get("wan_pppoe_username_path") else None,
+        wan_pppoe_password_path=str(form_data["wan_pppoe_password_path"]) if form_data.get("wan_pppoe_password_path") else None,
+        wan_connection_type_path=str(form_data["wan_connection_type_path"]) if form_data.get("wan_connection_type_path") else None,
+        default_wifi_security_mode=str(form_data["default_wifi_security_mode"]) if form_data.get("default_wifi_security_mode") else None,
+        default_wifi_channel=str(form_data["default_wifi_channel"]) if form_data.get("default_wifi_channel") else None,
+        min_firmware_version=str(form_data["min_firmware_version"]) if form_data.get("min_firmware_version") else None,
     )
 
 
@@ -232,6 +260,20 @@ def handle_update(
         supports_bundle_overrides=bool(form_data.get("supports_bundle_overrides")),
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
+        # ACS Config Pack
+        tr069_data_model=str(form_data["tr069_data_model"]) if form_data.get("tr069_data_model") else None,
+        config_method_preference=str(form_data["config_method_preference"]) if form_data.get("config_method_preference") else None,
+        wifi_ssid_path=str(form_data["wifi_ssid_path"]) if form_data.get("wifi_ssid_path") else None,
+        wifi_password_path=str(form_data["wifi_password_path"]) if form_data.get("wifi_password_path") else None,
+        wifi_enabled_path=str(form_data["wifi_enabled_path"]) if form_data.get("wifi_enabled_path") else None,
+        wifi_channel_path=str(form_data["wifi_channel_path"]) if form_data.get("wifi_channel_path") else None,
+        wifi_security_mode_path=str(form_data["wifi_security_mode_path"]) if form_data.get("wifi_security_mode_path") else None,
+        wan_pppoe_username_path=str(form_data["wan_pppoe_username_path"]) if form_data.get("wan_pppoe_username_path") else None,
+        wan_pppoe_password_path=str(form_data["wan_pppoe_password_path"]) if form_data.get("wan_pppoe_password_path") else None,
+        wan_connection_type_path=str(form_data["wan_connection_type_path"]) if form_data.get("wan_connection_type_path") else None,
+        default_wifi_security_mode=str(form_data["default_wifi_security_mode"]) if form_data.get("default_wifi_security_mode") else None,
+        default_wifi_channel=str(form_data["default_wifi_channel"]) if form_data.get("default_wifi_channel") else None,
+        min_firmware_version=str(form_data["min_firmware_version"]) if form_data.get("min_firmware_version") else None,
     )
 
 

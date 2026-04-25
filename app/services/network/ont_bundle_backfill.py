@@ -18,9 +18,6 @@ from app.models.network import (
     OntUnit,
 )
 from app.services.network.ont_bundle_assignments import assign_bundle_to_ont
-from app.services.network.ont_config_overrides import (
-    clear_bundle_managed_legacy_projection,
-)
 
 
 @dataclass
@@ -54,20 +51,27 @@ def _normalize(value: Any) -> Any:
 
 
 def _legacy_values(ont: OntUnit) -> dict[str, Any]:
+    """Extract legacy values from ONT for backfill.
+
+    Note: This function reads from legacy columns that are dropped in migration 064.
+    It should only be run BEFORE that migration.
+    """
+    # Legacy columns have been dropped - this function now returns empty values.
+    # The backfill script must be run BEFORE deploying the column-dropping migration.
     return {
-        "config_method": _enum_or_raw(getattr(ont, "config_method", None)),
+        "config_method": None,
         "onu_mode": _enum_or_raw(getattr(ont, "onu_mode", None)),
-        "ip_protocol": _enum_or_raw(getattr(ont, "ip_protocol", None)),
-        "wan.wan_mode": _enum_or_raw(getattr(ont, "wan_mode", None)),
-        "wan.vlan_tag": getattr(getattr(ont, "wan_vlan", None), "tag", None),
-        "wan.pppoe_username": getattr(ont, "pppoe_username", None),
-        "management.ip_mode": _enum_or_raw(getattr(ont, "mgmt_ip_mode", None)),
-        "management.vlan_tag": getattr(getattr(ont, "mgmt_vlan", None), "tag", None),
-        "management.ip_address": getattr(ont, "mgmt_ip_address", None),
-        "wifi.enabled": getattr(ont, "wifi_enabled", None),
-        "wifi.ssid": getattr(ont, "wifi_ssid", None),
-        "wifi.channel": getattr(ont, "wifi_channel", None),
-        "wifi.security_mode": getattr(ont, "wifi_security_mode", None),
+        "ip_protocol": None,
+        "wan.wan_mode": None,
+        "wan.vlan_tag": None,
+        "wan.pppoe_username": None,
+        "management.ip_mode": None,
+        "management.vlan_tag": None,
+        "management.ip_address": None,
+        "wifi.enabled": None,
+        "wifi.ssid": None,
+        "wifi.channel": None,
+        "wifi.security_mode": None,
     }
 
 
@@ -207,11 +211,15 @@ def build_backfill_plan(db: Session, ont: OntUnit) -> OntBackfillPlan:
             if _normalize(legacy_value) is not None:
                 override_values[field_name] = legacy_value
 
-    warnings: list[str] = []
-    if getattr(ont, "pppoe_password", None):
-        warnings.append("pppoe_password remains in legacy secret storage")
-    if getattr(ont, "wifi_password", None):
-        warnings.append("wifi_password remains in legacy secret storage")
+    # Migrate encrypted passwords to OntConfigOverride
+    # The passwords are already encrypted, so we store them as-is
+    pppoe_password = getattr(ont, "pppoe_password", None)
+    if pppoe_password:
+        override_values["wan.pppoe_password"] = pppoe_password
+
+    wifi_password = getattr(ont, "wifi_password", None)
+    if wifi_password:
+        override_values["wifi.password"] = wifi_password
 
     return OntBackfillPlan(
         ont_id=str(ont.id),
@@ -221,7 +229,6 @@ def build_backfill_plan(db: Session, ont: OntUnit) -> OntBackfillPlan:
         bundle_id=str(bundle.id),
         bundle_name=bundle.name,
         override_values=override_values,
-        warnings=warnings,
     )
 
 
@@ -240,8 +247,6 @@ def apply_backfill_plan(db: Session, ont: OntUnit, plan: OntBackfillPlan) -> Non
         status=OntBundleAssignmentStatus.applied,
         assigned_reason="backfill_script",
     )
-    clear_bundle_managed_legacy_projection(ont)
-    ont.provisioning_profile_id = None
 
     existing_rows = db.scalars(
         select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
@@ -267,10 +272,9 @@ def iter_candidate_onts(
     ont_id: str | None = None,
     limit: int | None = None,
 ) -> list[OntUnit]:
-    stmt = select(OntUnit).options(
-        selectinload(OntUnit.wan_vlan),
-        selectinload(OntUnit.mgmt_vlan),
-    )
+    # Note: Legacy VLAN relationships no longer exist after migration 064.
+    # This function should only be run BEFORE that migration.
+    stmt = select(OntUnit)
     if ont_id:
         stmt = stmt.where(OntUnit.id == ont_id)
     if limit is not None:

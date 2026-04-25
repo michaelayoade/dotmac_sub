@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import os
 import secrets
 import warnings
 from contextlib import asynccontextmanager
+from importlib import import_module
 from threading import Lock
 from time import monotonic
 from typing import TypedDict
@@ -21,55 +23,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 
-from app.api.analytics import router as analytics_router
-from app.api.audit import router as audit_router
-from app.api.auth import router as auth_router
-from app.api.auth_flow import router as auth_flow_router
-from app.api.bandwidth import router as bandwidth_router
-from app.api.billing import router as billing_router
-from app.api.catalog import router as catalog_router
-from app.api.comms import router as comms_router
-from app.api.connectors import router as connectors_router
-from app.api.customers import router as customers_router
-from app.api.defaults import router as defaults_router
-from app.api.deps import require_role, require_user_auth
-from app.api.domains_monitoring import router as domains_monitoring_router
-from app.api.domains_network_access import router as domains_network_access_router
-from app.api.domains_network_fiber import router as domains_network_fiber_router
-from app.api.domains_provisioning import router as domains_provisioning_router
-from app.api.domains_usage import router as domains_usage_router
-from app.api.external import router as external_router
-from app.api.fiber_plant import router as fiber_plant_router
-from app.api.files import router as files_router
-from app.api.geocoding import router as geocoding_router
-from app.api.gis import router as gis_router
-from app.api.health import router as health_router
-from app.api.imports import router as imports_router
-from app.api.integrations import router as integrations_router
-from app.api.nas import router as nas_router
-from app.api.network_catalog import router as network_catalog_router
-from app.api.network_olt_ops import router as network_olt_ops_router
-from app.api.network_ont_ops import router as network_ont_ops_router
-from app.api.nextcloud_talk import router as nextcloud_talk_router
-from app.api.notifications import router as notifications_router
-from app.api.provisioning import router as provisioning_api_router
-from app.api.qualification import router as qualification_router
-from app.api.rbac import router as rbac_router
-from app.api.router_management import jump_host_router as jump_host_mgmt_router
-from app.api.router_management import router as router_mgmt_router
-from app.api.scheduler import router as scheduler_router
-from app.api.search import router as search_router
-from app.api.settings import router as settings_router
-from app.api.subscribers import router as subscriber_router
-from app.api.support import router as support_router
-from app.api.tables import router as tables_router
-from app.api.tr069_inform import router as tr069_inform_router
-from app.api.validation import router as validation_router
-from app.api.webhooks import router as webhooks_router
-from app.api.wireguard import public_router as wireguard_public_router
-from app.api.wireguard import router as wireguard_router
-from app.api.zabbix import router as zabbix_router
-from app.api.zabbix_webhook import router as zabbix_webhook_router
 from app.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -83,47 +36,7 @@ from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
 from app.services.db_session_adapter import db_session_adapter
-from app.services.object_storage import (
-    ObjectStorageConnectionError,
-    ObjectStorageError,
-    ensure_storage_bucket,
-)
-from app.services.scheduler_config import find_unregistered_scheduled_tasks
-from app.services.settings_seed import (
-    seed_audit_settings,
-    seed_auth_policy_settings,
-    seed_auth_settings,
-    seed_billing_settings,
-    seed_catalog_settings,
-    seed_collections_policy_settings,
-    seed_collections_settings,
-    seed_comms_settings,
-    seed_geocoding_settings,
-    seed_gis_settings,
-    seed_imports_settings,
-    seed_lifecycle_settings,
-    seed_network_monitoring_settings,
-    seed_network_policy_settings,
-    seed_network_settings,
-    seed_notification_settings,
-    seed_notification_templates,
-    seed_provisioning_settings,
-    seed_provisioning_workflows,
-    seed_radius_policy_settings,
-    seed_radius_settings,
-    seed_scheduler_settings,
-    seed_subscriber_settings,
-    seed_tr069_settings,
-    seed_usage_policy_settings,
-    seed_usage_settings,
-    seed_wireguard_settings,
-)
 from app.telemetry import setup_otel
-from app.web import router as web_router
-from app.web.admin.network_routers import router as web_router_mgmt
-from app.web_domains import router as web_domains_router
-from app.web_home import router as web_home_router
-from app.websocket.router import router as ws_router
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +44,70 @@ _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
 _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
+_DEFERRED_ROUTER_TASK = None
+
+_CORE_ROUTER_SPECS = [
+    ("app.api.health", "router", "api", "none"),
+    ("app.web.auth", "router", "web", "none"),
+]
+
+_DEFERRED_API_ROUTER_SPECS = [
+    ("app.web.admin", "router", "web", "none"),
+    ("app.web_home", "router", "web", "none"),
+    ("app.web_domains", "router", "web", "none"),
+    ("app.web.customer", "router", "web", "none"),
+    ("app.web.reseller", "router", "web", "none"),
+    ("app.web.public", "router", "web", "none"),
+    ("app.web.admin.network_routers", "router", "admin", "none"),
+    ("app.websocket.router", "router", "ws", "none"),
+    ("app.api.notifications", "router", "api", "user"),
+    ("app.api.external", "router", "api", "user"),
+    ("app.api.billing", "router", "api", "user"),
+    ("app.api.files", "router", "api", "user"),
+    ("app.api.catalog", "router", "api", "user"),
+    ("app.api.auth", "router", "api", "admin"),
+    ("app.api.auth_flow", "router", "api", "none"),
+    ("app.api.rbac", "router", "api", "user"),
+    ("app.api.customers", "router", "api", "user"),
+    ("app.api.search", "router", "api", "user"),
+    ("app.api.subscribers", "router", "api", "user"),
+    ("app.api.support", "router", "api", "user"),
+    ("app.api.tables", "router", "api", "user"),
+    ("app.api.domains_provisioning", "router", "api", "user"),
+    ("app.api.domains_monitoring", "router", "api", "user"),
+    ("app.api.domains_network_access", "router", "api", "user"),
+    ("app.api.network_ont_ops", "router", "api", "user"),
+    ("app.api.network_olt_ops", "router", "api", "user"),
+    ("app.api.network_catalog", "router", "api", "user"),
+    ("app.api.domains_network_fiber", "router", "api", "user"),
+    ("app.api.domains_usage", "router", "api", "user"),
+    ("app.api.imports", "router", "api", "user"),
+    ("app.api.audit", "router", "api", "none"),
+    ("app.api.gis", "router", "api", "user"),
+    ("app.api.geocoding", "router", "api", "user"),
+    ("app.api.qualification", "router", "api", "user"),
+    ("app.api.settings", "router", "api", "user"),
+    ("app.api.webhooks", "router", "api", "user"),
+    ("app.api.connectors", "router", "api", "user"),
+    ("app.api.integrations", "router", "api", "user"),
+    ("app.api.scheduler", "router", "api", "user"),
+    ("app.api.comms", "router", "api", "user"),
+    ("app.api.analytics", "router", "api", "user"),
+    ("app.api.fiber_plant", "router", "api", "user"),
+    ("app.api.nextcloud_talk", "router", "api", "user"),
+    ("app.api.wireguard", "router", "api", "user"),
+    ("app.api.nas", "router", "api", "user"),
+    ("app.api.router_management", "router", "api", "user"),
+    ("app.api.router_management", "jump_host_router", "api", "user"),
+    ("app.api.provisioning", "router", "api", "user"),
+    ("app.api.bandwidth", "router", "api", "user"),
+    ("app.api.validation", "router", "api", "user"),
+    ("app.api.defaults", "router", "api", "user"),
+    ("app.api.zabbix", "router", "api", "user"),
+    ("app.api.zabbix_webhook", "router", "api", "none"),
+    ("app.api.wireguard", "public_router", "api", "none"),
+    ("app.api.tr069_inform", "router", "api", "none"),
+]
 
 
 def _get_release_metadata() -> dict[str, str | None]:
@@ -153,9 +130,90 @@ def _log_release_metadata(component: str) -> None:
     )
 
 
+def _router_dependencies(mode: str):
+    if mode == "user":
+        from app.api.deps import require_user_auth
+
+        return [Depends(require_user_auth)]
+    if mode == "admin":
+        from app.api.deps import require_role
+
+        return [Depends(require_role("admin"))]
+    return None
+
+
+def _load_router_object(module_name: str, attr_name: str):
+    module = import_module(module_name)
+    return getattr(module, attr_name)
+
+
+def _apply_router_spec(app: FastAPI, spec: tuple[str, str, str, str]) -> None:
+    module_name, attr_name, mount_kind, dependency_mode = spec
+    router = _load_router_object(module_name, attr_name)
+    _mount_router(app, router, mount_kind, dependency_mode)
+
+
+def _mount_router(
+    app: FastAPI, router, mount_kind: str, dependency_mode: str
+) -> None:
+    dependencies = _router_dependencies(dependency_mode)
+
+    if mount_kind == "api":
+        app.include_router(router, prefix="/api/v1", dependencies=dependencies)
+        return
+    if mount_kind == "admin":
+        app.include_router(router, prefix="/admin")
+        return
+    app.include_router(router)
+
+
+def _include_core_routers(app: FastAPI) -> None:
+    for spec in _CORE_ROUTER_SPECS:
+        _apply_router_spec(app, spec)
+
+
+async def _load_deferred_api_routers(app: FastAPI) -> None:
+    logger.info(
+        "deferred_api_router_load_begin",
+        extra={
+            "event": "deferred_api_router_load_begin",
+            "router_count": len(_DEFERRED_API_ROUTER_SPECS),
+        },
+    )
+    for spec in _DEFERRED_API_ROUTER_SPECS:
+        module_name, attr_name, _mount_kind, _dependency_mode = spec
+        try:
+            router = await asyncio.to_thread(_load_router_object, module_name, attr_name)
+            _mount_router(app, router, spec[2], spec[3])
+            logger.info(
+                "deferred_api_router_loaded",
+                extra={
+                    "event": "deferred_api_router_loaded",
+                    "module": module_name,
+                    "attr": attr_name,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "deferred_api_router_load_failed",
+                extra={
+                    "event": "deferred_api_router_load_failed",
+                    "module": module_name,
+                    "attr": attr_name,
+                },
+            )
+            raise
+        await asyncio.sleep(0)
+    logger.info(
+        "deferred_api_router_load_complete",
+        extra={"event": "deferred_api_router_load_complete"},
+    )
+
+
 def _warn_on_scheduler_registry_drift() -> None:
     try:
         from app.celery_app import celery_app
+        from app.services.scheduler_config import find_unregistered_scheduled_tasks
 
         drift = find_unregistered_scheduled_tasks(celery_app.tasks.keys())
     except Exception:
@@ -242,6 +300,40 @@ def _seed_startup_settings() -> None:
     # Enforce credential encryption if configured (P0 security fix)
     from app.config import settings
     from app.services.credential_crypto import require_encryption_key
+    from app.services.object_storage import (
+        ObjectStorageConnectionError,
+        ObjectStorageError,
+        ensure_storage_bucket,
+    )
+    from app.services.settings_seed import (
+        seed_audit_settings,
+        seed_auth_policy_settings,
+        seed_auth_settings,
+        seed_billing_settings,
+        seed_catalog_settings,
+        seed_collections_policy_settings,
+        seed_collections_settings,
+        seed_comms_settings,
+        seed_geocoding_settings,
+        seed_gis_settings,
+        seed_imports_settings,
+        seed_lifecycle_settings,
+        seed_network_monitoring_settings,
+        seed_network_policy_settings,
+        seed_network_settings,
+        seed_notification_settings,
+        seed_notification_templates,
+        seed_provisioning_settings,
+        seed_provisioning_workflows,
+        seed_radius_policy_settings,
+        seed_radius_settings,
+        seed_scheduler_settings,
+        seed_subscriber_settings,
+        seed_tr069_settings,
+        seed_usage_policy_settings,
+        seed_usage_settings,
+        seed_wireguard_settings,
+    )
 
     if settings.enforce_credential_encryption:
         require_encryption_key(enforce=True)
@@ -333,6 +425,7 @@ def _log_zabbix_startup_health() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _DEFERRED_ROUTER_TASK
     logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _log_release_metadata("api")
     _seed_startup_settings()
@@ -350,9 +443,17 @@ async def lifespan(app: FastAPI):
         "websocket_manager_connect_complete",
         extra={"event": "websocket_manager_connect_complete"},
     )
+    _DEFERRED_ROUTER_TASK = asyncio.create_task(_load_deferred_api_routers(app))
     try:
         yield
     finally:
+        if _DEFERRED_ROUTER_TASK is not None:
+            _DEFERRED_ROUTER_TASK.cancel()
+            try:
+                await _DEFERRED_ROUTER_TASK
+            except asyncio.CancelledError:
+                pass
+            _DEFERRED_ROUTER_TASK = None
         logger.info(
             "websocket_manager_disconnect_begin",
             extra={"event": "websocket_manager_disconnect_begin"},
@@ -373,6 +474,7 @@ setup_monitoring(
 setup_otel(app)
 app.add_middleware(ObservabilityMiddleware)
 register_error_handlers(app)
+_include_core_routers(app)
 
 
 @app.post("/api/v1/alerts/grafana-webhook", include_in_schema=False)
@@ -805,75 +907,6 @@ def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
 
 def _include_api_router(router, dependencies=None):
     app.include_router(router, prefix="/api/v1", dependencies=dependencies)
-
-
-_include_api_router(notifications_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(external_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(billing_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(files_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(catalog_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(auth_router, dependencies=[Depends(require_role("admin"))])
-# Only include auth_flow at /api/v1 to avoid conflict with web /auth/login
-app.include_router(auth_flow_router, prefix="/api/v1")
-_include_api_router(rbac_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(customers_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(search_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(support_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(tables_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(
-    domains_provisioning_router, dependencies=[Depends(require_user_auth)]
-)
-_include_api_router(
-    domains_monitoring_router, dependencies=[Depends(require_user_auth)]
-)
-_include_api_router(
-    domains_network_access_router, dependencies=[Depends(require_user_auth)]
-)
-_include_api_router(network_ont_ops_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(network_olt_ops_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(network_catalog_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(
-    domains_network_fiber_router, dependencies=[Depends(require_user_auth)]
-)
-_include_api_router(domains_usage_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(imports_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(audit_router)
-_include_api_router(gis_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(geocoding_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(qualification_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(settings_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(webhooks_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(connectors_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(integrations_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(scheduler_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(comms_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(analytics_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(fiber_plant_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(nextcloud_talk_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(wireguard_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(nas_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(router_mgmt_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(jump_host_mgmt_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(provisioning_api_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(bandwidth_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(validation_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(defaults_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(zabbix_router, dependencies=[Depends(require_user_auth)])
-# Zabbix webhook - no auth required (uses token header for validation)
-_include_api_router(zabbix_webhook_router)
-# WireGuard provisioning public endpoints - no auth required (token-based)
-_include_api_router(wireguard_public_router)
-# TR-069 inform callback - no auth required (called by GenieACS)
-_include_api_router(tr069_inform_router)
-# Health check endpoints - no auth required (for monitoring/load balancers)
-_include_api_router(health_router)
-app.include_router(web_home_router)
-app.include_router(web_domains_router)
-app.include_router(web_router)
-app.include_router(web_router_mgmt, prefix="/admin")
-
-app.include_router(ws_router)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

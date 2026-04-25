@@ -16,10 +16,10 @@ from starlette.datastructures import FormData
 from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_core_devices as web_network_core_devices_service
+from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
 )
-from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
@@ -29,6 +29,7 @@ from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.web.request_parsing import parse_form_data_sync
 from app.web.templates import templates
+
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-inventory"])
 logger = logging.getLogger(__name__)
 
@@ -290,28 +291,28 @@ def ont_detail(
             status_code=404,
         )
 
-    allowed_tabs = {
-        "summary",
-        "effective-config",
-        "observed-state",
-        "history",
-    }
+    allowed_tabs = {"status", "config", "history"}
     tab_aliases = {
-        "overview": "summary",
-        "service": "effective-config",
-        "network": "effective-config",
-        "service-ports": "effective-config",
-        "device-config": "effective-config",
-        "configuration": "effective-config",
-        "configure": "effective-config",
-        "device-status": "effective-config",
-        "diagnostics": "observed-state",
-        "topology": "observed-state",
-        "tr069": "observed-state",
-        "charts": "observed-state",
+        # Legacy tab names
+        "summary": "status",
+        "overview": "status",
+        "effective-config": "config",
+        "observed-state": "status",
+        # Convenience aliases
+        "service": "config",
+        "network": "config",
+        "service-ports": "config",
+        "device-config": "config",
+        "configuration": "config",
+        "configure": "config",
+        "device-status": "status",
+        "diagnostics": "status",
+        "topology": "status",
+        "tr069": "history",
+        "charts": "history",
     }
     tab = tab_aliases.get(tab, tab)
-    active_tab = tab if tab in allowed_tabs else "summary"
+    active_tab = tab if tab in allowed_tabs else "status"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
     try:

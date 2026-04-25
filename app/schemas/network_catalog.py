@@ -23,6 +23,29 @@ class OnuTypeBase(BaseModel):
     capability: str  # bridge, route, bridge_route
     notes: str | None = None
 
+    # ACS Config Pack: TR-069 configuration
+    tr069_data_model: str | None = None  # tr181 or tr098
+    config_method_preference: str | None = None  # tr069, omci, both
+
+    # WiFi TR-069 parameter paths
+    wifi_ssid_path: str | None = None
+    wifi_password_path: str | None = None
+    wifi_enabled_path: str | None = None
+    wifi_channel_path: str | None = None
+    wifi_security_mode_path: str | None = None
+
+    # WAN TR-069 parameter paths
+    wan_pppoe_username_path: str | None = None
+    wan_pppoe_password_path: str | None = None
+    wan_connection_type_path: str | None = None
+
+    # Default WiFi settings
+    default_wifi_security_mode: str | None = "WPA2-Personal"
+    default_wifi_channel: str | None = "auto"
+
+    # Firmware baseline
+    min_firmware_version: str | None = None
+
 
 class OnuTypeCreate(OnuTypeBase):
     pass
@@ -39,6 +62,21 @@ class OnuTypeUpdate(BaseModel):
     allow_custom_profiles: bool | None = None
     capability: str | None = None
     notes: str | None = None
+
+    # ACS Config Pack fields
+    tr069_data_model: str | None = None
+    config_method_preference: str | None = None
+    wifi_ssid_path: str | None = None
+    wifi_password_path: str | None = None
+    wifi_enabled_path: str | None = None
+    wifi_channel_path: str | None = None
+    wifi_security_mode_path: str | None = None
+    wan_pppoe_username_path: str | None = None
+    wan_pppoe_password_path: str | None = None
+    wan_connection_type_path: str | None = None
+    default_wifi_security_mode: str | None = None
+    default_wifi_channel: str | None = None
+    min_firmware_version: str | None = None
 
 
 class OnuTypeRead(OnuTypeBase):

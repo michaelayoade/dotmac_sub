@@ -279,3 +279,158 @@ def validate_olt_config_pack(
             errors.append("OLT missing TR-069 OLT profile ID")
 
     return errors
+
+
+@dataclass
+class ConfigPackValidation:
+    """Result of config pack validation with warnings and errors.
+
+    Errors are blocking issues that prevent provisioning.
+    Warnings are non-blocking issues that may cause problems.
+    """
+
+    is_valid: bool
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def has_warnings(self) -> bool:
+        return len(self.warnings) > 0
+
+    @property
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "is_valid": self.is_valid,
+            "has_warnings": self.has_warnings,
+            "has_errors": self.has_errors,
+            "warnings": self.warnings,
+            "errors": self.errors,
+            "warning_count": len(self.warnings),
+            "error_count": len(self.errors),
+        }
+
+
+def validate_config_pack_comprehensive(
+    db: Session,
+    olt_id: str | UUID,
+) -> ConfigPackValidation:
+    """Comprehensive validation of OLT config pack for provisioning readiness.
+
+    Checks all aspects of the config pack and returns warnings (non-blocking)
+    and errors (blocking). Authorization can proceed with warnings but not errors.
+
+    Validated fields:
+    - Authorization profiles (line/service) - ERROR if missing
+    - Internet VLAN - ERROR if missing
+    - Management VLAN - WARNING if missing (breaks ACS connectivity)
+    - Management IP Pool - WARNING if missing (no static management IPs)
+    - TR-069 ACS server - WARNING if missing
+    - TR-069 OLT profile ID - WARNING if missing
+    - Connection request credentials - WARNING if missing
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+
+    Returns:
+        ConfigPackValidation with is_valid, warnings, and errors
+    """
+    from app.models.network import OLTDevice
+
+    validation = ConfigPackValidation(is_valid=True)
+
+    olt = db.get(OLTDevice, str(olt_id))
+    if olt is None:
+        validation.is_valid = False
+        validation.errors.append("OLT device not found")
+        return validation
+
+    config_pack = resolve_olt_config_pack(db, olt_id)
+    if config_pack is None:
+        validation.is_valid = False
+        validation.errors.append("Failed to resolve OLT config pack")
+        return validation
+
+    # ========== ERRORS (blocking) ==========
+
+    # Authorization profiles are required for ONT authorization
+    if config_pack.line_profile_id is None:
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing default line profile ID - ONTs cannot be authorized"
+        )
+
+    if config_pack.service_profile_id is None:
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing default service profile ID - ONTs cannot be authorized"
+        )
+
+    # Internet VLAN is required for service ports
+    if config_pack.internet_vlan.tag is None:
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing internet VLAN - ONTs cannot receive internet service"
+        )
+
+    # ========== WARNINGS (non-blocking) ==========
+
+    # Management VLAN is needed for ACS connectivity
+    if config_pack.management_vlan.tag is None:
+        validation.warnings.append(
+            "Missing management VLAN - ONTs may not reach TR-069 ACS"
+        )
+
+    # Management IP pool is needed for static IP allocation
+    if not olt.mgmt_ip_pool_id:
+        validation.warnings.append(
+            "Missing management IP pool - ONTs will use DHCP for management"
+        )
+
+    # TR-069 ACS server is needed for device management
+    if config_pack.tr069_acs_server_id is None:
+        validation.warnings.append(
+            "Missing TR-069 ACS server - remote management unavailable"
+        )
+
+    # TR-069 OLT profile is needed to bind devices
+    if config_pack.tr069_olt_profile_id is None:
+        validation.warnings.append(
+            "Missing TR-069 OLT profile ID - ACS binding will be skipped"
+        )
+
+    # Connection request credentials enable push notifications
+    if not config_pack.cr_username or not config_pack.cr_password:
+        validation.warnings.append(
+            "Missing connection request credentials - ACS cannot push config changes"
+        )
+
+    # Default provisioning profile helps with consistent bundles
+    if config_pack.default_provisioning_profile_id is None:
+        validation.warnings.append(
+            "No default provisioning profile - each ONT needs manual bundle assignment"
+        )
+
+    return validation
+
+
+def get_validation_summary(validation: ConfigPackValidation) -> str:
+    """Get human-readable validation summary.
+
+    Args:
+        validation: ConfigPackValidation result
+
+    Returns:
+        Summary string for display
+    """
+    if validation.is_valid and not validation.has_warnings:
+        return "Config pack is complete and ready for provisioning"
+
+    if validation.is_valid and validation.has_warnings:
+        return f"Config pack is valid with {len(validation.warnings)} warning(s)"
+
+    return f"Config pack has {len(validation.errors)} error(s) that must be fixed"

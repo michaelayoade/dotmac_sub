@@ -306,9 +306,7 @@ def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
         effective_bundle is not None
         or ont.tr069_last_snapshot
         or effective_values.get("pppoe_username")
-        or ont.pppoe_password
         or effective_values.get("wifi_ssid")
-        or ont.wifi_password
         or ont.lan_gateway_ip
         or ont.lan_subnet_mask
         or ont.lan_dhcp_start

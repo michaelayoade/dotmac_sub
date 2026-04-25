@@ -60,25 +60,22 @@ class TestUpdateExternalId:
 
 class TestUpdateManagementIp:
     @patch("app.services.network.ont_write.upsert_ont_config_override")
-    @patch("app.services.network.ont_write.is_bundle_managed_ont")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
     @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-    def test_bundle_managed_ont_writes_management_intent_to_overrides(
+    def test_writes_management_intent_to_overrides(
         self,
         mock_get_adapter,
         mock_get,
         mock_resolve_context,
         mock_emit,
-        mock_bundle_managed,
         mock_upsert_override,
     ):
         from app.services.network.olt_protocol_adapters import OltOperationResult
 
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
-        mock_bundle_managed.return_value = True
         olt = MagicMock(id=uuid.uuid4())
         mock_resolve_context.return_value = (
             SimpleNamespace(olt=olt, fsp="0/1/3", ont_id_on_olt=5),
@@ -101,9 +98,6 @@ class TestUpdateManagementIp:
         )
 
         assert result.success is True
-        assert ont.mgmt_ip_mode is None
-        assert ont.mgmt_vlan_id is None
-        assert ont.mgmt_ip_address is None
         override_fields = [
             call.kwargs["field_name"] for call in mock_upsert_override.call_args_list
         ]

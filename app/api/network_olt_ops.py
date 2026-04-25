@@ -308,3 +308,61 @@ def run_cli_command(
     if not result.success:
         raise HTTPException(status_code=422, detail=result.message)
     return OltOperationResponse(success=True, message=result.message, data=result.data)
+
+
+# ── Config Pack Validation ─────────────────────────────────────────────
+
+
+@router.get(
+    "/olt-devices/{olt_id}/config-pack/validate",
+    response_model=OltOperationResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def validate_config_pack(
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> OltOperationResponse:
+    """Validate OLT config pack for provisioning readiness.
+
+    Returns validation status with warnings (non-blocking) and errors (blocking).
+    Authorization can proceed with warnings but not errors.
+    """
+    from app.services.network.olt_config_pack import (
+        get_validation_summary,
+        validate_config_pack_comprehensive,
+    )
+
+    validation = validate_config_pack_comprehensive(db, olt_id)
+    summary = get_validation_summary(validation)
+
+    return OltOperationResponse(
+        success=validation.is_valid,
+        message=summary,
+        data=validation.to_dict(),
+    )
+
+
+@router.get(
+    "/olt-devices/{olt_id}/config-pack",
+    response_model=OltOperationResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def get_config_pack(
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> OltOperationResponse:
+    """Get resolved OLT config pack for provisioning.
+
+    Returns all default configuration values for ONT provisioning.
+    """
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
+
+    config_pack = resolve_olt_config_pack(db, olt_id)
+    if config_pack is None:
+        raise HTTPException(status_code=404, detail="OLT device not found")
+
+    return OltOperationResponse(
+        success=True,
+        message="Config pack resolved successfully",
+        data=config_pack.to_dict(),
+    )

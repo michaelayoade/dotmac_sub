@@ -4,17 +4,20 @@
 {% block title %}{{ display_serial_label }} - ONT - Admin{% endblock %}
 
 {% block content %}
-{# State flags used by the header and Danger Zone #}
+{# State flags used throughout the page #}
 {%- set authorization_status = ont.authorization_status.value if ont.authorization_status and ont.authorization_status.value is defined else (ont.authorization_status if ont.authorization_status else '') -%}
 {%- set provisioning_status = ont.provisioning_status.value if ont.provisioning_status and ont.provisioning_status.value is defined else (ont.provisioning_status if ont.provisioning_status else 'unprovisioned') -%}
 {%- set authorized_for_configuration = authorization_status == 'authorized' -%}
 {%- set show_provision_cta = authorized_for_configuration and (inventory_ready or provisioning_status != 'provisioned') -%}
 {%- set fsp = (assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '')) -%}
+{%- set is_online = signal_info and signal_info.online_status == 'online' -%}
+{%- set is_offline = signal_info and signal_info.online_status == 'offline' -%}
 
-<div class="space-y-4"
-     x-data="{ activeTab: '{{ ont_active_tab | default('summary') }}' }">
-    {# Compact header — one row: status · identity · context pills · single primary CTA #}
-    <div class="flex flex-col gap-3 border-b border-slate-200 pb-3 dark:border-slate-700">
+<div class="space-y-4" x-data="{ activeTab: '{{ ont_active_tab | default('status') }}' }">
+    {# ═══════════════════════════════════════════════════════════════════════════
+       HEADER — Compact, status-forward design
+       ═══════════════════════════════════════════════════════════════════════════ #}
+    <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-700">
         {# Breadcrumb #}
         <nav class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
             <a href="/admin/network" class="hover:text-slate-700 dark:hover:text-slate-200">Network</a>
@@ -24,86 +27,158 @@
             <span aria-current="page" class="font-medium text-slate-700 dark:text-slate-200">{{ display_serial_label }}</span>
         </nav>
 
-        {# Identity row #}
-        <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-            {# Small status dot — status-as-information, no decoration #}
-            {% if signal_info and signal_info.online_status == 'online' %}
-              <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" aria-label="Online"></span>
-            {% elif signal_info and signal_info.online_status == 'offline' %}
-              <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500" aria-label="Offline"></span>
-            {% else %}
-              <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-slate-400" aria-label="Unknown"></span>
-            {% endif %}
-            <h1 class="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white lg:text-xl">{{ display_serial_label }}</h1>
-            <span class="text-sm text-slate-500 dark:text-slate-400">{{ identity_label }}</span>
-            {% if ont.firmware_version %}
-              <span class="font-mono text-xs text-slate-400 dark:text-slate-500">v{{ ont.firmware_version }}</span>
-            {% endif %}
+        {# Main header row: Identity + Status badges + Actions #}
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            {# Left: Identity and status #}
+            <div class="flex flex-col gap-2">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    {# Status dot #}
+                    {% if is_online %}
+                      <span class="relative flex h-2.5 w-2.5">
+                          <span class="absolute inline-flex h-full w-full animate-ping motion-reduce:animate-none rounded-full bg-emerald-400 opacity-75"></span>
+                          <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+                      </span>
+                    {% elif is_offline %}
+                      <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500" aria-label="Offline"></span>
+                    {% else %}
+                      <span class="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-slate-400" aria-label="Unknown"></span>
+                    {% endif %}
+                    <h1 class="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white lg:text-xl">{{ display_serial_label }}</h1>
+                    <span class="text-sm text-slate-500 dark:text-slate-400">{{ identity_label }}</span>
+                    {% if ont.firmware_version %}
+                      <span class="font-mono text-xs text-slate-400 dark:text-slate-500">v{{ ont.firmware_version }}</span>
+                    {% endif %}
+                </div>
 
-            {# Primary CTA — single, state-driven, on the right #}
-            <div class="ml-auto flex items-center gap-2">
-              {% if not authorized_for_configuration %}
-                {% if network_path.get('olt_id') and fsp %}
-                <form method="POST"
-                      action="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
-                      hx-post="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
-                      hx-swap="none"
-                      hx-disabled-elt="button[type='submit']"
-                      x-data="{
-                          status: null,
-                          operationId: null,
-                          init() {
-                              window.addEventListener('operation-status', (e) => {
-                                  if (e.detail.operation_id === this.operationId) {
-                                      this.status = e.detail.status;
-                                      if (e.detail.status === 'succeeded') {
-                                          setTimeout(() => location.reload(), 1500);
+                {# Status badges row #}
+                <div class="flex flex-wrap items-center gap-1.5">
+                    {# Online/Offline badge #}
+                    {% if is_online %}
+                      <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300">Online</span>
+                    {% elif is_offline %}
+                      <span class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-500/15 dark:text-rose-300">Offline</span>
+                    {% else %}
+                      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Unknown</span>
+                    {% endif %}
+
+                    {# Authorization badge #}
+                    {% if authorization_status == 'authorized' %}
+                      <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-500/15 dark:text-blue-300">Authorized</span>
+                    {% elif authorization_status == 'pending' %}
+                      <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">Pending</span>
+                    {% else %}
+                      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Unauthorized</span>
+                    {% endif %}
+
+                    {# Provisioning badge #}
+                    {% if provisioning_status == 'provisioned' %}
+                      <span class="inline-flex items-center rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-800 dark:bg-teal-500/15 dark:text-teal-300">Provisioned</span>
+                    {% elif provisioning_status == 'partial' %}
+                      <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">Partial</span>
+                    {% endif %}
+
+                    {# Active/Inactive #}
+                    {% if not ont.is_active %}
+                      <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">Inactive</span>
+                    {% endif %}
+
+                    {# Inventory ready #}
+                    {% if inventory_ready %}
+                      <span class="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-500/15 dark:text-violet-300">Ready to assign</span>
+                    {% endif %}
+                </div>
+
+                {# Context links row #}
+                <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                    {% if network_path.get('olt_name') %}
+                      <a href="/admin/network/olts/{{ network_path.olt_id }}"
+                         class="inline-flex items-center rounded bg-blue-50 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20">{{ network_path.olt_name }}</a>
+                    {% endif %}
+                    {% if network_path.get('pon_port') %}
+                      <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ network_path.pon_port }}</span>
+                    {% endif %}
+                    {% if fsp %}
+                      <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="Frame/Slot/Port">FSP {{ fsp }}</span>
+                    {% endif %}
+                    {% if subscriber_info.get('name') %}
+                      <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}"
+                         class="inline-flex items-center rounded bg-violet-50 px-2 py-0.5 font-medium text-violet-700 hover:bg-violet-100 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20">{{ subscriber_info.name }}</a>
+                    {% endif %}
+                    {% if subscriber_info.get('plan_name') %}
+                      <span class="inline-flex items-center rounded bg-teal-50 px-2 py-0.5 font-medium text-teal-700 dark:bg-teal-500/10 dark:text-teal-300">{{ subscriber_info.plan_name }}</span>
+                    {% endif %}
+                    {% if signal_info and signal_info.distance_meters is not none %}
+                      <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono tabular-nums text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="Fiber distance">{{ "{:,}".format(signal_info.distance_meters) }}m</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            {# Right: Actions #}
+            <div class="flex items-center gap-2">
+                {# Primary CTA — state-driven #}
+                {% if not authorized_for_configuration %}
+                    {% if network_path.get('olt_id') and fsp %}
+                    <form method="POST"
+                          action="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
+                          hx-post="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
+                          hx-swap="none"
+                          hx-disabled-elt="button[type='submit']"
+                          x-data="{
+                              status: null,
+                              operationId: null,
+                              init() {
+                                  window.addEventListener('operation-status', (e) => {
+                                      if (e.detail.operation_id === this.operationId) {
+                                          this.status = e.detail.status;
+                                          if (e.detail.status === 'succeeded') {
+                                              setTimeout(() => location.reload(), 1500);
+                                          }
+                                      }
+                                  });
+                              },
+                              handleQueued(e) {
+                                  if (e.detail && e.detail.operation_id) {
+                                      this.operationId = e.detail.operation_id;
+                                      this.status = 'running';
+                                      if (window.operationTracker) {
+                                          window.operationTracker.track(e.detail.operation_id, { showToasts: true });
                                       }
                                   }
-                              });
-                          },
-                          handleQueued(e) {
-                              if (e.detail && e.detail.operation_id) {
-                                  this.operationId = e.detail.operation_id;
-                                  this.status = 'running';
-                                  if (window.operationTracker) {
-                                      window.operationTracker.track(e.detail.operation_id, { showToasts: true });
-                                  }
                               }
-                          }
-                      }"
-                      @operationqueued.window="handleQueued($event)"
-                      @htmx:before-request="status = 'submitting'"
-                      @htmx:after-request="if (!operationId) status = null">
-                    {% include "components/forms/csrf_input.html" %}
-                    <input type="hidden" name="ont_id" value="{{ ont.id }}">
-                    <input type="hidden" name="fsp" value="{{ fsp }}">
-                    <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
-                    <button type="submit"
-                            :disabled="status === 'submitting' || status === 'running' || status === 'succeeded'"
-                            :class="{ 'opacity-75 cursor-wait': status === 'submitting' || status === 'running', 'bg-emerald-600 hover:bg-emerald-600': status === 'succeeded', 'bg-rose-600 hover:bg-rose-600': status === 'failed' }"
-                            class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
-                            title="Authorize this ONT on its OLT (FSP {{ fsp }}). Keyboard: a">
-                        <span x-text="status === 'succeeded' ? 'Authorized' : (status === 'failed' ? 'Failed' : (status === 'running' ? 'Authorizing…' : (status === 'submitting' ? 'Queuing…' : 'Authorize')))"></span>
-                    </button>
-                </form>
-                {% elif network_path.get('olt_id') %}
-                <a href="/admin/network/olts/{{ network_path.olt_id }}?tab=provisioning&search={{ ont.serial_number }}"
-                   class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                   title="Run autofind on the OLT to discover this ONT's port">
-                    Find &amp; authorize
-                </a>
+                          }"
+                          @operationqueued.window="handleQueued($event)"
+                          @htmx:before-request="status = 'submitting'"
+                          @htmx:after-request="if (!operationId) status = null">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="ont_id" value="{{ ont.id }}">
+                        <input type="hidden" name="fsp" value="{{ fsp }}">
+                        <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
+                        <button type="submit"
+                                :disabled="status === 'submitting' || status === 'running' || status === 'succeeded'"
+                                :class="{ 'opacity-75 cursor-wait': status === 'submitting' || status === 'running', 'bg-emerald-600 hover:bg-emerald-600': status === 'succeeded', 'bg-rose-600 hover:bg-rose-600': status === 'failed' }"
+                                class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800"
+                                title="Authorize this ONT on its OLT (FSP {{ fsp }}). Keyboard: a">
+                            <span x-text="status === 'succeeded' ? 'Authorized' : (status === 'failed' ? 'Failed' : (status === 'running' ? 'Authorizing...' : (status === 'submitting' ? 'Queuing...' : 'Authorize')))"></span>
+                        </button>
+                    </form>
+                    {% elif network_path.get('olt_id') %}
+                    <a href="/admin/network/olts/{{ network_path.olt_id }}?tab=provisioning&search={{ ont.serial_number }}"
+                       class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                       title="Run autofind on the OLT to discover this ONT's port">
+                        Find &amp; authorize
+                    </a>
+                    {% endif %}
+                {% elif show_provision_cta %}
+                    <a href="/admin/network/onts/{{ ont.id }}/provision"
+                       class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                       title="Push WiFi / PPPoE / speed profile to this ONT. Keyboard: c"
+                       data-kbd="c">
+                        Configure
+                    </a>
                 {% endif %}
-              {% elif show_provision_cta %}
-                <a href="/admin/network/onts/{{ ont.id }}/provision"
-                   class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                   title="Push WiFi / PPPoE / speed profile to this ONT. Keyboard: c"
-                   data-kbd="c">
-                    Configure
-                </a>
-              {% endif %}
-              {# Quick-apply default profile button #}
-              {% if authorized_for_configuration and network_path.get('olt_has_default_profile') %}
+
+                {# Quick Apply profile #}
+                {% if authorized_for_configuration and network_path.get('olt_has_default_profile') %}
                 <button type="button"
                         hx-post="/admin/network/onts/{{ ont.id }}/quick-apply-profile"
                         hx-swap="none"
@@ -112,58 +187,95 @@
                         title="Apply OLT's default profile ({{ network_path.get('olt_default_profile_name', 'default') }})">
                     Quick Apply
                 </button>
-              {% endif %}
-              {# Re-authorize button for authorized ONTs #}
-              {% if authorized_for_configuration and fsp %}
-                <button type="button"
-                        hx-post="/admin/network/onts/{{ ont.id }}/reauthorize"
-                        hx-swap="none"
-                        hx-disabled-elt="this"
-                        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                        title="Force re-authorize on OLT">
-                    Re-authorize
-                </button>
-              {% endif %}
-            </div>
-        </div>
+                {% endif %}
 
-        {# Context pills — secondary row, no decorative icons #}
-        <div class="flex flex-wrap items-center gap-1.5 text-xs">
-            {% if ont.is_active %}
-              <span class="inline-flex items-center rounded bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">Active</span>
-            {% else %}
-              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">Inactive</span>
-            {% endif %}
-            {% if network_path.get('olt_name') %}
-              <a href="/admin/network/olts/{{ network_path.olt_id }}"
-                 class="inline-flex items-center rounded bg-blue-50 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20">{{ network_path.olt_name }}</a>
-            {% endif %}
-            {% if network_path.get('pon_port') %}
-              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ network_path.pon_port }}</span>
-            {% endif %}
-            {% if subscriber_info.get('name') %}
-              <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}"
-                 class="inline-flex items-center rounded bg-violet-50 px-2 py-0.5 font-medium text-violet-700 hover:bg-violet-100 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20">{{ subscriber_info.name }}</a>
-            {% endif %}
-            {% if subscriber_info.get('plan_name') %}
-              <span class="inline-flex items-center rounded bg-teal-50 px-2 py-0.5 font-medium text-teal-700 dark:bg-teal-500/10 dark:text-teal-300">{{ subscriber_info.plan_name }}</span>
-            {% endif %}
-            {% if connected_customer_devices is not none %}
-              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <span class="tabular-nums font-medium">{{ connected_customer_devices }}</span><span class="ml-1">device{{ '' if connected_customer_devices == 1 else 's' }}</span>
-                {% if connected_wifi_clients is not none %}<span class="ml-1 text-slate-400">({{ connected_wifi_clients }} Wi-Fi)</span>{% endif %}
-              </span>
-            {% endif %}
-            {% if signal_info and signal_info.distance_meters is not none %}
-              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="Fiber distance from OLT in meters">{{ "{:,}".format(signal_info.distance_meters) }}m</span>
-            {% endif %}
-            {% if fsp %}
-              <span class="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 font-mono text-slate-600 dark:bg-slate-800 dark:text-slate-300" title="Frame/Slot/Port — the ONT's physical address on the OLT">FSP {{ fsp }}</span>
-            {% endif %}
+                {# Quick Actions dropdown #}
+                <div class="relative" x-data="{ open: false }">
+                    <button type="button"
+                            @click="open = !open"
+                            @click.outside="open = false"
+                            class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                        Actions
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    </button>
+                    <div x-show="open"
+                         x-cloak
+                         x-transition:enter="transition ease-out duration-100"
+                         x-transition:enter-start="transform opacity-0 scale-95"
+                         x-transition:enter-end="transform opacity-100 scale-100"
+                         x-transition:leave="transition ease-in duration-75"
+                         x-transition:leave-start="transform opacity-100 scale-100"
+                         x-transition:leave-end="transform opacity-0 scale-95"
+                         class="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                        <div class="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Device Actions</div>
+                        <button type="button"
+                                hx-post="/admin/network/onts/{{ ont.id }}/reboot"
+                                hx-swap="none"
+                                @click="open = false"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            Reboot ONT
+                        </button>
+                        <button type="button"
+                                hx-post="/admin/network/onts/{{ ont.id }}/refresh-status"
+                                hx-swap="none"
+                                @click="open = false"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            Refresh Status
+                        </button>
+                        <button type="button"
+                                hx-post="/admin/network/onts/{{ ont.id }}/config/refresh"
+                                hx-swap="none"
+                                @click="open = false"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/></svg>
+                            Get Config from Device
+                        </button>
+                        <button type="button"
+                                hx-post="/admin/network/onts/{{ ont.id }}/config/push"
+                                hx-swap="none"
+                                @click="open = false"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                            Push Config to Device
+                        </button>
+                        {% if authorized_for_configuration and fsp %}
+                        <div class="my-1 border-t border-slate-200 dark:border-slate-700"></div>
+                        <button type="button"
+                                hx-post="/admin/network/onts/{{ ont.id }}/reauthorize"
+                                hx-swap="none"
+                                @click="open = false"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            Re-authorize
+                        </button>
+                        {% endif %}
+                        <div class="my-1 border-t border-slate-200 dark:border-slate-700"></div>
+                        <div class="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">External</div>
+                        {% if ont.acs_device_id %}
+                        <a href="/admin/network/acs/devices/{{ ont.acs_device_id }}"
+                           @click="open = false"
+                           class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                            View in ACS
+                        </a>
+                        {% endif %}
+                        <a href="/admin/network/onts/{{ ont.id }}/edit"
+                           @click="open = false"
+                           class="flex w-full items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                            Edit Device
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-    {# ─── Signal + device faceplate — always above tabs, tab-independent ─── #}
+    {# ═══════════════════════════════════════════════════════════════════════════
+       OPTICAL LINK SUMMARY — Always visible, critical diagnostic info
+       ═══════════════════════════════════════════════════════════════════════════ #}
     {% from "components/devices/ont_faceplate.html" import ont_faceplate %}
     {%- set _rx = signal_info.onu_rx_dbm if signal_info else none -%}
     {%- if _rx is none -%}{%- set _optical_state = 'none' -%}
@@ -171,10 +283,9 @@
     {%- elif _rx >= -28 -%}{%- set _optical_state = 'warn' -%}
     {%- else -%}{%- set _optical_state = 'bad' -%}{%- endif -%}
 
-    {# Optical link summary — the first thing a NOC tech looks at #}
     {% include "admin/network/onts/_optical_link_summary.html" %}
 
-    {# Device faceplate strip — no outer card chrome, just the render + numbers #}
+    {# Device faceplate strip #}
     <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-6">
         <div class="flex-1 overflow-x-auto">
             {{ ont_faceplate(
@@ -196,22 +307,11 @@
         </div>
     </div>
 
-    {% if preview_mode %}
-    <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
-        <span class="font-semibold">Preview.</span> Changes on this page are not saved.
-        <a href="{{ preview_origin_url }}" class="ml-1 font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100">Open live page</a>
-    </div>
-    {% endif %}
-
-    {% if inventory_ready %}
-    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300">
-        Ready to assign to a new customer.
-    </div>
-    {% endif %}
-
-    {# Tab Navigation #}
+    {# ═══════════════════════════════════════════════════════════════════════════
+       TAB NAVIGATION — 3 tabs: Status, Config, History
+       ═══════════════════════════════════════════════════════════════════════════ #}
     <div x-data="{
-            tabs: ['summary', 'effective-config', 'observed-state', 'history'],
+            tabs: ['status', 'config', 'history'],
             focusTab(tabName) {
                 const tabEl = document.getElementById('tab-' + tabName);
                 if (tabEl) tabEl.focus();
@@ -231,37 +331,27 @@
          }"
          @keydown.right.prevent="nextTab()"
          @keydown.left.prevent="prevTab()"
-         class="relative z-50 overflow-x-auto border-b border-slate-200 dark:border-slate-700 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
+         class="relative z-40 overflow-x-auto border-b border-slate-200 dark:border-slate-700 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
         <nav class="flex min-w-max gap-1 sm:gap-3 lg:gap-4 -mb-px" role="tablist" aria-label="ONT detail tabs">
-            <button @click="activeTab = 'summary'"
+            <button @click="activeTab = 'status'"
                     role="tab"
-                    :aria-selected="activeTab === 'summary'"
-                    :tabindex="activeTab === 'summary' ? 0 : -1"
-                    id="tab-summary"
-                    aria-controls="panel-summary"
-                    :class="activeTab === 'summary' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    :aria-selected="activeTab === 'status'"
+                    :tabindex="activeTab === 'status' ? 0 : -1"
+                    id="tab-status"
+                    aria-controls="panel-status"
+                    :class="activeTab === 'status' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
-                Summary
+                Status
             </button>
-            <button @click="activeTab = 'effective-config'"
+            <button @click="activeTab = 'config'"
                     role="tab"
-                    :aria-selected="activeTab === 'effective-config'"
-                    :tabindex="activeTab === 'effective-config' ? 0 : -1"
-                    id="tab-effective-config"
-                    aria-controls="panel-effective-config"
-                    :class="activeTab === 'effective-config' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    :aria-selected="activeTab === 'config'"
+                    :tabindex="activeTab === 'config' ? 0 : -1"
+                    id="tab-config"
+                    aria-controls="panel-config"
+                    :class="activeTab === 'config' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
-                Effective Config
-            </button>
-            <button @click="activeTab = 'observed-state'"
-                    role="tab"
-                    :aria-selected="activeTab === 'observed-state'"
-                    :tabindex="activeTab === 'observed-state' ? 0 : -1"
-                    id="tab-observed-state"
-                    aria-controls="panel-observed-state"
-                    :class="activeTab === 'observed-state' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="border-b-2 px-3 py-2.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 whitespace-nowrap">
-                Observed State
+                Config
             </button>
             <button @click="activeTab = 'history'"
                     role="tab"
@@ -276,575 +366,15 @@
         </nav>
     </div>
 
-    {# ===================== OVERVIEW TAB ===================== #}
-    <div x-show="activeTab === 'summary'" x-transition role="tabpanel" id="panel-summary" aria-labelledby="tab-summary" class="space-y-4">
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-3"
-             {% if preview_mode %}
-             x-data='{
-                open: false,
-                gponChannelOpen: false,
-                locationOpen: false,
-                deviceInfoOpen: false,
-                currentOltId: {{ (ont.olt_device_id|string if ont.olt_device_id else "") | tojson }},
-                currentOltName: {{ ((network_path.get("olt_name") or (ont.olt_device.name if ont.olt_device is defined and ont.olt_device else ""))) | tojson }},
-                currentBoard: {{ (ont.board or "") | tojson }},
-                currentPort: {{ (ont.port or "") | tojson }},
-                currentGponChannel: {{ ((ont.gpon_channel.value if ont.gpon_channel and ont.gpon_channel.value is defined else ont.gpon_channel) or "gpon") | tojson }},
-                currentSerialNumber: {{ (display_serial_label or "") | tojson }},
-                currentVendor: {{ (ont.vendor or "") | tojson }},
-                currentModel: {{ (ont.model or "") | tojson }},
-                currentFirmware: {{ (ont.firmware_version or "") | tojson }},
-                currentOnuTypeId: {{ (ont.onu_type_id|string if ont.onu_type_id else "") | tojson }},
-                currentOnuTypeName: {{ ((ont.onu_type.name if ont.onu_type is defined and ont.onu_type else "")) | tojson }},
-                currentZoneId: {{ (ont.zone_id|string if ont.zone_id else "") | tojson }},
-                currentZoneName: {{ ((ont.zone.name if ont.zone is defined and ont.zone else "")) | tojson }},
-                currentSplitterId: {{ (ont.splitter_id|string if ont.splitter_id else "") | tojson }},
-                currentSplitterName: {{ ((ont.splitter.name if ont.splitter is defined and ont.splitter else "")) | tojson }},
-                currentSplitterPort: {{ (ont.splitter_port_id|string if ont.splitter_port_id else "") | tojson }},
-                currentLocationName: {{ (ont.name or "") | tojson }},
-                currentAddressComment: {{ (location_address_or_comment or "") | tojson }},
-                currentContact: {{ (location_contact or "") | tojson }},
-                currentLatitude: {{ (ont.gps_latitude|string if ont.gps_latitude is not none else "") | tojson }},
-                currentLongitude: {{ (ont.gps_longitude|string if ont.gps_longitude is not none else "") | tojson }},
-                draftOltId: {{ (ont.olt_device_id|string if ont.olt_device_id else "") | tojson }},
-                draftBoard: {{ (ont.board or "") | tojson }},
-                draftPort: {{ (ont.port or "") | tojson }},
-                draftGponChannel: {{ ((ont.gpon_channel.value if ont.gpon_channel and ont.gpon_channel.value is defined else ont.gpon_channel) or "gpon") | tojson }},
-                draftSerialNumber: {{ (ont.serial_number or "") | tojson }},
-                draftVendor: {{ (ont.vendor or "") | tojson }},
-                draftModel: {{ (ont.model or "") | tojson }},
-                draftFirmware: {{ (ont.firmware_version or "") | tojson }},
-                draftOnuTypeId: {{ (ont.onu_type_id|string if ont.onu_type_id else "") | tojson }},
-                draftZoneId: {{ (ont.zone_id|string if ont.zone_id else "") | tojson }},
-                draftSplitterId: {{ (ont.splitter_id|string if ont.splitter_id else "") | tojson }},
-                draftSplitterPort: {{ (ont.splitter_port_id|string if ont.splitter_port_id else "") | tojson }},
-                draftLocationName: {{ (ont.name or "") | tojson }},
-                draftAddressComment: {{ (location_address_or_comment or "") | tojson }},
-                draftContact: {{ (location_contact or "") | tojson }},
-                draftLatitude: {{ (ont.gps_latitude|string if ont.gps_latitude is not none else "") | tojson }},
-                draftLongitude: {{ (ont.gps_longitude|string if ont.gps_longitude is not none else "") | tojson }},
-                openModal() {
-                    this.draftOltId = this.currentOltId;
-                    this.draftBoard = this.currentBoard;
-                    this.draftPort = this.currentPort;
-                    this.open = true;
-                },
-                openGponChannelModal() {
-                    this.draftGponChannel = this.currentGponChannel;
-                    this.gponChannelOpen = true;
-                },
-                openDeviceInfoModal() {
-                    this.draftSerialNumber = this.currentSerialNumber;
-                    this.draftVendor = this.currentVendor;
-                    this.draftModel = this.currentModel;
-                    this.draftFirmware = this.currentFirmware;
-                    this.draftOnuTypeId = this.currentOnuTypeId;
-                    this.deviceInfoOpen = true;
-                },
-                openLocationModal() {
-                    this.draftZoneId = this.currentZoneId;
-                    this.draftSplitterId = this.currentSplitterId;
-                    this.draftSplitterPort = this.currentSplitterPort;
-                    this.draftLocationName = this.currentLocationName;
-                    this.draftAddressComment = this.currentAddressComment;
-                    this.draftContact = this.currentContact;
-                    this.draftLatitude = this.currentLatitude;
-                    this.draftLongitude = this.currentLongitude;
-                    this.locationOpen = true;
-                },
-                applyMove() {
-                    const select = this.$refs.oltSelect;
-                    this.currentOltId = this.draftOltId;
-                    this.currentBoard = this.draftBoard;
-                    this.currentPort = this.draftPort;
-                    this.currentOltName = select && select.selectedIndex >= 0
-                        ? select.options[select.selectedIndex].text
-                        : this.currentOltName;
-                    this.open = false;
-                },
-                applyGponChannel() {
-                    this.currentGponChannel = this.draftGponChannel;
-                    this.gponChannelOpen = false;
-                },
-                applyDeviceInfo() {
-                    const onuTypeSelect = this.$refs.deviceInfoOnuTypeSelect;
-                    this.currentSerialNumber = this.draftSerialNumber;
-                    this.currentVendor = this.draftVendor;
-                    this.currentModel = this.draftModel;
-                    this.currentFirmware = this.draftFirmware;
-                    this.currentOnuTypeId = this.draftOnuTypeId;
-                    this.currentOnuTypeName = onuTypeSelect && onuTypeSelect.selectedIndex > 0
-                        ? onuTypeSelect.options[onuTypeSelect.selectedIndex].text
-                        : "";
-                    this.deviceInfoOpen = false;
-                },
-                applyLocationDetails() {
-                    const zoneSelect = this.$refs.locationZoneSelect;
-                    const splitterSelect = this.$refs.locationSplitterSelect;
-                    this.currentZoneId = this.draftZoneId;
-                    this.currentZoneName = zoneSelect && zoneSelect.selectedIndex > 0
-                        ? zoneSelect.options[zoneSelect.selectedIndex].text
-                        : "";
-                    this.currentSplitterId = this.draftSplitterId;
-                    this.currentSplitterName = splitterSelect && splitterSelect.selectedIndex > 0
-                        ? splitterSelect.options[splitterSelect.selectedIndex].text
-                        : "";
-                    this.currentSplitterPort = this.draftSplitterPort;
-                    this.currentLocationName = this.draftLocationName;
-                    this.currentAddressComment = this.draftAddressComment;
-                    this.currentContact = this.draftContact;
-                    this.currentLatitude = this.draftLatitude;
-                    this.currentLongitude = this.draftLongitude;
-                    this.locationOpen = false;
-                }
-             }'
-             {% endif %}>
-            <div class="lg:col-span-3 space-y-4">
-                {% if preview_mode %}
-                <div>
-                    <div x-show="open" x-cloak x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                        <div class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
-                             @click.outside="open = false"
-                             @keydown.escape.window="open = false">
-                            <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Move ONU</h3>
-                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Preview only. This modal updates the page summary without saving to the database.</p>
-                                </div>
-                                <button type="button"
-                                        @click="open = false"
-                                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                </button>
-                            </div>
-                            <form class="mt-6 space-y-4" @submit.prevent="applyMove()">
-                                <div>
-                                    <label for="preview-move-olt" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT</label>
-                                    <select id="preview-move-olt"
-                                            x-ref="oltSelect"
-                                            x-model="draftOltId"
-                                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        <option value="">Select OLT</option>
-                                        {% for olt in olt_devices %}
-                                        <option value="{{ olt.id }}">{{ olt.name }}{% if olt.mgmt_ip %} ({{ olt.mgmt_ip }}){% endif %}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                    <div>
-                                        <label for="preview-move-board" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Board</label>
-                                        <input id="preview-move-board"
-                                               type="text"
-                                               x-model="draftBoard"
-                                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    </div>
-                                    <div>
-                                        <label for="preview-move-port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Port</label>
-                                        <input id="preview-move-port"
-                                               type="text"
-                                               x-model="draftPort"
-                                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    </div>
-                                </div>
-                                <div class="flex justify-end gap-3 pt-2">
-                                    <button type="button"
-                                            @click="open = false"
-                                            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                                        Cancel
-                                    </button>
-                                    <button type="submit"
-                                            class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-                                        Update
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                    <div x-show="gponChannelOpen" x-cloak x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                        <div class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
-                             @click.outside="gponChannelOpen = false"
-                             @keydown.escape.window="gponChannelOpen = false">
-                            <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Update GPON channel</h3>
-                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Preview only. This modal updates the page summary without saving to the database.</p>
-                                </div>
-                                <button type="button"
-                                        @click="gponChannelOpen = false"
-                                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                </button>
-                            </div>
-                            <form class="mt-6 space-y-4" @submit.prevent="applyGponChannel()">
-                                <div>
-                                    <label for="preview-gpon-channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300">GPON channel</label>
-                                    <select id="preview-gpon-channel"
-                                            x-model="draftGponChannel"
-                                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        <option value="gpon">GPON</option>
-                                        <option value="xg_pon">XG-PON</option>
-                                        <option value="xgs_pon">XGS-PON</option>
-                                    </select>
-                                </div>
-                                <div class="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
-                                    <p>SmartOLT allocates ONU IDs from the range 0-127 for the GPON channel and from the range 128-255 for the XG/XGS-PON channels.</p>
-                                    <p>Once the 128-255 range is exhausted, it allocates from the 0-127 range for both GPON and XG/XGS-PON channels.</p>
-                                    <p>Hint: XGPON-capable ONUs that were previously authorized on the GPON channel should be changed to the XGPON channel to free up IDs for the GPON ONUs.</p>
-                                </div>
-                                <div class="flex justify-end gap-3 pt-2">
-                                    <button type="button"
-                                            @click="gponChannelOpen = false"
-                                            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                                        Cancel
-                                    </button>
-                                    <button type="submit"
-                                            class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-                                        Update
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                    <div x-show="deviceInfoOpen" x-cloak x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                        <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
-                             @click.outside="deviceInfoOpen = false"
-                             @keydown.escape.window="deviceInfoOpen = false">
-                            <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Update device information</h3>
-                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Preview only. This modal updates the page summary without saving to the database.</p>
-                                </div>
-                                <button type="button"
-                                        @click="deviceInfoOpen = false"
-                                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                </button>
-                            </div>
-                            <form class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2" @submit.prevent="applyDeviceInfo()">
-                                <div>
-                                    <label for="preview-device-serial" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Serial Number</label>
-                                    <input id="preview-device-serial"
-                                           type="text"
-                                           x-model="draftSerialNumber"
-                                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                </div>
-                                <div>
-                                    <label for="preview-device-onu-type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">ONU Type</label>
-                                    <select id="preview-device-onu-type"
-                                            x-ref="deviceInfoOnuTypeSelect"
-                                            x-model="draftOnuTypeId"
-                                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        <option value="">None</option>
-                                        {% for ot in onu_types %}
-                                        <option value="{{ ot.id }}">{{ ot.name }}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label for="preview-device-vendor" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Vendor</label>
-                                    <input id="preview-device-vendor"
-                                           type="text"
-                                           x-model="draftVendor"
-                                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                </div>
-                                <div>
-                                    <label for="preview-device-model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Model</label>
-                                    <input id="preview-device-model"
-                                           type="text"
-                                           x-model="draftModel"
-                                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                </div>
-                                <div class="sm:col-span-2">
-                                    <label for="preview-device-firmware" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Firmware</label>
-                                    <input id="preview-device-firmware"
-                                           type="text"
-                                           x-model="draftFirmware"
-                                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                </div>
-                                <div class="sm:col-span-2 flex justify-end gap-3 pt-2">
-                                    <button type="button"
-                                            @click="deviceInfoOpen = false"
-                                            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                                        Cancel
-                                    </button>
-                                    <button type="submit"
-                                            class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-                                        Update
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                    <div x-show="locationOpen" x-cloak x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-                        <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
-                             @click.outside="locationOpen = false"
-                             @keydown.escape.window="locationOpen = false">
-                            <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Update location details</h3>
-                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Preview only. This modal updates the page summary without saving to the database.</p>
-                                </div>
-                                <button type="button"
-                                        @click="locationOpen = false"
-                                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                </button>
-                            </div>
-                            <form class="mt-6 space-y-6" @submit.prevent="applyLocationDetails()">
-                                <div>
-                                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Network Assignment</p>
-                                    <div class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                        <div>
-                                            <label for="preview-location-zone" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zone</label>
-                                            <select id="preview-location-zone"
-                                                    x-ref="locationZoneSelect"
-                                                    x-model="draftZoneId"
-                                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                                <option value="">None</option>
-                                                {% for zone in zones %}
-                                                <option value="{{ zone.id }}">{{ zone.name }}</option>
-                                                {% endfor %}
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label for="preview-location-splitter" class="block text-sm font-medium text-slate-700 dark:text-slate-300">ODB (Splitter)</label>
-                                            <select id="preview-location-splitter"
-                                                    x-ref="locationSplitterSelect"
-                                                    x-model="draftSplitterId"
-                                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                                <option value="">None</option>
-                                                {% for sp in splitters %}
-                                                <option value="{{ sp.id }}">{{ sp.name }}{% if sp.splitter_ratio %} ({{ sp.splitter_ratio }}){% endif %}</option>
-                                                {% endfor %}
-                                            </select>
-                                        </div>
-                                        <div class="sm:col-span-2">
-                                            <label for="preview-location-splitter-port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">ODB Port</label>
-                                            <input id="preview-location-splitter-port"
-                                                   type="text"
-                                                   x-model="draftSplitterPort"
-                                                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        </div>
-                                    </div>
-                                </div>
-                                <div>
-                                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Identification</p>
-                                    <div class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                        <div class="sm:col-span-2">
-                                            <label for="preview-location-name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name</label>
-                                            <input id="preview-location-name"
-                                                   type="text"
-                                                   x-model="draftLocationName"
-                                                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        </div>
-                                        <div class="sm:col-span-2">
-                                            <label for="preview-location-address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Address or comment</label>
-                                            <textarea id="preview-location-address"
-                                                      x-model="draftAddressComment"
-                                                      rows="3"
-                                                      class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
-                                        </div>
-                                        <div class="sm:col-span-2">
-                                            <label for="preview-location-contact" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contact</label>
-                                            <input id="preview-location-contact"
-                                                   type="text"
-                                                   x-model="draftContact"
-                                                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        </div>
-                                    </div>
-                                </div>
-                                <div>
-                                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">GPS Location</p>
-                                    <div class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                                        <div>
-                                            <label for="preview-location-latitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Latitude</label>
-                                            <input id="preview-location-latitude"
-                                                   type="text"
-                                                   x-model="draftLatitude"
-                                                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        </div>
-                                        <div>
-                                            <label for="preview-location-longitude" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Longitude</label>
-                                            <input id="preview-location-longitude"
-                                                   type="text"
-                                                   x-model="draftLongitude"
-                                                   class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="flex justify-end gap-3 pt-2">
-                                    <button type="button"
-                                            @click="locationOpen = false"
-                                            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                                        Cancel
-                                    </button>
-                                    <button type="submit"
-                                            class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
-                                        Update
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
-
-                {# Device Information #}
-                {% set device_info_actions = none %}
-                {% call card("Device Information", color="blue", actions=device_info_actions) %}
-                <div class="space-y-4">
-                    <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" {% if preview_mode %}x-text="currentSerialNumber || '-'"{% endif %}>{{ display_serial_label }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentVendor || '-'"{% endif %}>{{ ont.vendor or '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentModel || '-'"{% endif %}>{{ ont.model or '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" {% if preview_mode %}x-text="currentFirmware || '-'"{% endif %}>{{ ont.firmware_version or '-' }}</dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">ONU Type</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentOnuTypeName || '-'"{% endif %}>{{ ont.onu_type.name if ont.onu_type else '-' }}</dd>
-                        </div>
-                        {% if ont.notes %}
-                        <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ ont.notes }}</dd>
-                        </div>
-                        {% endif %}
-                    </dl>
-                    <details class="border-t border-slate-200 pt-4 dark:border-slate-700">
-                        <summary class="cursor-pointer list-none inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
-                            <span>See more</span>
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                        </summary>
-                        <div class="mt-4 space-y-4">
-                            <div>
-                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Device ID</p>
-                                <p class="text-sm text-slate-900 dark:text-white font-mono">{{ ont.id | string | truncate(20, True, '...') }}</p>
-                            </div>
-                            {% if signal_info and signal_info.offline_reason_display %}
-                            <div>
-                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Offline Reason</p>
-                                <p class="text-sm text-rose-600 dark:text-rose-400">{{ signal_info.offline_reason_display }}</p>
-                            </div>
-                            {% endif %}
-                            {% if signal_info and signal_info.last_seen_at %}
-                            <div>
-                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Seen Online</p>
-                                <p class="text-sm text-slate-900 dark:text-white">{{ signal_info.last_seen_at.strftime('%Y-%m-%d %H:%M') }}</p>
-                            </div>
-                            {% endif %}
-                            <div>
-                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                                <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '—' }}</p>
-                            </div>
-                        </div>
-                    </details>
-                </div>
-                {% endcall %}
-
-                {% if desired_config_summary is defined %}
-                {% set desired_config_actions %}
-                <a href="{{ desired_config_summary.configure_url }}"
-                   class="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
-                    Configure
-                </a>
-                {% endset %}
-                {% call card("Configured Service", color="blue", actions=desired_config_actions) %}
-                <div class="space-y-3">
-                    <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                        {% for item in desired_config_summary.rows %}
-                        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-                            <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ item.label }}</dt>
-                            <dd class="mt-1 truncate text-sm text-slate-900 dark:text-white {{ item.value_class }}" title="{{ item.value }}">{{ item.value }}</dd>
-                        </div>
-                        {% endfor %}
-                    </dl>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">
-                        Password fields are masked on overview. Use the configuration actions to update credentials.
-                    </p>
-                </div>
-                {% endcall %}
-                {% endif %}
-
-                {% if last_config_summary is defined %}
-                {% set last_config_actions %}
-                <div class="flex items-center gap-2">
-                    <form hx-post="/admin/network/onts/{{ ont.id }}/config/refresh"
-                          hx-swap="none"
-                          data-network-action
-                          data-loading-label="Refreshing...">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit"
-                                class="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                            <span data-network-action-label>Refresh</span>
-                        </button>
-                    </form>
-                    <a href="{{ last_config_summary.configure_url }}"
-                       class="rounded-md bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700">
-                        Configure
-                    </a>
-                </div>
-                {% endset %}
-                {% call card("Last Known Config", color="indigo", actions=last_config_actions) %}
-                {% if last_config_summary.has_snapshot %}
-                <div class="space-y-4">
-                    <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                        {% for item in last_config_summary.metrics %}
-                        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-                            <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ item.label }}</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white {{ item.value_class }}">{{ item.value }}</dd>
-                        </div>
-                        {% endfor %}
-                    </dl>
-                    <details class="border-t border-slate-200 pt-3 dark:border-slate-700">
-                        <summary class="cursor-pointer list-none inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
-                            <span>More config state</span>
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                        </summary>
-                        <dl class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                            {% for item in last_config_summary.details %}
-                            <div>
-                                <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ item.label }}</dt>
-                                <dd class="mt-1 text-sm text-slate-900 dark:text-white {{ item.value_class }}">{{ item.value }}</dd>
-                            </div>
-                            {% endfor %}
-                        </dl>
-                    </details>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">
-                        Cached at {{ last_config_summary.fetched_at_display }}
-                    </p>
-                </div>
-                {% else %}
-                <div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm dark:border-slate-700 dark:bg-slate-800/50">
-                    <p class="font-medium text-slate-900 dark:text-white">{{ last_config_summary.empty_message }}</p>
-                    <p class="mt-1 text-slate-500 dark:text-slate-400">{{ last_config_summary.empty_hint }}</p>
-                </div>
-                {% endif %}
-                {% endcall %}
-                {% endif %}
-
-            </div>
-        </div>
-    </div>
-
-    {# ===================== EFFECTIVE CONFIG TAB ===================== #}
-    <div x-show="activeTab === 'effective-config'" x-transition x-cloak role="tabpanel" id="panel-effective-config" aria-labelledby="tab-effective-config">
-        <div class="space-y-4">
-            {# Current Assignment #}
+    {# ═══════════════════════════════════════════════════════════════════════════
+       STATUS TAB — Assignment, Service, Runtime, Connected Devices
+       ═══════════════════════════════════════════════════════════════════════════ #}
+    <div x-show="activeTab === 'status'" x-transition role="tabpanel" id="panel-status" aria-labelledby="tab-status" class="space-y-4">
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {# Assignment Card #}
+            {% call card("Assignment", color="blue") %}
             {% if assignment %}
-            {% call card("Current Assignment", color="blue") %}
-            <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
                     <dd class="mt-1 text-sm text-slate-900 dark:text-white">
@@ -855,220 +385,241 @@
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">PON Port</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.pon_port.name if assignment.pon_port else '—' }}</dd>
-                </div>
-                <div>
-                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned Date</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.assigned_at.strftime('%b %d, %Y') if assignment.assigned_at else '—' }}</dd>
+                    <dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ assignment.pon_port.name if assignment.pon_port else '—' }}</dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
                     <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                         {% if subscriber_info and subscriber_info.id %}
-                        <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">{{ subscriber_info.name }}</a>
+                        <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="text-violet-600 hover:text-violet-800 dark:text-violet-400">{{ subscriber_info.name }}</a>
                         {% else %}&mdash;{% endif %}
                     </dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscription</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                        {% if subscriber_info and subscriber_info.plan_name %}
-                        {{ subscriber_info.plan_name }}
-                        {% else %}&mdash;{% endif %}
-                    </dd>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ subscriber_info.plan_name if subscriber_info and subscriber_info.plan_name else '—' }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.assigned_at.strftime('%b %d, %Y') if assignment.assigned_at else '—' }}</dd>
                 </div>
                 {% if assignment.service_address %}
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Service Address</dt>
                     <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                        {{ assignment.service_address.line1 or '' }}{% if assignment.service_address.line2 %}, {{ assignment.service_address.line2 }}{% endif %}<br>
-                        {{ assignment.service_address.city or '' }}{% if assignment.service_address.state %}, {{ assignment.service_address.state }}{% endif %} {{ assignment.service_address.postal_code or '' }}
+                        {{ assignment.service_address.line1 or '' }}{% if assignment.service_address.line2 %}, {{ assignment.service_address.line2 }}{% endif %}
                     </dd>
                 </div>
                 {% endif %}
             </dl>
-            {% if assignment.notes %}
-            <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/60">
-                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Assignment Notes</p>
-                <p class="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">{{ assignment.notes }}</p>
-            </div>
-            {% endif %}
-            {# Assignment Actions #}
-            <div class="mt-4 flex items-center justify-end gap-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+            <div class="mt-4 flex items-center gap-2 border-t border-slate-200 pt-4 dark:border-slate-700">
                 <a href="/admin/network/onts/{{ ont.id }}/assignments/{{ assignment.id }}/edit"
                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-                    </svg>
-                    Edit Assignment
+                    Edit
                 </a>
                 <form method="POST" action="/admin/network/onts/{{ ont.id }}/assignments/{{ assignment.id }}/remove" class="inline">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
-                            onclick="return confirm('Remove this subscriber assignment? The ONT will remain but won\\'t be linked to a subscriber.')"
+                            onclick="return confirm('Remove this subscriber assignment?')"
                             class="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-600/50 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20">
-                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7a4 4 0 11-8 0 4 4 0 018 0zM9 14a6 6 0 00-6 6v1h12v-1a6 6 0 00-6-6zM21 12h-6"/>
-                        </svg>
-                        Remove Assignment
+                        Remove
                     </button>
                 </form>
             </div>
-            {% endcall %}
             {% else %}
-            {% call card("Current Assignment", color="blue") %}
             <div class="text-center py-6">
-                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
                 </svg>
                 <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">Not assigned</h3>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This ONT is not currently assigned to a subscriber.</p>
-                <div class="mt-4">
-                    <a href="/admin/network/onts/{{ ont.id }}/assign" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
-                        </svg>
-                        Assign to Subscriber
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This ONT is not assigned to a subscriber.</p>
+                <div class="mt-3">
+                    <a href="/admin/network/onts/{{ ont.id }}/assign" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
+                        Assign Subscriber
                     </a>
                 </div>
             </div>
-            {% endcall %}
             {% endif %}
-        </div>
-    </div>
-
-    {# ===================== OBSERVED STATE TAB ===================== #}
-    <div x-show="activeTab === 'observed-state'" x-transition x-cloak role="tabpanel" id="panel-observed-state" aria-labelledby="tab-observed-state"
-         hx-get="/admin/network/onts/{{ ont.id }}/topology"
-         hx-trigger="intersect once"
-         hx-swap="innerHTML">
-        <div class="flex items-center justify-center py-12">
-            <svg class="h-8 w-8 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading topology...</span>
-        </div>
-    </div>
-
-    {# ===================== HISTORY TAB ===================== #}
-    <div x-show="activeTab === 'history'" x-transition x-cloak role="tabpanel" id="panel-history" aria-labelledby="tab-history">
-        <div class="space-y-4">
-            {# Past Assignments #}
-            {% if past_assignments %}
-            {% call card("Past Assignments", color="slate") %}
-            {% call data_table() %}
-                {{ table_head(["PON Port", "OLT", "Subscriber", "Assigned", "Notes"]) }}
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% for pa in past_assignments %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '—' }}</td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
-                            {% if pa.pon_port and pa.pon_port.olt %}{{ pa.pon_port.olt.name }}{% else %}&mdash;{% endif %}
-                        </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
-                            {% if pa.subscriber %}
-                            <a href="/admin/customers/{{ 'business/' ~ pa.subscriber.id if pa.subscriber.is_business else 'person/' ~ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
-                                {{ pa.subscriber.name if pa.subscriber else 'Subscriber' }}
-                            </a>
-                            {% else %}&mdash;{% endif %}
-                        </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '—' }}</td>
-                        <td class="px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ pa.notes or '—' }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            {% endcall %}
-            {% endcall %}
-            {% endif %}
-
-            {# Network Operations #}
-            {% call card("Network Operations", color="blue") %}
-            {% include "admin/network/_operations_history.html" %}
             {% endcall %}
 
-            {% call card("Rollback Cleanup", color="amber") %}
-            {% if compensation_failures %}
-            <div class="space-y-3">
-                {% for failure in compensation_failures %}
-                <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-800/60">
-                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div class="min-w-0 space-y-2">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ failure.step_name | replace('_', ' ') | title }}</p>
-                                {% set status_classes = {
-                                    'pending': 'bg-amber-100 text-amber-800 ring-amber-600/20 dark:bg-amber-500/15 dark:text-amber-200',
-                                    'resolved': 'bg-emerald-100 text-emerald-800 ring-emerald-600/20 dark:bg-emerald-500/15 dark:text-emerald-200',
-                                    'abandoned': 'bg-slate-100 text-slate-700 ring-slate-600/20 dark:bg-slate-500/15 dark:text-slate-200'
-                                } %}
-                                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset {{ status_classes.get(failure.status, status_classes['pending']) }}">{{ failure.status | replace('_', ' ') | title }}</span>
-                                {% if failure.retry_due and failure.status == 'pending' %}
-                                <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800 ring-1 ring-inset ring-red-600/20 dark:bg-red-500/15 dark:text-red-200">Retry Due</span>
-                                {% endif %}
-                            </div>
-                            <p class="text-sm text-slate-600 dark:text-slate-300">{{ failure.description }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ failure.error_message }}</p>
-                            <dl class="grid grid-cols-1 gap-2 text-xs text-slate-500 dark:text-slate-400 sm:grid-cols-2 xl:grid-cols-4">
-                                <div><dt class="font-medium uppercase tracking-wide">Attempts</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.failure_count }}</dd></div>
-                                <div><dt class="font-medium uppercase tracking-wide">Last Attempt</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.last_attempted_at.strftime('%b %d, %Y %H:%M') if failure.last_attempted_at else '—' }}</dd></div>
-                                <div><dt class="font-medium uppercase tracking-wide">Next Retry</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.next_retry_at.strftime('%b %d, %Y %H:%M') if failure.next_retry_at else '—' }}</dd></div>
-                                <div><dt class="font-medium uppercase tracking-wide">Resolved By</dt><dd class="mt-1 text-slate-700 dark:text-slate-200">{{ failure.resolved_by or '—' }}</dd></div>
-                            </dl>
-                        </div>
-                        {% if failure.status == 'pending' %}
-                        <div class="flex flex-wrap gap-2 lg:justify-end">
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/retry">
-                                <button type="submit" class="inline-flex items-center justify-center rounded-md bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900">Retry Now</button>
-                            </form>
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/resolve">
-                                <button type="submit" class="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700 dark:focus:ring-offset-slate-900">Mark Resolved</button>
-                            </form>
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/abandon">
-                                <button type="submit" class="inline-flex items-center justify-center rounded-md border border-rose-300 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:border-rose-700 dark:text-rose-200 dark:hover:bg-rose-900/30 dark:focus:ring-offset-slate-900">Abandon</button>
-                            </form>
-                        </div>
-                        {% endif %}
-                    </div>
+            {# Service Status Card #}
+            {% call card("Service Status", color="teal") %}
+            {% if desired_config_summary is defined %}
+            <dl class="grid grid-cols-2 gap-3">
+                {% for item in desired_config_summary.rows[:6] %}
+                <div>
+                    <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{{ item.label }}</dt>
+                    <dd class="mt-1 truncate text-sm text-slate-900 dark:text-white {{ item.value_class }}" title="{{ item.value }}">{{ item.value }}</dd>
                 </div>
                 {% endfor %}
+            </dl>
+            <div class="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                <a href="{{ desired_config_summary.configure_url }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400">
+                    View full configuration &rarr;
+                </a>
             </div>
             {% else %}
-            {{ empty_state("No rollback cleanup pending", "Automatic compensation retries are healthy for this ONT.") }}
-            {% endif %}
-            {% endcall %}
-
-            {# Activity Log #}
-            {% call card("Recent Activity", color="slate") %}
-            {% if activities %}
-            <div class="space-y-3">
-                {% for activity in activities %}
-                <div class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
-                    <div>
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
-                        {% if activity.description %}
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
-                        {% endif %}
-                    </div>
-                    {% if activity.occurred_at %}
-                    <span class="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</span>
-                    {% endif %}
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            {{ empty_state("No activity yet", "Activity for this ONT will appear here as changes are made.") }}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No service configuration defined.</p>
             {% endif %}
             {% endcall %}
         </div>
+
+        {# Runtime State Card #}
+        {% call card("Runtime State", color="indigo") %}
+        {% set runtime = observed_runtime_summary if observed_runtime_summary is defined else {} %}
+        {% if runtime.get('has_runtime') %}
+        <dl class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('mac_address') or '—' }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('wan_ip') or '—' }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('pppoe_user') or '—' }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ runtime.get('pppoe_status') or '—' }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (runtime.get('wan_mode') or '—') | replace('_', ' ') | title }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('lan_ip') or '—' }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('wifi_clients') if runtime.get('wifi_clients') is not none else '—' }}</dd></div>
+            <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('customer_devices') if runtime.get('customer_devices') is not none else '—' }}</dd></div>
+        </dl>
+        <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Updated: {{ runtime.get('updated_at_display') or '—' }}</p>
+        {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">No runtime data available. Use "Get Config from Device" to fetch live state.</p>
+        {% endif %}
+        {% endcall %}
+
+        {# Connected Devices / LAN Hosts #}
+        <div id="lan-hosts-content"
+             hx-get="/admin/network/onts/{{ ont.id }}/lan-hosts"
+             hx-trigger="intersect once"
+             hx-swap="innerHTML">
+            <div class="flex items-center justify-center py-8">
+                <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-2 text-sm text-slate-400">Loading connected devices...</span>
+            </div>
+        </div>
+
+        {# Topology / Network diagram (lazy loaded) #}
+        <div id="topology-content"
+             hx-get="/admin/network/onts/{{ ont.id }}/topology"
+             hx-trigger="intersect once"
+             hx-swap="innerHTML">
+            <div class="flex items-center justify-center py-8">
+                <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-2 text-sm text-slate-400">Loading topology...</span>
+            </div>
+        </div>
     </div>
 
-    {# Desired config, provisioning actions, and destructive controls live with effective config. #}
-    <div x-show="activeTab === 'effective-config'" x-transition x-cloak class="space-y-4">
+    {# ═══════════════════════════════════════════════════════════════════════════
+       CONFIG TAB — Device info, Service config, Network settings, Danger zone
+       ═══════════════════════════════════════════════════════════════════════════ #}
+    <div x-show="activeTab === 'config'" x-transition x-cloak role="tabpanel" id="panel-config" aria-labelledby="tab-config" class="space-y-4">
+        {# Device Information Card #}
+        {% call card("Device Information", color="blue") %}
+        <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ display_serial_label }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.firmware_version or '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">ONU Type</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.onu_type.name if ont.onu_type else '-' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Device ID</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono text-xs">{{ ont.id | string | truncate(24, True, '...') }}</dd>
+            </div>
+            {% if ont.notes %}
+            <div class="sm:col-span-2 lg:col-span-3">
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ ont.notes }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+        <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+            <a href="/admin/network/onts/{{ ont.id }}/edit" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400">
+                Edit device information &rarr;
+            </a>
+        </div>
+        {% endcall %}
+
+        {# Location Card #}
+        {% call card("Location", color="violet") %}
+        <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Zone</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.zone.name if ont.zone else '—' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">ODB (Splitter)</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.splitter.name if ont.splitter else '—' }}{% if ont.splitter_port_id %} Port {{ ont.splitter_port_id }}{% endif %}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Location Name</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.name or '—' }}</dd>
+            </div>
+            <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Address / Comment</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ location_address_or_comment or '—' }}</dd>
+            </div>
+            {% if ont.gps_latitude and ont.gps_longitude %}
+            <div class="sm:col-span-2">
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">GPS Coordinates</dt>
+                <dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.gps_latitude }}, {{ ont.gps_longitude }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+        {% endcall %}
+
+        {# Service Configuration - Unified config partial #}
         <div id="device-config-content" aria-live="polite" aria-atomic="false">
             {% include "admin/network/onts/_unified_config.html" %}
         </div>
 
-        {# Danger Zone — destructive / recoverable actions live here, not in the header #}
+        {# OLT Running Config (lazy loaded) #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
+             x-data="{ showConfig: false }">
+            <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
+                        <svg class="h-5 w-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">OLT Running Config</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">View this ONT's configuration as stored on the OLT</p>
+                    </div>
+                </div>
+                <button type="button"
+                        @click="showConfig = !showConfig"
+                        hx-get="/admin/network/onts/{{ ont.id }}/running-config"
+                        hx-target="#running-config-content"
+                        hx-trigger="click once"
+                        hx-swap="innerHTML"
+                        :class="showConfig ? 'bg-slate-200 dark:bg-slate-600' : 'hover:bg-slate-100 dark:hover:bg-slate-700'"
+                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors dark:border-slate-600 dark:text-slate-200">
+                    <span x-text="showConfig ? 'Hide' : 'Show'">Show</span>
+                </button>
+            </div>
+            <div id="running-config-content" x-show="showConfig" x-collapse x-cloak class="px-5 py-4">
+                <div class="flex items-center justify-center py-8 text-sm text-slate-500 dark:text-slate-400">
+                    <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Loading configuration from OLT...
+                </div>
+            </div>
+        </div>
+
+        {# Danger Zone #}
         <section aria-labelledby="danger-zone-heading"
                  class="rounded-xl border border-rose-200 bg-rose-50/50 dark:border-rose-900/50 dark:bg-rose-950/20">
             <header class="flex items-baseline justify-between gap-3 border-b border-rose-200 px-4 py-3 dark:border-rose-900/50">
@@ -1076,26 +627,26 @@
                 <span class="text-xs text-rose-700/80 dark:text-rose-300/70">These actions affect live service.</span>
             </header>
             <div class="divide-y divide-rose-200/70 dark:divide-rose-900/40">
-                {# Return to inventory — recoverable, amber #}
+                {# Return to inventory #}
                 <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div class="max-w-xl">
                         <h3 class="text-sm font-medium text-slate-900 dark:text-slate-100">Return to inventory</h3>
-                        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">Clears the subscriber assignment and marks the ONT as available. The device itself keeps its current configuration — reassign it to a new customer to provision again.</p>
+                        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">Clears the subscriber assignment and marks the ONT as available.</p>
                     </div>
                     <button type="button"
                             hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
                             hx-swap="none"
                             hx-disabled-elt="this"
-                            class="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 shadow-sm hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:border-amber-700/50 dark:bg-slate-900 dark:text-amber-400 dark:hover:bg-amber-950/30">
+                            class="inline-flex shrink-0 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 shadow-sm hover:bg-amber-50 dark:border-amber-700/50 dark:bg-slate-900 dark:text-amber-400 dark:hover:bg-amber-950/30">
                         Return to inventory
                     </button>
                 </div>
-                {# Factory reset — irreversible, typed-SERIAL confirm #}
+                {# Factory reset #}
                 <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
                      x-data="{ armed: false, typed: '', expected: {{ ont.serial_number | tojson }} }">
                     <div class="max-w-xl">
                         <h3 class="text-sm font-medium text-slate-900 dark:text-slate-100">Factory reset</h3>
-                        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">Erases all configuration on the ONT and reboots it. PPPoE, Wi-Fi, VLANs, firmware customizations — all gone. The device returns to vendor defaults.</p>
+                        <p class="mt-0.5 text-xs text-slate-600 dark:text-slate-400">Erases all configuration on the ONT and reboots it.</p>
                         <div x-show="armed" x-cloak x-transition class="mt-2">
                             <label class="block text-xs font-medium text-slate-700 dark:text-slate-300">Type the serial number to confirm:
                                 <code class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-900 dark:bg-slate-800 dark:text-slate-100">{{ ont.serial_number }}</code>
@@ -1104,7 +655,6 @@
                                    x-model="typed"
                                    autocomplete="off"
                                    spellcheck="false"
-                                   placeholder="{{ ont.serial_number }}"
                                    class="mt-1.5 w-full rounded-md border border-rose-300 bg-white px-2.5 py-1.5 font-mono text-sm text-slate-900 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 dark:border-rose-700/50 dark:bg-slate-900 dark:text-slate-100">
                         </div>
                     </div>
@@ -1118,8 +668,8 @@
                         <button type="button"
                                 x-show="!armed"
                                 @click="armed = true; $nextTick(() => $root.querySelector('input').focus())"
-                                class="inline-flex items-center rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 shadow-sm hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:border-rose-700/50 dark:bg-slate-900 dark:text-rose-400 dark:hover:bg-rose-950/30">
-                            Factory reset…
+                                class="inline-flex items-center rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-700/50 dark:bg-slate-900 dark:text-rose-400 dark:hover:bg-rose-950/30">
+                            Factory reset...
                         </button>
                         <button type="button"
                                 x-show="armed"
@@ -1137,114 +687,131 @@
         </section>
     </div>
 
-    {# Diagnostics are observed state, not a separate destination. #}
-    <div x-show="activeTab === 'observed-state'" x-transition x-cloak>
-        <div class="space-y-4">
-            {% call card("Live State", color="indigo") %}
-            {% set runtime = observed_runtime_summary if observed_runtime_summary is defined else {} %}
-            {% if runtime.get('has_runtime') %}
-            <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('mac_address') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('wan_ip') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('pppoe_user') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ runtime.get('pppoe_status') or '—' }}</dd></div>
+    {# ═══════════════════════════════════════════════════════════════════════════
+       HISTORY TAB — Assignments, Operations, Rollback, Activity
+       ═══════════════════════════════════════════════════════════════════════════ #}
+    <div x-show="activeTab === 'history'" x-transition x-cloak role="tabpanel" id="panel-history" aria-labelledby="tab-history" class="space-y-4">
+        {# Past Assignments #}
+        {% if past_assignments %}
+        {% call card("Past Assignments", color="slate") %}
+        {% call data_table() %}
+            {{ table_head(["PON Port", "OLT", "Subscriber", "Assigned", "Notes"]) }}
+            <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                {% for pa in past_assignments %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '—' }}</td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                        {% if pa.pon_port and pa.pon_port.olt %}{{ pa.pon_port.olt.name }}{% else %}&mdash;{% endif %}
+                    </td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
+                        {% if pa.subscriber %}
+                        <a href="/admin/customers/{{ 'business/' ~ pa.subscriber.id if pa.subscriber.is_business else 'person/' ~ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
+                            {{ pa.subscriber.name if pa.subscriber else 'Subscriber' }}
+                        </a>
+                        {% else %}&mdash;{% endif %}
+                    </td>
+                    <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '—' }}</td>
+                    <td class="px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ pa.notes or '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        {% endcall %}
+        {% endcall %}
+        {% endif %}
+
+        {# Network Operations #}
+        {% call card("Network Operations", color="blue") %}
+        {% include "admin/network/_operations_history.html" %}
+        {% endcall %}
+
+        {# Rollback Cleanup #}
+        {% call card("Rollback Cleanup", color="amber") %}
+        {% if compensation_failures %}
+        <div class="space-y-3">
+            {% for failure in compensation_failures %}
+            <div class="rounded-lg border border-slate-200 bg-white px-4 py-4 dark:border-slate-700 dark:bg-slate-800/60">
+                <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div class="min-w-0 space-y-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ failure.step_name | replace('_', ' ') | title }}</p>
+                            {% set status_classes = {
+                                'pending': 'bg-amber-100 text-amber-800 ring-amber-600/20 dark:bg-amber-500/15 dark:text-amber-200',
+                                'resolved': 'bg-emerald-100 text-emerald-800 ring-emerald-600/20 dark:bg-emerald-500/15 dark:text-emerald-200',
+                                'abandoned': 'bg-slate-100 text-slate-700 ring-slate-600/20 dark:bg-slate-500/15 dark:text-slate-200'
+                            } %}
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset {{ status_classes.get(failure.status, status_classes['pending']) }}">{{ failure.status | replace('_', ' ') | title }}</span>
+                        </div>
+                        <p class="text-sm text-slate-600 dark:text-slate-300">{{ failure.description }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ failure.error_message }}</p>
+                    </div>
+                    {% if failure.status == 'pending' %}
+                    <div class="flex flex-wrap gap-2 lg:justify-end">
+                        <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/retry">
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700">Retry Now</button>
+                        </form>
+                        <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/resolve">
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Mark Resolved</button>
+                        </form>
+                        <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/abandon">
+                            <button type="submit" class="inline-flex items-center justify-center rounded-md border border-rose-300 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-200 dark:hover:bg-rose-900/30">Abandon</button>
+                        </form>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        {{ empty_state("No rollback cleanup pending", "Automatic compensation retries are healthy for this ONT.") }}
+        {% endif %}
+        {% endcall %}
+
+        {# Activity Log #}
+        {% call card("Recent Activity", color="slate") %}
+        {% if activities %}
+        <div class="space-y-3">
+            {% for activity in activities %}
+            <div class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
                 <div>
-                    <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</dt>
-                    {% set wan_mode_value = runtime.get('wan_mode') %}
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</dd>
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
+                    {% if activity.description %}
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
+                    {% endif %}
                 </div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ runtime.get('lan_ip') or '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('wifi_clients') if runtime.get('wifi_clients') is not none else '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ runtime.get('customer_devices') if runtime.get('customer_devices') is not none else '—' }}</dd></div>
-            </dl>
-            <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                Runtime updated from ACS: {{ runtime.get('updated_at_display') or '—' }}
+                {% if activity.occurred_at %}
+                <span class="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</span>
+                {% endif %}
             </div>
-            {% else %}
-            <p class="text-sm text-slate-500 dark:text-slate-400">No runtime snapshot yet. Refresh TR-069 data to collect live state.</p>
-            {% endif %}
-            {% endcall %}
+            {% endfor %}
+        </div>
+        {% else %}
+        {{ empty_state("No activity yet", "Activity for this ONT will appear here as changes are made.") }}
+        {% endif %}
+        {% endcall %}
 
-            {# Show Running Config from OLT #}
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
-                 x-data="{ showConfig: false }">
-                <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
-                            <svg class="h-5 w-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                            </svg>
-                        </div>
-                        <div>
-                            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">OLT Running Config</h3>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">View this ONT's configuration as stored on the OLT</p>
-                        </div>
-                    </div>
-                    <button type="button"
-                            @click="showConfig = !showConfig"
-                            hx-get="/admin/network/onts/{{ ont.id }}/running-config"
-                            hx-target="#running-config-content"
-                            hx-trigger="click once"
-                            hx-swap="innerHTML"
-                            :class="showConfig ? 'bg-slate-200 dark:bg-slate-600' : 'hover:bg-slate-100 dark:hover:bg-slate-700'"
-                            class="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors dark:border-slate-600 dark:text-slate-200">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                        </svg>
-                        <span x-text="showConfig ? 'Hide' : 'Show'">Show</span>
-                    </button>
-                </div>
-                <div id="running-config-content" x-show="showConfig" x-collapse x-cloak class="px-5 py-4">
-                    <div class="flex items-center justify-center py-8 text-sm text-slate-500 dark:text-slate-400">
-                        <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                        Loading configuration from OLT...
-                    </div>
-                </div>
+        {# Charts (lazy loaded) #}
+        <div id="charts-content"
+             hx-get="/admin/network/onts/{{ ont.id }}/charts"
+             hx-trigger="intersect once"
+             hx-swap="innerHTML"
+             aria-live="polite"
+             aria-atomic="false">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
             </div>
+        </div>
 
-            <div id="charts-content"
-                 hx-get="/admin/network/onts/{{ ont.id }}/charts"
-                 hx-trigger="intersect once"
-                 hx-swap="innerHTML"
-                 aria-live="polite"
-                 aria-atomic="false">
-                <div class="flex items-center justify-center py-12">
-                    <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
-                </div>
-            </div>
-
-            <div id="tr069-content"
-                 hx-get="/admin/network/onts/{{ ont.id }}/tr069"
-                 hx-trigger="intersect once"
-                 hx-swap="innerHTML"
-                 aria-live="polite"
-                 aria-atomic="false">
-                <div class="flex items-center justify-center py-12">
-                    <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading TR-069 data...</span>
-                </div>
-            </div>
-
-            <div id="lan-hosts-content"
-                 hx-get="/admin/network/onts/{{ ont.id }}/lan-hosts"
-                 hx-trigger="intersect once"
-                 hx-swap="innerHTML">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-400">Loading LAN hosts...</span>
-                </div>
-            </div>
-
-            <div id="ethernet-ports-content"
-                 hx-get="/admin/network/onts/{{ ont.id }}/ethernet-ports"
-                 hx-trigger="intersect once"
-                 hx-swap="innerHTML">
-                <div class="flex items-center justify-center py-8">
-                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span class="ml-2 text-sm text-slate-400">Loading Ethernet ports...</span>
-                </div>
+        {# TR-069 Data (lazy loaded) #}
+        <div id="tr069-content"
+             hx-get="/admin/network/onts/{{ ont.id }}/tr069"
+             hx-trigger="intersect once"
+             hx-swap="innerHTML"
+             aria-live="polite"
+             aria-atomic="false">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading TR-069 data...</span>
             </div>
         </div>
     </div>
@@ -1253,7 +820,9 @@
 {# Modal container for HTMX-loaded modals #}
 <div id="modal-container"></div>
 
-{# Keyboard shortcuts — NOC workflow accelerator #}
+{# ═══════════════════════════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+   ═══════════════════════════════════════════════════════════════════════════ #}
 <div x-data="{
         cheatOpen: false,
         chord: null,
@@ -1284,9 +853,8 @@
                 this.chord = null;
                 clearTimeout(this.chordTimer);
                 if (key === 'o') { e.preventDefault(); this.goto('/admin/network/onts'); return; }
-                if (key === 's') { e.preventDefault(); this.switchTab('summary'); return; }
-                if (key === 'c') { e.preventDefault(); this.switchTab('effective-config'); return; }
-                if (key === 'd') { e.preventDefault(); this.switchTab('observed-state'); return; }
+                if (key === 's') { e.preventDefault(); this.switchTab('status'); return; }
+                if (key === 'c') { e.preventDefault(); this.switchTab('config'); return; }
                 if (key === 'h') { e.preventDefault(); this.switchTab('history'); return; }
                 return;
             }
@@ -1296,10 +864,9 @@
                 this.chordTimer = setTimeout(() => { this.chord = null; }, 1200);
                 return;
             }
-            if (key === '1') { e.preventDefault(); this.switchTab('summary'); return; }
-            if (key === '2') { e.preventDefault(); this.switchTab('effective-config'); return; }
-            if (key === '3') { e.preventDefault(); this.switchTab('observed-state'); return; }
-            if (key === '4') { e.preventDefault(); this.switchTab('history'); return; }
+            if (key === '1') { e.preventDefault(); this.switchTab('status'); return; }
+            if (key === '2') { e.preventDefault(); this.switchTab('config'); return; }
+            if (key === '3') { e.preventDefault(); this.switchTab('history'); return; }
             if (key === 'r') { e.preventDefault(); location.reload(); return; }
             if (key === 'c') { e.preventDefault(); this.click('a[data-kbd=\'c\']'); return; }
             if (key === 'a') { e.preventDefault(); this.click('button[type=\'submit\']:not([disabled])'); return; }
@@ -1307,7 +874,7 @@
      }"
      @keydown.window="handle($event)">
 
-    {# Floating hint button — unobtrusive #}
+    {# Floating hint button #}
     <button type="button"
             @click="cheatOpen = true"
             aria-label="Keyboard shortcuts"
@@ -1330,10 +897,9 @@
             </header>
             <div class="grid grid-cols-1 gap-x-6 gap-y-1.5 px-4 py-3 text-xs text-slate-700 sm:grid-cols-2 dark:text-slate-300">
                 <div class="col-span-full mb-1 font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">Navigation</div>
-                <div class="flex items-baseline justify-between gap-3"><span>Summary</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">1</kbd></div>
-                <div class="flex items-baseline justify-between gap-3"><span>Effective Config</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">2</kbd></div>
-                <div class="flex items-baseline justify-between gap-3"><span>Observed State</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">3</kbd></div>
-                <div class="flex items-baseline justify-between gap-3"><span>History</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">4</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Status</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">1</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>Config</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">2</kbd></div>
+                <div class="flex items-baseline justify-between gap-3"><span>History</span><kbd class="font-mono text-[11px] rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">3</kbd></div>
                 <div class="flex items-baseline justify-between gap-3"><span>Back to ONT list</span><span class="font-mono text-[11px]"><kbd class="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">g</kbd> <kbd class="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">o</kbd></span></div>
 
                 <div class="col-span-full mb-1 mt-3 font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</div>

@@ -15,6 +15,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from sqlalchemy import select
+
+from app.models.network import OntConfigOverride
+from app.services.credential_crypto import decrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_provisioning.result import StepResult
@@ -28,6 +32,26 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+def _get_wifi_password(ctx: SagaContext) -> str | None:
+    """Get wifi password from OntConfigOverride."""
+    if ctx.ont is None:
+        return None
+    override = ctx.db.scalars(
+        select(OntConfigOverride)
+        .where(OntConfigOverride.ont_unit_id == ctx.ont.id)
+        .where(OntConfigOverride.field_name == "wifi.password")
+        .limit(1)
+    ).first()
+    if override and override.value_json:
+        value = override.value_json.get("value")
+        if value:
+            try:
+                return decrypt_credential(str(value))
+            except ValueError:
+                return None
+    return None
 
 
 def _effective_value(ctx: SagaContext, key: str) -> object | None:
@@ -291,7 +315,7 @@ def _configure_wifi(ctx: SagaContext) -> StepResult:
     # Try to get from ONT saved config
     if ctx.ont is not None:
         ssid = ssid or _effective_value(ctx, "wifi_ssid")
-        password = password or ctx.ont.wifi_password
+        password = password or _get_wifi_password(ctx)
 
     wifi_enabled = ctx.step_data.get("wifi_enabled")
     if wifi_enabled is None:

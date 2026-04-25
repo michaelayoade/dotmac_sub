@@ -176,6 +176,143 @@
             </div>
         </div>
 
+        {# -- ACS Config Pack -- #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">ACS Config Pack</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">TR-069 parameter paths and device-specific defaults for this ONT model</p>
+            </div>
+            <div class="p-6 space-y-6">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                        <label for="tr069_data_model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">TR-069 Data Model</label>
+                        <select name="tr069_data_model" id="tr069_data_model"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Not specified</option>
+                            <option value="tr181" {% if item and item.tr069_data_model == 'tr181' %}selected{% endif %}>TR-181 (Device.)</option>
+                            <option value="tr098" {% if item and item.tr069_data_model == 'tr098' %}selected{% endif %}>TR-098 (InternetGatewayDevice.)</option>
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Determines root parameter path structure</p>
+                    </div>
+
+                    <div>
+                        <label for="config_method_preference" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Config Method Preference</label>
+                        <select name="config_method_preference" id="config_method_preference"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Not specified</option>
+                            <option value="tr069" {% if item and item.config_method_preference == 'tr069' %}selected{% endif %}>TR-069 (ACS)</option>
+                            <option value="omci" {% if item and item.config_method_preference == 'omci' %}selected{% endif %}>OMCI (OLT)</option>
+                            <option value="both" {% if item and item.config_method_preference == 'both' %}selected{% endif %}>Both (hybrid)</option>
+                        </select>
+                    </div>
+                </div>
+
+                {# WiFi Parameter Paths #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">WiFi TR-069 Parameter Paths</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="wifi_ssid_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">SSID Path</label>
+                            <input type="text" name="wifi_ssid_path" id="wifi_ssid_path" maxlength="255"
+                                value="{{ item.wifi_ssid_path or '' if item else '' }}"
+                                placeholder="e.g. Device.WiFi.SSID.1.SSID"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                        <div>
+                            <label for="wifi_password_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Password Path</label>
+                            <input type="text" name="wifi_password_path" id="wifi_password_path" maxlength="255"
+                                value="{{ item.wifi_password_path or '' if item else '' }}"
+                                placeholder="e.g. Device.WiFi.AccessPoint.1.Security.KeyPassphrase"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                        <div>
+                            <label for="wifi_enabled_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Enable Path</label>
+                            <input type="text" name="wifi_enabled_path" id="wifi_enabled_path" maxlength="255"
+                                value="{{ item.wifi_enabled_path or '' if item else '' }}"
+                                placeholder="e.g. Device.WiFi.SSID.1.Enable"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                        <div>
+                            <label for="wifi_channel_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Channel Path</label>
+                            <input type="text" name="wifi_channel_path" id="wifi_channel_path" maxlength="255"
+                                value="{{ item.wifi_channel_path or '' if item else '' }}"
+                                placeholder="e.g. Device.WiFi.Radio.1.Channel"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label for="wifi_security_mode_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Security Mode Path</label>
+                            <input type="text" name="wifi_security_mode_path" id="wifi_security_mode_path" maxlength="255"
+                                value="{{ item.wifi_security_mode_path or '' if item else '' }}"
+                                placeholder="e.g. Device.WiFi.AccessPoint.1.Security.ModeEnabled"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                    </div>
+                </div>
+
+                {# WAN Parameter Paths #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">WAN TR-069 Parameter Paths</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="wan_pppoe_username_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">PPPoE Username Path</label>
+                            <input type="text" name="wan_pppoe_username_path" id="wan_pppoe_username_path" maxlength="255"
+                                value="{{ item.wan_pppoe_username_path or '' if item else '' }}"
+                                placeholder="e.g. Device.PPP.Interface.1.Username"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                        <div>
+                            <label for="wan_pppoe_password_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">PPPoE Password Path</label>
+                            <input type="text" name="wan_pppoe_password_path" id="wan_pppoe_password_path" maxlength="255"
+                                value="{{ item.wan_pppoe_password_path or '' if item else '' }}"
+                                placeholder="e.g. Device.PPP.Interface.1.Password"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label for="wan_connection_type_path" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Connection Type Path</label>
+                            <input type="text" name="wan_connection_type_path" id="wan_connection_type_path" maxlength="255"
+                                value="{{ item.wan_connection_type_path or '' if item else '' }}"
+                                placeholder="e.g. Device.IP.Interface.1.Type"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono text-xs">
+                        </div>
+                    </div>
+                </div>
+
+                {# Default Settings #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-4">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Default WiFi Settings</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        <div>
+                            <label for="default_wifi_security_mode" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Security Mode</label>
+                            <select name="default_wifi_security_mode" id="default_wifi_security_mode"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="WPA2-Personal" {% if not item or item.default_wifi_security_mode == 'WPA2-Personal' %}selected{% endif %}>WPA2-Personal</option>
+                                <option value="WPA3-Personal" {% if item and item.default_wifi_security_mode == 'WPA3-Personal' %}selected{% endif %}>WPA3-Personal</option>
+                                <option value="WPA2/WPA3-Personal" {% if item and item.default_wifi_security_mode == 'WPA2/WPA3-Personal' %}selected{% endif %}>WPA2/WPA3 Mixed</option>
+                                <option value="None" {% if item and item.default_wifi_security_mode == 'None' %}selected{% endif %}>None (Open)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="default_wifi_channel" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Channel</label>
+                            <select name="default_wifi_channel" id="default_wifi_channel"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="auto" {% if not item or item.default_wifi_channel == 'auto' %}selected{% endif %}>Auto</option>
+                                {% for ch in range(1, 14) %}
+                                <option value="{{ ch }}" {% if item and item.default_wifi_channel == ch|string %}selected{% endif %}>{{ ch }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="min_firmware_version" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Min Firmware Version</label>
+                            <input type="text" name="min_firmware_version" id="min_firmware_version" maxlength="50"
+                                value="{{ item.min_firmware_version or '' if item else '' }}"
+                                placeholder="e.g. V3R017C10S100"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         {# -- Notes -- #}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">

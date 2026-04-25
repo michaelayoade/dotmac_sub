@@ -185,7 +185,7 @@ def wait_for_ont_bootstrap(
                     operation_id,
                     output_payload=payload,
                 )
-            elif payload["waiting"] and service_retry_count < 3:
+            elif payload["waiting"] and service_retry_count < 4:
                 network_operations.mark_waiting(
                     db,
                     operation_id,
@@ -193,12 +193,23 @@ def wait_for_ont_bootstrap(
                 )
                 from app.services.queue_adapter import enqueue_task
 
+                # Exponential backoff: 30s -> 60s -> 120s -> 240s
+                retry_delays = [30, 60, 120, 240]
+                countdown = retry_delays[min(service_retry_count, len(retry_delays) - 1)]
+
+                logger.info(
+                    "Scheduling TR-069 bootstrap retry %d for ONT %s in %ds",
+                    service_retry_count + 1,
+                    ont_id,
+                    countdown,
+                )
+
                 enqueue_task(
                     "app.tasks.tr069.wait_for_ont_bootstrap",
                     args=[ont_id, operation_id, service_retry_count + 1],
                     correlation_id=f"tr069_bootstrap:{ont_id}",
                     source="ont_provision_step_retry",
-                    countdown=60,
+                    countdown=countdown,
                 )
             else:
                 network_operations.mark_failed(
