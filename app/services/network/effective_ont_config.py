@@ -1,236 +1,149 @@
-"""Resolve ONT desired state as bundle + sparse overrides.
-
-Mental model:
-- Primary source is one active, applied bundle assignment.
-- Overrides are explicit ONT-level fields that win over bundle values.
-- Legacy OntUnit flat fields are consulted only when no bundle is assigned.
-- Active assignments that are not applied, or point to inactive bundles, block
-  legacy fallback so broken bundle state is not silently ignored.
-
-TODO: Retire legacy OntUnit desired-state fallback after bundle backfill is complete.
-"""
+"""Resolve ONT desired state from OLT defaults plus ONT-local intent."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import (
-    OLTDevice,
-    OntAssignment,
-    OntBundleAssignment,
-    OntBundleAssignmentStatus,
-    OntConfigOverride,
-    OntProfileWanService,
-    OntProvisioningProfile,
-    OntUnit,
-)
-from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
-
-logger = logging.getLogger(__name__)
-
-_CANONICAL_OVERRIDE_KEYS = {
-    "config_method": ("config_method",),
-    "onu_mode": ("onu_mode",),
-    "ip_protocol": ("ip_protocol",),
-    "wan_mode": ("wan.wan_mode", "wan_mode"),
-    "wan_vlan": ("wan.vlan_tag", "wan_vlan", "wan_vlan_id"),
-    "pppoe_username": ("wan.pppoe_username", "pppoe_username"),
-    "mgmt_ip_mode": ("management.ip_mode", "mgmt_ip_mode"),
-    "mgmt_vlan": ("management.vlan_tag", "mgmt_vlan", "mgmt_vlan_id"),
-    "mgmt_ip_address": ("management.ip_address", "mgmt_ip_address"),
-    "wifi_enabled": ("wifi.enabled", "wifi_enabled"),
-    "wifi_ssid": ("wifi.ssid", "wifi_ssid"),
-    "wifi_channel": ("wifi.channel", "wifi_channel"),
-    "wifi_security_mode": ("wifi.security_mode", "wifi_security_mode"),
-}
+from app.models.network import OLTDevice, OntUnit
+from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
+from app.services.network.ont_desired_config import desired_config
 
 
 def _enum_or_raw(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
-def _coerce_override_value(raw: Any) -> Any:
-    if isinstance(raw, dict) and "value" in raw:
-        return raw.get("value")
-    return raw
-
-
-def _assignment_blocked_reason(assignment: OntBundleAssignment | None) -> str | None:
-    if assignment is None:
-        return None
-    if assignment.status != OntBundleAssignmentStatus.applied:
-        return f"assignment_status_{_enum_or_raw(assignment.status)}"
-    assigned_bundle = assignment.bundle
-    if assigned_bundle is None:
-        return "missing_bundle"
-    if not assigned_bundle.is_active:
-        return "inactive_bundle"
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        # Check for None and empty string, but preserve False and 0
+        if value is not None and value != "":
+            return _enum_or_raw(value)
     return None
 
 
-def _resolve_ready_bundle(
+def _resolve_config_pack(
     db: Session,
     ont: OntUnit,
     *,
     olt: OLTDevice | None = None,
-) -> tuple[OntBundleAssignment | None, OntProvisioningProfile | None, str | None]:
-    assignment = get_active_bundle_assignment(db, ont)
-    blocked_reason = _assignment_blocked_reason(assignment)
-    if blocked_reason is not None:
-        logger.warning(
-            "ONT %s active bundle assignment is not config-ready: %s",
-            getattr(ont, "serial_number", None) or getattr(ont, "id", None),
-            blocked_reason,
-        )
-        return assignment, None, blocked_reason
-
-    if assignment is not None:
-        return assignment, assignment.bundle, None
-
-    return None, None, None
-
-
-def _first_active_wan_service(
-    profile: OntProvisioningProfile | None,
-) -> OntProfileWanService | None:
-    if profile is None:
+) -> OltConfigPack | None:
+    if olt is not None:
+        return resolve_olt_config_pack(db, olt.id)
+    olt_id = getattr(ont, "olt_device_id", None)
+    if olt_id is None:
         return None
-    services = [
-        service
-        for service in (getattr(profile, "wan_services", None) or [])
-        if getattr(service, "is_active", False)
-    ]
-    services.sort(
-        key=lambda service: (
-            getattr(service, "priority", 9999),
-            getattr(service, "name", "") or "",
-        )
-    )
-    return services[0] if services else None
+    return resolve_olt_config_pack(db, olt_id)
 
 
-def _load_raw_overrides(db: Session, ont: OntUnit) -> dict[str, Any]:
-    rows = db.scalars(
-        select(OntConfigOverride).where(OntConfigOverride.ont_unit_id == ont.id)
-    ).all()
-    return {
-        str(row.field_name): _coerce_override_value(getattr(row, "value_json", None))
-        for row in rows
-    }
-
-
-def _canonicalize_overrides(raw_overrides: dict[str, Any]) -> dict[str, Any]:
-    canonical: dict[str, Any] = {}
-    for key, aliases in _CANONICAL_OVERRIDE_KEYS.items():
-        for alias in aliases:
-            if alias in raw_overrides and raw_overrides[alias] not in (None, ""):
-                canonical[key] = raw_overrides[alias]
-                break
-    return canonical
-
-
-def _resolve_template(template: str | None, context: dict[str, str]) -> str | None:
-    if not template:
-        return None
-    result = template
-    for key in (
-        "subscriber_code",
-        "subscriber_name",
-        "serial_number",
-        "offer_name",
-        "ont_id_short",
-    ):
-        result = result.replace(f"{{{key}}}", context.get(key, ""))
-    return result
-
-
-def _subscriber_template_context(db: Session, ont: OntUnit) -> dict[str, str]:
-    context = {
-        "subscriber_code": "",
-        "subscriber_name": "",
-        "serial_number": getattr(ont, "serial_number", None) or "",
-        "offer_name": "",
-        "ont_id_short": str(ont.id)[:8] if getattr(ont, "id", None) else "",
-    }
-    active_assignment = db.scalars(
-        select(OntAssignment)
-        .where(OntAssignment.ont_unit_id == ont.id)
-        .where(OntAssignment.active.is_(True))
-        .limit(1)
-    ).first()
-    if not active_assignment or not active_assignment.subscriber_id:
-        return context
-
-    try:
-        from app.services.network_subscriber_bridge import default_subscriber_validator
-
-        context.update(
-            default_subscriber_validator.get_template_context(
-                db,
-                subscriber_id=active_assignment.subscriber_id,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001 - template context must not abort reads
-        logger.warning(
-            "Could not resolve subscriber template context for ONT %s: %s",
-            getattr(ont, "serial_number", None) or getattr(ont, "id", None),
-            exc,
-        )
-    return context
-
-
-def _bundle_values(
-    bundle: OntProvisioningProfile | None,
-    *,
-    template_context: dict[str, str],
+def _values_from_desired_config(
+    ont: OntUnit,
+    config_pack: OltConfigPack | None,
 ) -> dict[str, Any]:
-    primary_wan = _first_active_wan_service(bundle)
-    return {
-        "config_method": _enum_or_raw(getattr(bundle, "config_method", None)),
-        "onu_mode": _enum_or_raw(getattr(bundle, "onu_mode", None)),
-        "ip_protocol": _enum_or_raw(getattr(bundle, "ip_protocol", None)),
-        "wan_mode": _enum_or_raw(getattr(primary_wan, "connection_type", None)),
-        "wan_vlan": getattr(primary_wan, "s_vlan", None),
-        "pppoe_username": _resolve_template(
-            getattr(primary_wan, "pppoe_username_template", None),
-            template_context,
-        ),
-        "mgmt_ip_mode": _enum_or_raw(getattr(bundle, "mgmt_ip_mode", None)),
-        "mgmt_vlan": getattr(bundle, "mgmt_vlan_tag", None),
-        "mgmt_ip_address": None,
-        "wifi_enabled": getattr(bundle, "wifi_enabled", None),
-        "wifi_ssid": _resolve_template(
-            getattr(bundle, "wifi_ssid_template", None),
-            template_context,
-        ),
-        "wifi_channel": getattr(bundle, "wifi_channel", None),
-        "wifi_security_mode": getattr(bundle, "wifi_security_mode", None),
-        "primary_wan_service": primary_wan,
-    }
+    config = desired_config(ont)
+    wan = config.get("wan") if isinstance(config.get("wan"), dict) else {}
+    wifi = config.get("wifi") if isinstance(config.get("wifi"), dict) else {}
+    management = (
+        config.get("management") if isinstance(config.get("management"), dict) else {}
+    )
+    device = config.get("device") if isinstance(config.get("device"), dict) else {}
+    tr069 = config.get("tr069") if isinstance(config.get("tr069"), dict) else {}
+    omci = config.get("omci") if isinstance(config.get("omci"), dict) else {}
+    lan = config.get("lan") if isinstance(config.get("lan"), dict) else {}
+    authorization = (
+        config.get("authorization")
+        if isinstance(config.get("authorization"), dict)
+        else {}
+    )
 
-
-def _empty_values() -> dict[str, Any]:
-    """Return empty values when no bundle is assigned."""
     return {
-        "config_method": None,
-        "onu_mode": None,
-        "ip_protocol": None,
-        "wan_mode": None,
-        "wan_vlan": None,
-        "pppoe_username": None,
-        "mgmt_ip_mode": None,
-        "mgmt_vlan": None,
-        "mgmt_ip_address": None,
-        "wifi_enabled": None,
-        "wifi_ssid": None,
-        "wifi_channel": None,
-        "wifi_security_mode": None,
+        "config_method": _first_present(device.get("config_method")),
+        "onu_mode": _first_present(device.get("onu_mode")),
+        "ip_protocol": _first_present(wan.get("ip_protocol")),
+        "wan_mode": _first_present(wan.get("mode")),
+        "wan_vlan": _first_present(
+            wan.get("vlan"),
+            getattr(config_pack.internet_vlan, "tag", None) if config_pack else None,
+        ),
+        "pppoe_username": _first_present(wan.get("pppoe_username")),
+        "pppoe_password": _first_present(wan.get("pppoe_password")),
+        "wan_static_ip": _first_present(wan.get("static_ip"), wan.get("ip_address")),
+        "wan_static_subnet": _first_present(wan.get("static_subnet"), wan.get("subnet")),
+        "wan_static_gateway": _first_present(wan.get("static_gateway"), wan.get("gateway")),
+        "wan_static_dns": _first_present(wan.get("static_dns"), wan.get("dns")),
+        "wan_instance_index": _first_present(wan.get("instance_index"), 1),
+        "wan_gem_index": _first_present(
+            wan.get("gem_index"),
+            config_pack.internet_gem_index if config_pack else None,
+        ),
+        "mgmt_ip_mode": _first_present(management.get("ip_mode")),
+        "mgmt_vlan": _first_present(
+            management.get("vlan"),
+            getattr(config_pack.management_vlan, "tag", None) if config_pack else None,
+        ),
+        "mgmt_ip_address": _first_present(management.get("ip_address")),
+        "mgmt_subnet": _first_present(management.get("subnet"), management.get("subnet_mask")),
+        "mgmt_gateway": _first_present(management.get("gateway")),
+        "lan_ip": _first_present(lan.get("ip"), lan.get("gateway_ip")),
+        "lan_subnet": _first_present(lan.get("subnet"), lan.get("subnet_mask")),
+        "lan_dhcp_enabled": _first_present(lan.get("dhcp_enabled")),
+        "lan_dhcp_start": _first_present(lan.get("dhcp_start")),
+        "lan_dhcp_end": _first_present(lan.get("dhcp_end")),
+        "wifi_enabled": _first_present(wifi.get("enabled")),
+        "wifi_ssid": _first_present(wifi.get("ssid")),
+        "wifi_password": _first_present(wifi.get("password")),
+        "wifi_channel": _first_present(wifi.get("channel")),
+        "wifi_security_mode": _first_present(wifi.get("security_mode")),
+        "tr069_acs_server_id": _first_present(
+            tr069.get("acs_server_id"),
+            config_pack.tr069_acs_server_id if config_pack else None,
+        ),
+        "tr069_olt_profile_id": _first_present(
+            tr069.get("olt_profile_id"),
+            config_pack.tr069_olt_profile_id if config_pack else None,
+        ),
+        "cr_username": _first_present(
+            tr069.get("cr_username"),
+            config_pack.cr_username if config_pack else None,
+        ),
+        "cr_password": _first_present(
+            tr069.get("cr_password"),
+            config_pack.cr_password if config_pack else None,
+        ),
+        "internet_config_ip_index": _first_present(
+            omci.get("internet_config_ip_index"),
+            config_pack.internet_config_ip_index if config_pack else None,
+        ),
+        "wan_config_profile_id": _first_present(
+            omci.get("wan_config_profile_id"),
+            config_pack.wan_config_profile_id if config_pack else None,
+        ),
+        "pppoe_omci_vlan": _first_present(omci.get("pppoe_vlan")),
+        "authorization_line_profile_id": _first_present(
+            authorization.get("line_profile_id"),
+            config_pack.line_profile_id if config_pack else None,
+        ),
+        "authorization_service_profile_id": _first_present(
+            authorization.get("service_profile_id"),
+            config_pack.service_profile_id if config_pack else None,
+        ),
         "primary_wan_service": None,
     }
+
+
+def _explicit_keys(config: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+
+    def walk(prefix: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in sorted(value.items()):
+                walk(f"{prefix}.{child_key}" if prefix else child_key, child_value)
+            return
+        keys.append(prefix)
+
+    walk("", config)
+    return keys
 
 
 def resolve_effective_ont_config(
@@ -239,29 +152,24 @@ def resolve_effective_ont_config(
     *,
     olt: OLTDevice | None = None,
 ) -> dict[str, Any]:
-    """Return effective ONT config as applied bundle + sparse overrides."""
-    assignment, bundle, blocked_reason = _resolve_ready_bundle(db, ont, olt=olt)
-    raw_overrides = _load_raw_overrides(db, ont)
-    overrides = _canonicalize_overrides(raw_overrides)
-    has_bundle = assignment is not None or bundle is not None
-
-    if has_bundle:
-        values = _bundle_values(
-            bundle,
-            template_context=_subscriber_template_context(db, ont),
-        )
-    else:
-        values = _empty_values()
-    for key, value in overrides.items():
-        values[key] = value
-
+    """Return ONT desired config resolved from OLT defaults and ONT intent."""
+    config = desired_config(ont)
+    config_pack = _resolve_config_pack(db, ont, olt=olt)
     return {
-        "bundle": bundle,
-        "bundle_assignment": assignment,
-        "bundle_assignment_status": getattr(getattr(assignment, "status", None), "value", None),
-        "bundle_assignment_blocked_reason": blocked_reason,
-        "config_ready": blocked_reason is None,
-        "overrides": sorted(overrides.keys()),
-        "values": values,
-        "using_legacy_fallback": False,
+        "config_pack": config_pack,
+        "desired_config_keys": _explicit_keys(config),
+        "values": _values_from_desired_config(ont, config_pack),
     }
+
+
+def get_effective_value(
+    db: Session,
+    ont: OntUnit,
+    key: str,
+    *,
+    olt: OLTDevice | None = None,
+    default: Any = None,
+) -> Any:
+    """Convenience accessor for callers that need one resolved value."""
+    resolved = resolve_effective_ont_config(db, ont, olt=olt)
+    return resolved.get("values", {}).get(key, default)

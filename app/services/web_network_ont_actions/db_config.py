@@ -6,19 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import (
-    OntConfigOverride,
-    OntConfigOverrideSource,
-    OntProvisioningProfile,
-    Vlan,
-)
+from app.models.network import Vlan
 from app.services import network as network_service
 from app.services.network.ont_actions import ActionResult
-from app.services.network.ont_bundle_assignments import (
-    assign_bundle_to_ont,
-    clear_active_bundle_assignment,
-    get_active_bundle_assignment,
-)
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
 )
@@ -26,6 +16,7 @@ from app.services.web_network_ont_actions.config_setters import (
     set_lan_config,
     set_wifi_config,
 )
+from app.services.network.ont_desired_config import set_desired_config_value
 
 
 def _resolve_ont_scoped_vlan(
@@ -66,28 +57,7 @@ def _upsert_override(
     field_name: str,
     value,
 ) -> None:
-    row = db.scalars(
-        select(OntConfigOverride)
-        .where(OntConfigOverride.ont_unit_id == ont.id)
-        .where(OntConfigOverride.field_name == field_name)
-        .limit(1)
-    ).first()
-
-    normalized = _normalize_override_value(value)
-    if normalized is None:
-        if row is not None:
-            db.delete(row)
-        return
-
-    if row is None:
-        row = OntConfigOverride(
-            ont_unit_id=ont.id,
-            field_name=field_name,
-            source=OntConfigOverrideSource.operator,
-        )
-        db.add(row)
-    row.value_json = {"value": normalized}
-    row.reason = "configure_form"
+    set_desired_config_value(ont, field_name, _normalize_override_value(value))
 
 
 def _persist_bundle_authoring_state(
@@ -108,91 +78,24 @@ def _persist_bundle_authoring_state(
     wifi_channel: str | None,
     wifi_security_mode: str | None,
 ) -> None:
-    active_bundle = None
-    if bundle_id == "":
-        clear_active_bundle_assignment(db, ont=ont)
-    elif bundle_id:
-        active_bundle = db.get(OntProvisioningProfile, bundle_id)
-        if active_bundle is not None and active_bundle.is_active:
-            assign_bundle_to_ont(
-                db,
-                ont=ont,
-                bundle=active_bundle,
-                assigned_reason="configure_form",
-            )
-        elif active_bundle is not None:
-            raise ValueError(f"Provisioning bundle '{active_bundle.name}' is inactive")
+    if bundle_id:
+        raise ValueError("Bundle templates are obsolete. Save ONT desired_config directly.")
 
-    if active_bundle is None:
-        active_assignment = get_active_bundle_assignment(db, ont)
-        active_bundle = getattr(active_assignment, "bundle", None)
-        active_bundle_id = getattr(active_assignment, "bundle_id", None)
-        if active_bundle is None and active_bundle_id is not None:
-            active_bundle = db.get(OntProvisioningProfile, active_bundle_id)
-
-    if active_bundle is None:
-        for field_name in (
-            "config_method",
-            "ip_protocol",
-            "wan.wan_mode",
-            "wan.vlan_tag",
-            "wan.pppoe_username",
-            "management.ip_mode",
-            "management.vlan_tag",
-            "management.ip_address",
-            "wifi.enabled",
-            "wifi.ssid",
-            "wifi.channel",
-            "wifi.security_mode",
-        ):
-            _upsert_override(db, ont=ont, field_name=field_name, value=None)
-        return
-
-    active_services = [
-        service
-        for service in (getattr(active_bundle, "wan_services", None) or [])
-        if getattr(service, "is_active", False)
-    ]
-    active_services.sort(
-        key=lambda service: (
-            getattr(service, "priority", 9999),
-            getattr(service, "name", "") or "",
-        )
-    )
-    primary_wan = active_services[0] if active_services else None
-
-    override_pairs = {
-        "config_method": (config_method, getattr(getattr(active_bundle, "config_method", None), "value", getattr(active_bundle, "config_method", None))),
-        "ip_protocol": (ip_protocol, getattr(getattr(active_bundle, "ip_protocol", None), "value", getattr(active_bundle, "ip_protocol", None))),
-        "wan.wan_mode": (
-            wan_mode,
-            getattr(getattr(primary_wan, "connection_type", None), "value", getattr(primary_wan, "connection_type", None)),
-        ),
-        "wan.vlan_tag": (wan_vlan_tag, getattr(primary_wan, "s_vlan", None)),
-        "wan.pppoe_username": (
-            pppoe_username,
-            getattr(primary_wan, "pppoe_username_template", None),
-        ),
-        "management.ip_mode": (
-            mgmt_ip_mode,
-            getattr(getattr(active_bundle, "mgmt_ip_mode", None), "value", getattr(active_bundle, "mgmt_ip_mode", None)),
-        ),
-        "management.vlan_tag": (mgmt_vlan_tag, getattr(active_bundle, "mgmt_vlan_tag", None)),
-        "management.ip_address": (mgmt_ip_address, None),
-        "wifi.enabled": (wifi_enabled, getattr(active_bundle, "wifi_enabled", None)),
-        "wifi.ssid": (wifi_ssid, getattr(active_bundle, "wifi_ssid_template", None)),
-        "wifi.channel": (wifi_channel, getattr(active_bundle, "wifi_channel", None)),
-        "wifi.security_mode": (
-            wifi_security_mode,
-            getattr(active_bundle, "wifi_security_mode", None),
-        ),
-    }
-
-    for field_name, (submitted, bundle_value) in override_pairs.items():
-        if _normalize_override_value(submitted) == _normalize_override_value(bundle_value):
-            _upsert_override(db, ont=ont, field_name=field_name, value=None)
-        else:
-            _upsert_override(db, ont=ont, field_name=field_name, value=submitted)
+    for field_name, value in {
+        "device.config_method": config_method,
+        "wan.ip_protocol": ip_protocol,
+        "wan.mode": wan_mode,
+        "wan.vlan": wan_vlan_tag,
+        "wan.pppoe_username": pppoe_username,
+        "management.ip_mode": mgmt_ip_mode,
+        "management.vlan": mgmt_vlan_tag,
+        "management.ip_address": mgmt_ip_address,
+        "wifi.enabled": wifi_enabled,
+        "wifi.ssid": wifi_ssid,
+        "wifi.channel": wifi_channel,
+        "wifi.security_mode": wifi_security_mode,
+    }.items():
+        _upsert_override(db, ont=ont, field_name=field_name, value=value)
 
 
 def update_ont_config(

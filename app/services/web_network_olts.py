@@ -141,28 +141,16 @@ def authorize_autofind_ont(
         force_reauthorize: If True, delete any existing registration of this
             serial before authorizing.
     """
-    from app.services.network import (
-        olt_authorization_workflow as olt_authorization_workflow_service,
-    )
+    from app.services.network.ont_authorization import authorize_autofind_ont
 
-    authorize_and_provision = (
-        olt_authorization_workflow_service.authorize_autofind_ont_and_provision_network
+    result = authorize_autofind_ont(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+        force_reauthorize=force_reauthorize,
+        run_post_auth_sync=True,
     )
-    if force_reauthorize:
-        result = authorize_and_provision(
-            db,
-            olt_id,
-            fsp,
-            serial_number,
-            force_reauthorize=True,
-        )
-    else:
-        result = authorize_and_provision(
-            db,
-            olt_id,
-            fsp,
-            serial_number,
-        )
     return result.success, result.status, result.message
 
 

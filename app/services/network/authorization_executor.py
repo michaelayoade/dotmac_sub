@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
@@ -24,6 +25,11 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
+
+
+class AuthorizationExecutionMode(Enum):
+    sync_success = "sync_success"
+    sync_error = "sync_error"
 
 
 @dataclass
@@ -36,6 +42,8 @@ class AuthorizationExecutionResult:
     serial_number: str | None = None
     fsp: str | None = None
     error: str | None = None
+    mode: AuthorizationExecutionMode = AuthorizationExecutionMode.sync_success
+    operation_id: str | None = None
     details: dict = field(default_factory=dict)
 
     def to_operation_result(self):
@@ -75,6 +83,7 @@ def execute_authorization(
     initiated_by: str | None = None,
     request: Request | None = None,
     preset_id: str | None = None,
+    prefer_sync: bool = False,
 ) -> AuthorizationExecutionResult:
     """Execute ONT authorization synchronously.
 
@@ -99,12 +108,13 @@ def execute_authorization(
             fsp=fsp,
             serial_number=serial_number,
             error="validation_error",
+            mode=AuthorizationExecutionMode.sync_error,
         )
 
     # Normalize serial number
     normalized_serial = str(serial_number).replace("-", "").strip().upper()
 
-    from app.services.network.olt_authorization_workflow import (
+    from app.services.network.ont_authorization import (
         authorize_autofind_ont_and_provision_network_audited,
     )
 
@@ -125,11 +135,13 @@ def execute_authorization(
             ont_id=result.ont_unit_id,
             serial_number=normalized_serial,
             fsp=fsp,
+            mode=(
+                AuthorizationExecutionMode.sync_success
+                if result.success
+                else AuthorizationExecutionMode.sync_error
+            ),
             details={
                 "ont_id_on_olt": result.ont_id_on_olt,
-                "provisioning_status": result.provisioning_status.value
-                if hasattr(result, "provisioning_status") and result.provisioning_status
-                else None,
             },
         )
 
@@ -148,6 +160,7 @@ def execute_authorization(
             serial_number=normalized_serial,
             fsp=fsp,
             error=str(exc),
+            mode=AuthorizationExecutionMode.sync_error,
         )
 
 

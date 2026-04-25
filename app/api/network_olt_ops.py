@@ -50,7 +50,7 @@ def authorize_ont(
     payload: OltAuthorizeOntRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    result = olt_api_operations.queue_authorize_ont(
+    result = olt_api_operations.authorize_ont(
         db,
         olt_id,
         fsp=payload.fsp,

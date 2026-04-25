@@ -13,7 +13,6 @@ Usage:
         olt_id=olt_id,
         fsp=fsp,
         serial_number=serial_number,
-        bundle_id=bundle_id,
     )
 
     if result.success:
@@ -253,7 +252,6 @@ class ProvisioningCoordinator:
         fsp: str,
         serial_number: str,
         *,
-        bundle_id: str | None = None,
         force_reauthorize: bool = False,
         skip_acs_config: bool = False,
         acs_config_timeout_seconds: int = 120,
@@ -264,7 +262,6 @@ class ProvisioningCoordinator:
             olt_id: OLT device ID
             fsp: Frame/Slot/Port location (e.g., "0/1/0")
             serial_number: ONT serial number
-            bundle_id: Optional provisioning bundle ID
             force_reauthorize: Delete existing registration first
             skip_acs_config: Skip ACS config push (just OLT registration)
             acs_config_timeout_seconds: Timeout for ACS operations
@@ -286,12 +283,12 @@ class ProvisioningCoordinator:
             ):
                 return self._finalize("OLT registration failed")
 
-            if not self._execute_post_registration_saga(
+            if not self._execute_post_registration_steps(
                 olt_id,
                 skip_acs_config=skip_acs_config,
                 acs_config_timeout_seconds=acs_config_timeout_seconds,
             ):
-                return self._finalize("Post-registration provisioning saga failed")
+                return self._finalize("Post-registration provisioning failed")
 
             return self._finalize("Provisioning completed successfully", success=True)
 
@@ -360,144 +357,40 @@ class ProvisioningCoordinator:
     # Phase Executors
     # -----------------------------------------------------------------------
 
-    def _execute_post_registration_saga(
+    def _execute_post_registration_steps(
         self,
         olt_id: str,
         *,
         skip_acs_config: bool,
         acs_config_timeout_seconds: int,
     ) -> bool:
-        """Run coordinator post-registration phases through SagaExecutor."""
+        """Run coordinator post-registration phases directly."""
         assert self._result is not None
         if not self._result.ont_id:
             return False
-
-        from app.services.network.ont_provisioning.result import StepResult
-        from app.services.network.ont_provisioning.saga import (
-            SagaContext,
-            SagaDefinition,
-            SagaExecutor,
-            SagaStep,
-            generate_saga_execution_id,
-            saga_executions,
-        )
-
-        def _step_result(name: str, ok: bool, *, critical: bool = False) -> StepResult:
-            return StepResult(
-                step_name=name,
-                success=ok,
-                message=f"{name.replace('_', ' ').title()} {'completed' if ok else 'failed'}",
-                critical=critical,
-            )
-
-        def _verify_service_ports(_ctx: SagaContext) -> StepResult:
-            ok = self._execute_service_port_creation(olt_id)
-            return _step_result("verify_service_ports", ok)
-
-        def _compensate_service_ports(
-            ctx: SagaContext, _original: StepResult
-        ) -> StepResult:
-            from app.services.network.ont_provision_steps import rollback_service_ports
-
-            return rollback_service_ports(ctx.db, ctx.ont_id)
-
-        def _management_ip(_ctx: SagaContext) -> StepResult:
-            ok = self._execute_management_ip_config(olt_id)
-            return _step_result("management_ip", ok)
-
-        def _tr069_binding(_ctx: SagaContext) -> StepResult:
-            ok = self._execute_tr069_binding(olt_id)
-            return _step_result("tr069_binding", ok)
-
-        def _acs_discovery(_ctx: SagaContext) -> StepResult:
-            ok = self._execute_acs_discovery(acs_config_timeout_seconds)
-            return _step_result("acs_discovery", ok)
-
-        def _acs_config_push(_ctx: SagaContext) -> StepResult:
-            ok = self._execute_acs_config_push()
-            return _step_result("acs_config_push", ok)
-
         steps = [
-            SagaStep(
-                name="verify_service_ports",
-                action=_verify_service_ports,
-                compensate=_compensate_service_ports,
-                critical=False,
-                resumable=True,
-                description="Verify service ports after OLT registration",
-            ),
-            SagaStep(
-                name="management_ip",
-                action=_management_ip,
-                critical=False,
-                resumable=True,
-                description="Verify or configure management IP",
-            ),
-            SagaStep(
-                name="tr069_binding",
-                action=_tr069_binding,
-                critical=False,
-                resumable=True,
-                description="Bind TR-069 server profile",
-            ),
+            ("Verify service ports", lambda: self._execute_service_port_creation(olt_id)),
+            ("Management IP", lambda: self._execute_management_ip_config(olt_id)),
+            ("TR-069 binding", lambda: self._execute_tr069_binding(olt_id)),
         ]
         if not skip_acs_config:
             steps.extend(
                 [
-                    SagaStep(
-                        name="acs_discovery",
-                        action=_acs_discovery,
-                        critical=False,
-                        resumable=True,
-                        description="Queue ACS discovery wait",
+                    (
+                        "ACS discovery",
+                        lambda: self._execute_acs_discovery(
+                            acs_config_timeout_seconds
+                        ),
                     ),
-                    SagaStep(
-                        name="acs_config_push",
-                        action=_acs_config_push,
-                        critical=False,
-                        resumable=True,
-                        description="Queue ACS config push",
-                    ),
+                    ("ACS config push", self._execute_acs_config_push),
                 ]
             )
 
-        saga = SagaDefinition(
-            name="coordinated_post_registration",
-            description="Coordinator post-registration OLT/ACS provisioning phases",
-            steps=steps,
-            version="1.0",
-        )
-        context = SagaContext(
-            db=self.db,
-            ont_id=self._result.ont_id,
-            saga_execution_id=generate_saga_execution_id(),
-            ont=self._get_ont(self._result.ont_id),
-            olt=self._get_olt(olt_id),
-            initiated_by=self.initiated_by,
-            correlation_key=(
-                f"saga:coordinated_post_registration:{self._result.ont_id}"
-            ),
-        )
-        saga_executions.create(self.db, saga, context)
-        saga_executions.mark_running(self.db, context.saga_execution_id)
-        saga_result = SagaExecutor(saga, context).execute()
-        if hasattr(saga_result, "status"):
-            saga_executions.mark_completed(
-                self.db,
-                context.saga_execution_id,
-                saga_result,
-            )
-        if saga_result.compensation_failures:
-            self._result.add_step(
-                ProvisioningPhase.rollback,
-                "Saga compensation failures",
-                False,
-                "; ".join(
-                    f"{step}: {error}"
-                    for step, error in saga_result.compensation_failures
-                ),
-            )
-        return saga_result.success
+        for _name, action in steps:
+            ok = action()
+            if not ok:
+                return False
+        return True
 
     def _execute_olt_registration(
         self,
@@ -507,7 +400,7 @@ class ProvisioningCoordinator:
         force_reauthorize: bool,
     ) -> bool:
         """Phase 1: Register ONT on OLT."""
-        from app.services.network.olt_authorization_workflow import (
+        from app.services.network.ont_authorization import (
             authorize_autofind_ont_and_provision_network_audited,
         )
 
@@ -620,7 +513,7 @@ class ProvisioningCoordinator:
                 return True
 
             # Check if management IP is already configured
-            mgmt_ip = getattr(ont, "management_ip", None)
+            mgmt_ip = getattr(ont, "mgmt_ip_address", None)
             if mgmt_ip:
                 step.complete(True, f"Management IP already configured: {mgmt_ip}")
                 return True
@@ -720,12 +613,12 @@ class ProvisioningCoordinator:
                 )
                 return True
 
-            # Queue wait task for async discovery
+            # Wait for TR-069 bootstrap
             from app.services.network.ont_provision_steps import (
-                queue_wait_tr069_bootstrap,
+                wait_tr069_bootstrap,
             )
 
-            wait_result = queue_wait_tr069_bootstrap(self.db, self._result.ont_id)
+            wait_result = wait_tr069_bootstrap(self.db, self._result.ont_id)
             step.complete(
                 True,
                 f"Queued ACS discovery wait: {wait_result.message}",
@@ -764,10 +657,11 @@ class ProvisioningCoordinator:
                 step.skip("ONT not yet discovered in ACS - config push deferred")
                 return True
 
-            # Queue config push via provisioning profile
-            from app.services.network.ont_profile_push import queue_profile_push
+            from app.services.network.ont_provision_steps import (
+                apply_saved_service_config,
+            )
 
-            push_result = queue_profile_push(self.db, str(ont.id))
+            push_result = apply_saved_service_config(self.db, str(ont.id))
 
             if push_result.success:
                 step.complete(
@@ -820,7 +714,6 @@ def queue_provisioning(
     fsp: str,
     serial_number: str,
     *,
-    bundle_id: str | None = None,
     force_reauthorize: bool = False,
     initiated_by: str | None = None,
     request: Request | None = None,
@@ -835,7 +728,6 @@ def queue_provisioning(
         olt_id: OLT device ID
         fsp: Frame/Slot/Port location
         serial_number: ONT serial number
-        bundle_id: Optional provisioning bundle ID
         force_reauthorize: Delete existing registration first
         initiated_by: User/system that initiated
         request: HTTP request for audit
@@ -875,7 +767,6 @@ def queue_provisioning(
                 "olt_id": olt_id,
                 "fsp": fsp,
                 "serial_number": serial_number,
-                "bundle_id": bundle_id,
                 "force_reauthorize": force_reauthorize,
             },
         )
@@ -916,7 +807,6 @@ def queue_provisioning(
             "app.tasks.provisioning.run_coordinated_provisioning_task",
             args=[str(op.id), olt_id, fsp, serial_number],
             kwargs={
-                "bundle_id": bundle_id,
                 "force_reauthorize": force_reauthorize,
             },
             correlation_id=correlation_key,
@@ -964,7 +854,6 @@ def provision_ont_sync(
     fsp: str,
     serial_number: str,
     *,
-    bundle_id: str | None = None,
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> ProvisioningResult:
@@ -978,64 +867,7 @@ def provision_ont_sync(
         olt_id,
         fsp,
         serial_number,
-        bundle_id=bundle_id,
         force_reauthorize=force_reauthorize,
     )
 
 
-def provision_ont_resilient(
-    db: Session,
-    olt_id: str,
-    fsp: str,
-    serial_number: str,
-    *,
-    bundle_id: str | None = None,
-    force_reauthorize: bool = False,
-    request: Request | None = None,
-    prefer_sync: bool = False,
-) -> ProvisioningResult | AsyncProvisioningResult:
-    """Provision ONT with async/sync fallback.
-
-    Tries to queue async provisioning first. Falls back to sync execution
-    if Celery is unavailable.
-
-    Args:
-        db: Database session
-        olt_id: OLT device ID
-        fsp: Frame/Slot/Port location
-        serial_number: ONT serial number
-        bundle_id: Optional provisioning bundle ID
-        force_reauthorize: Delete existing registration first
-        request: HTTP request for audit
-        prefer_sync: Skip async and run synchronously
-
-    Returns:
-        ProvisioningResult (sync) or AsyncProvisioningResult (async)
-    """
-    from app.services.network.authorization_executor import is_celery_available
-
-    if prefer_sync or not is_celery_available():
-        logger.info(
-            "Running provisioning synchronously (prefer_sync=%s, celery=%s)",
-            prefer_sync,
-            is_celery_available() if not prefer_sync else "skipped",
-        )
-        return provision_ont_sync(
-            db,
-            olt_id,
-            fsp,
-            serial_number,
-            bundle_id=bundle_id,
-            force_reauthorize=force_reauthorize,
-            request=request,
-        )
-
-    return queue_provisioning(
-        db,
-        olt_id,
-        fsp,
-        serial_number,
-        bundle_id=bundle_id,
-        force_reauthorize=force_reauthorize,
-        request=request,
-    )

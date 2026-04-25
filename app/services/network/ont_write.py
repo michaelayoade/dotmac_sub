@@ -19,7 +19,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.network.ont_config_overrides import upsert_ont_config_override
+from app.services.network.ont_desired_config import upsert_ont_desired_config_value as upsert_ont_config_override
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
@@ -258,7 +258,7 @@ class OntWriteService:
             upsert_ont_config_override(
                 db,
                 ont=ont,
-                field_name="management.vlan_tag",
+                field_name="management.vlan",
                 value=vlan_int,
                 reason="ont_write.update_management_ip",
             )
