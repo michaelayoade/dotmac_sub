@@ -40,6 +40,24 @@
                     {% if subscriber_info.get('plan_name') %}
                     <span class="inline-flex items-center rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 dark:bg-teal-500/10 dark:text-teal-300">{{ subscriber_info.plan_name }}</span>
                     {% endif %}
+                    {% if ont.onu_type %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont.onu_type.name }}</span>
+                    {% endif %}
+                    {% if ont.firmware_version %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">v{{ ont.firmware_version }}</span>
+                    {% endif %}
+                    {% if ont.zone %}
+                    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{{ ont.zone.name }}</span>
+                    {% endif %}
+                    {% if ont.splitter %}
+                    <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">{{ ont.splitter.name }}</span>
+                    {% endif %}
+                    {% if location_address_or_comment %}
+                    <span class="inline-flex max-w-xs items-center truncate rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300" title="{{ location_address_or_comment }}">{{ location_address_or_comment }}</span>
+                    {% endif %}
+                    {% if ont.gps_latitude and ont.gps_longitude %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ont.gps_latitude }}, {{ ont.gps_longitude }}</span>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -77,6 +95,7 @@
                     Actions
                 </button>
                 <div x-show="open" x-cloak x-transition class="absolute right-0 z-50 mt-2 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                    <a href="/admin/network/onts/{{ ont.id }}/edit" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Edit</a>
                     <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/reboot" hx-swap="none" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Reboot</button>
                     <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory" hx-swap="none" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Return to Inventory</button>
                     <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/factory-reset" hx-swap="none" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Reset Config</button>

@@ -208,11 +208,18 @@
                 <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</h2>
                 <p class="text-sm text-slate-500 dark:text-slate-400">Cached autofind results across active OLTs.</p>
             </div>
-            <form method="POST" action="/admin/network/unconfigured-onts/scan">
+            <form method="POST" action="/admin/network/unconfigured-onts/scan"
+                  hx-post="/admin/network/unconfigured-onts/scan"
+                  hx-swap="none"
+                  @htmx:after-request="if ($event.detail.successful) { $dispatch('autofind-scan-started') }">
                 {% include "components/forms/csrf_input.html" %}
-                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.357 15m13.062 0H15"/></svg>
-                    Scan Now
+                {% if filters.olt_id %}
+                <input type="hidden" name="olt_id" value="{{ filters.olt_id }}">
+                {% endif %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-wait"
+                        :disabled="$store.autofindScan?.scanning">
+                    <svg class="h-4 w-4" :class="$store.autofindScan?.scanning && 'animate-spin'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.357 15m13.062 0H15"/></svg>
+                    <span x-text="$store.autofindScan?.scanning ? 'Scanning...' : 'Scan Now'">Scan Now</span>
                 </button>
             </form>
         </div>
@@ -774,4 +781,232 @@
     </div>
 
 {{ animation_styles() }}
+
+{# ═══════════════ Autofind Scan Progress Modal ═══════════════ #}
+<div x-data="autofindScanModal()"
+     x-show="open"
+     x-cloak
+     @autofindScanStarted.window="handleScanStarted($event.detail)"
+     @keydown.escape.window="if (completed) close()"
+     class="fixed inset-0 z-50 overflow-y-auto"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="autofind-modal-title">
+    {# Backdrop #}
+    <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
+         x-show="open"
+         x-transition:enter="ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0">
+    </div>
+
+    {# Modal content #}
+    <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="relative w-full max-w-lg transform rounded-xl bg-white shadow-2xl transition-all dark:bg-slate-800"
+             x-show="open"
+             x-transition:enter="ease-out duration-200"
+             x-transition:enter-start="opacity-0 scale-95"
+             x-transition:enter-end="opacity-100 scale-100"
+             x-transition:leave="ease-in duration-150"
+             x-transition:leave-start="opacity-100 scale-100"
+             x-transition:leave-end="opacity-0 scale-95"
+             @click.away="if (completed) close()">
+
+            {# Header #}
+            <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+                <h3 id="autofind-modal-title" class="text-lg font-semibold text-slate-900 dark:text-white">
+                    Scanning OLTs for Unconfigured ONTs
+                </h3>
+                <button x-show="completed"
+                        @click="close()"
+                        class="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+
+            {# Progress bar #}
+            <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-700/50">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium text-slate-700 dark:text-slate-300" x-text="statusMessage">Initializing...</span>
+                    <span class="text-sm font-medium tabular-nums text-slate-500 dark:text-slate-400" x-text="`${completedCount}/${totalCount}`"></span>
+                </div>
+                <div class="h-2 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                    <div class="h-full rounded-full transition-all duration-300"
+                         :class="finalStatus === 'failed' ? 'bg-rose-500' : (finalStatus === 'warning' ? 'bg-amber-500' : 'bg-emerald-500')"
+                         :style="`width: ${progressPercent}%`"></div>
+                </div>
+            </div>
+
+            {# OLT results list #}
+            <div class="max-h-80 overflow-y-auto px-5 py-3">
+                <template x-if="oltResults.length === 0 && !completed">
+                    <div class="flex items-center justify-center py-8 text-slate-500 dark:text-slate-400">
+                        <svg class="h-5 w-5 animate-spin mr-2" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Waiting for results...
+                    </div>
+                </template>
+                <ul class="space-y-2">
+                    <template x-for="olt in oltResults" :key="olt.id">
+                        <li class="flex items-center justify-between rounded-lg border px-3 py-2"
+                            :class="{
+                                'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20': olt.status === 'success',
+                                'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20': olt.status === 'failed',
+                                'border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20': olt.status === 'scanning'
+                            }">
+                            <div class="flex items-center gap-3">
+                                {# Status icon #}
+                                <template x-if="olt.status === 'success'">
+                                    <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                </template>
+                                <template x-if="olt.status === 'failed'">
+                                    <svg class="h-5 w-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </template>
+                                <template x-if="olt.status === 'scanning'">
+                                    <svg class="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                    </svg>
+                                </template>
+
+                                {# OLT name and message #}
+                                <div>
+                                    <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="olt.name"></span>
+                                    <p class="text-xs" :class="olt.status === 'failed' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'" x-text="olt.message || (olt.status === 'scanning' ? 'Scanning...' : '')"></p>
+                                </div>
+                            </div>
+
+                            {# Duration #}
+                            <span x-show="olt.duration_ms" class="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400" x-text="(olt.duration_ms / 1000).toFixed(1) + 's'"></span>
+                        </li>
+                    </template>
+                </ul>
+            </div>
+
+            {# Footer with summary #}
+            <div x-show="completed" class="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+                <div class="flex items-center justify-between">
+                    <div class="text-sm text-slate-600 dark:text-slate-400">
+                        <span x-show="summary.created > 0" class="mr-3"><strong class="text-emerald-600 dark:text-emerald-400" x-text="summary.created"></strong> new</span>
+                        <span x-show="summary.updated > 0" class="mr-3"><strong class="text-blue-600 dark:text-blue-400" x-text="summary.updated"></strong> refreshed</span>
+                        <span x-show="summary.resolved > 0" class="mr-3"><strong class="text-slate-600 dark:text-slate-400" x-text="summary.resolved"></strong> resolved</span>
+                        <span x-show="summary.failed_count > 0"><strong class="text-rose-600 dark:text-rose-400" x-text="summary.failed_count"></strong> failed</span>
+                    </div>
+                    <button @click="closeAndRefresh()" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Alpine.js store for global scan state
+document.addEventListener('alpine:init', () => {
+    Alpine.store('autofindScan', {
+        scanning: false
+    });
+});
+
+// Autofind scan progress modal component
+function autofindScanModal() {
+    return {
+        open: false,
+        operationId: null,
+        totalCount: 0,
+        completedCount: 0,
+        oltResults: [],
+        statusMessage: 'Initializing...',
+        completed: false,
+        finalStatus: null,
+        summary: { created: 0, updated: 0, resolved: 0, failed_count: 0 },
+
+        get progressPercent() {
+            if (this.totalCount === 0) return 0;
+            return Math.round((this.completedCount / this.totalCount) * 100);
+        },
+
+        handleScanStarted(data) {
+            if (!data || !data.operation_id) return;
+
+            this.operationId = data.operation_id;
+            this.totalCount = data.olt_count || 0;
+            this.completedCount = 0;
+            this.oltResults = [];
+            this.statusMessage = `Scanning ${this.totalCount} OLT(s)...`;
+            this.completed = false;
+            this.finalStatus = null;
+            this.summary = { created: 0, updated: 0, resolved: 0, failed_count: 0 };
+            this.open = true;
+
+            // Update global store
+            Alpine.store('autofindScan').scanning = true;
+
+            // Track with WebSocket
+            if (window.operationTracker) {
+                window.operationTracker.track(data.operation_id, {
+                    showToasts: false,
+                    onRunning: (d) => this.handleProgress(d),
+                    onSuccess: (d) => this.handleComplete(d, 'succeeded'),
+                    onWarning: (d) => this.handleComplete(d, 'warning'),
+                    onError: (d) => this.handleComplete(d, 'failed')
+                });
+            }
+        },
+
+        handleProgress(data) {
+            if (data.total_olts) this.totalCount = data.total_olts;
+            if (data.completed_olts !== undefined) this.completedCount = data.completed_olts;
+            if (data.message) this.statusMessage = data.message;
+
+            // Update OLT results
+            if (data.olt_results) {
+                this.oltResults = data.olt_results;
+            }
+
+            // Add current scanning OLT if provided
+            if (data.current_olt) {
+                const existing = this.oltResults.find(o => o.id === data.current_olt.id);
+                if (!existing) {
+                    this.oltResults.push(data.current_olt);
+                } else {
+                    Object.assign(existing, data.current_olt);
+                }
+            }
+        },
+
+        handleComplete(data, status) {
+            this.completed = true;
+            this.finalStatus = status;
+            this.statusMessage = data.message || (status === 'succeeded' ? 'Scan complete' : 'Scan finished with issues');
+
+            if (data.total_olts) this.totalCount = data.total_olts;
+            if (data.completed_olts !== undefined) this.completedCount = data.completed_olts;
+            if (data.olt_results) this.oltResults = data.olt_results;
+            if (data.summary) this.summary = data.summary;
+
+            // Update global store
+            Alpine.store('autofindScan').scanning = false;
+        },
+
+        close() {
+            this.open = false;
+            Alpine.store('autofindScan').scanning = false;
+        },
+
+        closeAndRefresh() {
+            this.close();
+            // Refresh the page to show updated results
+            window.location.href = '/admin/network/onts?view=unconfigured';
+        }
+    };
+}
+</script>
 {% endblock %}

@@ -64,6 +64,7 @@ class NetworkOperationType(enum.Enum):
     router_reboot = "router_reboot"
     router_firmware_upgrade = "router_firmware_upgrade"
     router_bulk_push = "router_bulk_push"
+    autofind_scan = "autofind_scan"
 
 
 class NetworkOperationTargetType(enum.Enum):
@@ -72,6 +73,7 @@ class NetworkOperationTargetType(enum.Enum):
     olt = "olt"
     ont = "ont"
     cpe = "cpe"
+    system = "system"  # For operations spanning multiple resources
 
 
 class NetworkOperation(Base):

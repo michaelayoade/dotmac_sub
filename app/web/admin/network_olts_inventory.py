@@ -1142,6 +1142,7 @@ def olt_autofind_scan(
             olt_id=olt_id,
             entries=entries,
         )
+        db.commit()
 
         # Auto-authorize if requested
         if auto_authorize and entries:
@@ -1241,18 +1242,125 @@ def olt_autofind_scan_redirect(olt_id: str) -> RedirectResponse:
     "/unconfigured-onts/scan",
     dependencies=[Depends(require_permission("network:write"))],
 )
-def unconfigured_onts_scan_now() -> RedirectResponse:
-    from app.services.queue_adapter import enqueue_task
-    from app.tasks.ont_autofind import discover_all_olt_autofind
+def unconfigured_onts_scan_now(
+    request: Request,
+    olt_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Start background autofind scan with per-OLT progress tracking.
 
-    enqueue_task(
-        discover_all_olt_autofind,
-        correlation_id="olt_autofind:all",
-        source="admin_network_olts_inventory",
+    Returns immediately with an operation ID for WebSocket progress updates.
+    The UI shows a progress modal with per-OLT status.
+    """
+    from uuid import uuid4
+
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
     )
+    from app.services.network_operations import network_operations
+    from app.tasks.olt_autofind import scan_olts_autofind
+
+    is_htmx = request.headers.get("HX-Request") == "true"
+
+    # Get OLT IDs to scan
+    query = select(OLTDevice.id, OLTDevice.name).where(OLTDevice.is_active.is_(True))
+    if olt_id:
+        query = query.where(OLTDevice.id == olt_id)
+    olts = db.execute(query.order_by(OLTDevice.name.asc())).all()
+
+    if not olts:
+        message = "No active OLTs found to scan"
+        if is_htmx:
+            return Response(
+                status_code=200,
+                headers=_toast_headers(message, "warning"),
+            )
+        return RedirectResponse(
+            f"/admin/network/onts?view=unconfigured&status=warning&message={quote_plus(message)}",
+            status_code=303,
+        )
+
+    # Create network operation for tracking
+    actor = getattr(getattr(request.state, "user", None), "email", None) or "system"
+    target_type = (
+        NetworkOperationTargetType.olt
+        if olt_id
+        else NetworkOperationTargetType.system
+    )
+    target_id = olt_id or str(uuid4())  # Use placeholder UUID for "all OLTs" scan
+
+    try:
+        operation = network_operations.start(
+            db,
+            NetworkOperationType.autofind_scan,
+            target_type,
+            target_id,
+            correlation_key=f"autofind_scan:{olt_id or 'all'}",
+            input_payload={
+                "olt_id": olt_id,
+                "olt_count": len(olts),
+                "olt_names": [o.name for o in olts],
+            },
+            initiated_by=actor,
+        )
+        db.commit()
+    except Exception as exc:
+        # Likely duplicate operation in progress
+        error_msg = str(exc.detail) if hasattr(exc, "detail") else str(exc)
+        if is_htmx:
+            return Response(
+                status_code=200,
+                headers=_toast_headers(error_msg, "warning"),
+            )
+        return RedirectResponse(
+            f"/admin/network/onts?view=unconfigured&status=warning&message={quote_plus(error_msg)}",
+            status_code=303,
+        )
+
+    operation_id = str(operation.id)
+    olt_ids_to_scan = [str(o.id) for o in olts] if olt_id else None
+
+    # Queue background task
+    scan_olts_autofind.delay(operation_id, olt_ids_to_scan)
+
+    log_network_action_result(
+        request=request,
+        resource_type="ont_autofind_candidate",
+        resource_id=olt_id or "all",
+        action="Start Autofind Scan",
+        success=True,
+        message=f"Started background scan of {len(olts)} OLT(s)",
+        metadata={
+            "operation_id": operation_id,
+            "olt_id": olt_id,
+            "olt_count": len(olts),
+        },
+    )
+
+    # For HTMX requests, return headers to trigger modal and track operation
+    if is_htmx:
+        trigger_data = {
+            "showToast": {
+                "message": f"Scanning {len(olts)} OLT(s)...",
+                "type": "info",
+            },
+            "autofindScanStarted": {
+                "operation_id": operation_id,
+                "olt_count": len(olts),
+                "olts": [{"id": str(o.id), "name": o.name} for o in olts],
+            },
+        }
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps(trigger_data, ensure_ascii=True),
+            },
+        )
+
+    # For non-HTMX, redirect with operation ID for tracking
     return RedirectResponse(
-        "/admin/network/onts?view=unconfigured&status=success&message="
-        + quote_plus("Scanning"),
+        f"/admin/network/onts?view=unconfigured&scan_operation_id={operation_id}",
         status_code=303,
     )
 

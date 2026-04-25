@@ -175,6 +175,83 @@ def refresh_pool_availability(
     return next_available, available_count
 
 
+def allocate_management_ip_for_ont(
+    db: Session,
+    *,
+    ont_unit_id: str,
+    olt_id: str,
+) -> tuple[bool, str, str | None]:
+    """Allocate a management IP from the OLT's management IP pool for the ONT.
+
+    Returns:
+        Tuple of (success, message, allocated_ip).
+    """
+    from app.models.network import IPv4Address, MgmtIpMode, OLTDevice
+
+    ont = db.get(OntUnit, ont_unit_id)
+    if ont is None:
+        return False, "ONT not found.", None
+
+    # Check if ONT already has a management IP
+    if ont.mgmt_ip_address:
+        return True, f"ONT already has management IP {ont.mgmt_ip_address}.", ont.mgmt_ip_address
+
+    olt = db.get(OLTDevice, olt_id)
+    if olt is None:
+        return False, "OLT not found.", None
+
+    # Get management IP pool from OLT config pack
+    pool_id = olt.mgmt_ip_pool_id
+    if not pool_id:
+        logger.info(
+            "No management IP pool configured for OLT %s, skipping IP allocation for ONT %s",
+            olt.name,
+            ont.serial_number,
+        )
+        return True, "No management IP pool configured on OLT.", None
+
+    # Get next available IP from pool
+    next_ip, available_count = refresh_pool_availability(db, pool_id)
+    if not next_ip:
+        logger.warning(
+            "Management IP pool %s exhausted for OLT %s, cannot allocate IP for ONT %s",
+            pool_id,
+            olt.name,
+            ont.serial_number,
+        )
+        return False, "Management IP pool exhausted.", None
+
+    # Create IPv4Address record to reserve the IP
+    note = f"ont:{ont_unit_id}"
+    record = db.query(IPv4Address).filter(IPv4Address.address == next_ip).first()
+    if record is None:
+        record = IPv4Address(
+            address=next_ip,
+            pool_id=pool_id,
+            is_reserved=True,
+            notes=note,
+            ont_unit_id=uuid.UUID(ont_unit_id),
+        )
+        db.add(record)
+    else:
+        record.is_reserved = True
+        record.notes = note
+        record.ont_unit_id = uuid.UUID(ont_unit_id)
+
+    # Update ONT with allocated IP
+    ont.mgmt_ip_address = next_ip
+    ont.mgmt_ip_mode = MgmtIpMode.static_ip
+
+    db.flush()
+    logger.info(
+        "Allocated management IP %s from pool %s to ONT %s",
+        next_ip,
+        pool_id,
+        ont.serial_number,
+    )
+    return True, f"Allocated management IP {next_ip}.", next_ip
+
+
 def get_autofind_candidate_by_serial(
     db: Session,
     olt_id: str,
@@ -407,8 +484,21 @@ def run_post_authorization_follow_up(
     serial_number: str,
     ont_id_on_olt: int,
     skip_autofind_resolve: bool = False,
+    queue_tr069_bootstrap: bool = True,
 ) -> tuple[bool, str, list[dict[str, object]]]:
-    """Run minimal post-authorization bookkeeping."""
+    """Run minimal post-authorization bookkeeping.
+
+    Args:
+        db: Database session.
+        ont_unit_id: UUID of the ONT unit.
+        olt_id: UUID of the OLT.
+        fsp: Frame/Slot/Port string.
+        serial_number: ONT serial number.
+        ont_id_on_olt: ONT ID on the OLT.
+        skip_autofind_resolve: Skip autofind candidate resolution.
+        queue_tr069_bootstrap: If True, queue a background task to bind TR-069
+            profile and wait for ACS connectivity. This is non-blocking.
+    """
     steps: list[dict[str, object]] = []
     assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
         db,
@@ -421,6 +511,75 @@ def run_post_authorization_follow_up(
     )
     if not assignment_ok:
         return False, assignment_msg, steps
+
+    # Allocate management IP from OLT's pool (non-blocking failure)
+    mgmt_ip_ok, mgmt_ip_msg, allocated_ip = allocate_management_ip_for_ont(
+        db,
+        ont_unit_id=ont_unit_id,
+        olt_id=olt_id,
+    )
+    steps.append({
+        "name": "Allocate management IP",
+        "success": mgmt_ip_ok,
+        "message": mgmt_ip_msg,
+        "allocated_ip": allocated_ip,
+    })
+    if not mgmt_ip_ok:
+        # Non-fatal - authorization still succeeded, but log warning
+        logger.warning(
+            "Failed to allocate management IP for ONT %s: %s",
+            serial_number,
+            mgmt_ip_msg,
+        )
+
+    # Queue background TR-069 ACS connectivity task (non-blocking)
+    if queue_tr069_bootstrap:
+        try:
+            from app.services.queue_adapter import enqueue_task
+
+            result = enqueue_task(
+                "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
+                args=[ont_unit_id, olt_id, fsp, ont_id_on_olt],
+                correlation_id=f"tr069_acs_connect:{ont_unit_id}",
+                source="post_authorization_follow_up",
+                countdown=5,  # Small delay to let OLT sync
+            )
+            if result.queued:
+                steps.append({
+                    "name": "Queue TR-069 ACS connectivity",
+                    "success": True,
+                    "message": "Queued background task to bind TR-069 and wait for ACS",
+                    "task_id": result.task_id,
+                })
+                logger.info(
+                    "Queued TR-069 ACS connectivity task for ONT %s: task_id=%s",
+                    serial_number,
+                    result.task_id,
+                )
+            else:
+                steps.append({
+                    "name": "Queue TR-069 ACS connectivity",
+                    "success": False,
+                    "message": f"Failed to queue: {result.error}",
+                })
+                logger.warning(
+                    "Failed to queue TR-069 ACS connectivity task for ONT %s: %s",
+                    serial_number,
+                    result.error,
+                )
+        except Exception as exc:
+            # Non-fatal - authorization still succeeded
+            steps.append({
+                "name": "Queue TR-069 ACS connectivity",
+                "success": False,
+                "message": str(exc),
+            })
+            logger.warning(
+                "Error queueing TR-069 ACS connectivity task for ONT %s: %s",
+                serial_number,
+                exc,
+            )
+
     return True, "Authorization follow-up completed.", steps
 
 

@@ -14,6 +14,7 @@ from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+from app.services.web_network_onts import management_ip_choices_for_ont
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
 )
@@ -590,6 +591,13 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
             initial_iphost_form=observed_state["initial_form"],
         )
     )
+    # Add management IP pool context for the dropdown
+    mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
+    context["mgmt_ip_pool"] = mgmt_ip_pool_ctx.get("mgmt_ip_pool")
+    context["available_mgmt_ips"] = mgmt_ip_pool_ctx.get("available_mgmt_ips", [])
+    # Add effective_values for easy access in templates
+    effective_config = context.get("effective_config", {})
+    context["effective_values"] = effective_config.get("values", {}) if isinstance(effective_config, dict) else {}
     context.update(
         _unified_summary_context(
             desired_mgmt=context["desired_mgmt_config"],

@@ -124,26 +124,6 @@
         </div>
     </details>
 
-    {# ==================== DANGER ZONE (collapsible) ==================== #}
-    <details class="rounded-xl border border-rose-200 bg-rose-50/50 dark:border-rose-900/50 dark:bg-rose-950/20">
-        <summary class="cursor-pointer px-5 py-3 text-sm font-medium text-rose-700 dark:text-rose-300">Danger Zone</summary>
-        <div class="border-t border-rose-200/70 p-5 space-y-3 dark:border-rose-900/40">
-            <div class="flex items-center justify-between">
-                <div><h4 class="text-sm font-medium text-slate-900 dark:text-slate-100">Return to inventory</h4><p class="text-xs text-slate-600 dark:text-slate-400">Clear assignment, mark as available</p></div>
-                <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory" hx-swap="none" class="rounded border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700/50 dark:bg-slate-900 dark:text-amber-400">Return</button>
-            </div>
-            <div class="flex items-center justify-between">
-                <div><h4 class="text-sm font-medium text-slate-900 dark:text-slate-100">Factory reset</h4><p class="text-xs text-slate-600 dark:text-slate-400">Erase config and reboot device</p></div>
-                <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/factory-reset" hx-swap="none" hx-confirm="Type RESET to confirm factory reset" class="rounded border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-700/50 dark:bg-slate-900 dark:text-rose-400">Reset</button>
-            </div>
-        </div>
-    </details>
-
-    {# Connected Devices (lazy) #}
-    <div id="lan-hosts-content" hx-get="/admin/network/onts/{{ ont.id }}/lan-hosts" hx-trigger="intersect once" hx-swap="innerHTML">
-        <div class="flex items-center justify-center py-6 text-sm text-slate-400"><svg class="mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Loading devices...</div>
-    </div>
-
     {# Charts (lazy) #}
     <div id="charts-content" hx-get="/admin/network/onts/{{ ont.id }}/charts" hx-trigger="intersect once" hx-swap="innerHTML">
         <div class="flex items-center justify-center py-6 text-sm text-slate-400"><svg class="mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Loading charts...</div>

@@ -1155,3 +1155,271 @@ def scrape_genieacs_metrics() -> dict[str, Any]:
         stats["online_silent"],
     )
     return stats
+
+
+@celery_app.task(name="app.tasks.tr069.heal_online_silent_onts")
+def heal_online_silent_onts(
+    batch_size: int = 20,
+    stale_minutes: int = 15,
+) -> dict[str, int]:
+    """Auto-heal ONTs that are online on OLT but silent in ACS.
+
+    Finds ONTs where:
+    - OLT reports them as online
+    - Either never informed to ACS, or last inform is stale
+
+    For each ONT:
+    - If never informed: queue TR-069 profile binding + bootstrap wait
+    - If informed before but stale: send connection request to trigger inform
+
+    Before processing, clears stale "running" task executions for bootstrap
+    tasks to prevent stuck tasks from blocking new attempts.
+
+    Args:
+        batch_size: Maximum ONTs to process per run.
+        stale_minutes: Consider ACS inform stale after this many minutes.
+
+    Returns:
+        Stats: {processed, bootstrapped, reconnected, skipped, errors}.
+    """
+    from sqlalchemy import update
+
+    from app.models.network import OntAuthorizationStatus, OntUnit, OnuOnlineStatus
+    from app.models.task_execution import TaskExecution, TaskExecutionStatus
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+    from app.services.queue_adapter import enqueue_task
+
+    logger.info(
+        "Starting online-silent ONT healing (batch=%d, stale_min=%d)",
+        batch_size,
+        stale_minutes,
+    )
+    db = db_session_adapter.create_session()
+    try:
+        now = datetime.now(UTC)
+
+        # Clear stale "running" bootstrap tasks (stuck > 30 minutes)
+        # This allows new healing attempts for ONTs with stuck tasks
+        stale_task_cutoff = now - timedelta(minutes=30)
+        stale_task_stmt = (
+            update(TaskExecution)
+            .where(TaskExecution.status == TaskExecutionStatus.running)
+            .where(TaskExecution.task_name == "app.tasks.ont_authorization.ensure_tr069_acs_connectivity")
+            .where(TaskExecution.created_at < stale_task_cutoff)
+            .values(
+                status=TaskExecutionStatus.failed,
+                error_message="Marked stale by heal_online_silent_onts",
+                completed_at=now,
+            )
+        )
+        stale_result = db.execute(stale_task_stmt)
+        stale_cleared = stale_result.rowcount
+        if stale_cleared > 0:
+            logger.info(
+                "Cleared %d stale bootstrap task executions before healing",
+                stale_cleared,
+            )
+            db.commit()
+        stale_cutoff = now - timedelta(minutes=stale_minutes)
+
+        # Find ONTs that are:
+        # - Active and authorized
+        # - Online on OLT
+        # - Either no acs_last_inform_at OR it's stale
+        stmt = (
+            select(OntUnit)
+            .where(OntUnit.is_active.is_(True))
+            .where(OntUnit.authorization_status == OntAuthorizationStatus.authorized)
+            .where(OntUnit.online_status == OnuOnlineStatus.online)
+            .where(
+                (OntUnit.acs_last_inform_at.is_(None))
+                | (OntUnit.acs_last_inform_at < stale_cutoff)
+            )
+            .order_by(OntUnit.acs_last_inform_at.asc().nulls_first())
+            .limit(batch_size)
+        )
+        onts = list(db.scalars(stmt).all())
+
+        if not onts:
+            logger.info("No online-silent ONTs to heal")
+            return {
+                "processed": 0,
+                "bootstrapped": 0,
+                "reconnected": 0,
+                "skipped": 0,
+                "errors": 0,
+                "stale_cleared": stale_cleared,
+            }
+
+        # Build set of ONT IDs with recent bootstrap attempts (cooldown: 10 minutes)
+        # to avoid retrying too frequently
+        cooldown_cutoff = now - timedelta(minutes=10)
+        ont_ids_str = [str(ont.id) for ont in onts]
+        recent_attempts_stmt = (
+            select(TaskExecution.idempotency_key)
+            .where(TaskExecution.task_name == "app.tasks.ont_authorization.ensure_tr069_acs_connectivity")
+            .where(TaskExecution.created_at > cooldown_cutoff)
+        )
+        recent_keys = set(db.scalars(recent_attempts_stmt).all())
+        # Extract ONT IDs from keys like "app.tasks...:tr069_connect:<ont_id>"
+        recently_attempted_ont_ids = {
+            key.split(":")[-1] for key in recent_keys if "tr069_connect:" in key
+        }
+
+        processed = 0
+        bootstrapped = 0
+        reconnected = 0
+        skipped = 0
+        errors = 0
+
+        for ont in onts:
+            processed += 1
+            try:
+                # Check cooldown - skip if recently attempted
+                if str(ont.id) in recently_attempted_ont_ids:
+                    logger.debug(
+                        "Online-silent heal: ONT %s has recent bootstrap attempt, skipping (cooldown)",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    continue
+
+                # Check if ONT has TR-069 profile configured
+                effective_config = resolve_effective_ont_config(db, ont)
+                effective_values = effective_config.get("values", {})
+                tr069_profile_id = effective_values.get("tr069_olt_profile_id")
+
+                if not tr069_profile_id:
+                    logger.debug(
+                        "Online-silent heal: ONT %s has no TR-069 profile, skipping",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    continue
+
+                # Check if ONT has a linked TR-069 device with genieacs_device_id
+                linked_tr069 = (
+                    db.scalars(
+                        select(Tr069CpeDevice)
+                        .where(Tr069CpeDevice.ont_unit_id == ont.id)
+                        .where(Tr069CpeDevice.is_active.is_(True))
+                        .where(Tr069CpeDevice.genieacs_device_id.isnot(None))
+                        .limit(1)
+                    ).first()
+                )
+
+                if linked_tr069 and ont.acs_last_inform_at is not None:
+                    # Device has informed before - send connection request
+                    logger.info(
+                        "Online-silent heal: Sending connection request for ONT %s (last inform: %s)",
+                        ont.serial_number,
+                        ont.acs_last_inform_at,
+                    )
+                    try:
+                        from app.services.acs_client import create_acs_config_writer
+
+                        writer = create_acs_config_writer()
+                        result = writer.send_connection_request(db, str(ont.id))
+                        if result.success:
+                            reconnected += 1
+                            logger.info(
+                                "Online-silent heal: Connection request sent for ONT %s",
+                                ont.serial_number,
+                            )
+                        else:
+                            logger.warning(
+                                "Online-silent heal: Connection request failed for ONT %s: %s",
+                                ont.serial_number,
+                                result.message,
+                            )
+                            errors += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "Online-silent heal: Error sending connection request for ONT %s: %s",
+                            ont.serial_number,
+                            exc,
+                        )
+                        errors += 1
+                else:
+                    # Device has never informed - queue TR-069 bootstrap
+                    logger.info(
+                        "Online-silent heal: Queueing TR-069 bootstrap for ONT %s (never informed)",
+                        ont.serial_number,
+                    )
+                    # Get OLT context for the task
+                    olt_id = str(ont.olt_device_id) if ont.olt_device_id else None
+
+                    # Construct FSP from board/port fields
+                    board = (ont.board or "").strip()
+                    port = (ont.port or "").strip()
+                    fsp = f"{board}/{port}" if board and port else None
+
+                    # Parse external_id to get ONT-ID on OLT (integer)
+                    ext_id_raw = (ont.external_id or "").strip() if ont.external_id else ""
+                    ont_id_on_olt = int(ext_id_raw) if ext_id_raw.isdigit() else None
+
+                    if not olt_id or not fsp or ont_id_on_olt is None:
+                        logger.warning(
+                            "Online-silent heal: ONT %s missing OLT context (olt_id=%s, fsp=%s, ont_id=%s), skipping",
+                            ont.serial_number,
+                            olt_id,
+                            fsp,
+                            ont_id_on_olt,
+                        )
+                        skipped += 1
+                        continue
+
+                    try:
+                        enqueue_result = enqueue_task(
+                            "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
+                            args=[str(ont.id), olt_id, fsp, ont_id_on_olt],
+                            correlation_id=f"heal_tr069:{ont.id}",
+                            source="heal_online_silent_onts",
+                        )
+                        if enqueue_result.queued:
+                            bootstrapped += 1
+                        else:
+                            logger.warning(
+                                "Online-silent heal: Failed to queue bootstrap for ONT %s: %s",
+                                ont.serial_number,
+                                enqueue_result.error,
+                            )
+                            errors += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "Online-silent heal: Error queueing bootstrap for ONT %s: %s",
+                            ont.serial_number,
+                            exc,
+                        )
+                        errors += 1
+
+            except Exception as exc:
+                logger.warning(
+                    "Online-silent heal: Error processing ONT %s: %s",
+                    ont.serial_number,
+                    exc,
+                )
+                errors += 1
+
+        logger.info(
+            "Online-silent ONT healing complete: processed=%d bootstrapped=%d reconnected=%d skipped=%d errors=%d stale_cleared=%d",
+            processed,
+            bootstrapped,
+            reconnected,
+            skipped,
+            errors,
+            stale_cleared,
+        )
+        return {
+            "processed": processed,
+            "bootstrapped": bootstrapped,
+            "reconnected": reconnected,
+            "skipped": skipped,
+            "errors": errors,
+            "stale_cleared": stale_cleared,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

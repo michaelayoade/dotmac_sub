@@ -80,10 +80,6 @@ class OltDetailAdapter:
                 "ont_relationship_context": self._build_ont_relationship_context(
                     page_data
                 ),
-                "bundle_context": self._build_bundle_context(db, olt),
-                "resource_blast_radius": self._build_resource_blast_radius(
-                    page_data
-                ),
             }
         )
         return page_data
@@ -247,43 +243,6 @@ class OltDetailAdapter:
             "available_vlans": page_data.get("available_vlans", []),
             "ip_pool_usage": page_data.get("olt_ip_pool_usage", []),
             "available_ip_pools": page_data.get("available_ip_pools", []),
-        }
-
-    def _build_bundle_context(
-        self, db: Session, olt: object | None
-    ) -> dict[str, object]:
-        del db, olt
-        return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
-
-    def _build_resource_blast_radius(
-        self, page_data: dict[str, object]
-    ) -> dict[str, object]:
-        vlan_ont_refs = 0
-        for ont in page_data.get("onts_on_olt", []) or []:
-            vlan_ids = {
-                getattr(ont, "wan_vlan_id", None),
-                getattr(ont, "mgmt_vlan_id", None),
-                getattr(ont, "user_vlan_id", None),
-            }
-            vlan_ont_refs += len([vlan_id for vlan_id in vlan_ids if vlan_id])
-
-        pool_assigned = 0
-        for usage in page_data.get("olt_ip_pool_usage", []) or []:
-            if isinstance(usage, dict):
-                pool_assigned += int(usage.get("assigned", 0) or 0)
-            else:
-                pool_assigned += int(getattr(usage, "assigned", 0) or 0)
-
-        return {
-            "vlans": {
-                "count": len(page_data.get("olt_vlans", []) or []),
-                "ont_references": vlan_ont_refs,
-            },
-            "ip_pools": {
-                "count": len(page_data.get("olt_ip_pool_usage", []) or []),
-                "assigned_addresses": pool_assigned,
-            },
-            "onts": len(page_data.get("onts_on_olt", []) or []),
         }
 
     def _build_ont_relationship_context(
