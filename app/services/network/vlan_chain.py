@@ -1,7 +1,7 @@
-"""VLAN chain validation — compares profile desired VLANs vs actual OLT service-ports.
+"""VLAN chain validation — compares ONT desired VLANs vs actual OLT service-ports.
 
 Provides advisory warnings (not blocking) to help operators spot mismatches
-between what the provisioning profile expects and what is actually configured.
+between what ONT service instances expect and what is actually configured.
 """
 
 from __future__ import annotations
@@ -9,10 +9,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntAssignment, OntProvisioningProfile, OntUnit
-from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
+from app.models.network import OntAssignment, OntUnit, OntWanServiceInstance
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def validate_chain(
     *,
     actual_service_ports: list[dict] | None = None,
 ) -> VlanChainResult:
-    """Compare profile desired VLANs vs actual OLT service-ports.
+    """Compare ONT desired VLANs vs actual OLT service-ports.
 
     Args:
         db: Database session.
@@ -71,31 +71,33 @@ def validate_chain(
 
     if not assignment:
         result.warnings.append(
-            VlanChainWarning("info", "No active assignment — skipping profile check")
+            VlanChainWarning("info", "No active assignment - skipping VLAN check")
         )
         return result
 
-    profile: OntProvisioningProfile | None = resolve_assigned_bundle(db, ont)
-
-    if not profile:
+    services = list(
+        db.scalars(
+            select(OntWanServiceInstance)
+            .where(OntWanServiceInstance.ont_id == ont.id)
+            .where(OntWanServiceInstance.is_active.is_(True))
+            .order_by(OntWanServiceInstance.priority, OntWanServiceInstance.name)
+        ).all()
+    )
+    if not services:
         result.warnings.append(
             VlanChainWarning(
-                "info", "No provisioning profile linked — VLAN check skipped"
+                "info", "No ONT WAN service instances linked - VLAN check skipped"
             )
         )
         return result
 
-    result.profile_name = profile.name
-
-    # Collect desired VLANs from profile WAN services
+    # Collect desired VLANs from ONT WAN service instances.
     desired: set[int] = set()
-    for ws in profile.wan_services:
-        if ws.is_active and ws.s_vlan:
-            desired.add(ws.s_vlan)
-        if ws.is_active and ws.c_vlan:
-            desired.add(ws.c_vlan)
-    if profile.mgmt_vlan_tag:
-        desired.add(profile.mgmt_vlan_tag)
+    for service in services:
+        if service.s_vlan:
+            desired.add(service.s_vlan)
+        if service.c_vlan:
+            desired.add(service.c_vlan)
 
     result.desired_vlans = sorted(desired)
 

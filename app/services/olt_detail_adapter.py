@@ -257,11 +257,7 @@ class OltDetailAdapter:
             return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
 
         try:
-            from app.models.network import (
-                OntBundleAssignment,
-                OntProvisioningProfile,
-                OntUnit,
-            )
+            from app.models.network import OntProvisioningProfile, OntUnit
 
             bundles = list(
                 db.scalars(
@@ -277,17 +273,7 @@ class OltDetailAdapter:
                 return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
 
             bundle_ids = [bundle.id for bundle in bundles]
-            active_assignment_counts = dict(
-                db.execute(
-                    select(
-                        OntBundleAssignment.bundle_id,
-                        func.count(OntBundleAssignment.id),
-                    )
-                    .where(OntBundleAssignment.bundle_id.in_(bundle_ids))
-                    .where(OntBundleAssignment.is_active.is_(True))
-                    .group_by(OntBundleAssignment.bundle_id)
-                ).all()
-            )
+            active_assignment_counts: dict[object, int] = {}
             legacy_profile_counts = dict(
                 db.execute(
                     select(OntUnit.provisioning_profile_id, func.count(OntUnit.id))
@@ -310,7 +296,7 @@ class OltDetailAdapter:
                         "usage_count": usage_count,
                         "explicit_assignment_count": explicit_count,
                         "legacy_profile_count": legacy_count,
-                        "url": f"/admin/network/provisioning-profiles/{bundle.id}/edit",
+                        "url": None,
                     }
                 )
 

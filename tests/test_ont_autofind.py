@@ -283,7 +283,7 @@ def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
 
 
 def test_restore_candidate_clears_disappeared_state_for_authorization(db_session):
-    from app.services.network.olt_authorization_workflow import (
+    from app.services.network.ont_authorization import (
         get_autofind_candidate_by_serial,
     )
 

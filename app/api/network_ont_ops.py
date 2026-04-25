@@ -525,7 +525,7 @@ ALLOWED_BULK_ACTIONS = {
     "catv_toggle",
     "wifi_update",
     "voip_toggle",
-    "provision_saga",
+    "provision",
 }
 
 
@@ -543,7 +543,7 @@ def submit_bulk_action(
             status_code=400,
             detail=f"Invalid action '{payload.action}'. Allowed: {sorted(ALLOWED_BULK_ACTIONS)}",
         )
-    if payload.action == "provision_saga":
+    if payload.action == "provision":
         from app.services.network.bulk_provisioning import bulk_provision_onts
 
         params = dict(payload.params or {})
@@ -551,8 +551,6 @@ def submit_bulk_action(
             result = bulk_provision_onts(
                 db,
                 payload.ont_ids,
-                bundle_id=params.get("bundle_id") or params.get("profile_id"),
-                saga_name=str(params.get("saga_name") or "full_provisioning"),
                 tr069_olt_profile_id=params.get("tr069_olt_profile_id"),
                 max_workers=int(params.get("max_parallel") or 10),
                 chunk_delay_seconds=int(params.get("chunk_delay_seconds") or 15),

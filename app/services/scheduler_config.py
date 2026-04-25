@@ -337,8 +337,8 @@ def get_celery_config() -> dict:
     annotations: dict[str, dict[str, int]] = dict.fromkeys(TR069_TASK_QUEUE_NAMES, acs_limits)
     annotations.update(
         {
-            "app.tasks.saga.execute_saga": long_limits,
-            "app.tasks.saga.queue_bulk_saga_executions": long_limits,
+            "app.tasks.ont_provisioning.provision_ont": long_limits,
+            "app.tasks.ont_provisioning.queue_bulk_provisioning": long_limits,
             "app.tasks.olt_firmware.upgrade_with_verification": long_limits,
             "app.tasks.olt_firmware.rollback": long_limits,
             "app.tasks.provisioning.run_bulk_activation_job": long_limits,

@@ -1,12 +1,15 @@
-"""ONT provisioning executor with compensation-based rollback.
+"""ONT provisioning executor with best-effort external rollback.
 
 This module executes provisioning deltas using batched SSH commands
-and maintains a compensation log for rollback on failure.
+and maintains a compensation log for rollback on failure. OLT CLI writes
+are external side effects, so this is not an atomic database transaction;
+it is a compensation-based recovery path for partially applied changes.
 
 Key concepts:
-- Each step registers its undo action (compensation) before execution
+- Each step registers its undo action once the undo target is knowable
 - On failure, compensation actions are executed in reverse order
-- Single SSH session for all commands (avoids connection exhaustion)
+- Single SSH session for all commands (consistent CLI mode, fewer reconnects)
+- Failed compensation entries are persisted for retry/manual intervention
 """
 
 from __future__ import annotations
@@ -266,8 +269,11 @@ def execute_delta(
 ) -> ProvisioningExecutionResult:
     """Execute provisioning changes with compensation registration.
 
-    Uses a single SSH session for all commands and registers compensation
-    actions before each change so rollback is possible on failure.
+    Uses a single SSH session for all commands and records compensation
+    actions as soon as the rollback target is knowable. Some rollback commands
+    can be known before the write, while others (for example auto-assigned
+    service-port indices) can only be recorded after the OLT accepts the write.
+    In every case, compensation is recorded before durable success is reported.
 
     Args:
         olt: The OLT device.
@@ -318,7 +324,8 @@ def execute_delta(
     # Get interface path for commands that need it
     interface_path = _get_interface_path(desired.fsp)
 
-    # Execute with single SSH session
+    # Execute in one SSH session. This reduces reconnect/mode drift risk, but
+    # the OLT does not provide a transaction boundary; rollback is best-effort.
     try:
         with olt_session(olt) as session:
             # Track successfully deleted indices for dependency verification

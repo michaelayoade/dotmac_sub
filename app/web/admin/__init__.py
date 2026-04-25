@@ -49,9 +49,6 @@ from app.web.admin.network_olts_profiles import router as network_olts_profiles_
 from app.web.admin.network_authorization_presets import (
     router as network_authorization_presets_router,
 )
-from app.web.admin.network_ont_provisioning_profiles import (
-    router as network_ont_provisioning_profiles_router,
-)
 from app.web.admin.network_onts import router as network_onts_router
 from app.web.admin.network_onts_actions import router as network_onts_actions_router
 from app.web.admin.network_onts_inventory import router as network_onts_inventory_router
@@ -293,10 +290,6 @@ router.include_router(
 )
 router.include_router(
     network_speed_profiles_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
-)
-router.include_router(
-    network_ont_provisioning_profiles_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

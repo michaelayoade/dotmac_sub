@@ -42,9 +42,8 @@ celery_app.conf.task_routes = {
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
     "app.tasks.tr069.apply_saved_ont_service_config": {"queue": "acs"},
     "app.tasks.tr069.apply_acs_config": {"queue": "acs"},
-    "app.tasks.saga.execute_saga": {"queue": "tr069"},
-    "app.tasks.saga.queue_saga_execution": {"queue": "tr069"},
-    "app.tasks.saga.queue_bulk_saga_executions": {"queue": "tr069"},
+    "app.tasks.ont_provisioning.provision_ont": {"queue": "tr069"},
+    "app.tasks.ont_provisioning.queue_bulk_provisioning": {"queue": "tr069"},
     # OLT queue processing (circuit breaker recovery) - route to tr069 queue
     "app.tasks.olt_queue.process_deferred_olt_operations": {"queue": "tr069"},
     "app.tasks.olt_queue.retry_failed_operations": {"queue": "tr069"},

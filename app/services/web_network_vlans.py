@@ -62,7 +62,7 @@ def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
         return usage
 
     # Legacy: ONT VLAN assignments are now tracked through bundle assignments
-    # and OntConfigOverride, not direct columns. Counts shown as 0.
+    # and OntUnit.desired_config, not direct columns. Counts shown as 0.
 
     pool_rows = db.execute(
         select(IpPool.vlan_id, func.count(IpPool.id))
@@ -204,7 +204,7 @@ def build_vlan_detail_data(db, *, vlan_id: str) -> dict[str, object] | None:
     port_links = db.query(PortVlan).filter(PortVlan.vlan_id == vlan.id).all()
 
     # Legacy: ONT VLAN assignments are now tracked through bundle assignments
-    # and OntConfigOverride, not direct columns. Counts shown as 0.
+    # and OntUnit.desired_config, not direct columns. Counts shown as 0.
     wan_ont_count = 0
     mgmt_ont_count = 0
     ip_pool_count = (

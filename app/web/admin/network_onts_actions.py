@@ -304,8 +304,6 @@ def ont_quick_apply_profile(
 ) -> JSONResponse:
     """Apply OLT's default profile to ONT without wizard."""
     from app.models.network import OntUnit
-    from app.services.network.ont_profile_apply import apply_bundle_to_ont
-    from app.services.network_subscriber_bridge import default_subscriber_validator
 
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
@@ -342,22 +340,9 @@ def ont_quick_apply_profile(
             ont_id=ont_id,
         )
 
-    # Apply the profile
-    result = apply_bundle_to_ont(
-        db,
-        ont_id,
-        str(default_profile.id),
-        create_wan_instances=True,
-        push_to_device=True,
-        subscriber_context_provider=default_subscriber_validator,
-    )
-
-    if result.success:
-        db.commit()
-
     return _action_json_response(
-        success=result.success,
-        message=result.message if not result.success else f"Applied profile '{default_profile.name}'",
+        success=False,
+        message="Quick apply profile is obsolete. Edit ONT desired config and run provisioning.",
         action="Quick Apply Profile",
         request=request,
         ont_id=ont_id,
@@ -539,7 +524,7 @@ def ont_factory_reset(
 def ont_apply_bundle(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Apply a provisioning bundle to an ONT."""
+    """Reject obsolete provisioning-bundle apply requests."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
@@ -548,7 +533,7 @@ def ont_apply_bundle(
     if not bundle_id:
         return _action_json_response(
             success=False,
-            message="No bundle selected",
+            message="Provisioning bundles were removed. Edit desired_config instead.",
             action="Apply Provisioning Bundle",
             request=request,
             ont_id=ont_id,

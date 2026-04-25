@@ -92,13 +92,11 @@ def preview_decommission(db: Session, ont_id: str) -> DecommissionPreview:
     Returns:
         DecommissionPreview with affected counts and warnings.
     """
-    from app.models.ont_bundle import OntBundleAssignment
     from app.models.tr069 import Tr069CpeDevice
 
     warnings: list[str] = []
     affected: dict[str, int] = {
         "active_assignments": 0,
-        "bundle_assignments": 0,
         "service_port_allocations": 0,
         "acs_devices": 0,
     }
@@ -134,27 +132,6 @@ def preview_decommission(db: Session, ont_id: str) -> DecommissionPreview:
         warnings.append(
             f"Will close {len(active_assignments)} active customer assignment(s)"
         )
-
-    # Count bundle assignments
-    bundle_count = db.scalar(
-        select(OntBundleAssignment)
-        .where(
-            OntBundleAssignment.ont_id == ont_id,
-            OntBundleAssignment.is_active.is_(True),
-        )
-        .with_only_columns(OntBundleAssignment.id)
-        .limit(100)
-    )
-    # Count properly
-    bundles = db.scalars(
-        select(OntBundleAssignment).where(
-            OntBundleAssignment.ont_id == ont_id,
-            OntBundleAssignment.is_active.is_(True),
-        )
-    ).all()
-    affected["bundle_assignments"] = len(bundles)
-    if bundles:
-        warnings.append(f"Will deactivate {len(bundles)} bundle assignment(s)")
 
     # Count service port allocations
     try:
@@ -241,14 +218,12 @@ def decommission_ont(
             message=f"Invalid reason '{reason}'. Valid reasons: {', '.join(DECOMMISSION_REASONS.keys())}",
             ont_id=ont_id,
         )
-    from app.models.ont_bundle import OntBundleAssignment, OntBundleAssignmentStatus
     from app.models.tr069 import Tr069CpeDevice
     from app.services.events.dispatcher import emit_event
     from app.services.events.types import EventType
 
     stats: dict[str, int] = {
         "assignments_closed": 0,
-        "bundles_deactivated": 0,
         "service_ports_released": 0,
         "acs_devices_cleared": 0,
     }
@@ -317,22 +292,7 @@ def decommission_ont(
         assignment.release_reason = f"decommissioned:{reason}"
         stats["assignments_closed"] += 1
 
-    # Step 3: Deactivate all bundle assignments
-    bundle_result = db.execute(
-        update(OntBundleAssignment)
-        .where(
-            OntBundleAssignment.ont_id == ont_id,
-            OntBundleAssignment.is_active.is_(True),
-        )
-        .values(
-            is_active=False,
-            status=OntBundleAssignmentStatus.superseded,
-            superseded_at=datetime.now(UTC),
-        )
-    )
-    stats["bundles_deactivated"] = bundle_result.rowcount
-
-    # Step 4: Release service port allocations
+    # Step 3: Release service port allocations
     try:
         from app.services.network.service_port_allocator import release_all_for_ont
 

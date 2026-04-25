@@ -61,6 +61,8 @@ from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_o
 from app.tasks.ont_provisioning import (
     auto_link_profiles,
     detect_profile_drift,
+    provision_ont,
+    queue_bulk_provisioning,
 )
 from app.tasks.ont_verification import (
     mark_pending_verification,
@@ -74,11 +76,6 @@ from app.tasks.provisioning import (
 )
 from app.tasks.provisioning_enforcement import run_enforcement
 from app.tasks.radius import run_radius_sync_job
-from app.tasks.saga import (
-    execute_saga_task,
-    queue_bulk_saga_executions,
-    queue_saga_execution,
-)
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
 from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
 from app.tasks.splynx_sync import (
@@ -143,9 +140,8 @@ __all__ = [
     "run_integration_job",
     "generate_invoice_pdf_export",
     "run_radius_sync_job",
-    "execute_saga_task",
-    "queue_saga_execution",
-    "queue_bulk_saga_executions",
+    "provision_ont",
+    "queue_bulk_provisioning",
     "run_invoice_cycle",
     "expire_subscriptions",
     "run_dunning",

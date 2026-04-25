@@ -6,6 +6,72 @@ This file provides context for Claude Code when working on this project.
 
 **DotMac Sub** is a multi-tenant subscription management system for ISPs and fiber network operators. It handles subscriber lifecycle, catalog management, billing, network provisioning, and service orders.
 
+---
+
+## Behavioral Guidelines (Karpathy Principles)
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+### 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
 ## Quick Commands
 
 ```bash
@@ -131,7 +197,24 @@ def dashboard(db: Session = Depends(get_db)):
     return stats
 ```
 
-### 1a. Adapter Boundaries — Register and Return Shared Results
+### 1a. ONT Configuration — Single Source of Truth
+
+For ONT provisioning config, use `resolve_effective_ont_config()` as the **single source of truth**. Do NOT add fallback chains like:
+```python
+# WRONG — don't double-check after the resolver
+value = effective_values.get("field") or getattr(ont, "field", None)
+
+# CORRECT — trust the resolver
+value = effective_values.get("field")
+```
+
+**Config priority (handled by resolver):**
+1. `OntUnit.desired_config` JSON (highest)
+2. `OltConfigPack` from OLT defaults (lowest)
+
+If you need a value, call `resolve_effective_ont_config()` once and use the result.
+
+### 1b. Adapter Boundaries — Register and Return Shared Results
 Adapters in `app/services/*adapter*.py` should declare a stable `name` and register singleton instances with `app.services.adapters.adapter_registry` when they are safe to import without network I/O. Operation-style adapters should return or convert through `AdapterResult` from `app.services.adapters.base` so success, queued, warning, skipped, and error semantics stay consistent.
 
 ```python
@@ -316,6 +399,8 @@ For changes touching 3+ files, use plan mode first. Explore the codebase, identi
 After implementing, run the verification workflow above. If tests fail, fix them before reporting completion. If mypy fails, fix type errors. Never skip verification.
 
 ### Common Mistakes to Avoid
+
+**Technical:**
 - Using `db.query()` instead of `select()` (SQLAlchemy 1.x vs 2.0)
 - Using `| safe` on user content (XSS vulnerability)
 - Using bare `except:` (catch specific exceptions)
@@ -326,6 +411,14 @@ After implementing, run the verification workflow above. If tests fail, fix them
 - String interpolation in Tailwind classes (gets purged — use dict lookup)
 - Double quotes on Alpine.js `x-data` with `tojson` (use single quotes)
 - Fragile regex for parsing (use proper parsers)
+
+**Overengineering (Karpathy anti-patterns):**
+- Adding fallback chains like `value or getattr(obj, "field", None)` — pick ONE source of truth
+- Creating multiple entry points for the same operation (e.g., `do_x()`, `do_x_sync()`, `do_x_resilient()`)
+- Keeping legacy field name mappings indefinitely — migrate and delete
+- Adding `_first_present(a, b, c)` without documenting which source wins
+- Leaving dead code "for backwards compatibility" — delete it or document why it's needed
+- Creating abstractions for single-use code paths
 
 ## Key Models
 

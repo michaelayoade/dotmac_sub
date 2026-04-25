@@ -67,15 +67,12 @@ class ServiceIntentUiAdapter:
         create_wan_instances: bool = True,
         push_to_device: bool = False,
     ) -> object:
-        """Apply a provisioning bundle through the network-owned bundle adapter."""
-        from app.services.network.ont_profile_apply import apply_bundle_to_ont
+        """Reject obsolete bundle application."""
+        from app.services.network.ont_action_common import ActionResult
 
-        return apply_bundle_to_ont(
-            db,
-            ont_id,
-            bundle_id,
-            create_wan_instances=create_wan_instances,
-            push_to_device=push_to_device,
+        return ActionResult(
+            success=False,
+            message="Bundle templates are obsolete. Save ONT desired_config directly.",
         )
 
     def resolve_effective_tr069_profile(
@@ -101,10 +98,6 @@ class ServiceIntentUiAdapter:
     ) -> dict[str, object]:
         """Return profile-derived service-port defaults for operator UI forms."""
         profile = None
-        if db is not None:
-            from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
-
-            profile = resolve_assigned_bundle(db, ont)
         if profile is None:
             profile = getattr(ont, "provisioning_profile", None)
         services = list(

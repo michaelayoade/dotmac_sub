@@ -301,10 +301,8 @@ def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
     effective_values = (
         effective.get("values", {}) if isinstance(effective, dict) else {}
     )
-    effective_bundle = effective.get("bundle") if isinstance(effective, dict) else None
     if (
-        effective_bundle is not None
-        or ont.tr069_last_snapshot
+        ont.tr069_last_snapshot
         or effective_values.get("pppoe_username")
         or effective_values.get("wifi_ssid")
         or ont.lan_gateway_ip

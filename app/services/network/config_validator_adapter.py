@@ -1068,24 +1068,19 @@ class NetworkConfigValidator(BaseConfigValidator):
         olt: OLTDevice,
         result: ConfigValidationResult,
     ) -> None:
-        """Check if OLT has an active provisioning profile (required for authorization)."""
-        from sqlalchemy import select
-
-        from app.models.network import OntProvisioningProfile
-
-        # Check if OLT has a default profile or any OLT-scoped active profile
-        stmt = select(OntProvisioningProfile.id).where(
-            OntProvisioningProfile.olt_device_id == olt.id,
-            OntProvisioningProfile.is_active.is_(True),
-        )
-        profile_exists = db.scalars(stmt).first() is not None
-
-        if not profile_exists:
+        """Check if OLT has default authorization profiles."""
+        del db
+        if not getattr(olt, "default_line_profile_id", None):
             result.add_error(
                 "olt",
-                f"OLT '{olt.name}' has no active provisioning profile. "
-                "Create a provisioning bundle scoped to this OLT before authorizing ONTs.",
-                code="NO_PROVISIONING_PROFILE",
+                f"OLT '{olt.name}' has no default authorization line profile.",
+                code="NO_DEFAULT_LINE_PROFILE",
+            )
+        if not getattr(olt, "default_service_profile_id", None):
+            result.add_error(
+                "olt",
+                f"OLT '{olt.name}' has no default authorization service profile.",
+                code="NO_DEFAULT_SERVICE_PROFILE",
             )
 
     def _validate_pon_port_exists(

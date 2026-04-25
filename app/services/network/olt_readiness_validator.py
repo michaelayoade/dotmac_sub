@@ -1,7 +1,6 @@
-"""OLT Readiness Validator - Comprehensive OLT and bundle validation.
+"""OLT Readiness Validator - Comprehensive OLT default validation.
 
-Validates that OLTs and their provisioning bundles have all required
-prerequisites for ONT authorization.
+Validates that OLT defaults have the prerequisites for ONT authorization.
 
 Usage:
     from app.services.network.olt_readiness_validator import (
@@ -58,7 +57,7 @@ class ValidationIssue:
 
 @dataclass
 class BundleValidationResult:
-    """Validation result for a single provisioning bundle."""
+    """Legacy validation result retained for report shape compatibility."""
 
     bundle_id: str
     bundle_name: str
@@ -139,7 +138,7 @@ def validate_olt_readiness(
     Returns:
         OltReadinessReport with validation results.
     """
-    from app.models.network import OLTDevice, OntProvisioningProfile
+    from app.models.network import OLTDevice
 
     olt = db.get(OLTDevice, olt_id)
     if not olt:
@@ -168,39 +167,50 @@ def validate_olt_readiness(
     # 2. Validate OLT vendor/model
     _validate_olt_vendor_model(olt, report)
 
-    # 3. Validate provisioning profiles
-    profiles = db.scalars(
-        select(OntProvisioningProfile).where(
-            OntProvisioningProfile.olt_device_id == olt.id,
-        )
-    ).all()
-
-    if not profiles:
-        report.issues.append(
-            ValidationIssue(
-                category="provisioning",
-                message="No provisioning bundles scoped to this OLT",
-                severity=IssueSeverity.blocking,
-                code="NO_BUNDLES",
-            )
-        )
-        report.is_ready = False
-    else:
-        active_profiles = [p for p in profiles if p.is_active]
-        if not active_profiles:
+    # 3. Validate OLT authorization defaults
+    vendor = str(getattr(olt, "vendor", "") or "").lower()
+    if "huawei" in vendor:
+        if not getattr(olt, "default_line_profile_id", None):
             report.issues.append(
                 ValidationIssue(
-                    category="provisioning",
-                    message="No active provisioning bundles for this OLT",
+                    category="authorization",
+                    message="Missing default authorization line profile ID",
                     severity=IssueSeverity.blocking,
-                    code="NO_ACTIVE_BUNDLES",
+                    code="NO_DEFAULT_LINE_PROFILE",
+                    field="default_line_profile_id",
+                )
+            )
+            report.is_ready = False
+        if not getattr(olt, "default_service_profile_id", None):
+            report.issues.append(
+                ValidationIssue(
+                    category="authorization",
+                    message="Missing default authorization service profile ID",
+                    severity=IssueSeverity.blocking,
+                    code="NO_DEFAULT_SERVICE_PROFILE",
+                    field="default_service_profile_id",
                 )
             )
             report.is_ready = False
 
-        for profile in profiles:
-            bundle_result = _validate_bundle(db, profile, olt)
-            report.bundles.append(bundle_result)
+    if not getattr(olt, "management_vlan_id", None):
+        report.issues.append(
+            ValidationIssue(
+                category="vlan",
+                message="Missing default management VLAN",
+                severity=IssueSeverity.warning,
+                code="NO_DEFAULT_MGMT_VLAN",
+            )
+        )
+    if not getattr(olt, "internet_vlan_id", None):
+        report.issues.append(
+            ValidationIssue(
+                category="vlan",
+                message="Missing default internet VLAN",
+                severity=IssueSeverity.warning,
+                code="NO_DEFAULT_INTERNET_VLAN",
+            )
+        )
 
     # 4. Connectivity tests (optional)
     if test_connectivity:
@@ -292,7 +302,7 @@ def _validate_bundle(
     profile: object,
     olt: object,
 ) -> BundleValidationResult:
-    """Validate a provisioning bundle has required data."""
+    """Validate a legacy provisioning bundle has required data."""
     result = BundleValidationResult(
         bundle_id=str(getattr(profile, "id", "")),
         bundle_name=getattr(profile, "name", "Unnamed"),

@@ -22,7 +22,7 @@ def run_post_authorization_follow_up_task(
     ont_id_on_olt: int,
 ) -> dict[str, object]:
     """Run non-critical reconciliation after foreground OLT authorization succeeds."""
-    from app.services.network.olt_authorization_workflow import (
+    from app.services.network.ont_authorization import (
         run_post_authorization_follow_up,
     )
     from app.services.network_operations import network_operations
@@ -72,5 +72,4 @@ def run_post_authorization_follow_up_task(
         raise
     finally:
         db.close()
-
 

@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.ont_action_common import get_ont_strict_or_error
-from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 from app.services.network.ont_status import resolve_ont_status_for_model
 
 logger = logging.getLogger(__name__)
@@ -90,9 +89,7 @@ class OntReadFacade:
             "provisioning_status": (
                 ont.provisioning_status.value if ont.provisioning_status else None
             ),
-            "provisioning_profile_name": (
-                getattr(resolve_assigned_bundle(db, ont), "name", None)
-            ),
+            "provisioning_profile_name": None,
             # Sync metadata
             "last_sync_source": getattr(ont, "last_sync_source", None),
             "last_sync_at": getattr(ont, "last_sync_at", None),

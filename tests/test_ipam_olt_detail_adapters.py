@@ -338,7 +338,7 @@ def test_olt_action_adapter_rejects_unknown_legacy_passthrough() -> None:
 def test_olt_action_adapter_delegates_authorization_sync(monkeypatch) -> None:
     from types import SimpleNamespace
 
-    from app.services.network import olt_authorization_workflow
+    from app.services.network import ont_authorization
     from app.services.olt_action_adapter import olt_action_adapter
 
     calls = {}
@@ -352,7 +352,7 @@ def test_olt_action_adapter_delegates_authorization_sync(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        olt_authorization_workflow,
+        ont_authorization,
         "authorize_autofind_ont_and_provision_network_audited",
         fake_authorize,
     )

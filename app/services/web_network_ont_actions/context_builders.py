@@ -142,9 +142,8 @@ def _desired_config_context(
             ),
         },
         "config_resolution": {
-            "bundle": effective["bundle"],
-            "overrides": effective["overrides"],
-            "using_legacy_fallback": effective["using_legacy_fallback"],
+            "config_pack": effective.get("config_pack"),
+            "desired_config_keys": effective.get("desired_config_keys", []),
         },
         "effective_config": effective,
     }
@@ -739,38 +738,21 @@ def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
 def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build context for the ONT configure form (database-backed fields)."""
     from app.services import web_network_onts as web_network_onts_service
-    from app.services.network import ont_provisioning_profiles
-    from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
     mgmt_ip_choices = web_network_onts_service.management_ip_choices_for_ont(db, ont)
 
-    # Get available provisioning profiles for this ONT's OLT (or global)
-    olt_device_id = str(ont.olt_device_id) if ont.olt_device_id else None
-    profiles = ont_provisioning_profiles.ont_provisioning_profiles.list(
-        db,
-        olt_device_id=olt_device_id,
-        include_global=True,
-        is_active=True,
-        limit=100,
-    )
-    active_assignment = get_active_bundle_assignment(db, ont)
     effective = resolve_effective_ont_config(db, ont)
     values = effective["values"]
     selected_bundle_id = ""
-    if active_assignment and active_assignment.bundle_id:
-        selected_bundle_id = str(active_assignment.bundle_id)
-    profile_preview = (
-        profile_preview_context(db, selected_bundle_id) if selected_bundle_id else None
-    )
+    profile_preview = None
 
     context = {
         "ont": ont,
         "ont_id": ont_id,
         "vlans": vlans,
-        "provisioning_profiles": profiles,
-        "active_bundle_assignment": active_assignment,
+        "provisioning_profiles": [],
         "selected_bundle_id": selected_bundle_id,
         "profile_preview": profile_preview,
         # Current values from DB
@@ -795,25 +777,8 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def profile_preview_context(db: Session, profile_id: str) -> dict[str, object]:
-    """Build context for profile preview HTMX partial."""
-    from app.services.network import ont_provisioning_profiles
-
-    profile = ont_provisioning_profiles.ont_provisioning_profiles.get(db, profile_id)
-    if not profile:
-        return {"profile": None, "error": "Profile not found"}
-
-    # Build summary info for the preview
-    wan_services = profile.wan_services or []
-    primary_wan = wan_services[0] if wan_services else None
-
-    return {
-        "profile": profile,
-        "primary_wan": primary_wan,
-        "wan_services": wan_services,
-        "wan_service_count": len(wan_services),
-        "download_speed": profile.download_speed_profile,
-        "upload_speed": profile.upload_speed_profile,
-    }
+    """Return obsolete profile preview context."""
+    return {"profile": None, "error": "Provisioning profiles are obsolete"}
 
 
 def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:

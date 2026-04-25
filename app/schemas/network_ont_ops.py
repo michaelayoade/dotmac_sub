@@ -177,7 +177,7 @@ class OntWebCredentialsRequest(BaseModel):
 
 class OntBulkActionRequest(BaseModel):
     ont_ids: list[str] = Field(min_length=1, max_length=200)
-    action: str  # reboot, factory_reset, speed_update, catv_toggle, wifi_update, voip_toggle, provision_saga
+    action: str  # reboot, factory_reset, speed_update, catv_toggle, wifi_update, voip_toggle, provision
     params: dict[str, Any] = {}
 
 

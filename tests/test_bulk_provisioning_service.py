@@ -18,7 +18,6 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
         OntUnit,
     )
     from app.services.network import bulk_provisioning
-    from app.services.network.ont_provisioning import saga as saga_module
 
     ont_ok = OntUnit(serial_number="BULK-ONT-OK")
     ont_other = OntUnit(serial_number="BULK-ONT-OTHER")
@@ -28,12 +27,6 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
     db_session.refresh(ont_other)
 
     enqueued: list[tuple[object, dict]] = []
-
-    monkeypatch.setattr(
-        saga_module,
-        "get_saga_by_name",
-        lambda saga_name: object() if saga_name == "full_provisioning" else None,
-    )
 
     def fake_enqueue(task_or_name, **kwargs):  # type: ignore[no-untyped-def]
         enqueued.append((task_or_name, kwargs))
@@ -48,7 +41,7 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
         max_workers=10,
         initiated_by="admin",
         correlation_key="bulk-test",
-        step_data={"profile_id": "profile-1"},
+        step_data={"wait_for_acs": False},
     )
 
     assert result.status == BulkProvisioningRunStatus.running
@@ -62,6 +55,7 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
     assert run.max_workers == 10
     assert run.initiated_by == "admin"
     assert run.correlation_key == "bulk-test"
+    assert run.profile_id is None
 
     items = list(
         db_session.query(BulkProvisioningItem)
@@ -77,16 +71,15 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
 
     assert len(enqueued) == 1
     task_name, kwargs = enqueued[0]
-    assert task_name == "app.tasks.saga.queue_bulk_saga_executions"
+    assert task_name == "app.tasks.ont_provisioning.queue_bulk_provisioning"
     assert kwargs["correlation_id"] == "bulk-test"
     assert kwargs["source"] == "bulk_provisioning_service"
     task_kwargs = kwargs["kwargs"]
     assert task_kwargs["bulk_run_id"] == str(run.id)
     assert task_kwargs["max_parallel"] == 10
-    assert task_kwargs["step_data"] == {
-        "profile_id": "profile-1",
-        "allow_low_optical_margin": False,
-    }
+    assert task_kwargs["wait_for_acs"] is False
+    assert task_kwargs["apply_acs_config"] is True
+    assert task_kwargs["allow_low_optical_margin"] is False
 
 
 def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
@@ -102,7 +95,6 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
         OntUnit,
     )
     from app.services.network import bulk_provisioning
-    from app.services.network.ont_provisioning import saga as saga_module
     from app.services.network.ont_provisioning.result import StepResult
     from app.services.network.provisioning_events import (
         provisioning_correlation,
@@ -116,11 +108,6 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
     db_session.refresh(ont_ok)
     db_session.refresh(ont_fail)
 
-    monkeypatch.setattr(
-        saga_module,
-        "get_saga_by_name",
-        lambda saga_name: object() if saga_name == "full_provisioning" else None,
-    )
     monkeypatch.setattr(
         celery_module,
         "enqueue_celery_task",

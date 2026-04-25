@@ -137,11 +137,10 @@ class TestRouterRegistration:
     """Test that catalog router is properly registered."""
 
     def test_catalog_routes_exist(self):
-        from app.main import app
+        from app.api.network_catalog import router
 
-        paths = [r.path for r in app.routes]
+        paths = [r.path for r in router.routes]
         assert any("/onu-types" in p for p in paths)
         assert any("/speed-profiles" in p for p in paths)
         assert any("/network-zones" in p for p in paths)
         assert any("/vendor-capabilities" in p for p in paths)
-        assert any("/provisioning-profiles" in p for p in paths)

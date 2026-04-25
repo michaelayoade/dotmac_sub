@@ -11,8 +11,8 @@ from app.models.network import OntUnit
 from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
-from app.services.network.ont_config_overrides import (
-    upsert_ont_config_override,
+from app.services.network.ont_desired_config import (
+    upsert_ont_desired_config_value as upsert_ont_config_override,
 )
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,

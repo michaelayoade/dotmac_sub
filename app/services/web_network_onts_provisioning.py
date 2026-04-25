@@ -14,7 +14,6 @@ from app.models.network import (
     IpPool,
     IPv4Address,
     IPVersion,
-    OntProvisioningProfile,
     OnuMode,
     Vlan,
     WanMode,
@@ -23,13 +22,11 @@ from app.schemas.network import OntUnitUpdate
 from app.schemas.provisioning import ServiceOrderUpdate
 from app.services import network as network_service
 from app.services import provisioning as provisioning_service
-from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_bundle_assignments import assign_bundle_to_ont
-from app.services.network.ont_config_overrides import upsert_ont_config_override
+from app.services.network.ont_desired_config import upsert_ont_desired_config_value as upsert_ont_config_override
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
@@ -404,43 +401,30 @@ def profile_preview_context(
     *,
     bundle_id: str,
 ) -> dict[str, object] | None:
-    """Return provisioning profile preview context, or None when not found."""
-    pid = coerce_uuid(bundle_id)
-    if pid is None:
-        return None
-    profile = db.get(OntProvisioningProfile, str(pid))
-    if profile is None:
-        return None
+    """Provisioning profile previews are obsolete after desired_config."""
+    del db, bundle_id
     return {
-        "profile": profile,
-        "wan_services": list(profile.wan_services),
+        "error": "Provisioning bundles were removed. Configure OntUnit.desired_config instead.",
+        "profile": None,
+        "wan_services": [],
     }
 
 
-def _effective_bundle_ids(
+def _effective_tr069_profile_id(
     db: Session,
     *,
     ont_id: str,
-    bundle_id: str | None,
     tr069_profile_id: int | None,
-) -> tuple[str | None, int | None]:
+) -> int | None:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    olt = getattr(ont, "olt_device", None)
-    resolved_profile = web_network_onts_service.resolve_effective_provisioning_profile(
-        db, ont, olt
-    )
     resolved_tr069_profile, _resolved_tr069_profile_error = (
         web_network_onts_service.resolve_effective_tr069_profile_for_ont(db, ont)
     )
-    effective_bundle_id = bundle_id or (
-        str(resolved_profile.id) if resolved_profile else None
-    )
-    effective_tr069_profile_id = tr069_profile_id or getattr(
+    return tr069_profile_id or getattr(
         resolved_tr069_profile,
         "profile_id",
         None,
     )
-    return effective_bundle_id, effective_tr069_profile_id
 
 
 def provisioning_preview_context(
@@ -450,19 +434,18 @@ def provisioning_preview_context(
     bundle_id: str | None,
     tr069_profile_id: int | None,
 ) -> dict[str, object]:
-    """Return command-preview context using explicit or effective profiles."""
-    effective_bundle_id, effective_tr069_profile_id = _effective_bundle_ids(
+    """Return command-preview context for desired-config provisioning."""
+    effective_tr069_profile_id = _effective_tr069_profile_id(
         db,
         ont_id=ont_id,
-        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
     )
-    return web_network_olt_profiles_service.command_preview_context(
-        db,
-        ont_id,
-        effective_bundle_id or "",
-        tr069_olt_profile_id=effective_tr069_profile_id,
-    )
+    del bundle_id
+    return {
+        "ont_id": ont_id,
+        "tr069_olt_profile_id": effective_tr069_profile_id,
+        "message": "Command preview is generated from OntUnit.desired_config during direct provisioning.",
+    }
 
 
 def preflight_result(
@@ -472,17 +455,17 @@ def preflight_result(
     bundle_id: str | None,
     tr069_profile_id: int | None,
 ) -> dict[str, object]:
-    """Run provisioning preflight using explicit or effective profiles."""
-    effective_bundle_id, effective_tr069_profile_id = _effective_bundle_ids(
+    """Run provisioning preflight using OLT defaults and desired_config."""
+    effective_tr069_profile_id = _effective_tr069_profile_id(
         db,
         ont_id=ont_id,
-        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
     )
+    del bundle_id
     return validate_prerequisites(
         db,
         ont_id,
-        bundle_id=effective_bundle_id,
+        bundle_id=None,
         tr069_olt_profile_id=effective_tr069_profile_id,
     )
 
@@ -530,7 +513,7 @@ def save_provision_settings(
         )
 
     onu_mode_value = (onu_mode or "").strip().lower() or None
-    bundle_id_value = (bundle_id or "").strip() or None
+    del bundle_id
     tr069_profile_id_value = (tr069_profile_id or "").strip() or None
     mgmt_vlan_id_value = (mgmt_vlan_id or "").strip() or None
     mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower() or None
@@ -609,57 +592,15 @@ def save_provision_settings(
     )
 
     if network_only_profile_save:
-        if not bundle_id_value:
-            return JsonActionResult(
-                status_code=422,
-                content={
-                    "success": False,
-                    "message": "Select OLT provisioning bundle",
-                    "issues": ["Select OLT provisioning bundle"],
-                },
-            )
         try:
-            profile_uuid = coerce_uuid(bundle_id_value)
-            if profile_uuid is None:
-                return JsonActionResult(
-                    status_code=422,
-                    content={
-                        "success": False,
-                        "message": "Invalid provisioning bundle",
-                    },
-                )
-            profile = db.get(OntProvisioningProfile, profile_uuid)
-            if profile is None:
-                return JsonActionResult(
-                    status_code=422,
-                    content={
-                        "success": False,
-                        "message": "Provisioning bundle not found",
-                    },
-                )
-            apply_result = service_intent_ui_adapter.apply_bundle_to_ont(
-                db,
-                ont_id=ont_id,
-                bundle_id=str(profile_uuid),
-                create_wan_instances=True,
-                push_to_device=False,
-            )
-            if not getattr(apply_result, "success", False):
-                db.rollback()
-                return JsonActionResult(
-                    status_code=422,
-                    content={
-                        "success": False,
-                        "message": str(
-                            getattr(
-                                apply_result,
-                                "message",
-                                "Unable to apply provisioning bundle",
-                            )
-                        ),
-                    },
-                )
             ont.tr069_olt_profile_id = tr069_profile_id_int
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name="tr069.olt_profile_id",
+                value=tr069_profile_id_int,
+                reason="save_provision_settings",
+            )
             update_service_order_execution_context_for_ont(
                 db,
                 ont_id=ont_id,
@@ -671,19 +612,20 @@ def save_provision_settings(
         except Exception:
             db.rollback()
             logger.exception(
-                "Failed to save network provisioning bundle for ONT %s", ont_id
+                "Failed to save network provisioning profile binding for ONT %s",
+                ont_id,
             )
             return JsonActionResult(
                 status_code=500,
                 content={
                     "success": False,
-                    "message": "Unable to save network provisioning bundle. Please try again.",
+                    "message": "Unable to save provisioning settings. Please try again.",
                 },
             )
         return JsonActionResult(
             content={
                 "success": True,
-                "message": "Network provisioning bundle applied to service intent",
+                "message": "Provision settings saved",
             }
         )
 
@@ -725,14 +667,10 @@ def save_provision_settings(
             static_dns_value or str(choices_state.get("dns") or "").strip() or None
         )
 
-    profile_for_defaults = None
-    profile_uuid_for_defaults = coerce_uuid(bundle_id_value)
-    if profile_uuid_for_defaults is not None:
-        profile_for_defaults = db.get(OntProvisioningProfile, profile_uuid_for_defaults)
     adapter_defaults = service_intent_ui_adapter.provisioning_form_defaults(
         db,
         ont=ont,
-        profile=profile_for_defaults,
+        profile=None,
     )
     effective = resolve_effective_ont_config(db, ont)
     effective_values = (
@@ -771,12 +709,25 @@ def save_provision_settings(
         or str(effective_values.get("pppoe_username") or "").strip()
         or None
     )
-    lan_ip_value = lan_ip_value or getattr(ont, "lan_gateway_ip", None)
-    lan_subnet_value = lan_subnet_value or getattr(ont, "lan_subnet_mask", None)
+    lan_ip_value = lan_ip_value or str(effective_values.get("lan_ip") or "").strip() or None
+    lan_subnet_value = (
+        lan_subnet_value or str(effective_values.get("lan_subnet") or "").strip() or None
+    )
     if dhcp_enabled_value is None:
-        dhcp_enabled_value = getattr(ont, "lan_dhcp_enabled", None)
-    dhcp_start_value = dhcp_start_value or getattr(ont, "lan_dhcp_start", None)
-    dhcp_end_value = dhcp_end_value or getattr(ont, "lan_dhcp_end", None)
+        resolved_dhcp_enabled = effective_values.get("lan_dhcp_enabled")
+        dhcp_enabled_value = (
+            resolved_dhcp_enabled if isinstance(resolved_dhcp_enabled, bool) else None
+        )
+    dhcp_start_value = (
+        dhcp_start_value
+        or str(effective_values.get("lan_dhcp_start") or "").strip()
+        or None
+    )
+    dhcp_end_value = (
+        dhcp_end_value
+        or str(effective_values.get("lan_dhcp_end") or "").strip()
+        or None
+    )
     if wifi_enabled_value is None:
         wifi_enabled_default = adapter_defaults.get("wifi_enabled")
         wifi_enabled_value = (
@@ -805,7 +756,7 @@ def save_provision_settings(
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
     field_issues = validate_provision_form_fields(
-        bundle_id=bundle_id_value,
+        bundle_id=None,
         onu_mode=onu_mode_value,
         mgmt_vlan_id=mgmt_vlan_id_value,
         mgmt_ip_mode=mgmt_ip_mode_value,
@@ -944,12 +895,6 @@ def save_provision_settings(
         pppoe_password=encrypt_credential(pppoe_password_value)
         if wan_protocol_value == "pppoe" and pppoe_password_value
         else None,
-        # LAN configuration (persisted directly on ONT, independent of service orders)
-        lan_gateway_ip=lan_ip_value,
-        lan_subnet_mask=lan_subnet_value,
-        lan_dhcp_enabled=dhcp_enabled_value,
-        lan_dhcp_start=dhcp_start_value,
-        lan_dhcp_end=dhcp_end_value,
         wifi_ssid=wifi_ssid_value,
         wifi_password=encrypt_credential(wifi_password_value)
         if wifi_password_value
@@ -957,133 +902,67 @@ def save_provision_settings(
     )
     try:
         payload_values = payload.model_dump(exclude_unset=True)
-        if not any(
-            value is not None
-            for value in [
-                lan_ip_value,
-                lan_subnet_value,
-                dhcp_enabled_value,
-                dhcp_start_value,
-                dhcp_end_value,
-            ]
-        ):
-            for key in [
-                "lan_gateway_ip",
-                "lan_subnet_mask",
-                "lan_dhcp_enabled",
-                "lan_dhcp_start",
-                "lan_dhcp_end",
-            ]:
-                payload_values.pop(key, None)
         if wifi_ssid_value is None:
             payload_values.pop("wifi_ssid", None)
         if wifi_password_value is None:
             payload_values.pop("wifi_password", None)
         for key, value in payload_values.items():
             setattr(ont, key, value)
-        profile_uuid = coerce_uuid(bundle_id_value)
-        if profile_uuid is not None:
-            profile = db.get(OntProvisioningProfile, profile_uuid)
-            if profile is not None:
-                if not profile.is_active:
-                    db.rollback()
-                    return JsonActionResult(
-                        status_code=400,
-                        content={
-                            "success": False,
-                            "message": f"Provisioning bundle '{profile.name}' is inactive",
-                        },
-                    )
-                assign_bundle_to_ont(
-                    db,
-                    ont=ont,
-                    bundle=profile,
-                    assigned_reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="onu_mode",
-                    value=onu_mode_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="management.ip_mode",
-                    value=mgmt_ip_mode_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="management.vlan_tag",
-                    value=mgmt_vlan_tag_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="management.ip_address",
-                    value=mgmt_ip_address_value if mgmt_ip_mode_value == "static_ip" else None,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wan.wan_mode",
-                    value=wan_mode_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wan.vlan_tag",
-                    value=wan_vlan_tag_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wan.pppoe_username",
-                    value=pppoe_username_value if wan_protocol_value == "pppoe" else None,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wifi.ssid",
-                    value=wifi_ssid_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wifi.security_mode",
-                    value=wifi_security_mode_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wifi.channel",
-                    value=wifi_channel_value,
-                    reason="save_provision_settings",
-                )
-                upsert_ont_config_override(
-                    db,
-                    ont=ont,
-                    field_name="wifi.enabled",
-                    value=wifi_enabled_value,
-                    reason="save_provision_settings",
-                )
-            else:
-                logger.warning(
-                    "Skipping legacy provisioning profile sync for ONT %s because profile %s was not found during save_provision_settings",
-                    ont_id,
-                    profile_uuid,
-                )
+        for field_name, value in [
+            ("device.onu_mode", onu_mode_value),
+            ("management.ip_mode", mgmt_ip_mode_value),
+            ("management.vlan", mgmt_vlan_tag_value),
+            (
+                "management.ip_address",
+                mgmt_ip_address_value if mgmt_ip_mode_value == "static_ip" else None,
+            ),
+            ("management.subnet", mgmt_subnet_value if mgmt_ip_mode_value == "static_ip" else None),
+            ("management.gateway", mgmt_gateway_value if mgmt_ip_mode_value == "static_ip" else None),
+            ("wan.mode", wan_mode_value),
+            ("wan.vlan", wan_vlan_tag_value),
+            (
+                "wan.pppoe_username",
+                pppoe_username_value if wan_protocol_value == "pppoe" else None,
+            ),
+            (
+                "wan.pppoe_password",
+                encrypt_credential(pppoe_password_value)
+                if wan_protocol_value == "pppoe" and pppoe_password_value
+                else None,
+            ),
+            ("wan.static_ip", static_ip_value if wan_protocol_value == "static" else None),
+            ("wan.static_subnet", static_subnet_value if wan_protocol_value == "static" else None),
+            ("wan.static_gateway", static_gateway_value if wan_protocol_value == "static" else None),
+            ("wan.static_dns", static_dns_value if wan_protocol_value == "static" else None),
+            ("lan.ip", lan_ip_value),
+            ("lan.subnet", lan_subnet_value),
+            ("lan.dhcp_enabled", dhcp_enabled_value),
+            ("lan.dhcp_start", dhcp_start_value),
+            ("lan.dhcp_end", dhcp_end_value),
+            ("wifi.ssid", wifi_ssid_value),
+            (
+                "wifi.password",
+                encrypt_credential(wifi_password_value) if wifi_password_value else None,
+            ),
+            ("wifi.security_mode", wifi_security_mode_value),
+            ("wifi.channel", wifi_channel_value),
+            ("wifi.enabled", wifi_enabled_value),
+        ]:
+            upsert_ont_config_override(
+                db,
+                ont=ont,
+                field_name=field_name,
+                value=value,
+                reason="save_provision_settings",
+            )
         ont.tr069_olt_profile_id = tr069_profile_id_int
+        upsert_ont_config_override(
+            db,
+            ont=ont,
+            field_name="tr069.olt_profile_id",
+            value=tr069_profile_id_int,
+            reason="save_provision_settings",
+        )
 
         if mgmt_vlan_id_value or mgmt_ip_mode_value:
             update_service_order_execution_context_for_ont(
@@ -1205,8 +1084,7 @@ def validate_provision_form_fields(
     mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower()
     wan_protocol_value = (wan_protocol or "").strip().lower()
 
-    if not bundle_id:
-        issues.append("Select service bundle")
+    del bundle_id
     if onu_mode_value not in {OnuMode.routing.value, OnuMode.bridging.value}:
         issues.append("Select ONU mode")
     if not mgmt_vlan_id:

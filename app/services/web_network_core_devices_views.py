@@ -38,7 +38,6 @@ from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
-from app.services.network.ont_bundle_assignments import get_active_bundle_assignment
 from app.services.network.ont_status import (
     resolve_effective_last_seen_at,
     resolve_ont_status_for_model,
@@ -1518,41 +1517,8 @@ def onts_list_page_data(
         .order_by(OntUnit.vendor)
     ).all()
 
-    # Build profile info lookup for displayed ONTs
-    from app.models.network import OntProvisioningProfile
-
+    # Bundles are templates only; displayed ONTs do not have active profile state.
     profile_info: dict[str, dict[str, str]] = {}
-    active_assignments = {
-        str(getattr(ont, "id", "")): get_active_bundle_assignment(db, ont)
-        for ont in displayed_onts
-        if getattr(ont, "id", None)
-    }
-    profile_ids = {
-        assignment.bundle_id
-        for assignment in active_assignments.values()
-        if assignment and getattr(assignment, "bundle_id", None)
-    }
-    profile_by_id: dict[str, OntProvisioningProfile] = {}
-    if profile_ids:
-        profile_rows = db.scalars(
-            select(OntProvisioningProfile).where(
-                OntProvisioningProfile.id.in_(profile_ids)
-            )
-        ).all()
-        profile_by_id = {str(p.id): p for p in profile_rows}
-    for ont in displayed_onts:
-        ont_key = str(getattr(ont, "id", ""))
-        if not ont_key:
-            continue
-        assignment = active_assignments.get(ont_key)
-        profile_id = getattr(assignment, "bundle_id", None)
-        if profile_id and str(profile_id) in profile_by_id:
-            profile = profile_by_id[str(profile_id)]
-            profile_info[ont_key] = {
-                "profile_id": str(profile.id),
-                "profile_name": profile.name or "",
-                "profile_type": profile.profile_type.value if profile.profile_type else "",
-            }
 
     return {
         "onts": onts,
@@ -1876,34 +1842,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             }
         )
 
-    # Manual profile state shown on the ONT detail screen
+    # Bundle templates are materialized onto ONT intent and do not remain active.
     profile_state: dict[str, object] = {}
-    active_assignment = get_active_bundle_assignment(db, ont)
-    active_profile_id = getattr(active_assignment, "bundle_id", None)
-    if active_profile_id:
-        profile_state["profile_id"] = str(active_profile_id)
-        profile_state["status"] = (
-            ont.provisioning_status.value if ont.provisioning_status else None
-        )
-        profile_state["last_provisioned_at"] = ont.last_provisioned_at
-        bundle = getattr(active_assignment, "bundle", None)
-        if bundle is not None:
-            profile_state["profile_name"] = bundle.name
-
-        # Check for drift
-        from app.services.network.ont_profile_apply import detect_drift
-
-        drift = detect_drift(db, str(ont.id))
-        if drift:
-            profile_state["has_drift"] = drift.has_drift
-            profile_state["drifted_fields"] = [
-                {
-                    "field": f.field_name,
-                    "desired": str(f.desired),
-                    "observed": str(f.observed),
-                }
-                for f in drift.drifted_fields
-            ]
 
     # Note: available_profile_templates and available_firmware are now lazy-loaded
     # via HTMX endpoints to reduce initial page load time

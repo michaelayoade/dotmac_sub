@@ -123,7 +123,7 @@ class OltActionAdapter:
         Returns:
             Tuple of (success, message, ont_unit_id).
         """
-        from app.services.network.olt_authorization_workflow import (
+        from app.services.network.ont_authorization import (
             authorize_autofind_ont_and_provision_network_audited,
         )
 

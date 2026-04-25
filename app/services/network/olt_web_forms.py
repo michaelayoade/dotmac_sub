@@ -205,9 +205,9 @@ def validate_values(
     if default_profile_id:
         profile = db.get(OntProvisioningProfile, coerce_uuid(default_profile_id))
         if not profile:
-            return "Default provisioning bundle not found."
+            return "Default provisioning profile not found."
         if not profile.is_active:
-            return f"Default provisioning bundle '{profile.name}' is inactive."
+            return f"Default provisioning profile '{profile.name}' is inactive."
         # If OLT already exists, check profile is scoped to this OLT or is global
         if current_olt and profile.olt_device_id:
             if profile.olt_device_id != current_olt.id:

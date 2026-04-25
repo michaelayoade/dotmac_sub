@@ -3,16 +3,16 @@
 This package provides modular ONT provisioning functionality:
 
 - context: OLT context resolution (ONT -> OLT + FSP + ONT-ID)
-- profiles: Profile resolution and TR-069 requirements
 - preflight: Pre-provisioning validation checks
 - preview: Dry-run command generation
 - credentials: PPPoE credential masking
 - result: StepResult dataclass for operation outcomes
+- orchestrator: Direct ONT provisioning from OLT defaults + desired config
 
 State Reconciliation (new):
 - state: Desired/actual state dataclasses and building functions
 - reconciler: Delta computation and validation
-- executor: Batched execution with compensation-based rollback
+- executor: Batched execution with best-effort compensation rollback
 - optical_budget: Optical power validation
 - vlan_validator: VLAN trunk verification
 
@@ -39,10 +39,6 @@ from app.services.network.ont_provisioning.optical_budget import (
 )
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.preview import preview_commands
-from app.services.network.ont_provisioning.profiles import (
-    profile_requires_tr069,
-    resolve_profile,
-)
 from app.services.network.ont_provisioning.reconciler import (
     compute_delta,
     get_delta_summary,
@@ -50,24 +46,9 @@ from app.services.network.ont_provisioning.reconciler import (
     validate_delta,
 )
 from app.services.network.ont_provisioning.result import StepResult
-
-# Saga pattern exports
-from app.services.network.ont_provisioning.saga import (
-    ACS_CONFIG_SAGA,
-    FULL_PROVISIONING_SAGA,
-    SAGA_REGISTRY,
-    WIFI_SETUP_SAGA,
-    SagaContext,
-    SagaDefinition,
-    SagaExecutionStatus,
-    SagaExecutor,
-    SagaResult,
-    SagaStep,
-    build_internet_provisioning_saga,
-    execute_saga,
-    get_saga_by_name,
-    list_available_sagas,
-    saga_executions,
+from app.services.network.ont_provisioning.orchestrator import (
+    OntProvisioningResult,
+    provision_ont_from_desired_config,
 )
 
 # State reconciliation exports
@@ -93,9 +74,6 @@ __all__ = [
     # Context
     "OltContext",
     "resolve_olt_context",
-    # Profiles
-    "resolve_profile",
-    "profile_requires_tr069",
     # Preflight
     "validate_prerequisites",
     # Preview
@@ -132,20 +110,7 @@ __all__ = [
     "validate_vlan_exists",
     "validate_management_vlan_trunked",
     "validate_service_port_vlans",
-    # Saga pattern
-    "SagaStep",
-    "SagaDefinition",
-    "SagaContext",
-    "SagaResult",
-    "SagaExecutionStatus",
-    "SagaExecutor",
-    "execute_saga",
-    "saga_executions",
-    "FULL_PROVISIONING_SAGA",
-    "WIFI_SETUP_SAGA",
-    "ACS_CONFIG_SAGA",
-    "SAGA_REGISTRY",
-    "build_internet_provisioning_saga",
-    "get_saga_by_name",
-    "list_available_sagas",
+    # Direct orchestration
+    "OntProvisioningResult",
+    "provision_ont_from_desired_config",
 ]

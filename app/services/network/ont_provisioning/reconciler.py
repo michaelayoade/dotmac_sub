@@ -334,7 +334,6 @@ def _validate_ip_index(ont: OntUnit, ip_index: int) -> tuple[bool, str]:
 def reconcile_ont_state(
     db: Session,
     ont_id: str,
-    bundle_id: str | None = None,
     tr069_olt_profile_id: int | None = None,
 ) -> tuple[ProvisioningDelta | None, str]:
     """Full reconciliation: build desired, read actual, compute and validate delta.
@@ -344,15 +343,12 @@ def reconcile_ont_state(
     Args:
         db: Database session.
         ont_id: The ONT ID to reconcile.
-        bundle_id: Optional explicit bundle ID.
         tr069_olt_profile_id: Optional explicit OLT-local TR-069 profile ID.
 
     Returns:
         Tuple of (ProvisioningDelta or None, error message).
     """
-    from app.models.network import OntProvisioningProfile
     from app.services.network.ont_provisioning.context import resolve_olt_context
-    from app.services.network.ont_provisioning.profiles import resolve_profile
     from app.services.network.ont_provisioning.state import (
         build_desired_state_from_profile,
         read_actual_state,
@@ -363,18 +359,11 @@ def reconcile_ont_state(
     if not ctx:
         return None, err
 
-    # Resolve profile
-    profile = None
-    if bundle_id:
-        profile = db.get(OntProvisioningProfile, bundle_id)
-    else:
-        profile = resolve_profile(db, ctx.ont)
-
     # Build desired state
     desired, err = build_desired_state_from_profile(
         db,
         ont_id,
-        profile,
+        None,
         tr069_olt_profile_id=tr069_olt_profile_id,
     )
     if not desired:

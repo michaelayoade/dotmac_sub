@@ -9,16 +9,12 @@ from app.models.network import (
     OLTDevice,
     OntAssignment,
     OntAuthorizationStatus,
-    OntProvisioningProfile,
     OntUnit,
 )
 from app.services.common import coerce_uuid
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_provisioning.optical_budget import (
     validate_optical_budget,
-)
-from app.services.network.ont_provisioning.profiles import (
-    profile_requires_tr069,
-    resolve_profile,
 )
 from app.services.network.serial_utils import parse_ont_id_on_olt
 
@@ -34,7 +30,6 @@ _AUTHORIZATION_BLOCKER_NAMES = {
     "ONT exists",
     "OLT assigned",
     "OLT position (F/S/P)",
-    "Provisioning profile",
     "Authorization profiles",
     "OLT SSH credentials",
     "Active PON assignment",
@@ -99,7 +94,6 @@ def validate_prerequisites(
     checks: list[dict] = []
     ont = db.get(OntUnit, coerce_uuid(ont_id))
     olt: OLTDevice | None = None
-    profile: OntProvisioningProfile | None = None
 
     if not ont:
         checks.append(
@@ -191,56 +185,25 @@ def validate_prerequisites(
         }
     )
 
-    profile = resolve_profile(db, ont, bundle_id)
-    if profile:
+    resolved_config = resolve_effective_ont_config(db, ont, olt=olt)
+    resolved_values = resolved_config.get("values", {})
+    line_profile_id = resolved_values.get("authorization_line_profile_id")
+    service_profile_id = resolved_values.get("authorization_service_profile_id")
+    if line_profile_id is not None and service_profile_id is not None:
         checks.append(
             {
-                "name": "Provisioning profile",
+                "name": "Authorization profiles",
                 "status": "ok",
-                "message": profile.name,
+                "message": f"Line {line_profile_id}, service {service_profile_id}",
                 "can_auto_fix": False,
             }
         )
-        if (
-            profile.authorization_line_profile_id is not None
-            and profile.authorization_service_profile_id is not None
-        ):
-            checks.append(
-                {
-                    "name": "Authorization profiles",
-                    "status": "ok",
-                    "message": (
-                        f"Line {profile.authorization_line_profile_id}, "
-                        f"service {profile.authorization_service_profile_id}"
-                    ),
-                    "can_auto_fix": False,
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "name": "Authorization profiles",
-                    "status": "fail",
-                    "message": (
-                        "Set OLT line/service profile IDs before authorizing ONTs"
-                    ),
-                    "can_auto_fix": False,
-                }
-            )
     else:
-        checks.append(
-            {
-                "name": "Provisioning profile",
-                "status": "fail",
-                "message": "No profile - create one in Catalog -> Provisioning Profiles",
-                "can_auto_fix": False,
-            }
-        )
         checks.append(
             {
                 "name": "Authorization profiles",
                 "status": "fail",
-                "message": "No provisioning profile selected for authorization",
+                "message": "Set OLT default or ONT desired line/service profile IDs",
                 "can_auto_fix": False,
             }
         )
@@ -300,9 +263,7 @@ def validate_prerequisites(
         }
     )
 
-    acs_server_id = ont.tr069_acs_server_id
-    if not acs_server_id and olt is not None:
-        acs_server_id = getattr(olt, "tr069_acs_server_id", None)
+    acs_server_id = resolved_values.get("tr069_acs_server_id")
     if acs_server_id:
         checks.append(
             {
@@ -322,16 +283,15 @@ def validate_prerequisites(
             }
         )
 
-    profile_requires = profile_requires_tr069(profile)
-    acs_enabled = bool(
-        getattr(ont, "tr069_acs_server_id", None)
-        or getattr(olt, "tr069_acs_server_id", None)
+    tr069_credentials_present = bool(
+        resolved_values.get("cr_username") or resolved_values.get("cr_password")
     )
-    tr069_required = profile_requires or acs_enabled
+    acs_enabled = bool(acs_server_id)
+    tr069_required = tr069_credentials_present or acs_enabled
 
     effective_tr069_profile_id = tr069_olt_profile_id
     if effective_tr069_profile_id is None:
-        effective_tr069_profile_id = getattr(ont, "tr069_olt_profile_id", None)
+        effective_tr069_profile_id = resolved_values.get("tr069_olt_profile_id")
 
     if not tr069_required:
         tr069_status = "ok"
@@ -342,10 +302,10 @@ def validate_prerequisites(
     elif acs_enabled:
         tr069_status = "ok"
         tr069_msg = "Profile will be resolved dynamically at provisioning time"
-    elif profile_requires and not acs_enabled:
+    elif tr069_credentials_present and not acs_enabled:
         tr069_status = "fail"
         tr069_msg = (
-            "Selected provisioning profile requires TR-069, but no ACS-enabled OLT "
+            "TR-069 connection request credentials are set, but no ACS-enabled OLT "
             "or ONT is configured."
         )
     else:

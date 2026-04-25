@@ -39,10 +39,13 @@ def _intent_step_present(ont_plan: dict[str, Any], step_name: str) -> bool:
 
 
 def _has_profile_service_path_intent(db: Session, ont: OntUnit) -> bool:
-    from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
+    from app.models.network import OntWanServiceInstance
 
-    profile = resolve_assigned_bundle(db, ont)
-    services = getattr(profile, "wan_services", None) or []
+    services = db.scalars(
+        select(OntWanServiceInstance)
+        .where(OntWanServiceInstance.ont_id == ont.id)
+        .where(OntWanServiceInstance.is_active.is_(True))
+    ).all()
     return any(
         getattr(service, "is_active", False)
         and (
@@ -546,7 +549,7 @@ def operational_health_context(
         "return_impact": {
             "service_ports": "OLT service ports will be removed when reachable.",
             "olt_registration": "ONT authorization will be removed from the OLT.",
-            "assignment": "Active assignment will be closed.",
+            "assignment": "Active subscriber assignment will be closed.",
             "credentials": "Local PPPoE and management config will be cleared.",
             "acs": "ACS link remains discoverable by serial after the next inform.",
         },

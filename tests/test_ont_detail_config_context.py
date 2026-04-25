@@ -29,9 +29,8 @@ def test_desired_config_context_prefers_durable_ont_fields(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.services.web_network_ont_actions.context_builders.resolve_effective_ont_config",
         lambda *_args, **_kwargs: {
-            "bundle": None,
-            "overrides": [],
-            "using_legacy_fallback": True,
+            "config_pack": None,
+            "desired_config_keys": ["management.ip_address"],
             "values": {
                 "mgmt_ip_mode": "static",
                 "mgmt_vlan": 300,

@@ -6,7 +6,7 @@ system computes the delta between desired and actual state, then applies
 only the necessary changes.
 
 Key concepts:
-- DesiredOntState: Built from OntProvisioningProfile (VLANs from profile WAN services)
+- DesiredOntState: Built from OntUnit desired config plus OLT defaults
 - ActualOntState: Read from OLT via SSH
 - ProvisioningDelta: Computed changes needed to reconcile actual -> desired
 """
@@ -50,16 +50,13 @@ class ServicePortMatchResult(Enum):
 
 
 # ---------------------------------------------------------------------------
-# Desired State (from Profile)
+# Desired State
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class DesiredServicePort:
-    """A single service-port specification from the provisioning profile.
-
-    Built from OntProfileWanService records, NOT cloned from reference ONTs.
-    """
+    """A single service-port specification for the ONT."""
 
     vlan_id: int
     gem_index: int
@@ -78,7 +75,7 @@ class DesiredServicePort:
 
 @dataclass(frozen=True)
 class DesiredManagementConfig:
-    """Management plane configuration from profile."""
+    """Management plane configuration."""
 
     vlan_tag: int
     ip_mode: str = "dhcp"  # "dhcp" or "static"
@@ -90,7 +87,7 @@ class DesiredManagementConfig:
 
 @dataclass(frozen=True)
 class DesiredTr069Config:
-    """TR-069 configuration from profile."""
+    """TR-069 configuration."""
 
     olt_profile_id: int
     cr_username: str | None = None
@@ -99,11 +96,7 @@ class DesiredTr069Config:
 
 @dataclass(frozen=True)
 class DesiredOntState:
-    """Complete desired state for an ONT, built from profile.
-
-    This represents what the ONT should look like when fully provisioned.
-    VLANs come from profile WAN services, NOT cloned from reference ONTs.
-    """
+    """Complete desired state for an ONT."""
 
     ont_id: str
     serial_number: str
@@ -221,16 +214,12 @@ def build_desired_state_from_profile(
     profile: OntProvisioningProfile | None = None,
     tr069_olt_profile_id: int | None = None,
 ) -> tuple[DesiredOntState | None, str]:
-    """Build desired state from profile WAN services.
-
-    IMPORTANT: This function reads VLANs from the profile's WAN services,
-    NOT from a reference ONT. This eliminates the "reference cloning" problem
-    where errors propagate from misconfigured reference ONTs.
+    """Build desired state from ONT desired config and OLT defaults.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-    profile: Optional explicit profile. If None, uses ONT's assigned profile.
+        profile: Deprecated compatibility argument. Ignored when absent.
         tr069_olt_profile_id: Optional OLT-local TR-069 profile ID. When omitted,
             the effective OLT profile is resolved from the ONT/OLT.
 
@@ -239,7 +228,6 @@ def build_desired_state_from_profile(
     """
     from app.models.network import OntUnit
     from app.services.network.ont_provisioning.context import resolve_olt_context
-    from app.services.network.ont_provisioning.profiles import resolve_profile
 
     ont = db.get(OntUnit, ont_id)
     if not ont:
@@ -249,76 +237,42 @@ def build_desired_state_from_profile(
     if not ctx:
         return None, err
 
-    # Resolve profile
-    resolved_profile = profile or resolve_profile(db, ont)
-    if not resolved_profile:
-        return None, "No provisioning profile assigned or specified"
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
 
-    # Build service ports from profile WAN services
-    service_ports = _build_service_ports_from_profile(resolved_profile)
+    service_ports: list[DesiredServicePort] = []
+    if effective_values.get("wan_vlan") is not None:
+        service_ports.append(
+            DesiredServicePort(
+                vlan_id=int(effective_values["wan_vlan"]),
+                gem_index=int(effective_values.get("wan_gem_index") or 1),
+            )
+        )
 
     # Build management config
     management = None
-    if resolved_profile.mgmt_vlan_tag:
-        mgmt_ip_mode = (
-            resolved_profile.mgmt_ip_mode.value
-            if resolved_profile.mgmt_ip_mode
-            else "dhcp"
-        )
-        subnet = None
-        gateway = None
-        if mgmt_ip_mode == "static_ip" and resolved_profile.mgmt_ip_pool_id:
-            import ipaddress
-
-            pool = getattr(resolved_profile, "mgmt_ip_pool", None)
-            if pool is None:
-                from app.models.network import IpPool
-
-                pool = db.get(IpPool, resolved_profile.mgmt_ip_pool_id)
-            if pool is not None:
-                gateway = getattr(pool, "gateway", None)
-                try:
-                    subnet = str(
-                        ipaddress.ip_network(str(pool.cidr), strict=False).netmask
-                    )
-                except ValueError:
-                    subnet = None
-        effective = resolve_effective_ont_config(db, ont)
-        effective_values = (
-            effective.get("values", {}) if isinstance(effective, dict) else {}
-        )
+    mgmt_ip_mode = str(effective_values.get("mgmt_ip_mode") or "").strip()
+    if effective_values.get("mgmt_vlan") is not None and mgmt_ip_mode:
         management = DesiredManagementConfig(
-            vlan_tag=resolved_profile.mgmt_vlan_tag,
+            vlan_tag=int(effective_values["mgmt_vlan"]),
             ip_mode=mgmt_ip_mode,
-            ip_address=effective_values.get("mgmt_ip_address")
-            or getattr(ont, "mgmt_ip_address", None),
-            subnet=subnet,
-            gateway=gateway,
+            ip_address=effective_values.get("mgmt_ip_address"),
+            subnet=effective_values.get("mgmt_subnet"),
+            gateway=effective_values.get("mgmt_gateway"),
         )
 
     # Build TR-069 config if OLT has ACS
     tr069 = None
-    if ctx.olt.tr069_acs_server_id:
-        resolved_tr069_profile_id = tr069_olt_profile_id
-        if resolved_tr069_profile_id is None:
-            try:
-                from app.services.web_network_onts import (
-                    resolve_effective_tr069_profile_for_ont,
-                )
-
-                tr069_profile, tr069_error = resolve_effective_tr069_profile_for_ont(
-                    db, ont
-                )
-                resolved_tr069_profile_id = getattr(tr069_profile, "profile_id", None)
-                if resolved_tr069_profile_id is None:
-                    return None, tr069_error or "No OLT TR-069 profile resolved"
-            except Exception as exc:
-                return None, f"Failed to resolve OLT TR-069 profile: {exc}"
-
+    resolved_tr069_profile_id = (
+        tr069_olt_profile_id or effective_values.get("tr069_olt_profile_id")
+    )
+    if effective_values.get("tr069_acs_server_id") and resolved_tr069_profile_id:
         tr069 = DesiredTr069Config(
             olt_profile_id=int(resolved_tr069_profile_id),
-            cr_username=resolved_profile.cr_username,
-            cr_password=resolved_profile.cr_password,
+            cr_username=effective_values.get("cr_username"),
+            cr_password=effective_values.get("cr_password"),
         )
 
     return (
@@ -327,13 +281,13 @@ def build_desired_state_from_profile(
             serial_number=ont.serial_number or "",
             fsp=ctx.fsp,
             olt_ont_id=ctx.olt_ont_id,
-            line_profile_id=resolved_profile.authorization_line_profile_id,
-            service_profile_id=resolved_profile.authorization_service_profile_id,
+            line_profile_id=effective_values.get("authorization_line_profile_id"),
+            service_profile_id=effective_values.get("authorization_service_profile_id"),
             service_ports=tuple(service_ports),
             management=management,
             tr069=tr069,
-            internet_config_ip_index=resolved_profile.internet_config_ip_index,
-            wan_config_profile_id=resolved_profile.wan_config_profile_id,
+            internet_config_ip_index=effective_values.get("internet_config_ip_index"),
+            wan_config_profile_id=effective_values.get("wan_config_profile_id"),
         ),
         "",
     )

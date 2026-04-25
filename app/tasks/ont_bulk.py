@@ -25,8 +25,8 @@ def execute_bulk_action(
     Returns:
         Statistics dict with processed/errors/skipped counts.
     """
-    if action == "provision_saga":
-        return _queue_bulk_provision_saga(ont_ids, params)
+    if action == "provision":
+        return _queue_bulk_provisioning(ont_ids, params)
 
     logger.info("Starting bulk %s for %d ONT(s)", action, len(ont_ids))
     processed = 0
@@ -111,21 +111,18 @@ def _dispatch_action(db, ont_id: str, action: str, params: dict):  # type: ignor
     return ActionResult(success=False, message=f"Unknown action: {action}")
 
 
-def _queue_bulk_provision_saga(
+def _queue_bulk_provisioning(
     ont_ids: list[str],
     params: dict[str, Any],
 ) -> dict[str, Any]:
-    """Queue many per-ONT provisioning sagas with bounded fan-out."""
+    """Queue many per-ONT direct provisioning tasks with bounded fan-out."""
     from app.services.network.bulk_provisioning import bulk_provision_onts
 
     params = dict(params or {})
-    saga_name = str(params.get("saga_name") or "full_provisioning")
     with db_session_adapter.session() as db:
         result = bulk_provision_onts(
             db,
             ont_ids,
-            bundle_id=params.get("bundle_id") or params.get("profile_id"),
-            saga_name=saga_name,
             tr069_olt_profile_id=params.get("tr069_olt_profile_id"),
             max_workers=int(params.get("max_parallel") or 10),
             chunk_delay_seconds=int(params.get("chunk_delay_seconds") or 15),
@@ -144,8 +141,8 @@ def _queue_bulk_provision_saga(
         "errors": 0,
         "skipped": result.skipped,
         "queued": result.queued,
-        "bulk_run_id": str(result.run_id),
-        "correlation_key": result.correlation_key,
-        "orchestrator_task_id": result.orchestrator_task_id,
-        "saga_name": saga_name,
+            "bulk_run_id": str(result.run_id),
+            "correlation_key": result.correlation_key,
+            "orchestrator_task_id": result.orchestrator_task_id,
+        "provisioning_mode": "direct",
     }

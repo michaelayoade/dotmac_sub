@@ -19,7 +19,6 @@ from app.schemas.network_catalog import (
     NetworkZoneCreate,
     NetworkZoneRead,
     NetworkZoneUpdate,
-    OntProvisioningProfileRead,
     OnuTypeCreate,
     OnuTypeRead,
     OnuTypeUpdate,
@@ -498,56 +497,3 @@ def delete_parameter_map(
 ):  # type: ignore[no-untyped-def]
     Tr069ParameterMaps.delete(db, map_id)
 
-
-# ── Provisioning Profiles (read-only) ─────────────────────────────────
-
-
-@router.get(
-    "/provisioning-profiles",
-    response_model=list[OntProvisioningProfileRead],
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def list_provisioning_profiles(
-    owner_subscriber_id: str | None = None,
-    profile_type: str | None = None,
-    config_method: str | None = None,
-    olt_device_id: str | None = None,
-    is_active: bool | None = None,
-    search: str | None = None,
-    order_by: str = "name",
-    order_dir: str = "asc",
-    limit: int = Query(default=200, le=500),
-    offset: int = 0,
-    db: Session = Depends(get_db),
-) -> list[OntProvisioningProfileRead]:
-    from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
-
-    items = ont_provisioning_profiles.list(
-        db,
-        owner_subscriber_id=owner_subscriber_id,
-        profile_type=profile_type,
-        config_method=config_method,
-        olt_device_id=olt_device_id,
-        is_active=is_active,
-        search=search,
-        order_by=order_by,
-        order_dir=order_dir,
-        limit=limit,
-        offset=offset,
-    )
-    return [OntProvisioningProfileRead.model_validate(i) for i in items]
-
-
-@router.get(
-    "/provisioning-profiles/{profile_id}",
-    response_model=OntProvisioningProfileRead,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def get_provisioning_profile(
-    profile_id: str, db: Session = Depends(get_db)
-) -> OntProvisioningProfileRead:
-    from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
-
-    return OntProvisioningProfileRead.model_validate(
-        ont_provisioning_profiles.get(db, profile_id)
-    )

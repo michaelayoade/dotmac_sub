@@ -1,4 +1,4 @@
-"""Tests for bulk ONT saga dispatch."""
+"""Tests for bulk direct ONT provisioning dispatch."""
 
 from __future__ import annotations
 
@@ -7,18 +7,18 @@ from typing import Any
 from uuid import UUID
 
 
-class _NoCloseSession:
+class _SessionContext:
     def __init__(self, session):
-        self._session = session
+        self.session = session
 
-    def __getattr__(self, name):
-        return getattr(self._session, name)
+    def __enter__(self):
+        return self.session
 
-    def close(self):
-        return None
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
-def test_bulk_provision_action_queues_saga_orchestrator(monkeypatch):
+def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
     from app.models.network import BulkProvisioningRunStatus
     from app.services.network.bulk_provisioning import BulkProvisioningDispatchResult
     from app.tasks.ont_bulk import execute_bulk_action
@@ -44,9 +44,8 @@ def test_bulk_provision_action_queues_saga_orchestrator(monkeypatch):
 
     result = execute_bulk_action.run(
         ["ont-a", "ont-b"],
-        "provision_saga",
+        "provision",
         {
-            "profile_id": "profile-1",
             "tr069_olt_profile_id": "tr069-profile-1",
             "initiated_by": "admin",
             "max_parallel": 10,
@@ -62,13 +61,11 @@ def test_bulk_provision_action_queues_saga_orchestrator(monkeypatch):
         "bulk_run_id": "00000000-0000-0000-0000-000000000001",
         "correlation_key": "bulk-test",
         "orchestrator_task_id": "bulk-orchestrator-task",
-        "saga_name": "full_provisioning",
+        "provisioning_mode": "direct",
     }
     assert calls == [
         {
             "ont_ids": ["ont-a", "ont-b"],
-            "profile_id": "profile-1",
-            "saga_name": "full_provisioning",
             "tr069_olt_profile_id": "tr069-profile-1",
             "max_workers": 10,
             "chunk_delay_seconds": 20,
@@ -82,29 +79,20 @@ def test_bulk_provision_action_queues_saga_orchestrator(monkeypatch):
     ]
 
 
-def test_bulk_saga_orchestrator_dedupes_and_chunks(monkeypatch):
+def test_bulk_direct_orchestrator_dedupes_and_chunks(monkeypatch):
     import app.celery_app as celery_module
-    from app.services.network.ont_provisioning import saga as saga_module
-    from app.tasks.saga import queue_bulk_saga_executions
+    from app.tasks.ont_provisioning import queue_bulk_provisioning
 
     enqueued: list[tuple[Any, dict[str, Any]]] = []
 
-    monkeypatch.setattr(
-        saga_module,
-        "get_saga_by_name",
-        lambda saga_name: object() if saga_name == "full_provisioning" else None,
-    )
-
     def fake_enqueue(task_or_name, **kwargs):  # type: ignore[no-untyped-def]
         enqueued.append((task_or_name, kwargs))
-        return SimpleNamespace(id=f"saga-task-{len(enqueued)}")
+        return SimpleNamespace(id=f"provision-task-{len(enqueued)}")
 
     monkeypatch.setattr(celery_module, "enqueue_celery_task", fake_enqueue)
 
-    result = queue_bulk_saga_executions.run(
-        "full_provisioning",
+    result = queue_bulk_provisioning.run(
         ["ont-1", "ont-2", "ont-1", "", "ont-3"],
-        step_data={"profile_id": "profile-1"},
         dry_run=True,
         initiated_by="admin",
         max_parallel=2,
@@ -124,21 +112,16 @@ def test_bulk_saga_orchestrator_dedupes_and_chunks(monkeypatch):
         kwargs["kwargs"]["ont_id"] for _, kwargs in enqueued
     ] == ["ont-1", "ont-2", "ont-3"]
     assert all(
-        getattr(task_or_name, "name", None) == "app.tasks.saga.execute_saga"
+        task_or_name == "app.tasks.ont_provisioning.provision_ont"
         for task_or_name, _ in enqueued
     )
-    assert all(
-        kwargs["kwargs"]["step_data"] == {"profile_id": "profile-1"}
-        for _, kwargs in enqueued
-    )
 
 
-def test_bulk_saga_orchestrator_uses_bulk_item_correlation(
+def test_bulk_direct_orchestrator_uses_bulk_item_correlation(
     db_session,
     monkeypatch,
 ):
     import app.celery_app as celery_module
-    import app.tasks.saga as saga_task_module
     from app.models.network import (
         BulkProvisioningItem,
         BulkProvisioningItemStatus,
@@ -146,10 +129,10 @@ def test_bulk_saga_orchestrator_uses_bulk_item_correlation(
         BulkProvisioningRunStatus,
         OntUnit,
     )
-    from app.services.network.ont_provisioning import saga as saga_module
-    from app.tasks.saga import queue_bulk_saga_executions
+    from app.tasks.ont_provisioning import queue_bulk_provisioning
+    import app.tasks.ont_provisioning as provisioning_task_module
 
-    ont = OntUnit(serial_number="BULK-SAGA-CORR")
+    ont = OntUnit(serial_number="BULK-DIRECT-CORR")
     db_session.add(ont)
     db_session.commit()
     db_session.refresh(ont)
@@ -172,21 +155,19 @@ def test_bulk_saga_orchestrator_uses_bulk_item_correlation(
     db_session.commit()
 
     enqueued: list[tuple[Any, dict[str, Any]]] = []
-    monkeypatch.setattr(
-        saga_module,
-        "get_saga_by_name",
-        lambda saga_name: object() if saga_name == "full_provisioning" else None,
-    )
 
     def fake_enqueue(task_or_name, **kwargs):  # type: ignore[no-untyped-def]
         enqueued.append((task_or_name, kwargs))
-        return SimpleNamespace(id="saga-task-1")
+        return SimpleNamespace(id="provision-task-1")
 
     monkeypatch.setattr(celery_module, "enqueue_celery_task", fake_enqueue)
-    monkeypatch.setattr(saga_task_module, "SessionLocal", lambda: _NoCloseSession(db_session))
+    monkeypatch.setattr(
+        provisioning_task_module.db_session_adapter,
+        "read_session",
+        lambda: _SessionContext(db_session),
+    )
 
-    result = queue_bulk_saga_executions.run(
-        "full_provisioning",
+    result = queue_bulk_provisioning.run(
         [str(ont.id)],
         bulk_run_id=str(run.id),
     )
@@ -200,23 +181,3 @@ def test_bulk_saga_orchestrator_uses_bulk_item_correlation(
     assert child_kwargs["bulk_run_id"] == str(run.id)
     assert child_kwargs["bulk_item_id"] == str(item.id)
     assert child_kwargs["correlation_key"] == item.correlation_key
-
-
-def test_bulk_saga_orchestrator_rejects_unknown_saga(monkeypatch):
-    from app.services.network.ont_provisioning import saga as saga_module
-    from app.tasks.saga import queue_bulk_saga_executions
-
-    monkeypatch.setattr(saga_module, "get_saga_by_name", lambda saga_name: None)
-
-    result = queue_bulk_saga_executions.run(
-        "missing_saga",
-        ["ont-1"],
-    )
-
-    assert result == {
-        "queued": 0,
-        "errors": 1,
-        "skipped": 1,
-        "message": "Saga not found: missing_saga",
-        "tasks": [],
-    }

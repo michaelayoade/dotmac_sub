@@ -102,7 +102,7 @@ class TestUpdateManagementIp:
             call.kwargs["field_name"] for call in mock_upsert_override.call_args_list
         ]
         assert "management.ip_mode" in override_fields
-        assert "management.vlan_tag" in override_fields
+        assert "management.vlan" in override_fields
         assert "management.ip_address" in override_fields
         assert db.commit.called
 

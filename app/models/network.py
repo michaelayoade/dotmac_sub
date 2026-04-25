@@ -292,17 +292,6 @@ class OntProvisioningStatus(enum.Enum):
     pending_service_config = "pending_service_config"  # ACS registered, config pending
 
 
-class OntBundleAssignmentStatus(enum.Enum):
-    applied = "applied"
-    superseded = "superseded"
-
-
-class OntConfigOverrideSource(enum.Enum):
-    operator = "operator"
-    workflow = "workflow"
-    subscriber_data = "subscriber_data"
-
-
 class OntBundleKind(enum.Enum):
     residential = "residential"
     business = "business"
@@ -1358,6 +1347,11 @@ class OntUnit(Base):
     observed_runtime_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    desired_config: Mapped[dict | None] = mapped_column(
+        JSON,
+        default=dict,
+        doc="Per-ONT desired configuration intent. OLT defaults are resolved from OltConfigPack.",
+    )
     tr069_last_snapshot: Mapped[dict | None] = mapped_column(JSON)
     tr069_last_snapshot_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -1443,18 +1437,6 @@ class OntUnit(Base):
         "SpeedProfile", foreign_keys=[upload_speed_profile_id]
     )
     tr069_acs_server = relationship("Tr069AcsServer")
-    bundle_assignments = relationship(
-        "OntBundleAssignment",
-        back_populates="ont",
-        cascade="all, delete-orphan",
-        order_by="OntBundleAssignment.created_at.desc()",
-    )
-    config_overrides = relationship(
-        "OntConfigOverride",
-        back_populates="ont",
-        cascade="all, delete-orphan",
-        order_by="OntConfigOverride.field_name",
-    )
     wan_service_instances = relationship(
         "OntWanServiceInstance",
         back_populates="ont",
@@ -1466,6 +1448,67 @@ class OntUnit(Base):
         back_populates="ont",
         order_by="OntProvisioningEvent.created_at",
     )
+
+    def _desired_section(self, section: str) -> dict:
+        config = self.desired_config if isinstance(self.desired_config, dict) else {}
+        value = config.get(section)
+        return value if isinstance(value, dict) else {}
+
+    def _get_desired_value(self, section: str, key: str):
+        return self._desired_section(section).get(key)
+
+    def _set_desired_value(self, section: str, key: str, value) -> None:
+        config = dict(self.desired_config or {})
+        section_values = dict(config.get(section) or {})
+        if value in (None, ""):
+            section_values.pop(key, None)
+        else:
+            section_values[key] = value
+        if section_values:
+            config[section] = section_values
+        else:
+            config.pop(section, None)
+        self.desired_config = config
+
+    @property
+    def pppoe_username(self):
+        return self._get_desired_value("wan", "pppoe_username")
+
+    @pppoe_username.setter
+    def pppoe_username(self, value) -> None:
+        self._set_desired_value("wan", "pppoe_username", value)
+
+    @property
+    def pppoe_password(self):
+        return self._get_desired_value("wan", "pppoe_password")
+
+    @pppoe_password.setter
+    def pppoe_password(self, value) -> None:
+        self._set_desired_value("wan", "pppoe_password", value)
+
+    @property
+    def wifi_ssid(self):
+        return self._get_desired_value("wifi", "ssid")
+
+    @wifi_ssid.setter
+    def wifi_ssid(self, value) -> None:
+        self._set_desired_value("wifi", "ssid", value)
+
+    @property
+    def wifi_password(self):
+        return self._get_desired_value("wifi", "password")
+
+    @wifi_password.setter
+    def wifi_password(self, value) -> None:
+        self._set_desired_value("wifi", "password", value)
+
+    @property
+    def mgmt_ip_address(self):
+        return self._get_desired_value("management", "ip_address")
+
+    @mgmt_ip_address.setter
+    def mgmt_ip_address(self, value) -> None:
+        self._set_desired_value("management", "ip_address", value)
 
 
 class OntProvisioningEvent(Base):
@@ -1507,114 +1550,6 @@ class OntProvisioningEvent(Base):
     )
 
     ont = relationship("OntUnit", back_populates="provisioning_events")
-
-
-class OntBundleAssignment(Base):
-    """Explicit assignment of a desired-state bundle to an ONT."""
-
-    __tablename__ = "ont_bundle_assignments"
-    __table_args__ = (
-        Index("ix_ont_bundle_assignments_ont_status", "ont_unit_id", "status"),
-        Index("ix_ont_bundle_assignments_bundle_status", "bundle_id", "status"),
-        Index(
-            "uq_ont_bundle_assignments_active_ont",
-            "ont_unit_id",
-            unique=True,
-            postgresql_where=text("is_active"),
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_units.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    bundle_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_provisioning_profiles.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    assigned_by_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("subscribers.id", ondelete="SET NULL"),
-    )
-    status: Mapped[OntBundleAssignmentStatus] = mapped_column(
-        Enum(
-            OntBundleAssignmentStatus,
-            name="ontbundleassignmentstatus",
-            create_constraint=False,
-        ),
-        nullable=False,
-        default=OntBundleAssignmentStatus.applied,
-        server_default=OntBundleAssignmentStatus.applied.value,
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
-    )
-    assigned_reason: Mapped[str | None] = mapped_column(Text)
-    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-    ont = relationship("OntUnit", back_populates="bundle_assignments")
-    bundle = relationship("OntProvisioningProfile", back_populates="bundle_assignments")
-    assigned_by_subscriber = relationship("Subscriber")
-
-
-class OntConfigOverride(Base):
-    """Explicit per-ONT override on top of a bundle assignment."""
-
-    __tablename__ = "ont_config_overrides"
-    __table_args__ = (
-        UniqueConstraint(
-            "ont_unit_id",
-            "field_name",
-            name="uq_ont_config_overrides_ont_field",
-        ),
-        Index("ix_ont_config_overrides_field_name", "field_name"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_units.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    field_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    value_json: Mapped[dict | None] = mapped_column(JSON)
-    source: Mapped[OntConfigOverrideSource] = mapped_column(
-        Enum(
-            OntConfigOverrideSource,
-            name="ontconfigoverridesource",
-            create_constraint=False,
-        ),
-        nullable=False,
-        default=OntConfigOverrideSource.operator,
-        server_default=OntConfigOverrideSource.operator.value,
-    )
-    reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-    ont = relationship("OntUnit", back_populates="config_overrides")
 
 
 class BulkProvisioningRun(Base):
@@ -2592,12 +2527,6 @@ class OntProvisioningProfile(Base):
         back_populates="profile",
         cascade="all, delete-orphan",
         order_by="OntProfileWanService.priority",
-    )
-    bundle_assignments = relationship(
-        "OntBundleAssignment",
-        back_populates="bundle",
-        cascade="all, delete-orphan",
-        order_by="OntBundleAssignment.created_at.desc()",
     )
 
 

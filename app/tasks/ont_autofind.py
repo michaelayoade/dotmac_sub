@@ -223,7 +223,7 @@ def poll_rediscovery_and_authorize(
         Dict with authorization result or error details
     """
     from app.services import web_network_ont_autofind as ont_autofind_service
-    from app.services.network.olt_authorization_workflow import (
+    from app.services.network.ont_authorization import (
         get_autofind_candidate_by_serial,
     )
 
@@ -275,7 +275,7 @@ def poll_rediscovery_and_authorize(
                         olt.name,
                     )
                     # ONT rediscovered - now authorize it
-                    from app.services.network.olt_authorization_workflow import (
+                    from app.services.network.ont_authorization import (
                         authorize_autofind_ont_and_provision_network_audited,
                     )
 

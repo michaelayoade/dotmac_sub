@@ -82,7 +82,7 @@ def _create_bulk_run(
     *,
     ont_ids: list[uuid.UUID],
     bundle_id: str | uuid.UUID | None,
-    saga_name: str,
+    provisioning_mode: str,
     max_workers: int,
     initiated_by: str | None,
     correlation_key: str,
@@ -92,12 +92,13 @@ def _create_bulk_run(
     run_metadata = dict(metadata or {})
     run_metadata.update(
         {
-            "saga_name": saga_name,
+            "provisioning_mode": provisioning_mode,
             "input_skipped_count": input_skipped_count,
         }
     )
+    del bundle_id
     run = BulkProvisioningRun(
-        profile_id=_as_uuid(bundle_id) if bundle_id else None,
+        profile_id=None,
         status=BulkProvisioningRunStatus.pending,
         correlation_key=correlation_key,
         initiated_by=initiated_by,
@@ -142,7 +143,7 @@ def bulk_provision_onts(
     ont_ids: list[str | uuid.UUID],
     *,
     bundle_id: str | uuid.UUID | None = None,
-    saga_name: str = "full_provisioning",
+    provisioning_mode: str = "direct",
     tr069_olt_profile_id: int | None = None,
     max_workers: int = 10,
     chunk_delay_seconds: int = 15,
@@ -153,12 +154,9 @@ def bulk_provision_onts(
     step_data: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> BulkProvisioningDispatchResult:
-    """Create a durable bulk run and queue its Celery saga orchestrator."""
-    from app.services.network.ont_provisioning.saga import get_saga_by_name
+    """Create a durable bulk run and queue direct provisioning tasks."""
+    del provisioning_mode
     from app.services.queue_adapter import enqueue_task
-
-    if get_saga_by_name(saga_name) is None:
-        raise ValueError(f"Saga not found: {saga_name}")
 
     workers = max(1, min(int(max_workers or 10), 50))
     delay = max(0, int(chunk_delay_seconds or 0))
@@ -168,7 +166,7 @@ def bulk_provision_onts(
         db,
         ont_ids=unique_ont_ids,
         bundle_id=bundle_id,
-        saga_name=saga_name,
+        provisioning_mode="direct",
         max_workers=workers,
         initiated_by=initiated_by,
         correlation_key=run_correlation,
@@ -187,28 +185,19 @@ def bulk_provision_onts(
 
     orchestrator_task_id: str | None = None
     if queued_count:
-        task_step_data = dict(step_data or {})
-        if bundle_id:
-            task_step_data.setdefault("bundle_id", str(bundle_id))
-            task_step_data.setdefault("profile_id", str(bundle_id))
-        if (
-            tr069_olt_profile_id is not None
-            and "tr069_olt_profile_id" not in task_step_data
-        ):
-            task_step_data["tr069_olt_profile_id"] = tr069_olt_profile_id
-        task_step_data.setdefault("allow_low_optical_margin", allow_low_optical_margin)
-
         dispatch = enqueue_task(
-            "app.tasks.saga.queue_bulk_saga_executions",
+            "app.tasks.ont_provisioning.queue_bulk_provisioning",
             kwargs={
-                "saga_name": saga_name,
                 "ont_ids": [str(ont_id) for ont_id in unique_ont_ids],
-                "step_data": task_step_data,
+                "tr069_olt_profile_id": tr069_olt_profile_id,
                 "dry_run": dry_run,
                 "initiated_by": initiated_by,
                 "max_parallel": workers,
                 "chunk_delay_seconds": delay,
                 "bulk_run_id": str(run.id),
+                "allow_low_optical_margin": allow_low_optical_margin,
+                "wait_for_acs": bool((step_data or {}).get("wait_for_acs", True)),
+                "apply_acs_config": bool((step_data or {}).get("apply_acs_config", True)),
             },
             correlation_id=run_correlation,
             source="bulk_provisioning_service",
@@ -254,7 +243,7 @@ def mark_bulk_item_running(
     db: Session,
     item_id: str | uuid.UUID,
     *,
-    saga_execution_id: str | None = None,
+    provisioning_execution_id: str | None = None,
 ) -> BulkProvisioningItem | None:
     """Mark a bulk item as running."""
     item = db.get(BulkProvisioningItem, _as_uuid(item_id))
@@ -264,7 +253,11 @@ def mark_bulk_item_running(
     item.started_at = item.started_at or datetime.now(UTC)
     item.result_data = {
         **(item.result_data or {}),
-        **({"saga_execution_id": saga_execution_id} if saga_execution_id else {}),
+        **(
+            {"provisioning_execution_id": provisioning_execution_id}
+            if provisioning_execution_id
+            else {}
+        ),
     }
     db.flush()
     return item
@@ -275,7 +268,7 @@ def mark_bulk_item_completed(
     item_id: str | uuid.UUID,
     result: dict[str, Any],
 ) -> BulkProvisioningItem | None:
-    """Persist a child saga result onto its bulk item and refresh run status."""
+    """Persist a child provisioning result onto its bulk item and refresh status."""
     item = db.get(BulkProvisioningItem, _as_uuid(item_id))
     if item is None:
         return None
@@ -284,7 +277,7 @@ def mark_bulk_item_completed(
     item.error_message = None if result.get("success") else item.message
     item.result_data = {
         **(item.result_data or {}),
-        "saga_result": result,
+        "provisioning_result": result,
     }
     item.completed_at = datetime.now(UTC)
     db.flush()

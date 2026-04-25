@@ -76,13 +76,8 @@
                         <span class="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">(Optional)</span>
                     </label>
                     <p class="text-xs text-slate-600 dark:text-slate-400 mb-3">
-                        Assign an OLT-scoped bundle to apply pre-configured settings, or configure manually below.
+                        Apply an OLT-scoped template to copy pre-configured settings, or configure manually below.
                     </p>
-                    {% if active_bundle_assignment %}
-                    <p class="mb-3 text-xs text-indigo-700 dark:text-indigo-300">
-                        Active assignment: {{ active_bundle_assignment.status.value|replace('_', ' ')|title }}
-                    </p>
-                    {% endif %}
                     <select id="bundle_id" name="bundle_id"
                             hx-get="/admin/network/onts/{{ ont_id }}/profile-preview"
                             hx-include="#bundle_id"

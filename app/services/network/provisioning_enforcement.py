@@ -37,8 +37,6 @@ logger = logging.getLogger(__name__)
 
 def _effective_field(db: Session, ont: OntUnit, key: str) -> object | None:
     resolved = resolve_effective_ont_config(db, ont)
-    if not resolved.get("config_ready", True):
-        return None
     values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
     return values.get(key)
 
@@ -78,8 +76,6 @@ class ProvisioningEnforcement:
             .options(
                 joinedload(OntUnit.olt_device),
                 joinedload(OntUnit.user_vlan),
-                selectinload(OntUnit.bundle_assignments),
-                selectinload(OntUnit.config_overrides),
             )
             .where(OntUnit.is_active.is_(True))
         )
@@ -121,20 +117,10 @@ class ProvisioningEnforcement:
 
         for ont in ProvisioningEnforcement._list_candidate_onts(db, olt_id=olt_id):
             resolved = resolve_effective_ont_config(db, ont)
-            if not resolved.get("config_ready", True):
-                logger.info(
-                    "Skipping provisioning enforcement for ONT %s because bundle "
-                    "assignment is not config-ready: %s",
-                    getattr(ont, "serial_number", None) or getattr(ont, "id", None),
-                    resolved.get("bundle_assignment_blocked_reason"),
-                )
-                continue
             values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
             effective_pppoe_username = values.get("pppoe_username")
             effective_wifi_ssid = values.get("wifi_ssid")
-            effective_mgmt_ip = values.get("mgmt_ip_address") or getattr(
-                ont, "mgmt_ip_address", None
-            )
+            effective_mgmt_ip = values.get("mgmt_ip_address")
 
             if (
                 effective_pppoe_username not in (None, "")
@@ -279,9 +265,7 @@ class ProvisioningEnforcement:
             if not ont:
                 skipped += 1
                 continue
-            wifi_ssid = _effective_field(db, ont, "wifi_ssid") or getattr(
-                ont, "wifi_ssid", None
-            )
+            wifi_ssid = _effective_field(db, ont, "wifi_ssid")
             if not wifi_ssid:
                 skipped += 1
                 continue
@@ -374,9 +358,7 @@ class ProvisioningEnforcement:
             if not ont:
                 skipped += 1
                 continue
-            mgmt_ip_address = _effective_field(db, ont, "mgmt_ip_address") or getattr(
-                ont, "mgmt_ip_address", None
-            )
+            mgmt_ip_address = _effective_field(db, ont, "mgmt_ip_address")
             if not mgmt_ip_address:
                 skipped += 1
                 continue

@@ -328,15 +328,12 @@ def return_to_inventory(
 def apply_bundle(
     db: Session, ont_id: str, bundle_id: str, *, request: Request | None = None
 ) -> Any:
-    """Apply a bundle template and audit the explicit admin action."""
-    from app.services.network.ont_profile_apply import apply_bundle_to_ont
-    from app.services.network_subscriber_bridge import default_subscriber_validator
+    """Reject obsolete bundle template application."""
+    from app.services.network.ont_action_common import ActionResult
 
-    result = apply_bundle_to_ont(
-        db,
-        ont_id,
-        bundle_id,
-        subscriber_context_provider=default_subscriber_validator,
+    result = ActionResult(
+        success=False,
+        message="Bundle templates are obsolete. Save ONT desired_config directly.",
     )
     _log_action_audit(
         db,

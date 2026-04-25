@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_bundle_assignments import resolve_assigned_bundle
 
 
 def _value(raw: object, default: str = "Not set") -> str:
@@ -43,21 +42,6 @@ def _plan_section(ont_plan: dict[str, Any], step: str) -> dict[str, Any]:
 def _active_profile_wan_services(
     ont: object, db: Session | None = None
 ) -> list[object]:
-    if db is not None:
-        profile = resolve_assigned_bundle(db, ont)
-        profile_id = getattr(profile, "id", None)
-        if profile_id:
-            from app.models.network import OntProfileWanService
-
-            return list(
-                db.scalars(
-                    select(OntProfileWanService)
-                    .where(OntProfileWanService.profile_id == profile_id)
-                    .where(OntProfileWanService.is_active.is_(True))
-                    .order_by(OntProfileWanService.priority, OntProfileWanService.name)
-                ).all()
-            )
-
     profile = getattr(ont, "provisioning_profile", None)
     services = getattr(profile, "wan_services", None) or []
     return [service for service in services if getattr(service, "is_active", False)]
@@ -255,7 +239,8 @@ def build_service_intent(
         ),
     }
     service_port_plan = _plan_section(ont_plan, "create_service_port")
-    profile_wan_services = _active_profile_wan_services(ont, db)
+    wan_service_instances = _active_wan_service_instances(ont, db)
+    profile_wan_services = wan_service_instances or _active_profile_wan_services(ont, db)
     profile_service_vlans = _profile_service_vlans(profile_wan_services)
     profile_service_gems = _profile_service_gems(profile_wan_services)
     profile_service_tag_modes = _profile_service_tag_modes(profile_wan_services)
@@ -423,7 +408,6 @@ def build_service_intent(
         )
 
     # Include WAN service instances if available (Phase 2+3 architecture)
-    wan_service_instances = _active_wan_service_instances(ont, db)
     formatted_instances = _format_wan_service_instances(wan_service_instances)
 
     return {
