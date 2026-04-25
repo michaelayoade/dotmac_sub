@@ -589,11 +589,7 @@ def _normalize_summary_group(group: Any) -> dict[str, Any]:
     return {key: _unwrap_tr069_value(value) for key, value in group.items()}
 
 
-def _first_present(item: dict[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in item and item[key] is not None:
-            return item[key]
-    return None
+from app.services.network._util import first_key_present as _first_present
 
 
 def _normalize_ethernet_ports(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

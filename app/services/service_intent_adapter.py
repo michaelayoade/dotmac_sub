@@ -49,11 +49,10 @@ def _mbps_to_kbps(raw: object) -> int | None:
     return value * 1000 if value > 0 else None
 
 
+from app.services.network._util import first_present
+
 def _first_present(*values: object) -> object | None:
-    for value in values:
-        if value not in (None, "", []):
-            return value
-    return None
+    return first_present(*values, exclude_empty_list=True)
 
 
 @dataclass(frozen=True)

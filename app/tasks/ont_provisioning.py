@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 def provision_ont(
     ont_id: str,
     *,
-    tr069_olt_profile_id: int | None = None,
     dry_run: bool = False,
     initiated_by: str | None = None,
     correlation_key: str | None = None,
@@ -47,7 +46,6 @@ def provision_ont(
                 result = provision_ont_from_desired_config(
                     db,
                     ont_id,
-                    tr069_olt_profile_id=tr069_olt_profile_id,
                     dry_run=dry_run,
                     allow_low_optical_margin=allow_low_optical_margin,
                     wait_for_acs=wait_for_acs,
@@ -90,7 +88,6 @@ def provision_ont(
 def queue_bulk_provisioning(
     ont_ids: list[str],
     *,
-    tr069_olt_profile_id: int | None = None,
     dry_run: bool = False,
     initiated_by: str | None = None,
     max_parallel: int = 10,
@@ -144,7 +141,6 @@ def queue_bulk_provisioning(
             "app.tasks.ont_provisioning.provision_ont",
             kwargs={
                 "ont_id": ont_id,
-                "tr069_olt_profile_id": tr069_olt_profile_id,
                 "dry_run": dry_run,
                 "initiated_by": initiated_by,
                 "correlation_key": item_correlation_key,

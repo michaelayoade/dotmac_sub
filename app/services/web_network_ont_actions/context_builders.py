@@ -17,7 +17,7 @@ from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
 )
-from app.services.web_network_onts import get_profile_templates
+from app.services.network._util import first_present as _first_present
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,6 @@ logger = logging.getLogger(__name__)
 def _enum_value(value: object) -> str | None:
     raw = getattr(value, "value", value)
     return str(raw) if raw not in (None, "") else None
-
-
-def _first_present(*values: object) -> object | None:
-    for value in values:
-        if value not in (None, ""):
-            return value
-    return None
 
 
 def _plan_section(ont_plan: dict[str, object], step_name: str) -> dict[str, object]:
@@ -571,10 +564,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     )
     lan = observed.get("lan", {}) if isinstance(observed.get("lan"), dict) else {}
 
-    # Fetch provisioning profiles for service profile selector
-    olt_device_id = getattr(ont, "olt_device_id", None)
-    provisioning_profiles = get_profile_templates(db, olt_device_id=olt_device_id)
-
     context = {
         "ont_id": ont_id,
         "ont": ont,
@@ -588,7 +577,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "iphost_freshness": observed_state["iphost_result"].freshness,
         "initial_iphost_form": observed_state["initial_form"],
         "vlans": observed_state["vlans"],
-        "provisioning_profiles": provisioning_profiles,
         "tr069_profiles": observed_state["tr069_profiles"],
         "tr069_profiles_error": observed_state["tr069_profiles_error"],
         "tr069_profiles_freshness": observed_state["profiles_result"].freshness,

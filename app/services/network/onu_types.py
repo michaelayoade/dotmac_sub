@@ -73,8 +73,6 @@ class OnuTypes:
         allow_custom_profiles: bool = True,
         capability: OnuCapability,
         vendor_model_capability_id: object | None = None,
-        default_bundle_id: object | None = None,
-        supports_bundle_overrides: bool = True,
         is_active: bool = True,
         notes: str | None = None,
     ) -> OnuType:
@@ -90,8 +88,8 @@ class OnuTypes:
             allow_custom_profiles=allow_custom_profiles,
             capability=capability,
             vendor_model_capability_id=vendor_model_capability_id,
-            default_bundle_id=default_bundle_id,
-            supports_bundle_overrides=supports_bundle_overrides,
+            default_bundle_id=None,
+            supports_bundle_overrides=False,
             is_active=is_active,
             notes=notes,
         )

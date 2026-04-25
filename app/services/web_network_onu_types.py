@@ -187,8 +187,6 @@ def handle_create(db: Session, form_data: dict[str, object]) -> OnuType:
             if form_data.get("vendor_model_capability_id")
             else None
         ),
-        default_bundle_id=None,
-        supports_bundle_overrides=False,
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
         # ACS Config Pack
@@ -229,8 +227,6 @@ def handle_update(
             if form_data.get("vendor_model_capability_id")
             else None
         ),
-        default_bundle_id=None,
-        supports_bundle_overrides=False,
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
         # ACS Config Pack

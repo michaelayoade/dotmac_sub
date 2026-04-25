@@ -170,11 +170,10 @@ def _service_port_value(
     return _value(fallback_value)
 
 
+from app.services.network._util import first_present
+
 def _first_present(*values: object) -> object | None:
-    for value in values:
-        if value not in (None, "", []):
-            return value
-    return None
+    return first_present(*values, exclude_empty_list=True)
 
 
 def build_service_intent(

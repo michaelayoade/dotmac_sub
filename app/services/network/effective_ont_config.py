@@ -7,20 +7,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntUnit
+from app.services.network._util import first_present_enum as _first_present
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
 from app.services.network.ont_desired_config import desired_config
-
-
-def _enum_or_raw(value: Any) -> Any:
-    return getattr(value, "value", value)
-
-
-def _first_present(*values: Any) -> Any:
-    for value in values:
-        # Check for None and empty string, but preserve False and 0
-        if value is not None and value != "":
-            return _enum_or_raw(value)
-    return None
 
 
 def _resolve_config_pack(

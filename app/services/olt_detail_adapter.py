@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.services.adapters import adapter_registry
@@ -253,67 +252,8 @@ class OltDetailAdapter:
     def _build_bundle_context(
         self, db: Session, olt: object | None
     ) -> dict[str, object]:
-        if olt is None or not hasattr(db, "scalars"):
-            return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
-
-        try:
-            from app.models.network import OntProvisioningProfile, OntUnit
-
-            bundles = list(
-                db.scalars(
-                    select(OntProvisioningProfile)
-                    .where(OntProvisioningProfile.olt_device_id == olt.id)
-                    .order_by(
-                        OntProvisioningProfile.is_default.desc(),
-                        OntProvisioningProfile.name.asc(),
-                    )
-                ).all()
-            )
-            if not bundles:
-                return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
-
-            bundle_ids = [bundle.id for bundle in bundles]
-            active_assignment_counts: dict[object, int] = {}
-            legacy_profile_counts = dict(
-                db.execute(
-                    select(OntUnit.provisioning_profile_id, func.count(OntUnit.id))
-                    .where(OntUnit.provisioning_profile_id.in_(bundle_ids))
-                    .where(OntUnit.is_active.is_(True))
-                    .group_by(OntUnit.provisioning_profile_id)
-                ).all()
-            )
-
-            rows: list[dict[str, object]] = []
-            assigned_onts = 0
-            for bundle in bundles:
-                explicit_count = int(active_assignment_counts.get(bundle.id, 0) or 0)
-                legacy_count = int(legacy_profile_counts.get(bundle.id, 0) or 0)
-                usage_count = max(explicit_count, legacy_count)
-                assigned_onts += usage_count
-                rows.append(
-                    {
-                        "bundle": bundle,
-                        "usage_count": usage_count,
-                        "explicit_assignment_count": explicit_count,
-                        "legacy_profile_count": legacy_count,
-                        "url": None,
-                    }
-                )
-
-            return {
-                "rows": rows,
-                "summary": {
-                    "total": len(rows),
-                    "assigned_onts": assigned_onts,
-                },
-            }
-        except Exception:
-            logger.error(
-                "Failed to build OLT bundle context for %s",
-                getattr(olt, "id", None),
-                exc_info=True,
-            )
-            return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
+        del db, olt
+        return {"rows": [], "summary": {"total": 0, "assigned_onts": 0}}
 
     def _build_resource_blast_radius(
         self, page_data: dict[str, object]

@@ -590,12 +590,6 @@ def get_tr069_servers(db: Session) -> list[Tr069AcsServer]:
     return list(db.scalars(stmt).all())
 
 
-def get_profile_templates(db: Session, olt_device_id: str | None = None) -> list[Any]:
-    """Provisioning profiles are obsolete for ONT desired config."""
-    del db, olt_device_id
-    return []
-
-
 def ont_form_dependencies(
     db: Session, ont: OntUnit | Any | None = None
 ) -> dict[str, Any]:
@@ -802,18 +796,6 @@ def bulk_action_summary_context(
         "failed_results": failed_results,
         "firmware_image_id": firmware_image_id,
     }
-
-
-# ---------------------------------------------------------------------------
-# Provisioning profile helpers
-# ---------------------------------------------------------------------------
-
-
-def get_provisioning_profiles(
-    db: Session, olt_device_id: str | None = None
-) -> list[Any]:
-    """Fetch active ONT provisioning profiles for form dropdowns."""
-    return get_profile_templates(db, olt_device_id=olt_device_id)
 
 
 def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str, Any]:

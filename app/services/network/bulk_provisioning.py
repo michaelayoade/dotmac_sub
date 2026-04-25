@@ -141,7 +141,6 @@ def bulk_provision_onts(
     ont_ids: list[str | uuid.UUID],
     *,
     provisioning_mode: str = "direct",
-    tr069_olt_profile_id: int | None = None,
     max_workers: int = 10,
     chunk_delay_seconds: int = 15,
     initiated_by: str | None = None,
@@ -185,7 +184,6 @@ def bulk_provision_onts(
             "app.tasks.ont_provisioning.queue_bulk_provisioning",
             kwargs={
                 "ont_ids": [str(ont_id) for ont_id in unique_ont_ids],
-                "tr069_olt_profile_id": tr069_olt_profile_id,
                 "dry_run": dry_run,
                 "initiated_by": initiated_by,
                 "max_parallel": workers,

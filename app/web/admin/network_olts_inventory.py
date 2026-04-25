@@ -18,7 +18,6 @@ from app.models.network import (
     IpPool,
     OLTDevice,
     OntAssignment,
-    OntProvisioningProfile,
     OntUnit,
     PonPort,
     Vlan,
@@ -157,15 +156,6 @@ def _olt_delete_impact(db: Session, olt: OLTDevice) -> dict[str, object]:
         db.scalar(select(func.count(IpPool.id)).where(IpPool.olt_device_id == olt.id))
         or 0
     )
-    provisioning_profiles = (
-        db.scalar(
-            select(func.count(OntProvisioningProfile.id)).where(
-                OntProvisioningProfile.olt_device_id == olt.id
-            )
-        )
-        or 0
-    )
-
     blocking_reasons = []
     if active_onts:
         blocking_reasons.append(
@@ -181,9 +171,6 @@ def _olt_delete_impact(db: Session, olt: OLTDevice) -> dict[str, object]:
         warnings.append("OLT-scoped VLANs remain preserved for audit and restore.")
     if linked_ip_pools:
         warnings.append("OLT-scoped IP pools remain preserved for audit and restore.")
-    if provisioning_profiles:
-        warnings.append("Provisioning profiles scoped to this OLT remain linked.")
-
     return {
         "olt_id": str(olt.id),
         "olt_name": olt.name,
@@ -193,7 +180,6 @@ def _olt_delete_impact(db: Session, olt: OLTDevice) -> dict[str, object]:
         "active_assignments": active_assignments,
         "vlans_to_orphan": linked_vlans,
         "ip_pools_to_orphan": linked_ip_pools,
-        "provisioning_profiles": provisioning_profiles,
         "warnings": warnings,
     }
 
@@ -287,12 +273,6 @@ def olt_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                 db
             ),
-            "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
-                db
-            ),
-            "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
-                db
-            ),
         }
     )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -317,12 +297,6 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
                 "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                     db
                 ),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
-                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -336,12 +310,6 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
                 "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
-                    db
-                ),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
-                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
                     db
                 ),
             }
@@ -378,12 +346,6 @@ def olt_edit(
             "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                 db, olt=olt
             ),
-            "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
-                db
-            ),
-            "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
-                db
-            ),
             "olt_vlans": ipam_context.get("olt_vlans", []),
             "olt_ip_pools": ipam_context.get("olt_ip_pools", []),
         }
@@ -419,12 +381,6 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
                 "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                     db, olt=olt
                 ),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
-                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
                 "olt_vlans": ipam_context.get("olt_vlans", []),
                 "olt_ip_pools": ipam_context.get("olt_ip_pools", []),
             }
@@ -441,12 +397,6 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
                 "action_url": f"/admin/network/olts/{olt_id}",
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
-                "provisioning_bundles": web_network_onts_service.get_provisioning_profiles(
-                    db
-                ),
                 "olt_vlans": ipam_context.get("olt_vlans", []),
                 "olt_ip_pools": ipam_context.get("olt_ip_pools", []),
             }

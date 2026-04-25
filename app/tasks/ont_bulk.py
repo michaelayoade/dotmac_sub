@@ -123,7 +123,6 @@ def _queue_bulk_provisioning(
         result = bulk_provision_onts(
             db,
             ont_ids,
-            tr069_olt_profile_id=params.get("tr069_olt_profile_id"),
             max_workers=int(params.get("max_parallel") or 10),
             chunk_delay_seconds=int(params.get("chunk_delay_seconds") or 15),
             initiated_by=params.get("initiated_by"),

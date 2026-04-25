@@ -72,7 +72,6 @@ def provision_ont_from_desired_config(
     db: Session,
     ont_id: str,
     *,
-    tr069_olt_profile_id: int | None = None,
     dry_run: bool = False,
     allow_low_optical_margin: bool = False,
     wait_for_acs: bool = True,
@@ -98,13 +97,12 @@ def provision_ont_from_desired_config(
     )
     has_tr069 = bool(
         effective_values.get("tr069_acs_server_id")
-        and (tr069_olt_profile_id or effective_values.get("tr069_olt_profile_id"))
+        and effective_values.get("tr069_olt_profile_id")
     )
 
     provision_result = provision_with_reconciliation(
         db,
         ont_id,
-        tr069_olt_profile_id=tr069_olt_profile_id,
         dry_run=dry_run,
         allow_low_optical_margin=allow_low_optical_margin,
     )

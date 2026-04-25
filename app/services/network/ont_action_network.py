@@ -117,11 +117,7 @@ def _igd_ppp_wan_details(
     }
 
 
-def _first_present(*values: Any) -> Any:
-    for value in values:
-        if value not in (None, ""):
-            return value
-    return None
+from app.services.network._util import first_present as _first_present
 
 
 def _igd_wan_details(
