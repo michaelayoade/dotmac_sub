@@ -181,6 +181,56 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
     return result
 
 
+def get_available_mgmt_ips_for_vlan(
+    db: Session, vlan_id: str | None, limit: int = 50
+) -> list[dict[str, str]]:
+    """Return available management IP addresses from the VLAN's IP pool.
+
+    Source of truth:
+    - VLAN has ip_pools relationship
+    - IpPool contains IPv4Address records
+    - Available = ont_unit_id IS NULL and is_reserved = False
+    """
+    from app.models.network import IpPool, IPv4Address, Vlan
+
+    if not vlan_id:
+        return []
+
+    vlan_uuid = coerce_uuid(vlan_id)
+    if not vlan_uuid:
+        return []
+
+    # Find IP pools linked to this VLAN
+    pools = db.scalars(
+        select(IpPool).where(
+            IpPool.vlan_id == vlan_uuid,
+            IpPool.is_active.is_(True),
+        )
+    ).all()
+
+    if not pools:
+        return []
+
+    pool_ids = [p.id for p in pools]
+
+    # Get available IPs from those pools
+    available_ips = db.scalars(
+        select(IPv4Address)
+        .where(
+            IPv4Address.pool_id.in_(pool_ids),
+            IPv4Address.ont_unit_id.is_(None),
+            IPv4Address.is_reserved.is_(False),
+        )
+        .order_by(IPv4Address.address)
+        .limit(limit)
+    ).all()
+
+    return [
+        {"address": ip.address, "id": str(ip.id)}
+        for ip in available_ips
+    ]
+
+
 def parse_form_values(form) -> dict[str, object]:
     """Parse ONT assignment form values including service config."""
     return {

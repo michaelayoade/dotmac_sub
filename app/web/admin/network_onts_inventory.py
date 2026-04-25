@@ -434,6 +434,28 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
 
 
 @router.get(
+    "/onts/available-mgmt-ips",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def available_mgmt_ips_for_vlan(
+    request: Request,
+    vlan_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX endpoint: return available management IPs for a VLAN as select options."""
+    available_ips = web_network_ont_assignments_service.get_available_mgmt_ips_for_vlan(
+        db, vlan_id
+    )
+    options_html = '<option value="">Select an IP address</option>'
+    for ip in available_ips:
+        options_html += f'<option value="{ip["address"]}">{ip["address"]}</option>'
+    if not available_ips:
+        options_html = '<option value="">No available IPs in pool</option>'
+    return HTMLResponse(content=options_html)
+
+
+@router.get(
     "/onts/{ont_id}/assignments/{assignment_id}/edit",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],

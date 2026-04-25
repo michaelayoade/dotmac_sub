@@ -131,6 +131,10 @@
                     <div>
                         <label for="mgmt_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management VLAN</label>
                         <select name="mgmt_vlan_id" id="mgmt_vlan_id"
+                            hx-get="/admin/network/onts/available-mgmt-ips"
+                            hx-target="#mgmt_ip_address"
+                            hx-trigger="change"
+                            hx-include="[name='mgmt_vlan_id']"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Use OLT Config Pack default</option>
                             {% for vlan in mgmt_vlans %}
@@ -229,11 +233,14 @@
                         </div>
                         <div x-show="mgmtIpMode === 'static_ip'" x-cloak>
                             <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP Address</label>
-                            <input type="text" name="mgmt_ip_address" id="mgmt_ip_address" maxlength="64"
-                                value="{{ form.mgmt_ip_address if form else '' }}"
-                                placeholder="172.16.202.100"
+                            <select name="mgmt_ip_address" id="mgmt_ip_address"
                                 class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">IP from management VLAN pool</p>
+                                <option value="">Select management VLAN first</option>
+                                {% if form and form.mgmt_ip_address %}
+                                <option value="{{ form.mgmt_ip_address }}" selected>{{ form.mgmt_ip_address }}</option>
+                                {% endif %}
+                            </select>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Available IPs from management VLAN pool</p>
                         </div>
                     </div>
                 </div>

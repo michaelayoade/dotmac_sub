@@ -1,0 +1,248 @@
+{# SmartOLT-style ONT detail overview - Identity, Status, Optical in first viewport #}
+
+{# ==================== IDENTITY PANEL ==================== #}
+<div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+        {# Left: Identity #}
+        <div class="flex items-start gap-4">
+            {# Status indicator #}
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl {{ 'bg-emerald-100 dark:bg-emerald-900/30' if is_online else ('bg-rose-100 dark:bg-rose-900/30' if is_offline else 'bg-slate-100 dark:bg-slate-800') }}">
+                {% if is_online %}
+                <span class="relative flex h-3 w-3"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-emerald-500"></span></span>
+                {% elif is_offline %}
+                <span class="h-3 w-3 rounded-full bg-rose-500"></span>
+                {% else %}
+                <span class="h-3 w-3 rounded-full bg-slate-400"></span>
+                {% endif %}
+            </div>
+            <div>
+                {# Serial as title #}
+                <h1 class="text-lg font-bold text-slate-900 dark:text-white font-mono">{{ display_serial_label }}</h1>
+                {# Vendor/model as subtitle #}
+                <p class="text-sm text-slate-500 dark:text-slate-400">{{ ont.vendor or 'Unknown' }} {{ ont.model or '' }}</p>
+                {# Context chips #}
+                <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                    {% if network_path.get('olt_name') %}
+                    <a href="/admin/network/olts/{{ network_path.olt_id }}" class="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300">
+                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                        {{ network_path.olt_name }}
+                    </a>
+                    {% endif %}
+                    {% if fsp %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ fsp }}</span>
+                    {% endif %}
+                    {% if subscriber_info.get('name') %}
+                    <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:bg-violet-500/10 dark:text-violet-300">
+                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                        {{ subscriber_info.name }}
+                    </a>
+                    {% endif %}
+                    {% if subscriber_info.get('plan_name') %}
+                    <span class="inline-flex items-center rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 dark:bg-teal-500/10 dark:text-teal-300">{{ subscriber_info.plan_name }}</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        {# Right: Actions #}
+        <div class="flex items-center gap-2">
+            {# Status pill #}
+            {% if is_online %}
+            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">Online</span>
+            {% elif is_offline %}
+            <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800 dark:bg-rose-900/30 dark:text-rose-300">Offline</span>
+            {% else %}
+            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Unknown</span>
+            {% endif %}
+
+            {# Primary: Configure #}
+            {% if show_provision_cta %}
+            <a href="/admin/network/onts/{{ ont.id }}/provision" class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Configure
+            </a>
+            {% elif not authorized_for_configuration and network_path.get('olt_id') and fsp %}
+            <form method="POST" action="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont" hx-post="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont" hx-swap="none" class="inline">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="ont_id" value="{{ ont.id }}">
+                <input type="hidden" name="fsp" value="{{ fsp }}">
+                <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
+                <button type="submit" class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700">Authorize</button>
+            </form>
+            {% endif %}
+
+            {# Actions dropdown #}
+            <div class="relative" x-data="{ open: false }">
+                <button type="button" @click="open = !open" @click.outside="open = false" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    Actions
+                </button>
+                <div x-show="open" x-cloak x-transition class="absolute right-0 z-50 mt-2 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                    <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/reboot" hx-swap="none" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Reboot</button>
+                    <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory" hx-swap="none" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Return to Inventory</button>
+                    <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/factory-reset" hx-swap="none" @click="open = false" class="flex w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">Reset Config</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# ==================== STATUS CARDS ROW ==================== #}
+<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    {# Runtime #}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Runtime</div>
+        <div class="mt-1 flex items-center gap-2">
+            <span class="h-2 w-2 rounded-full {{ 'bg-emerald-500' if is_online else ('bg-rose-500' if is_offline else 'bg-slate-400') }}"></span>
+            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ 'Online' if is_online else ('Offline' if is_offline else 'Unknown') }}</span>
+        </div>
+        {% if signal_info and signal_info.distance_meters is not none %}
+        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ "{:,}".format(signal_info.distance_meters) }}m distance</div>
+        {% endif %}
+    </div>
+
+    {# Assignment #}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Assignment</div>
+        <div class="mt-1 flex items-center gap-2">
+            <span class="h-2 w-2 rounded-full {{ 'bg-emerald-500' if assignment else 'bg-slate-400' }}"></span>
+            <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ 'Assigned' if assignment else 'Unassigned' }}</span>
+        </div>
+        {% if not assignment %}
+        <a href="/admin/network/onts/{{ ont.id }}/assign" class="mt-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">Assign &rarr;</a>
+        {% endif %}
+    </div>
+
+    {# Subscriber #}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber</div>
+        {% if subscriber_info.get('name') %}
+        <div class="mt-1 text-sm font-semibold text-slate-900 dark:text-white truncate">{{ subscriber_info.name }}</div>
+        <div class="mt-0.5 text-xs {{ 'text-emerald-600 dark:text-emerald-400' if subscriber_info.get('status') == 'active' else 'text-amber-600 dark:text-amber-400' }}">
+            {{ subscriber_info.get('status', 'unknown') | title }}
+        </div>
+        {% else %}
+        <div class="mt-1 text-sm text-slate-400 dark:text-slate-500">—</div>
+        {% endif %}
+    </div>
+
+    {# Topology #}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Topology</div>
+        {% if network_path.get('olt_name') %}
+        <div class="mt-1 text-sm font-semibold text-slate-900 dark:text-white truncate">{{ network_path.olt_name }}</div>
+        <div class="mt-0.5 text-xs text-slate-500 dark:text-slate-400 font-mono">{{ fsp or '—' }}</div>
+        {% else %}
+        <div class="mt-1 text-sm text-slate-400 dark:text-slate-500">No OLT</div>
+        {% endif %}
+    </div>
+
+    {# Config Pack #}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+        <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Config Pack</div>
+        {% if config_pack_name %}
+        <div class="mt-1 text-sm font-semibold text-slate-900 dark:text-white truncate">{{ config_pack_name }}</div>
+        {% else %}
+        <div class="mt-1 text-sm text-slate-400 dark:text-slate-500">OLT Defaults</div>
+        {% endif %}
+    </div>
+</div>
+
+{# ==================== OPTICAL LINK PANEL ==================== #}
+{% if signal_info %}
+<div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Optical Link</h2>
+        {% if signal_info.signal_updated_at %}
+        <span class="text-xs text-slate-500 dark:text-slate-400">Updated {{ signal_info.signal_updated_at.strftime('%H:%M') if signal_info.signal_updated_at else '—' }}</span>
+        {% endif %}
+    </div>
+
+    <div class="flex items-center justify-between gap-6">
+        {# OLT side #}
+        <div class="flex flex-col items-center">
+            <div class="flex h-14 w-14 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                <svg class="h-7 w-7 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+            </div>
+            <div class="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">OLT</div>
+        </div>
+
+        {# Path with readings #}
+        <div class="flex-1">
+            <div class="relative">
+                {# Connection line #}
+                <div class="absolute top-1/2 left-0 right-0 h-0.5 -translate-y-1/2 bg-gradient-to-r from-blue-300 via-emerald-400 to-cyan-300 dark:from-blue-600 dark:via-emerald-500 dark:to-cyan-500"></div>
+
+                {# Readings #}
+                <div class="relative flex justify-between">
+                    {# OLT RX #}
+                    <div class="rounded-lg bg-white px-3 py-2 shadow-sm border border-slate-200 dark:bg-slate-800 dark:border-slate-700">
+                        <div class="text-xs text-slate-500 dark:text-slate-400">OLT RX</div>
+                        <div class="text-sm font-bold tabular-nums {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.olt_rx_dbm and signal_info.olt_rx_dbm >= -25 else ('text-amber-600 dark:text-amber-400' if signal_info.olt_rx_dbm and signal_info.olt_rx_dbm >= -28 else 'text-rose-600 dark:text-rose-400') if signal_info.olt_rx_dbm else 'text-slate-400' }}">
+                            {{ "%.1f"|format(signal_info.olt_rx_dbm) if signal_info.olt_rx_dbm is not none else '—' }} dBm
+                        </div>
+                    </div>
+
+                    {# Distance #}
+                    {% if signal_info.distance_meters is not none %}
+                    <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-900/50">
+                        <div class="text-xs text-slate-500 dark:text-slate-400">Distance</div>
+                        <div class="text-sm font-bold tabular-nums text-slate-700 dark:text-slate-300">{{ "{:,}".format(signal_info.distance_meters) }}m</div>
+                    </div>
+                    {% endif %}
+
+                    {# ONU RX #}
+                    <div class="rounded-lg bg-white px-3 py-2 shadow-sm border border-slate-200 dark:bg-slate-800 dark:border-slate-700">
+                        <div class="text-xs text-slate-500 dark:text-slate-400">ONU RX</div>
+                        <div class="text-sm font-bold tabular-nums {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.onu_rx_dbm and signal_info.onu_rx_dbm >= -25 else ('text-amber-600 dark:text-amber-400' if signal_info.onu_rx_dbm and signal_info.onu_rx_dbm >= -28 else 'text-rose-600 dark:text-rose-400') if signal_info.onu_rx_dbm else 'text-slate-400' }}">
+                            {{ "%.1f"|format(signal_info.onu_rx_dbm) if signal_info.onu_rx_dbm is not none else '—' }} dBm
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {# Quality indicators #}
+            <div class="mt-4 grid grid-cols-2 gap-4">
+                <div>
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="text-slate-500 dark:text-slate-400">OLT Receive Quality</span>
+                        {% set olt_quality = 'good' if signal_info.olt_rx_dbm and signal_info.olt_rx_dbm >= -25 else ('warning' if signal_info.olt_rx_dbm and signal_info.olt_rx_dbm >= -28 else 'critical') if signal_info.olt_rx_dbm else 'unknown' %}
+                        <span class="font-medium {{ 'text-emerald-600 dark:text-emerald-400' if olt_quality == 'good' else ('text-amber-600 dark:text-amber-400' if olt_quality == 'warning' else ('text-rose-600 dark:text-rose-400' if olt_quality == 'critical' else 'text-slate-400')) }}">{{ olt_quality | title }}</span>
+                    </div>
+                    <div class="mt-1 h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700">
+                        <div class="h-1.5 rounded-full {{ 'bg-emerald-500' if olt_quality == 'good' else ('bg-amber-500' if olt_quality == 'warning' else ('bg-rose-500' if olt_quality == 'critical' else 'bg-slate-400')) }}" style="width: {{ '100%' if olt_quality == 'good' else ('60%' if olt_quality == 'warning' else ('30%' if olt_quality == 'critical' else '10%')) }}"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="text-slate-500 dark:text-slate-400">ONU Receive Quality</span>
+                        {% set onu_quality = 'good' if signal_info.onu_rx_dbm and signal_info.onu_rx_dbm >= -25 else ('warning' if signal_info.onu_rx_dbm and signal_info.onu_rx_dbm >= -28 else 'critical') if signal_info.onu_rx_dbm else 'unknown' %}
+                        <span class="font-medium {{ 'text-emerald-600 dark:text-emerald-400' if onu_quality == 'good' else ('text-amber-600 dark:text-amber-400' if onu_quality == 'warning' else ('text-rose-600 dark:text-rose-400' if onu_quality == 'critical' else 'text-slate-400')) }}">{{ onu_quality | title }}</span>
+                    </div>
+                    <div class="mt-1 h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700">
+                        <div class="h-1.5 rounded-full {{ 'bg-emerald-500' if onu_quality == 'good' else ('bg-amber-500' if onu_quality == 'warning' else ('bg-rose-500' if onu_quality == 'critical' else 'bg-slate-400')) }}" style="width: {{ '100%' if onu_quality == 'good' else ('60%' if onu_quality == 'warning' else ('30%' if onu_quality == 'critical' else '10%')) }}"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ONT side #}
+        <div class="flex flex-col items-center">
+            <div class="flex h-14 w-14 items-center justify-center rounded-lg {{ 'bg-emerald-100 dark:bg-emerald-900/30' if is_online else 'bg-slate-100 dark:bg-slate-800' }}">
+                <svg class="h-7 w-7 {{ 'text-emerald-600 dark:text-emerald-400' if is_online else 'text-slate-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+            </div>
+            <div class="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">ONT</div>
+        </div>
+    </div>
+</div>
+{% else %}
+{# No signal data #}
+<div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Optical Link</h2>
+    </div>
+    <div class="text-center py-6 text-sm text-slate-500 dark:text-slate-400">
+        <p>No optical signal data available.</p>
+        <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/refresh-status" hx-swap="none" class="mt-2 text-blue-600 hover:text-blue-800 dark:text-blue-400">Refresh status &rarr;</button>
+    </div>
+</div>
+{% endif %}
