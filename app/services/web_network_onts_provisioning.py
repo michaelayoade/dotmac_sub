@@ -646,11 +646,6 @@ def save_provision_settings(
             static_dns_value or str(choices_state.get("dns") or "").strip() or None
         )
 
-    adapter_defaults = service_intent_ui_adapter.provisioning_form_defaults(
-        db,
-        ont=ont,
-        profile=None,
-    )
     effective = resolve_effective_ont_config(db, ont)
     effective_values = (
         effective.get("values", {}) if isinstance(effective, dict) else {}
@@ -658,17 +653,14 @@ def save_provision_settings(
     onu_mode_value = (
         onu_mode_value
         or str(effective_values.get("onu_mode") or "").strip()
-        or _adapter_default_str(adapter_defaults, "onu_mode")
     )
     mgmt_vlan_id_value = (
         mgmt_vlan_id_value
         or (str(getattr(ont, "mgmt_vlan_id", "") or "").strip() or None)
-        or _adapter_default_str(adapter_defaults, "mgmt_vlan_id")
     )
     mgmt_ip_mode_value = (
         mgmt_ip_mode_value
         or str(effective_values.get("mgmt_ip_mode") or "").strip()
-        or _adapter_default_str(adapter_defaults, "mgmt_ip_mode")
     )
     mgmt_ip_address_value = mgmt_ip_address_value or str(
         effective_values.get("mgmt_ip_address") or ""
@@ -676,12 +668,10 @@ def save_provision_settings(
     wan_protocol_value = (
         wan_protocol_value
         or str(effective_values.get("wan_mode") or "").strip()
-        or _adapter_default_str(adapter_defaults, "wan_protocol")
     )
     wan_vlan_id_value = (
         wan_vlan_id_value
         or (str(getattr(ont, "wan_vlan_id", "") or "").strip() or None)
-        or _adapter_default_str(adapter_defaults, "wan_vlan_id")
     )
     pppoe_username_value = (
         pppoe_username_value
@@ -708,28 +698,22 @@ def save_provision_settings(
         or None
     )
     if wifi_enabled_value is None:
-        wifi_enabled_default = adapter_defaults.get("wifi_enabled")
         wifi_enabled_value = (
             effective_values.get("wifi_enabled")
             if effective_values.get("wifi_enabled") is not None
-            else wifi_enabled_default
-            if isinstance(wifi_enabled_default, bool)
             else None
         )
     wifi_ssid_value = (
         wifi_ssid_value
         or str(effective_values.get("wifi_ssid") or "").strip()
-        or _adapter_default_str(adapter_defaults, "wifi_ssid")
     )
     wifi_security_mode_value = (
         wifi_security_mode_value
         or str(effective_values.get("wifi_security_mode") or "").strip()
-        or _adapter_default_str(adapter_defaults, "wifi_security_mode")
     )
     wifi_channel_value = (
         wifi_channel_value
         or str(effective_values.get("wifi_channel") or "").strip()
-        or _adapter_default_str(adapter_defaults, "wifi_channel")
     )
     mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)

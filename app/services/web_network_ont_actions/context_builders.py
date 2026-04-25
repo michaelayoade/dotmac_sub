@@ -45,10 +45,6 @@ def _desired_config_context(
     initial_iphost_form: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return durable desired config values for ONT config partials."""
-    mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
-    lan_plan = _plan_section(ont_plan, "configure_lan_tr069")
-    wifi_plan = _plan_section(ont_plan, "configure_wifi_tr069")
-    initial_iphost_form = initial_iphost_form or {}
     effective = resolve_effective_ont_config(db, ont)
     values = effective["values"]
 
@@ -61,20 +57,14 @@ def _desired_config_context(
 
     mgmt_mode = _first_present(
         values.get("mgmt_ip_mode"),
-        mgmt_plan.get("ip_mode"),
-        initial_iphost_form.get("ip_mode"),
     )
     if mgmt_mode == "static_ip":
         mgmt_mode = "static"
     mgmt_vlan = _first_present(
         values.get("mgmt_vlan"),
-        mgmt_plan.get("vlan_id"),
-        initial_iphost_form.get("vlan_id"),
     )
     mgmt_ip = _first_present(
         values.get("mgmt_ip_address"),
-        mgmt_plan.get("ip_address"),
-        initial_iphost_form.get("ip_address"),
     )
 
     return {
@@ -82,12 +72,8 @@ def _desired_config_context(
             "ip_mode": mgmt_mode or "",
             "vlan_id": str(mgmt_vlan or ""),
             "ip_address": str(mgmt_ip or ""),
-            "subnet": str(
-                mgmt_plan.get("subnet") or initial_iphost_form.get("subnet") or ""
-            ),
-            "gateway": str(
-                mgmt_plan.get("gateway") or initial_iphost_form.get("gateway") or ""
-            ),
+            "subnet": str(values.get("mgmt_subnet") or ""),
+            "gateway": str(values.get("mgmt_gateway") or ""),
         },
         "desired_wan_config": {
             "wan_mode": wan_mode or "",
@@ -100,39 +86,17 @@ def _desired_config_context(
             "pppoe_username": str(values.get("pppoe_username") or ""),
         },
         "desired_lan_config": {
-            "lan_ip": str(
-                getattr(ont, "lan_gateway_ip", None) or lan_plan.get("lan_ip") or ""
-            ),
-            "lan_subnet": str(
-                getattr(ont, "lan_subnet_mask", None)
-                or lan_plan.get("lan_subnet")
-                or ""
-            ),
-            "dhcp_enabled": _first_present(
-                getattr(ont, "lan_dhcp_enabled", None),
-                lan_plan.get("dhcp_enabled"),
-            ),
-            "dhcp_start": str(
-                getattr(ont, "lan_dhcp_start", None)
-                or lan_plan.get("dhcp_start")
-                or ""
-            ),
-            "dhcp_end": str(
-                getattr(ont, "lan_dhcp_end", None) or lan_plan.get("dhcp_end") or ""
-            ),
+            "lan_ip": str(values.get("lan_ip") or ""),
+            "lan_subnet": str(values.get("lan_subnet") or ""),
+            "dhcp_enabled": values.get("lan_dhcp_enabled"),
+            "dhcp_start": str(values.get("lan_dhcp_start") or ""),
+            "dhcp_end": str(values.get("lan_dhcp_end") or ""),
         },
         "desired_wifi_config": {
-            "enabled": _first_present(
-                values.get("wifi_enabled"),
-                wifi_plan.get("enabled"),
-            ),
-            "ssid": str(values.get("wifi_ssid") or wifi_plan.get("ssid") or ""),
-            "channel": str(
-                values.get("wifi_channel") or wifi_plan.get("channel") or ""
-            ),
-            "security_mode": str(
-                values.get("wifi_security_mode") or wifi_plan.get("security_mode") or ""
-            ),
+            "enabled": values.get("wifi_enabled"),
+            "ssid": str(values.get("wifi_ssid") or ""),
+            "channel": str(values.get("wifi_channel") or ""),
+            "security_mode": str(values.get("wifi_security_mode") or ""),
         },
         "config_resolution": {
             "config_pack": effective.get("config_pack"),
@@ -747,12 +711,16 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
         "mgmt_ip_mode": values.get("mgmt_ip_mode"),
         "mgmt_vlan_id": str(values.get("mgmt_vlan") or ""),
         "mgmt_ip_address": str(values.get("mgmt_ip_address") or ""),
+        "wifi_enabled": values.get("wifi_enabled"),
+        "wifi_ssid": str(values.get("wifi_ssid") or ""),
+        "wifi_channel": str(values.get("wifi_channel") or ""),
+        "wifi_security_mode": str(values.get("wifi_security_mode") or ""),
         "mgmt_remote_access": getattr(ont, "mgmt_remote_access", False),
-        "lan_gateway_ip": ont.lan_gateway_ip or "",
-        "lan_subnet_mask": ont.lan_subnet_mask or "",
-        "lan_dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
-        "lan_dhcp_start": ont.lan_dhcp_start or "",
-        "lan_dhcp_end": ont.lan_dhcp_end or "",
+        "lan_gateway_ip": str(values.get("lan_ip") or ""),
+        "lan_subnet_mask": str(values.get("lan_subnet") or ""),
+        "lan_dhcp_enabled": values.get("lan_dhcp_enabled"),
+        "lan_dhcp_start": str(values.get("lan_dhcp_start") or ""),
+        "lan_dhcp_end": str(values.get("lan_dhcp_end") or ""),
         "voip_enabled": getattr(ont, "voip_enabled", False),
     }
     context.update(mgmt_ip_choices)
