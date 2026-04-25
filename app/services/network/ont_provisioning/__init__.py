@@ -4,7 +4,6 @@ This package provides modular ONT provisioning functionality:
 
 - context: OLT context resolution (ONT -> OLT + FSP + ONT-ID)
 - preflight: Pre-provisioning validation checks
-- preview: Dry-run command generation
 - credentials: PPPoE credential masking
 - result: StepResult dataclass for operation outcomes
 - orchestrator: Direct ONT provisioning from OLT defaults + desired config
@@ -38,7 +37,6 @@ from app.services.network.ont_provisioning.optical_budget import (
     validate_optical_budget,
 )
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
-from app.services.network.ont_provisioning.preview import preview_commands
 from app.services.network.ont_provisioning.reconciler import (
     compute_delta,
     get_delta_summary,
@@ -60,7 +58,7 @@ from app.services.network.ont_provisioning.state import (
     ProvisioningAction,
     ProvisioningDelta,
     ServicePortDelta,
-    build_desired_state_from_profile,
+    build_desired_state_from_config,
     read_actual_state,
 )
 from app.services.network.ont_provisioning.vlan_validator import (
@@ -76,8 +74,6 @@ __all__ = [
     "resolve_olt_context",
     # Preflight
     "validate_prerequisites",
-    # Preview
-    "preview_commands",
     # Credentials
     "mask_credentials",
     # Result
@@ -90,7 +86,7 @@ __all__ = [
     "ProvisioningAction",
     "ProvisioningDelta",
     "ServicePortDelta",
-    "build_desired_state_from_profile",
+    "build_desired_state_from_config",
     "read_actual_state",
     # Reconciler
     "compute_delta",

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from app.services.web_network_ont_actions.context_builders import (
     _desired_config_context,
+    _operator_summary_context,
 )
 
 
@@ -80,6 +81,42 @@ def test_desired_config_context_prefers_durable_ont_fields(monkeypatch) -> None:
     assert context["desired_lan_config"]["dhcp_enabled"] is True
     assert context["desired_wifi_config"]["enabled"] is True
     assert context["desired_wifi_config"]["ssid"] == "CustomerWiFi"
+
+
+def test_operator_summary_does_not_flag_missing_vlans_when_service_ports_deferred() -> None:
+    context = _operator_summary_context(
+        desired_mgmt={"vlan_id": "201"},
+        desired_wan={"wan_vlan": "212"},
+        service_ports_context={
+            "service_ports": [],
+            "error": "Live OLT service-port read deferred.",
+            "deferred": True,
+        },
+        olt_status={
+            "deferred": True,
+            "entry": {
+                "fsp": "0/0/6",
+                "ont_id": "6",
+                "description": "Customer",
+            }
+        },
+        has_tr069_device=True,
+        current_tr069_profile="DotMac-ACS",
+    )
+
+    summary = context["operator_summary"]
+
+    assert summary["service_ports_count"] == 0
+    assert summary["service_ports_deferred"] is True
+    assert summary["service_ports_error"] == "Live OLT service-port read deferred."
+    messages = [blocker["message"] for blocker in summary["blockers"]]
+    assert not any("Service-port read failed" in message for message in messages)
+    assert not any("Expected management VLAN" in message for message in messages)
+    assert not any("Expected internet VLAN" in message for message in messages)
+    labels = [label for label, _value in summary["olt_status_rows"]]
+    assert "Run State" not in labels
+    assert "Config State" not in labels
+    assert "Match State" not in labels
 
 
 def test_unified_config_context_does_not_perform_live_reads(

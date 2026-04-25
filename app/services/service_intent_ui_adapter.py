@@ -79,136 +79,65 @@ class ServiceIntentUiAdapter:
         db: Session | None = None,
         service_ports: list[object] | None = None,
     ) -> dict[str, object]:
-        """Return profile-derived service-port defaults for operator UI forms."""
-        profile = None
-        if profile is None:
-            profile = getattr(ont, "provisioning_profile", None)
-        services = list(
-            getattr(profile, "wan_services", None) or []
-        )
-        services = [svc for svc in services if getattr(svc, "is_active", False)]
-        primary = services[0] if services else None
-        gem_choices = sorted(
-            {
-                int(gem)
-                for gem in (getattr(service, "gem_port_id", None) for service in services)
-                if gem is not None
-            }
-        )
-        user_vlan_choices = sorted(
-            {
-                int(c_vlan)
-                for c_vlan in (getattr(service, "c_vlan", None) for service in services)
-                if c_vlan is not None
-            }
-        )
+        """Return OLT config pack + ONT desired-config service-port defaults."""
+        config_pack = None
+        effective_values: dict[str, object] = {}
+        if db is not None:
+            from app.services.network.effective_ont_config import (
+                resolve_effective_ont_config,
+            )
 
-        vlan_id = getattr(primary, "s_vlan", None) if primary else None
-        gem_index = getattr(primary, "gem_port_id", None) if primary else None
-        c_vlan = getattr(primary, "c_vlan", None) if primary else None
-        vlan_mode = getattr(primary, "vlan_mode", None) if primary else None
-        vlan_mode_value = getattr(vlan_mode, "value", vlan_mode)
-        tag_transform = (
-            "translate"
-            if c_vlan
-            else "transparent"
-            if vlan_mode_value == "transparent"
-            else "default"
-        )
+            effective = resolve_effective_ont_config(db, ont)
+            effective_values = (
+                effective.get("values", {}) if isinstance(effective, dict) else {}
+            )
+            config_pack = effective.get("config_pack") if isinstance(effective, dict) else None
+
+        vlan_id = effective_values.get("wan_vlan")
+        gem_index = effective_values.get("wan_gem_index") or 1
+        gem_choices = [int(gem_index)]
+        if config_pack:
+            gem_choices = sorted(
+                {
+                    int(config_pack.internet_gem_index),
+                    int(config_pack.mgmt_gem_index),
+                    int(config_pack.voip_gem_index),
+                    int(config_pack.iptv_gem_index),
+                }
+            )
 
         actual_vlans = {
             getattr(port, "vlan_id", None)
             for port in (service_ports or [])
             if getattr(port, "vlan_id", None) is not None
         }
-        planned_vlans = {
-            getattr(service, "s_vlan", None)
-            for service in services
-            if getattr(service, "s_vlan", None) is not None
-        }
+        planned_vlans = {vlan_id} if vlan_id is not None else set()
         missing_vlans = sorted(planned_vlans - actual_vlans)
         extra_vlans = sorted(actual_vlans - planned_vlans) if planned_vlans else []
 
         return {
             "primary_vlan_id": vlan_id,
-            "primary_gem_index": gem_index or 1,
-            "primary_user_vlan": c_vlan,
-            "primary_tag_transform": tag_transform,
-            "gem_choices": gem_choices or ([gem_index] if gem_index is not None else [1]),
-            "user_vlan_choices": user_vlan_choices,
+            "primary_gem_index": int(gem_index or 1),
+            "primary_user_vlan": None,
+            "primary_tag_transform": "default",
+            "gem_choices": gem_choices,
+            "user_vlan_choices": [],
+            "config_pack_source": config_pack.olt_name if config_pack else None,
             "planned_services": [
                 {
-                    "name": getattr(service, "name", None)
-                    or getattr(getattr(service, "service_type", None), "value", "service"),
-                    "service_type": getattr(
-                        getattr(service, "service_type", None), "value", None
-                    ),
-                    "s_vlan": getattr(service, "s_vlan", None),
-                    "c_vlan": getattr(service, "c_vlan", None),
-                    "gem_port_id": getattr(service, "gem_port_id", None),
-                    "connection_type": getattr(
-                        getattr(service, "connection_type", None), "value", None
-                    ),
+                    "name": "Internet",
+                    "service_type": "internet",
+                    "s_vlan": vlan_id,
+                    "c_vlan": None,
+                    "gem_port_id": int(gem_index or 1),
+                    "connection_type": effective_values.get("wan_mode"),
                 }
-                for service in services
-            ],
+            ]
+            if vlan_id is not None
+            else [],
             "missing_vlans": missing_vlans,
             "extra_vlans": extra_vlans,
         }
-
-    def provisioning_form_defaults(
-        self,
-        db: Session,
-        *,
-        ont: object,
-        profile: object | None,
-    ) -> dict[str, object]:
-        """Return adapter-derived defaults for ONT provisioning form validation."""
-        if profile is None:
-            return {}
-
-        from app.services import web_network_onts as web_network_onts_service
-
-        def _enum_value(raw: object) -> str | None:
-            value = getattr(raw, "value", raw)
-            text = str(value or "").strip()
-            return text or None
-
-        vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-        vlan_id_by_tag = {
-            int(vlan.tag): str(vlan.id)
-            for vlan in vlans
-            if getattr(vlan, "tag", None) is not None
-        }
-        active_services = [
-            svc
-            for svc in (getattr(profile, "wan_services", None) or [])
-            if getattr(svc, "is_active", False)
-        ]
-        primary_service = active_services[0] if active_services else None
-        wan_protocol = _enum_value(getattr(primary_service, "connection_type", None))
-        if wan_protocol == "bridge":
-            wan_protocol = "bridged"
-
-        mgmt_vlan_tag = getattr(profile, "mgmt_vlan_tag", None)
-        wan_vlan_tag = getattr(primary_service, "s_vlan", None) if primary_service else None
-
-        return {
-            "onu_mode": _enum_value(getattr(profile, "onu_mode", None)),
-            "mgmt_ip_mode": _enum_value(getattr(profile, "mgmt_ip_mode", None)),
-            "mgmt_vlan_id": vlan_id_by_tag.get(int(mgmt_vlan_tag))
-            if mgmt_vlan_tag is not None
-            else None,
-            "wan_protocol": wan_protocol,
-            "wan_vlan_id": vlan_id_by_tag.get(int(wan_vlan_tag))
-            if wan_vlan_tag is not None
-            else None,
-            "wifi_enabled": getattr(profile, "wifi_enabled", None),
-            "wifi_ssid": getattr(profile, "wifi_ssid_template", None),
-            "wifi_security_mode": getattr(profile, "wifi_security_mode", None),
-            "wifi_channel": getattr(profile, "wifi_channel", None),
-        }
-
 
 service_intent_ui_adapter = ServiceIntentUiAdapter()
 adapter_registry.register(service_intent_ui_adapter)

@@ -47,7 +47,6 @@ class AuthorizationPresets:
             offset: Skip first N results
         """
         stmt = select(AuthorizationPreset).options(
-            selectinload(AuthorizationPreset.provisioning_profile),
             selectinload(AuthorizationPreset.default_vlan),
             selectinload(AuthorizationPreset.olt_device),
         )
@@ -80,7 +79,6 @@ class AuthorizationPresets:
         stmt = (
             select(AuthorizationPreset)
             .options(
-                selectinload(AuthorizationPreset.provisioning_profile),
                 selectinload(AuthorizationPreset.default_vlan),
                 selectinload(AuthorizationPreset.olt_device),
             )
@@ -145,7 +143,6 @@ class AuthorizationPresets:
         preset = AuthorizationPreset(
             name=name,
             description=description,
-            provisioning_profile_id=None,
             line_profile_id=line_profile_id,
             service_profile_id=service_profile_id,
             default_vlan_id=coerce_uuid(default_vlan_id) if default_vlan_id else None,
@@ -189,9 +186,6 @@ class AuthorizationPresets:
             preset.name = name
         if description is not None:
             preset.description = description
-
-        # Provisioning profile templates are retired; clear any old link on edit.
-        preset.provisioning_profile_id = None
 
         if clear_default_vlan:
             preset.default_vlan_id = None

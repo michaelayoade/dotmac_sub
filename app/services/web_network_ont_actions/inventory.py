@@ -17,10 +17,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult
-from app.services.network.ont_inventory import (
-    emit_bundle_unassignment_events,
-    reset_ont_service_state,
-)
+from app.services.network.ont_inventory import reset_ont_service_state
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
     _resolve_return_olt_context,
@@ -227,7 +224,6 @@ def return_to_inventory(
         logger.warning("Failed to clear TR-069 device association: %s", e)
 
     # Use savepoint to enable rollback on partial failure
-    deferred_bundle_events: list[dict] = []
     try:
         with db.begin_nested():
             active_assignment = db.scalars(
@@ -251,10 +247,7 @@ def return_to_inventory(
             ont.board = None
             ont.port = None
             ont.external_id = None
-            # Defer event emission to avoid commit inside savepoint
-            deferred_bundle_events = reset_ont_service_state(
-                db, ont, reason="return_to_inventory", emit_events=False
-            )
+            reset_ont_service_state(db, ont, reason="return_to_inventory")
             db.flush()
             ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
         db.commit()
@@ -269,10 +262,6 @@ def return_to_inventory(
             success=False,
             message=f"OLT cleanup succeeded but DB update failed: {exc}. Manual cleanup may be required.",
         )
-
-    # Emit deferred bundle unassignment events after successful commit
-    if deferred_bundle_events:
-        emit_bundle_unassignment_events(db, deferred_bundle_events)
 
     db.refresh(ont)
 

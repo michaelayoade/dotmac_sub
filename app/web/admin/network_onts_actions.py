@@ -6,6 +6,7 @@ import json
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -324,17 +325,6 @@ def ont_quick_apply_profile(
         return _action_json_response(
             success=False,
             message="ONT not assigned to an OLT",
-            action="Quick Apply Profile",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    # Get default profile from OLT
-    default_profile = olt.default_provisioning_profile
-    if not default_profile:
-        return _action_json_response(
-            success=False,
-            message=f"OLT '{olt.name}' has no default provisioning profile configured",
             action="Quick Apply Profile",
             request=request,
             ont_id=ont_id,
@@ -809,9 +799,10 @@ def ont_running_config(
     """
     from datetime import UTC, datetime
 
-    from app.models.network import OntUnit
+    from app.models.network import OntAssignment, OntUnit
     from app.services.common import coerce_uuid
     from app.services.network.olt_read_cache import olt_cache
+    from app.services.network.serial_utils import parse_ont_id_on_olt
     from app.services.network.olt_ssh import run_cli_command
 
     ont = db.get(OntUnit, coerce_uuid(ont_id))
@@ -828,12 +819,19 @@ def ont_running_config(
             },
         )
 
-    # Try to get the OLT from the ONT's assignment
+    active_assignment = db.scalars(
+        select(OntAssignment)
+        .where(OntAssignment.ont_unit_id == ont.id)
+        .where(OntAssignment.active.is_(True))
+        .limit(1)
+    ).first()
+
+    # Try to get the OLT from the ONT or active assignment.
     olt = None
     if ont.olt_device:
         olt = ont.olt_device
-    elif ont.active_assignment and ont.active_assignment.pon_port:
-        olt = ont.active_assignment.pon_port.olt
+    elif active_assignment and active_assignment.pon_port:
+        olt = active_assignment.pon_port.olt
 
     if not olt:
         return templates.TemplateResponse(
@@ -852,15 +850,15 @@ def ont_running_config(
     # Get F/S/P from the assignment
     fsp = None
     onu_id = None
-    if ont.active_assignment and ont.active_assignment.pon_port:
-        pon = ont.active_assignment.pon_port
+    if active_assignment and active_assignment.pon_port:
+        pon = active_assignment.pon_port
         fsp = pon.name  # e.g., "0/1/0"
-        onu_id = ont.active_assignment.onu_id
+        onu_id = parse_ont_id_on_olt(getattr(ont, "external_id", None))
 
     # Cache key for this ONT's config
     cache_key = f"ont_config:{ont_id}"
     cached = olt_cache.get(str(olt.id), "cli", cache_key)
-    cached_at = olt_cache.get_timestamp(str(olt.id), "cli", cache_key)
+    cached_at = None
 
     config_lines = []
     error_msg = None
@@ -1587,7 +1585,16 @@ def ont_probe_wan_instance(
         return denied
     form = parse_form_data_sync(request)
     instance_index_raw = _form_str(form, "instance_index").strip()
-    wan_mode = _form_str(form, "wan_mode").strip().lower() or "pppoe"
+    wan_mode = _form_str(form, "wan_mode").strip().lower()
+
+    if wan_mode not in {"pppoe", "dhcp", "static", "bridge"}:
+        return _action_json_response(
+            success=False,
+            message="Select a WAN mode before probing the WAN instance",
+            action="Probe WAN Instance",
+            request=request,
+            ont_id=ont_id,
+        )
 
     instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
 
@@ -1621,8 +1628,17 @@ def ont_ensure_wan_instance(
         return denied
     form = parse_form_data_sync(request)
     instance_index_raw = _form_str(form, "instance_index").strip()
-    wan_mode = _form_str(form, "wan_mode").strip().lower() or "pppoe"
+    wan_mode = _form_str(form, "wan_mode").strip().lower()
     wan_vlan_raw = _form_str(form, "wan_vlan").strip()
+
+    if wan_mode not in {"pppoe", "dhcp", "static", "bridge"}:
+        return _action_json_response(
+            success=False,
+            message="Select a WAN mode before creating the WAN instance",
+            action="Ensure WAN Instance",
+            request=request,
+            ont_id=ont_id,
+        )
 
     instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
     wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None

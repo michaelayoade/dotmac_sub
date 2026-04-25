@@ -185,14 +185,12 @@ def ont_available_static_ips(
 def ont_provisioning_preview(
     request: Request,
     ont_id: str,
-    tr069_profile_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: Command preview for provisioning an ONT."""
     data = web_onts_provisioning_service.provisioning_preview_context(
         db,
         ont_id=ont_id,
-        tr069_profile_id=tr069_profile_id,
     )
     context = _base_context(request, db, active_page="onts")
     context.update(data)
@@ -208,14 +206,12 @@ def ont_provisioning_preview(
 def ont_preflight_check(
     request: Request,
     ont_id: str,
-    tr069_profile_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Pre-flight validation for ONT provisioning. Returns JSON checklist."""
     result = web_onts_provisioning_service.preflight_result(
         db,
         ont_id=ont_id,
-        tr069_profile_id=tr069_profile_id,
     )
     return JSONResponse(result)
 

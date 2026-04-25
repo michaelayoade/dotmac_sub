@@ -178,31 +178,7 @@ def test_build_olt_provisioning_spec_uses_scalar_intent_only() -> None:
 def test_ui_adapter_builds_service_port_defaults_from_profile_intent() -> None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
-    profile = SimpleNamespace(
-        wan_services=[
-            SimpleNamespace(
-                is_active=True,
-                name="Internet",
-                service_type=SimpleNamespace(value="internet"),
-                connection_type=SimpleNamespace(value="pppoe"),
-                vlan_mode=SimpleNamespace(value="tagged"),
-                s_vlan=203,
-                c_vlan=3003,
-                gem_port_id=2,
-            ),
-            SimpleNamespace(
-                is_active=False,
-                name="Old VoIP",
-                service_type=SimpleNamespace(value="voip"),
-                connection_type=SimpleNamespace(value="dhcp"),
-                vlan_mode=SimpleNamespace(value="tagged"),
-                s_vlan=204,
-                c_vlan=None,
-                gem_port_id=3,
-            ),
-        ]
-    )
-    ont = SimpleNamespace(provisioning_profile=profile)
+    ont = SimpleNamespace()
     actual_ports = [SimpleNamespace(vlan_id=999)]
 
     defaults = service_intent_ui_adapter.profile_service_port_defaults(
@@ -210,56 +186,13 @@ def test_ui_adapter_builds_service_port_defaults_from_profile_intent() -> None:
         service_ports=actual_ports,
     )
 
-    assert defaults["primary_vlan_id"] == 203
-    assert defaults["primary_gem_index"] == 2
-    assert defaults["primary_user_vlan"] == 3003
-    assert defaults["primary_tag_transform"] == "translate"
-    assert defaults["missing_vlans"] == [203]
-    assert defaults["extra_vlans"] == [999]
-    assert len(defaults["planned_services"]) == 1
-
-
-def test_ui_adapter_builds_provisioning_defaults_from_profile(monkeypatch) -> None:
-    from app.services import web_network_onts as web_network_onts_service
-    from app.services.service_intent_ui_adapter import service_intent_ui_adapter
-
-    monkeypatch.setattr(
-        web_network_onts_service,
-        "get_vlans_for_ont",
-        lambda *_args, **_kwargs: [
-            SimpleNamespace(id="mgmt-vlan-id", tag=201),
-            SimpleNamespace(id="wan-vlan-id", tag=203),
-        ],
-    )
-    profile = SimpleNamespace(
-        onu_mode=SimpleNamespace(value="routing"),
-        mgmt_ip_mode=SimpleNamespace(value="dhcp"),
-        mgmt_vlan_tag=201,
-        wifi_enabled=True,
-        wifi_ssid_template="DOTMAC-{subscriber_code}",
-        wifi_security_mode="WPA2-Personal",
-        wifi_channel="auto",
-        wan_services=[
-            SimpleNamespace(
-                is_active=True,
-                connection_type=SimpleNamespace(value="pppoe"),
-                s_vlan=203,
-            )
-        ],
-    )
-
-    defaults = service_intent_ui_adapter.provisioning_form_defaults(
-        SimpleNamespace(),
-        ont=SimpleNamespace(),
-        profile=profile,
-    )
-
-    assert defaults["onu_mode"] == "routing"
-    assert defaults["mgmt_ip_mode"] == "dhcp"
-    assert defaults["mgmt_vlan_id"] == "mgmt-vlan-id"
-    assert defaults["wan_protocol"] == "pppoe"
-    assert defaults["wan_vlan_id"] == "wan-vlan-id"
-    assert defaults["wifi_ssid"] == "DOTMAC-{subscriber_code}"
+    assert defaults["primary_vlan_id"] is None
+    assert defaults["primary_gem_index"] == 1
+    assert defaults["primary_user_vlan"] is None
+    assert defaults["primary_tag_transform"] == "default"
+    assert defaults["missing_vlans"] == []
+    assert defaults["extra_vlans"] == []
+    assert defaults["planned_services"] == []
 
 
 def test_acs_service_intent_adapter_maps_observed_summary_without_secrets() -> None:

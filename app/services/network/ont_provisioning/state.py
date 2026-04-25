@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 
 if TYPE_CHECKING:
-    from app.models.network import OLTDevice, OntProvisioningProfile
+    from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
 
@@ -208,20 +208,15 @@ class ProvisioningDelta:
 # ---------------------------------------------------------------------------
 
 
-def build_desired_state_from_profile(
+def build_desired_state_from_config(
     db: Session,
     ont_id: str,
-    profile: OntProvisioningProfile | None = None,
-    tr069_olt_profile_id: int | None = None,
 ) -> tuple[DesiredOntState | None, str]:
     """Build desired state from ONT desired config and OLT defaults.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        profile: Deprecated compatibility argument. Ignored when absent.
-        tr069_olt_profile_id: Optional OLT-local TR-069 profile ID. When omitted,
-            the effective OLT profile is resolved from the ONT/OLT.
 
     Returns:
         Tuple of (DesiredOntState or None, error message).
@@ -265,9 +260,7 @@ def build_desired_state_from_profile(
 
     # Build TR-069 config if OLT has ACS
     tr069 = None
-    resolved_tr069_profile_id = (
-        tr069_olt_profile_id or effective_values.get("tr069_olt_profile_id")
-    )
+    resolved_tr069_profile_id = effective_values.get("tr069_olt_profile_id")
     if effective_values.get("tr069_acs_server_id") and resolved_tr069_profile_id:
         tr069 = DesiredTr069Config(
             olt_profile_id=int(resolved_tr069_profile_id),
@@ -291,61 +284,6 @@ def build_desired_state_from_profile(
         ),
         "",
     )
-
-
-def _build_service_ports_from_profile(
-    profile: OntProvisioningProfile,
-) -> list[DesiredServicePort]:
-    """Extract service port specifications from profile WAN services.
-
-    Reads VLANs from OntProfileWanService records attached to the profile.
-    Each WAN service with a configured s_vlan (outer VLAN) becomes a service port.
-    """
-    service_ports: list[DesiredServicePort] = []
-
-    wan_services = getattr(profile, "wan_services", []) or []
-    for service in wan_services:
-        if not getattr(service, "is_active", True):
-            continue
-
-        s_vlan = getattr(service, "s_vlan", None)
-        if s_vlan is None:
-            continue
-
-        gem_index = getattr(service, "gem_port_id", None) or 1
-        c_vlan = getattr(service, "c_vlan", None)
-
-        # Determine user_vlan and tag_transform based on vlan_mode
-        vlan_mode = getattr(service, "vlan_mode", None)
-        vlan_mode_value: str = ""
-        if vlan_mode is not None and hasattr(vlan_mode, "value"):
-            vlan_mode_value = str(vlan_mode.value)
-        elif vlan_mode is not None:
-            vlan_mode_value = str(vlan_mode)
-
-        user_vlan: int | str | None = None
-        tag_transform = "translate"
-
-        if vlan_mode_value == "untagged":
-            user_vlan = "untagged"
-            tag_transform = "default"
-        elif vlan_mode_value == "transparent":
-            user_vlan = "transparent"
-            tag_transform = "transparent"
-        elif c_vlan is not None:
-            user_vlan = c_vlan
-
-        service_ports.append(
-            DesiredServicePort(
-                vlan_id=s_vlan,
-                gem_index=gem_index,
-                user_vlan=user_vlan,
-                tag_transform=tag_transform,
-            )
-        )
-
-    return service_ports
-
 
 def read_actual_state(
     olt: OLTDevice,

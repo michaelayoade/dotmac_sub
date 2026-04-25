@@ -117,7 +117,7 @@ def update_ont_config(
     mgmt_ip_mode: str | None = None,
     mgmt_vlan_id: str | None = None,
     mgmt_ip_address: str | None = None,
-    mgmt_remote_access: bool = False,
+    mgmt_remote_access: bool | None = None,
     lan_gateway_ip: str | None = None,
     lan_subnet_mask: str | None = None,
     lan_dhcp_enabled: bool | None = None,
@@ -128,7 +128,7 @@ def update_ont_config(
     wifi_channel: str | None = None,
     wifi_security_mode: str | None = None,
     wifi_password: str | None = None,
-    voip_enabled: bool = False,
+    voip_enabled: bool | None = None,
     push_to_device: bool = False,
     request: Request | None = None,
 ) -> ActionResult:
@@ -163,8 +163,9 @@ def update_ont_config(
             return vlan_err
         resolved_mgmt_vlan = vlan
 
-    # Update non-bundle-managed fields (still on ONT model)
-    ont.mgmt_remote_access = mgmt_remote_access
+    # Update direct ONT runtime fields that still live on the ONT model.
+    if mgmt_remote_access is not None:
+        ont.mgmt_remote_access = mgmt_remote_access
     if lan_gateway_ip is not None:
         ont.lan_gateway_ip = lan_gateway_ip.strip() or None
     if lan_subnet_mask is not None:
@@ -174,7 +175,8 @@ def update_ont_config(
         ont.lan_dhcp_start = lan_dhcp_start.strip() or None
     if lan_dhcp_end is not None:
         ont.lan_dhcp_end = lan_dhcp_end.strip() or None
-    ont.voip_enabled = voip_enabled
+    if voip_enabled is not None:
+        ont.voip_enabled = voip_enabled
 
     wan_vlan_tag = None
     if resolved_wan_vlan is not None:

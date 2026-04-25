@@ -12,7 +12,7 @@ from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_desired_config import (
-    upsert_ont_desired_config_value as upsert_ont_config_override,
+    upsert_ont_desired_config_value,
 )
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
@@ -36,7 +36,7 @@ def set_wifi_ssid(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="wifi.ssid",
@@ -62,7 +62,7 @@ def set_wifi_password(
     if result.success:
         ont = db.get(OntUnit, ont_id)
         if ont:
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="wifi.password",
@@ -122,7 +122,7 @@ def set_wifi_config(
         if ont:
             # Store WiFi config as overrides
             if ssid is not None:
-                upsert_ont_config_override(
+                upsert_ont_desired_config_value(
                     db,
                     ont=ont,
                     field_name="wifi.ssid",
@@ -130,7 +130,7 @@ def set_wifi_config(
                     reason="config_setters.set_wifi_config",
                 )
             if password is not None:
-                upsert_ont_config_override(
+                upsert_ont_desired_config_value(
                     db,
                     ont=ont,
                     field_name="wifi.password",
@@ -138,7 +138,7 @@ def set_wifi_config(
                     reason="config_setters.set_wifi_config",
                 )
             if enabled is not None:
-                upsert_ont_config_override(
+                upsert_ont_desired_config_value(
                     db,
                     ont=ont,
                     field_name="wifi.enabled",
@@ -146,7 +146,7 @@ def set_wifi_config(
                     reason="config_setters.set_wifi_config",
                 )
             if channel is not None:
-                upsert_ont_config_override(
+                upsert_ont_desired_config_value(
                     db,
                     ont=ont,
                     field_name="wifi.channel",
@@ -154,7 +154,7 @@ def set_wifi_config(
                     reason="config_setters.set_wifi_config",
                 )
             if security_mode is not None:
-                upsert_ont_config_override(
+                upsert_ont_desired_config_value(
                     db,
                     ont=ont,
                     field_name="wifi.security_mode",
@@ -248,9 +248,8 @@ def set_lan_config(
 ) -> ActionResult:
     """Set LAN gateway and DHCP server config on ONT via GenieACS TR-069.
 
-    LAN intent remains outside the bundle + sparse-override model for now.
-    It is treated as direct ONT-local operator intent because it is customer-
-    specific runtime state, not reusable OLT-scoped bundle policy.
+    LAN settings are explicit ONT-local desired config because they are
+    customer-specific runtime intent, not OLT config-pack defaults.
     """
     result = _acs_config_writer().set_lan_config(
         db,
@@ -348,7 +347,6 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
                 upsert_ont_desired_config_value,
             )
 
-            ont.tr069_olt_profile_id = profile_id
             upsert_ont_desired_config_value(
                 db,
                 ont=ont,
@@ -411,14 +409,14 @@ def set_pppoe_credentials(
         ont = db.get(OntUnit, ont_id)
         if ont:
             # Store PPPoE credentials as overrides
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="wan.pppoe_username",
                 value=username,
                 reason="config_setters.set_pppoe_credentials",
             )
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="wan.pppoe_password",
@@ -607,14 +605,14 @@ def set_wan_config(
         ont = db.get(OntUnit, ont_id)
         if ont and wan_mode == "pppoe" and pppoe_username and pppoe_password:
             # Store PPPoE credentials as overrides
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="wan.pppoe_username",
                 value=pppoe_username,
                 reason="config_setters.set_wan_config",
             )
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="wan.pppoe_password",

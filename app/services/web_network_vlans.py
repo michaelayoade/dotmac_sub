@@ -46,11 +46,10 @@ VLAN_PURPOSE_CHOICES: list[dict[str, str]] = [
 
 
 def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
-    """Count VLAN usage across ONTs, profiles, and IP pools.
+    """Count VLAN usage across ONT desired config, WAN services, and IP pools.
 
-    Note: ONT VLAN usage is now tracked through bundle assignments + WAN services,
-    not via direct OntUnit columns. This simplified version counts IP pools only.
-    ONT counts are shown as 0 until bundle-based counting is implemented.
+    Note: ONT VLAN usage is derived from OntUnit.desired_config and WAN service
+    instances, not direct OntUnit columns. This simplified view counts IP pools only.
     """
     from app.models.network import IpPool
 
@@ -61,8 +60,8 @@ def _vlan_usage_counts(db, vlan_ids: list[object]) -> dict[str, dict[str, int]]:
     if not vlan_ids:
         return usage
 
-    # Legacy: ONT VLAN assignments are now tracked through bundle assignments
-    # and OntUnit.desired_config, not direct columns. Counts shown as 0.
+    # ONT VLAN assignments are resolved from desired_config/WAN services elsewhere.
+    # Counts remain 0 here until that source-of-truth path is indexed.
 
     pool_rows = db.execute(
         select(IpPool.vlan_id, func.count(IpPool.id))
@@ -192,8 +191,8 @@ def build_vlan_edit_form_data(db, *, vlan_id: str) -> dict[str, object] | None:
 def build_vlan_detail_data(db, *, vlan_id: str) -> dict[str, object] | None:
     """Build context for VLAN detail page.
 
-    Note: ONT VLAN usage counts are now tracked through bundle assignments + WAN services,
-    not via direct OntUnit columns. ONT counts shown as 0 until bundle-based counting.
+    Note: ONT VLAN usage is derived from OntUnit.desired_config and WAN service
+    instances, not direct OntUnit columns.
     """
     from app.models.network import IpPool
 
@@ -203,8 +202,8 @@ def build_vlan_detail_data(db, *, vlan_id: str) -> dict[str, object] | None:
         return None
     port_links = db.query(PortVlan).filter(PortVlan.vlan_id == vlan.id).all()
 
-    # Legacy: ONT VLAN assignments are now tracked through bundle assignments
-    # and OntUnit.desired_config, not direct columns. Counts shown as 0.
+    # ONT VLAN assignments are resolved from desired_config/WAN services elsewhere.
+    # Counts remain 0 here until that source-of-truth path is indexed.
     wan_ont_count = 0
     mgmt_ont_count = 0
     ip_pool_count = (

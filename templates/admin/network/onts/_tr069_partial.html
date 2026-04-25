@@ -247,52 +247,6 @@
     </div>
     {% endif %}
 
-    {# LAN Hosts #}
-    {% if tr069.lan_hosts %}
-    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-        <button @click="hostsOpen = !hostsOpen" class="flex w-full items-center justify-between px-5 py-3">
-            <div class="flex items-center gap-2">
-                <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                <span class="text-sm font-semibold text-slate-900 dark:text-white">Connected Hosts</span>
-                <span class="text-xs text-slate-400">({{ tr069.lan_hosts | length }})</span>
-            </div>
-            <svg :class="hostsOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-        </button>
-        <div x-show="hostsOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead class="bg-slate-50 dark:bg-slate-800/60">
-                    <tr>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Hostname</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">IP Address</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">MAC Address</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Interface</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Active</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% for host in tr069.lan_hosts %}
-                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-4 py-2 text-sm text-slate-900 dark:text-white">{{ host.host_name_display }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ host.ip_address_display }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ host.mac_address_display }}</td>
-                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ host.interface_type_display }}</td>
-                        <td class="px-4 py-2 text-sm">
-                            {% if host.active %}
-                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
-                                <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ host.active_display }}
-                            </span>
-                            {% else %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ host.active_display }}</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    {% endif %}
-
     {% if tr069.recent_informs %}
     <details class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800" open>
         <summary class="flex cursor-pointer items-center justify-between px-5 py-3">

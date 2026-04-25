@@ -33,5 +33,3 @@ def test_onu_type_create_persists_capability_map_without_bundle_state(db_session
     db_session.refresh(created)
     assert isinstance(created, OnuType)
     assert created.vendor_model_capability_id == capability.id
-    assert created.default_bundle_id is None
-    assert created.supports_bundle_overrides is False

@@ -358,22 +358,6 @@ def ont_lan_ports_status(
 
 
 @router.get(
-    "/onts/{ont_id}/profile-form",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_profile_form(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    """HTMX partial: Profile selection form with available templates."""
-    context = {
-        "request": request,
-        **ont_web_forms_service.profile_form_context(db, ont_id),
-    }
-    return templates.TemplateResponse("admin/network/onts/_profile_form.html", context)
-
-
-@router.get(
     "/onts/{ont_id}/firmware-form",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
@@ -665,61 +649,26 @@ def ont_configure_submit(
     request: Request,
     ont_id: str,
     wan_mode: str = Form(default=""),
-    wan_vlan_id: str = Form(default=""),
-    config_method: str = Form(default=""),
-    ip_protocol: str = Form(default=""),
     pppoe_username: str = Form(default=""),
     pppoe_password: str = Form(default=""),
-    mgmt_ip_mode: str = Form(default=""),
-    mgmt_vlan_id: str = Form(default=""),
-    mgmt_ip_address: str = Form(default=""),
-    mgmt_remote_access: bool = Form(default=False),
-    lan_gateway_ip: str = Form(default=""),
-    lan_subnet_mask: str = Form(default=""),
-    lan_dhcp_enabled: str = Form(default=""),
-    lan_dhcp_start: str = Form(default=""),
-    lan_dhcp_end: str = Form(default=""),
     wifi_enabled: bool = Form(default=False),
     wifi_ssid: str = Form(default=""),
-    wifi_channel: str = Form(default=""),
     wifi_security_mode: str = Form(default=""),
     wifi_password: str = Form(default=""),
-    voip_enabled: bool = Form(default=False),
     push_to_device: bool = Form(default=False),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Handle ONT configure form submission."""
-    # Convert string to bool for checkbox that may be empty
-    dhcp_enabled: bool | None = None
-    if lan_dhcp_enabled == "true":
-        dhcp_enabled = True
-    elif lan_dhcp_enabled == "false":
-        dhcp_enabled = False
-
     result = web_network_ont_actions_service.update_ont_config(
         db,
         ont_id,
         wan_mode=wan_mode or None,
-        wan_vlan_id=wan_vlan_id or None,
-        config_method=config_method or None,
-        ip_protocol=ip_protocol or None,
         pppoe_username=pppoe_username or None,
         pppoe_password=pppoe_password or None,
-        mgmt_ip_mode=mgmt_ip_mode or None,
-        mgmt_vlan_id=mgmt_vlan_id or None,
-        mgmt_ip_address=mgmt_ip_address or None,
-        mgmt_remote_access=mgmt_remote_access,
-        lan_gateway_ip=lan_gateway_ip or None,
-        lan_subnet_mask=lan_subnet_mask or None,
-        lan_dhcp_enabled=dhcp_enabled,
-        lan_dhcp_start=lan_dhcp_start or None,
-        lan_dhcp_end=lan_dhcp_end or None,
         wifi_enabled=wifi_enabled,
         wifi_ssid=wifi_ssid or None,
-        wifi_channel=wifi_channel or None,
         wifi_security_mode=wifi_security_mode or None,
         wifi_password=wifi_password or None,
-        voip_enabled=voip_enabled,
         push_to_device=push_to_device,
         request=request,
     )

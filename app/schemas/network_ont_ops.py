@@ -96,8 +96,6 @@ class OntEnrichedRead(BaseModel):
 
     # Provisioning
     provisioning_status: str | None = None
-    provisioning_profile_name: str | None = None
-
     # Observed runtime (TR-069 / polling)
     observed_wan_ip: str | None = None
     observed_pppoe_status: str | None = None

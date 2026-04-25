@@ -39,14 +39,6 @@ def _plan_section(ont_plan: dict[str, Any], step: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _active_profile_wan_services(
-    ont: object, db: Session | None = None
-) -> list[object]:
-    profile = getattr(ont, "provisioning_profile", None)
-    services = getattr(profile, "wan_services", None) or []
-    return [service for service in services if getattr(service, "is_active", False)]
-
-
 def _active_wan_service_instances(
     ont: object, db: Session | None = None
 ) -> list[object]:
@@ -239,7 +231,7 @@ def build_service_intent(
     }
     service_port_plan = _plan_section(ont_plan, "create_service_port")
     wan_service_instances = _active_wan_service_instances(ont, db)
-    profile_wan_services = wan_service_instances or _active_profile_wan_services(ont, db)
+    profile_wan_services = wan_service_instances
     profile_service_vlans = _profile_service_vlans(profile_wan_services)
     profile_service_gems = _profile_service_gems(profile_wan_services)
     profile_service_tag_modes = _profile_service_tag_modes(profile_wan_services)

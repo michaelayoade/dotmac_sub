@@ -72,14 +72,20 @@
 
 {# Configuration Form #}
 <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
-     x-data="{ ipMode: '{{ mgmt_form.ip_mode if mgmt_form else 'dhcp' }}' }">
+     x-data="{ ipMode: '{{ mgmt_form.ip_mode if mgmt_form else '' }}' }">
     <div class="flex items-center justify-between mb-4">
         <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure Management IP</h4>
         <div class="flex items-center gap-2">
             <button type="button"
+                    @click="ipMode = ''"
+                    :class="ipMode === '' ? 'bg-slate-100 text-slate-800 border-slate-300 dark:bg-slate-700 dark:text-slate-200 dark:border-slate-500' : 'bg-white text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-600'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-l-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-1 focus:z-10">
+                Unset
+            </button>
+            <button type="button"
                     @click="ipMode = 'dhcp'"
                     :class="ipMode === 'dhcp' ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700' : 'bg-white text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-600'"
-                    class="px-3 py-1.5 text-xs font-medium rounded-l-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1 focus:z-10">
+                    class="px-3 py-1.5 text-xs font-medium border -ml-px transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1 focus:z-10">
                 DHCP
             </button>
             <button type="button"
@@ -93,6 +99,9 @@
 
     {# Mode Explanation #}
     <div class="mb-4 rounded-lg px-3 py-2 text-xs" :class="ipMode === 'dhcp' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'">
+        <template x-if="ipMode === ''">
+            <p><strong>Unset:</strong> No management IP desired state will be saved until you choose DHCP or Static IP.</p>
+        </template>
         <template x-if="ipMode === 'dhcp'">
             <p><strong>DHCP Mode:</strong> The ONT will obtain its management IP address automatically from a DHCP server on the selected VLAN. This is the recommended mode for most deployments.</p>
         </template>

@@ -1,7 +1,7 @@
 """ONT decommission service for permanent hardware removal.
 
 This module provides functionality to permanently decommission faulty ONT hardware,
-including cleanup of all associated records (assignments, bundles, config overrides,
+including cleanup of all associated records (assignments, desired config,
 TR-069 bindings).
 
 Gap 14 implementation: Hard delete / decommission feature.
@@ -181,7 +181,7 @@ def decommission_ont(
     This is a destructive operation that:
     1. Deauthorizes the ONT on the OLT (if still registered)
     2. Closes all active assignments
-    3. Deactivates all bundle assignments
+    3. Clears ONT desired config and WAN service state
     4. Clears TR-069 CPE device association
     5. Optionally removes the device from ACS entirely
     6. Marks the ONT as inactive with decommission metadata

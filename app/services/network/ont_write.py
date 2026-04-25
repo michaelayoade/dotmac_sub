@@ -19,7 +19,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.network.ont_desired_config import upsert_ont_desired_config_value as upsert_ont_config_override
+from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
@@ -247,7 +247,7 @@ class OntWriteService:
             parsed_mgmt_mode = None
 
         # Store management IP config as overrides
-        upsert_ont_config_override(
+        upsert_ont_desired_config_value(
             db,
             ont=ont,
             field_name="management.ip_mode",
@@ -255,14 +255,14 @@ class OntWriteService:
             reason="ont_write.update_management_ip",
         )
         if vlan_int is not None:
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="management.vlan",
                 value=vlan_int,
                 reason="ont_write.update_management_ip",
             )
-        upsert_ont_config_override(
+        upsert_ont_desired_config_value(
             db,
             ont=ont,
             field_name="management.ip_address",

@@ -111,9 +111,6 @@ class EventType(enum.Enum):
     ont_provisioning_drift_detected = "ont.provisioning_drift_detected"
     ont_provisioning_verified = "ont.provisioning_verified"
 
-    # ONT bundle assignment events
-    ont_bundle_unassigned = "ont.bundle_unassigned"
-
     # ONT lifecycle events
     ont_decommissioned = "ont.decommissioned"
 

@@ -13,7 +13,6 @@ Step functions:
 
 Supporting utilities:
 - ``validate_prerequisites`` — preflight checklist before provisioning
-- ``preview_commands`` — dry-run OLT command generation
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models.network import OntUnit
 from app.services.network._common import NasTarget
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import upsert_ont_desired_config_value as upsert_ont_config_override
+from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -42,9 +41,6 @@ from app.services.network.ont_provisioning.credentials import (
 )
 from app.services.network.ont_provisioning.preflight import (
     validate_prerequisites as validate_prerequisites,
-)
-from app.services.network.ont_provisioning.preview import (
-    preview_commands as preview_commands,
 )
 from app.services.network.ont_provisioning.result import StepResult as StepResult
 from app.services.network.provisioning_events import record_ont_provisioning_event
@@ -1575,7 +1571,7 @@ def _ensure_static_management_ip_from_profile(
             notes=f"Management IP for ONT {ont.serial_number}",
         )
     )
-    upsert_ont_config_override(
+    upsert_ont_desired_config_value(
         db,
         ont=ont,
         field_name="management.ip_address",
@@ -1614,7 +1610,6 @@ def provision_with_reconciliation(
     db: Session,
     ont_id: str,
     *,
-    tr069_olt_profile_id: int | None = None,
     dry_run: bool = False,
     allow_low_optical_margin: bool = False,
 ) -> StepResult:
@@ -1630,7 +1625,6 @@ def provision_with_reconciliation(
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        tr069_olt_profile_id: Optional explicit OLT-local TR-069 profile ID.
         dry_run: If True, compute delta but don't execute.
         allow_low_optical_margin: If True, proceed even with low optical margin.
 
@@ -1643,7 +1637,7 @@ def provision_with_reconciliation(
         reconcile_ont_state,
     )
     from app.services.network.ont_provisioning.state import (
-        build_desired_state_from_profile,
+        build_desired_state_from_config,
     )
 
     t0 = time.monotonic()
@@ -1665,7 +1659,6 @@ def provision_with_reconciliation(
     delta, err = reconcile_ont_state(
         db,
         ont_id,
-        tr069_olt_profile_id=tr069_olt_profile_id,
     )
     if not delta:
         ms = int((time.monotonic() - t0) * 1000)
@@ -1713,10 +1706,9 @@ def provision_with_reconciliation(
         return result
 
     # Build desired state for execution
-    desired, err = build_desired_state_from_profile(
+    desired, err = build_desired_state_from_config(
         db,
         ont_id,
-        tr069_olt_profile_id=tr069_olt_profile_id,
     )
     if not desired:
         ms = int((time.monotonic() - t0) * 1000)
@@ -1860,8 +1852,6 @@ def provision_with_reconciliation(
 def preview_reconciliation(
     db: Session,
     ont_id: str,
-    *,
-    tr069_olt_profile_id: int | None = None,
 ) -> dict:
     """Preview what reconciliation would do without executing.
 
@@ -1880,7 +1870,6 @@ def preview_reconciliation(
     delta, err = reconcile_ont_state(
         db,
         ont_id,
-        tr069_olt_profile_id=tr069_olt_profile_id,
     )
     if not delta:
         return {"error": err, "has_changes": False, "is_valid": False}

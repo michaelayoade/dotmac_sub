@@ -89,7 +89,6 @@ class OntReadFacade:
             "provisioning_status": (
                 ont.provisioning_status.value if ont.provisioning_status else None
             ),
-            "provisioning_profile_name": None,
             # Sync metadata
             "last_sync_source": getattr(ont, "last_sync_source", None),
             "last_sync_at": getattr(ont, "last_sync_at", None),

@@ -45,7 +45,15 @@ def upgrade() -> None:
         )
     )
 
-    # Step 3: Alter the column to use the new enum type
+    # Step 3: Drop the default before changing the type (PostgreSQL can't auto-cast defaults)
+    conn.execute(
+        sa.text("""
+            ALTER TABLE ont_bundle_assignments
+            ALTER COLUMN status DROP DEFAULT
+        """)
+    )
+
+    # Step 4: Alter the column to use the new enum type
     # PostgreSQL requires casting through text
     conn.execute(
         sa.text("""
@@ -55,7 +63,7 @@ def upgrade() -> None:
         """)
     )
 
-    # Step 4: Update the default to 'applied'
+    # Step 5: Set the new default
     conn.execute(
         sa.text("""
             ALTER TABLE ont_bundle_assignments
@@ -63,7 +71,7 @@ def upgrade() -> None:
         """)
     )
 
-    # Step 5: Drop the old enum and rename the new one
+    # Step 6: Drop the old enum and rename the new one
     conn.execute(sa.text("DROP TYPE ontbundleassignmentstatus"))
     conn.execute(
         sa.text(

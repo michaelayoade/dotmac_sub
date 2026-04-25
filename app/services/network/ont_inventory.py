@@ -21,21 +21,15 @@ from app.services.network.ont_actions import ActionResult
 logger = logging.getLogger(__name__)
 
 
-def reset_ont_service_state(
-    db: Session, ont, *, reason: str = "service_reset", emit_events: bool = True
-) -> list[dict]:
+def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") -> None:
     """Clear desired-state and runtime cache for a reusable ONT.
 
     Args:
         db: Database session
         ont: ONT unit to reset
-        reason: Reason for the reset (used in event payloads)
-        emit_events: Retained for call compatibility; no bundle events are emitted.
-
-    Returns:
-        List of event payloads for deferred emission when emit_events=False
+        reason: Reason for the reset, retained for caller clarity.
     """
-    deferred_events: list[dict] = []
+    del reason
 
     ont.desired_config = {}
 
@@ -87,11 +81,6 @@ def reset_ont_service_state(
     ont.distance_meters = None
     ont.signal_updated_at = None
 
-    return deferred_events
-
-
-def emit_bundle_unassignment_events(db: Session, event_payloads: list[dict]) -> None:
-    """Compatibility no-op after bundle assignments were removed."""
     return None
 
 

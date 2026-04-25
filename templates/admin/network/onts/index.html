@@ -443,7 +443,6 @@
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT / PON</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
-                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Profile</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Online</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Signal</th>
                             <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Seen</th>
@@ -455,7 +454,6 @@
                         {% for ont in onts %}
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
-                        {% set pi = profile_info.get(ont.id | string, {}) if profile_info else {} %}
                         <tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/20">
                             <td class="w-10 px-3 py-2">
                                 <input type="checkbox" class="ont-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
@@ -488,16 +486,6 @@
                                     {% endif %}
                                 {% else %}
                                 <span class="text-xs text-slate-400"></span>
-                                {% endif %}
-                            </td>
-                            <td class="px-3 py-2 whitespace-nowrap">
-                                {% if pi.get("profile_name") %}
-                                <span class="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300 truncate max-w-[120px]"
-                                      title="{{ pi.profile_name }}">
-                                    {{ pi.profile_name | truncate(16) }}
-                                </span>
-                                {% else %}
-                                <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">

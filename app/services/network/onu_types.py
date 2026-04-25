@@ -75,6 +75,19 @@ class OnuTypes:
         vendor_model_capability_id: object | None = None,
         is_active: bool = True,
         notes: str | None = None,
+        tr069_data_model: str | None = None,
+        config_method_preference: str | None = None,
+        wifi_ssid_path: str | None = None,
+        wifi_password_path: str | None = None,
+        wifi_enabled_path: str | None = None,
+        wifi_channel_path: str | None = None,
+        wifi_security_mode_path: str | None = None,
+        wan_pppoe_username_path: str | None = None,
+        wan_pppoe_password_path: str | None = None,
+        wan_connection_type_path: str | None = None,
+        default_wifi_security_mode: str | None = None,
+        default_wifi_channel: str | None = None,
+        min_firmware_version: str | None = None,
     ) -> OnuType:
         """Create a new ONU type catalog entry."""
         onu_type = OnuType(
@@ -88,10 +101,21 @@ class OnuTypes:
             allow_custom_profiles=allow_custom_profiles,
             capability=capability,
             vendor_model_capability_id=vendor_model_capability_id,
-            default_bundle_id=None,
-            supports_bundle_overrides=False,
             is_active=is_active,
             notes=notes,
+            tr069_data_model=tr069_data_model,
+            config_method_preference=config_method_preference,
+            wifi_ssid_path=wifi_ssid_path,
+            wifi_password_path=wifi_password_path,
+            wifi_enabled_path=wifi_enabled_path,
+            wifi_channel_path=wifi_channel_path,
+            wifi_security_mode_path=wifi_security_mode_path,
+            wan_pppoe_username_path=wan_pppoe_username_path,
+            wan_pppoe_password_path=wan_pppoe_password_path,
+            wan_connection_type_path=wan_connection_type_path,
+            default_wifi_security_mode=default_wifi_security_mode,
+            default_wifi_channel=default_wifi_channel,
+            min_firmware_version=min_firmware_version,
         )
         db.add(onu_type)
         db.commit()

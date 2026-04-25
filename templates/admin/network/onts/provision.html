@@ -1,239 +1,257 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import card %}
 
-{% block title %}Authorize - {{ ont.serial_number }} - Admin{% endblock %}
+{% block title %}Provision - {{ ont.serial_number }} - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6"
-     x-data='{
-        tr069ProfileId: {{ (selected_tr069_profile_id or "") | tojson }},
-        missingPrerequisites() {
-            return [];
-        },
-        canSave() {
-            return this.missingPrerequisites().length === 0;
-        }
-     }">
-
-    <div>
-        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-            <a href="/admin/network/onts" class="hover:text-blue-600 dark:hover:text-blue-400">ONTs</a>
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <a href="/admin/network/onts/{{ ont.id }}" class="hover:text-blue-600 dark:hover:text-blue-400">{{ ont.serial_number }}</a>
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <span class="text-slate-900 dark:text-white">Authorize</span>
-        </nav>
-        <div class="flex items-center justify-between gap-4">
-            <div>
-                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Authorize {{ ont.serial_number }}</h1>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                    {{ ont.vendor or '' }} {{ ont.model or '' }}
-                    {% if olt %} &middot; {{ olt.name }}{% endif %}
-                    {% if pon_label %} &middot; {{ pon_label }}{% endif %}
-                    {% if signal_info.online_status == 'online' %}
-                    &middot; <span class="text-emerald-600 dark:text-emerald-400">Online</span>
-                    {% elif signal_info.online_status == 'offline' %}
-                    &middot; <span class="text-rose-600 dark:text-rose-400">Offline</span>
-                    {% endif %}
-                    {% if signal_info.olt_rx_dbm is not none %} &middot; {{ "%.1f"|format(signal_info.olt_rx_dbm) }} dBm{% endif %}
-                </p>
+<div class="space-y-4">
+    <div class="flex items-center justify-between">
+        <div>
+            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-1">
+                <a href="/admin/network/onts" class="hover:text-blue-600 dark:hover:text-blue-400">ONTs</a>
+                <span>/</span>
+                <a href="/admin/network/onts/{{ ont.id }}" class="hover:text-blue-600 dark:hover:text-blue-400">{{ ont.serial_number }}</a>
+                <span>/</span>
+                <span class="text-slate-900 dark:text-white">Provision</span>
+            </nav>
+            <div class="flex items-center gap-3">
+                <h1 class="text-xl font-bold text-slate-900 dark:text-white">{{ ont.serial_number }}</h1>
+                {% if signal_info.online_status == 'online' %}
+                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">Online</span>
+                {% elif signal_info.online_status == 'offline' %}
+                <span class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900 dark:text-rose-300">Offline</span>
+                {% endif %}
+                {% if signal_info.olt_rx_dbm is not none %}
+                <span class="text-sm font-mono text-slate-500 dark:text-slate-400">{{ "%.1f"|format(signal_info.olt_rx_dbm) }} dBm</span>
+                {% endif %}
             </div>
-            <a href="/admin/network/onts/{{ ont.id }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-                Back to Detail
-            </a>
         </div>
+        <a href="/admin/network/onts/{{ ont.id }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            Back
+        </a>
     </div>
 
     {% if provision_feedback %}
-    <div class="rounded-lg border px-4 py-3 text-sm {% if provision_feedback.status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/30 dark:bg-rose-900/10 dark:text-rose-300{% endif %}">
+    <div class="rounded-lg border px-3 py-2 text-sm {% if provision_feedback.status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/30 dark:bg-rose-900/10 dark:text-rose-300{% endif %}">
         {{ provision_feedback.message }}
     </div>
     {% endif %}
 
-    {% set ready_to_authorize = provision_preflight.ready_to_authorize if provision_preflight else false %}
-    {% set ready_to_provision = provision_preflight.ready_to_provision if provision_preflight else false %}
-
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div class="space-y-6 lg:col-span-2">
-            {% call card("OLT activation sequence", color="amber") %}
-            <div class="space-y-5">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">
-                            {{ 'Ready to authorize' if ready_to_authorize else 'Complete network prerequisites before authorization' }}
-                        </p>
-                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                            Authorize completes OLT-layer work: discovery, authorization, OLT profile binding, VLAN/GEM/service-port reconciliation, and OLT readback. Configure ONT is next.
-                        </p>
-                    </div>
-                    <div class="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-end">
-                        <span class="inline-flex rounded-md px-2 py-1 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' if ready_to_authorize else 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200' }}">
-                            {{ 'Authorize ready' if ready_to_authorize else 'Authorize blocked' }}
-                        </span>
-                        <span class="inline-flex rounded-md px-2 py-1 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' if ready_to_provision else 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300' }}">
-                            {{ 'Provision ready' if ready_to_provision else 'Provision after authorization' }}
-                        </span>
-                    </div>
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {# Main content #}
+        <div class="space-y-4 lg:col-span-2">
+            {# Preflight checks #}
+            <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Preflight Checks</h3>
+                    {% set ready_to_authorize = provision_preflight.ready_to_authorize if provision_preflight else false %}
+                    <span class="rounded px-2 py-0.5 text-xs font-medium {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300' if ready_to_authorize else 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' }}">
+                        {{ 'Ready' if ready_to_authorize else 'Blocked' }}
+                    </span>
                 </div>
-
-                <div class="grid gap-3 sm:grid-cols-6">
-                    <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                        <p class="text-xs font-semibold uppercase text-slate-400">1. Discover</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">Serial and F/S/P are known.</p>
-                    </div>
-                    <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                        <p class="text-xs font-semibold uppercase text-slate-400">2. Authorize</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">Line and service profiles register the ONT.</p>
-                    </div>
-                    <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                        <p class="text-xs font-semibold uppercase text-slate-400">3. Verify</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">OLT readback confirms ONT-ID and serial.</p>
-                    </div>
-                    <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                        <p class="text-xs font-semibold uppercase text-slate-400">4. Reconcile</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">Compare VLAN/GEM/service-port intent.</p>
-                    </div>
-                    <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                        <p class="text-xs font-semibold uppercase text-slate-400">5. Provision</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">Apply OLT-side network config.</p>
-                    </div>
-                    <div class="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
-                        <p class="text-xs font-semibold uppercase text-slate-400">Next</p>
-                        <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">Configure ONT.</p>
-                    </div>
-                </div>
-
-                <div class="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
-                    {% if provision_preflight and provision_preflight.checks %}
+                {% if provision_preflight and provision_preflight.checks %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700 text-sm">
                     {% for check in provision_preflight.checks %}
-                    {% set status = check.status %}
-                    <div class="flex items-start justify-between gap-3 px-3 py-2.5">
-                        <div>
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ check.name }}</p>
-                            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ check.message }}</p>
-                        </div>
-                        <div class="flex shrink-0 flex-col items-end gap-1">
-                            <span class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' if status == 'ok' else 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' if status == 'warn' else 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300' }}">
-                                {{ status }}
-                            </span>
-                            <span class="text-[10px] font-medium text-slate-400 dark:text-slate-500">
-                                {{ 'Before auth' if check.blocks_authorization else 'After auth' }}
-                            </span>
+                    <div class="flex items-center justify-between py-1.5">
+                        <span class="text-slate-700 dark:text-slate-300">{{ check.name }}</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-slate-500 dark:text-slate-400 max-w-[200px] truncate" title="{{ check.message }}">{{ check.message }}</span>
+                            {% if check.status == 'ok' %}
+                            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                            {% elif check.status == 'warn' %}
+                            <span class="h-2 w-2 rounded-full bg-amber-500"></span>
+                            {% else %}
+                            <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                            {% endif %}
                         </div>
                     </div>
                     {% endfor %}
-                    {% else %}
-                    <div class="px-3 py-2.5 text-sm text-slate-500 dark:text-slate-400">
-                        No preflight checks available.
-                    </div>
-                    {% endif %}
                 </div>
-            </div>
-            {% endcall %}
-
-            {% call card("OLT TR-069 profile", color="blue") %}
-            <div>
-                <label for="tr069_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">TR-069 Profile</label>
-                <select id="tr069_profile_id" name="tr069_profile_id" x-model="tr069ProfileId"
-                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">Use auto selection</option>
-                    {% for profile in tr069_profiles or [] %}
-                    <option value="{{ profile.profile_id }}" {% if selected_tr069_profile_id and selected_tr069_profile_id|string == profile.profile_id|string %}selected{% endif %}>
-                        {{ profile.name or ('Profile ' ~ profile.profile_id) }} (ID {{ profile.profile_id }})
-                    </option>
-                    {% endfor %}
-                </select>
-                {% if resolved_tr069_profile_error %}
-                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ resolved_tr069_profile_error }}</p>
-                {% elif selected_tr069_profile_name %}
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Auto-selected: {{ selected_tr069_profile_name }} (ID {{ selected_tr069_profile_id }})</p>
-                {% elif tr069_profiles_error %}
-                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ tr069_profiles_error }}</p>
-                {% else %}
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose the OLT TR-069 profile only when OLT-layer ACS binding is part of the network profile.</p>
                 {% endif %}
             </div>
-            {% endcall %}
 
-            <div class="rounded-lg border p-4"
-                 :class="canSave() ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/30 dark:bg-emerald-900/10' : 'border-amber-200 bg-amber-50/60 dark:border-amber-900/30 dark:bg-amber-900/10'">
-                <div class="flex items-start justify-between gap-4">
-                    <div>
-                        <h3 class="text-sm font-semibold"
-                            :class="canSave() ? 'text-emerald-900 dark:text-emerald-200' : 'text-amber-900 dark:text-amber-200'">
-                            OLT desired config gate
-                        </h3>
-                        <p class="mt-1 text-sm"
-                           :class="canSave() ? 'text-emerald-800 dark:text-emerald-300' : 'text-amber-800 dark:text-amber-300'">
-                            Save explicit OLT desired-config selections before authorization.
-                        </p>
-                    </div>
-                    <span class="rounded-md px-2 py-1 text-xs font-semibold"
-                          :class="canSave() ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'"
-                          x-text="canSave() ? 'Ready' : 'Blocked'"></span>
+            {# Configuration Summary - What will be applied #}
+            <div class="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Configuration Summary</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Settings that will be applied during provisioning</p>
                 </div>
-                <template x-if="missingPrerequisites().length">
-                    <ul class="mt-3 space-y-1 text-sm text-amber-800 dark:text-amber-300">
-                        <template x-for="issue in missingPrerequisites()" :key="issue">
-                            <li class="flex gap-2">
-                                <span aria-hidden="true">-</span>
-                                <span x-text="issue"></span>
-                            </li>
-                        </template>
-                    </ul>
-                </template>
+                <div class="p-4 space-y-4">
+                    {# Network Config (from OLT Config Pack) #}
+                    <div>
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Network</span>
+                            <span class="text-xs text-slate-400 dark:text-slate-500">from OLT Config Pack</span>
+                        </div>
+                        {% if config_pack %}
+                        <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Line Profile</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.line_profile_id or '—' }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Service Profile</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.service_profile_id or '—' }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Internet VLAN</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.internet_vlan.tag if config_pack.internet_vlan else '—' }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Management VLAN</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.management_vlan.tag if config_pack.management_vlan else '—' }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Internet GEM</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.internet_gem_index }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Management GEM</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.mgmt_gem_index }}</dd>
+                            </div>
+                            {% if selected_tr069_profile_name %}
+                            <div class="col-span-2 flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">TR-069 Profile</dt>
+                                <dd class="text-slate-900 dark:text-white">{{ selected_tr069_profile_name }}</dd>
+                            </div>
+                            {% endif %}
+                        </dl>
+                        {% else %}
+                        <p class="text-sm text-amber-600 dark:text-amber-400">No OLT config pack found. Configure the OLT first.</p>
+                        {% endif %}
+                    </div>
+
+                    {# Service Config (from Assignment) #}
+                    <div class="border-t border-slate-100 dark:border-slate-700 pt-4">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Service</span>
+                            <span class="text-xs text-slate-400 dark:text-slate-500">from Subscriber Assignment</span>
+                        </div>
+                        {% if assignment %}
+                        <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">WAN Mode</dt>
+                                <dd class="text-slate-900 dark:text-white">{{ (assignment.wan_mode.value if assignment.wan_mode else 'routing') | title }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">IP Mode</dt>
+                                <dd class="text-slate-900 dark:text-white">{{ (assignment.ip_mode.value if assignment.ip_mode else 'dhcp') | upper }}</dd>
+                            </div>
+                            {% if assignment.ip_mode and assignment.ip_mode.value == 'static_ip' %}
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Static IP</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ assignment.static_ip or '—' }}</dd>
+                            </div>
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">Gateway</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ assignment.static_gateway or '—' }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if assignment.pppoe_username %}
+                            <div class="col-span-2 flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">PPPoE User</dt>
+                                <dd class="font-mono text-slate-900 dark:text-white">{{ assignment.pppoe_username }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if assignment.wifi_ssid %}
+                            <div class="flex justify-between">
+                                <dt class="text-slate-500 dark:text-slate-400">WiFi SSID</dt>
+                                <dd class="text-slate-900 dark:text-white">{{ assignment.wifi_ssid }}</dd>
+                            </div>
+                            {% endif %}
+                        </dl>
+                        <div class="mt-2">
+                            <a href="/admin/network/onts/{{ ont.id }}/assign?return_to=provision" class="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">
+                                Edit service config &rarr;
+                            </a>
+                        </div>
+                        {% else %}
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Not assigned to a subscriber.</p>
+                        <a href="/admin/network/onts/{{ ont.id }}/assign?return_to=provision" class="mt-1 inline-block text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">
+                            Assign to subscriber &rarr;
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
             </div>
 
-            <form method="POST" action="/admin/network/onts/{{ ont.id }}/save-provision-settings">
+            {# Provision Action #}
+            {% if config_pack %}
+            <form method="POST" action="/admin/network/onts/{{ ont.id }}/provision" class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
                 {% include "components/forms/csrf_input.html" %}
-                <input type="hidden" name="tr069_profile_id" :value="tr069ProfileId">
-                <button type="submit"
-                    :disabled="!canSave()"
-                    :class="canSave() ? 'bg-blue-600 text-white hover:bg-blue-700' : 'cursor-not-allowed bg-slate-300 text-slate-500 dark:bg-slate-700 dark:text-slate-400'"
-                    class="inline-flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-semibold shadow-sm transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                    Save OLT Desired Config
-                </button>
-                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                    This does not configure customer internet service, PPPoE, LAN, DHCP, or WiFi.
-                </p>
+                <input type="hidden" name="async_execution" value="true">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Apply Configuration</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Push network and service settings to the OLT and ACS</p>
+                    </div>
+                    <button type="submit"
+                        {% if not provision_preflight or not provision_preflight.ready_to_authorize %}disabled{% endif %}
+                        class="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white {{ 'bg-blue-600 hover:bg-blue-700' if provision_preflight and provision_preflight.ready_to_authorize else 'bg-slate-400 cursor-not-allowed' }}">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        Provision ONT
+                    </button>
+                </div>
             </form>
+            {% endif %}
         </div>
 
+        {# Sidebar #}
         <div class="space-y-4">
-            {% call card("OLT state", color="slate") %}
-            <div class="space-y-2 text-xs">
-                <div class="flex justify-between gap-3"><span class="text-slate-500 dark:text-slate-400">Serial</span><span class="font-mono text-slate-900 dark:text-white">{{ ont.serial_number }}</span></div>
-                <div class="flex justify-between gap-3"><span class="text-slate-500 dark:text-slate-400">OLT</span><span class="text-right text-slate-900 dark:text-white">{{ olt.name if olt else '—' }}</span></div>
-                <div class="flex justify-between gap-3"><span class="text-slate-500 dark:text-slate-400">PON</span><span class="font-mono text-slate-900 dark:text-white">{{ pon_label or '—' }}</span></div>
-                <div class="flex justify-between gap-3"><span class="text-slate-500 dark:text-slate-400">ONT-ID</span><span class="font-mono text-slate-900 dark:text-white">{{ ont.external_id or '—' }}</span></div>
-                <div class="flex justify-between gap-3"><span class="text-slate-500 dark:text-slate-400">Authorization</span><span class="text-slate-900 dark:text-white">{{ ont.authorization_status.value | replace('_', ' ') | title if ont.authorization_status else 'Not authorized' }}</span></div>
-                <div class="flex justify-between gap-3"><span class="text-slate-500 dark:text-slate-400">Network Provisioning</span><span class="text-slate-900 dark:text-white">{{ ont.provisioning_status.value | replace('_', ' ') | title if ont.provisioning_status else 'Unprovisioned' }}</span></div>
-            </div>
-            {% endcall %}
-
-            {% call card("TR-069 / ACS", color="blue") %}
-            <div class="space-y-3">
-                <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">ACS linked to OLT/ONT</span>
-                    {% if acs_bound %}
-                    <span class="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">Yes</span>
-                    {% else %}
-                    <span class="text-xs text-slate-500 dark:text-slate-400">No</span>
-                    {% endif %}
-                </div>
-                <p class="text-xs text-slate-500 dark:text-slate-400">
-                    ACS connection is verified after OLT-layer TR-069 binding. It is not a prerequisite for ONT authorization.
-                </p>
-                {% if operational_acs_server_name %}
-                <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">ACS server</span>
-                    <span class="text-xs text-slate-700 dark:text-slate-300">{{ operational_acs_server_name }}</span>
-                </div>
+            {# OLT State #}
+            <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-2">OLT State</h3>
+                <dl class="space-y-1 text-xs">
+                    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">OLT</dt><dd class="text-slate-900 dark:text-white">{{ olt.name if olt else '—' }}</dd></div>
+                    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">PON</dt><dd class="font-mono text-slate-900 dark:text-white">{{ pon_label or '—' }}</dd></div>
+                    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">ONT-ID</dt><dd class="font-mono text-slate-900 dark:text-white">{{ ont.external_id or '—' }}</dd></div>
+                    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Auth</dt><dd class="text-slate-900 dark:text-white">{{ ont.authorization_status.value | replace('_', ' ') | title if ont.authorization_status else 'Pending' }}</dd></div>
+                </dl>
+                {% if olt %}
+                <a href="/admin/network/olts/{{ olt.id }}/edit" class="mt-2 block text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">Edit OLT config &rarr;</a>
                 {% endif %}
             </div>
-            {% endcall %}
+
+            {# Subscriber #}
+            <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-2">Subscriber</h3>
+                {% if subscriber %}
+                <dl class="space-y-1 text-xs">
+                    <div class="flex justify-between">
+                        <dt class="text-slate-500 dark:text-slate-400">Name</dt>
+                        <dd class="text-slate-900 dark:text-white">{{ subscriber.first_name }} {{ subscriber.last_name }}</dd>
+                    </div>
+                    {% if subscriber.account_number %}
+                    <div class="flex justify-between">
+                        <dt class="text-slate-500 dark:text-slate-400">Account</dt>
+                        <dd class="font-mono text-slate-900 dark:text-white">{{ subscriber.account_number }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+                <a href="/admin/subscribers/{{ subscriber.id }}" class="mt-2 block text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">View subscriber &rarr;</a>
+                {% else %}
+                <p class="text-xs text-slate-500 dark:text-slate-400">Not assigned</p>
+                <a href="/admin/network/onts/{{ ont.id }}/assign?return_to=provision" class="mt-1 block text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">Assign now &rarr;</a>
+                {% endif %}
+            </div>
+
+            {# ACS #}
+            <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-2">ACS</h3>
+                <dl class="space-y-1 text-xs">
+                    <div class="flex justify-between">
+                        <dt class="text-slate-500 dark:text-slate-400">Linked</dt>
+                        <dd class="text-slate-900 dark:text-white">{{ 'Yes' if acs_bound else 'No' }}</dd>
+                    </div>
+                    {% if operational_acs_server_name %}
+                    <div class="flex justify-between">
+                        <dt class="text-slate-500 dark:text-slate-400">Server</dt>
+                        <dd class="text-slate-900 dark:text-white">{{ operational_acs_server_name }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+            </div>
         </div>
     </div>
 </div>

@@ -980,7 +980,7 @@ class NetworkConfigValidator(BaseConfigValidator):
         if olt and db:
             self._validate_olt_has_vendor_model(olt, result)
             self._validate_olt_has_credentials(olt, result)
-            self._validate_olt_has_provisioning_profile(db, olt, result)
+            self._validate_olt_has_authorization_profiles(db, olt, result)
             if config.fsp:
                 self._validate_pon_port_exists(db, olt, config.fsp, result)
 
@@ -1062,7 +1062,7 @@ class NetworkConfigValidator(BaseConfigValidator):
                 code="NO_MODEL",
             )
 
-    def _validate_olt_has_provisioning_profile(
+    def _validate_olt_has_authorization_profiles(
         self,
         db: Session,
         olt: OLTDevice,

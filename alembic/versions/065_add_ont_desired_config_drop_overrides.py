@@ -114,25 +114,46 @@ def upgrade() -> None:
                 },
             )
 
+        # Drop constraints first (unique constraints create backing indexes)
+        for constraint in inspector.get_unique_constraints("ont_config_overrides"):
+            if constraint.get("name"):
+                op.drop_constraint(constraint["name"], "ont_config_overrides", type_="unique")
+        # Drop remaining indexes
         for index in inspector.get_indexes("ont_config_overrides"):
             if index.get("name"):
-                op.drop_index(index["name"], table_name="ont_config_overrides")
+                try:
+                    op.drop_index(index["name"], table_name="ont_config_overrides")
+                except Exception:
+                    pass  # May have been dropped with constraint
         op.drop_table("ont_config_overrides")
 
     if "provisioning_step_executions" in inspector.get_table_names():
+        for constraint in inspector.get_unique_constraints("provisioning_step_executions"):
+            if constraint.get("name"):
+                op.drop_constraint(constraint["name"], "provisioning_step_executions", type_="unique")
         for index in inspector.get_indexes("provisioning_step_executions"):
             if index.get("name"):
-                op.drop_index(index["name"], table_name="provisioning_step_executions")
+                try:
+                    op.drop_index(index["name"], table_name="provisioning_step_executions")
+                except Exception:
+                    pass
         op.drop_table("provisioning_step_executions")
 
     if "saga_executions" in inspector.get_table_names():
+        for constraint in inspector.get_unique_constraints("saga_executions"):
+            if constraint.get("name"):
+                op.drop_constraint(constraint["name"], "saga_executions", type_="unique")
         for index in inspector.get_indexes("saga_executions"):
             if index.get("name"):
-                op.drop_index(index["name"], table_name="saga_executions")
+                try:
+                    op.drop_index(index["name"], table_name="saga_executions")
+                except Exception:
+                    pass
         op.drop_table("saga_executions")
 
+    # Drop orphaned enum types that are no longer used
+    # Note: ontbundleassignmentstatus is still in use by ont_bundle_assignments, don't drop it
     bind.execute(sa.text("DROP TYPE IF EXISTS ontconfigoverridesource"))
-    bind.execute(sa.text("DROP TYPE IF EXISTS ontbundleassignmentstatus"))
     bind.execute(sa.text("DROP TYPE IF EXISTS provisioningstepexecutionstatus"))
     bind.execute(sa.text("DROP TYPE IF EXISTS sagaexecutionstatus"))
 

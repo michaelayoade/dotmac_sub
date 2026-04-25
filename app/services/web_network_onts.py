@@ -813,6 +813,19 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         return {"error": "ONT not found", "request": request}
 
     olt = getattr(ont, "olt_device", None)
+
+    # Resolve config pack for this ONT's OLT
+    config_pack = None
+    config_pack_validation = None
+    if olt:
+        from app.services.network.olt_config_pack import (
+            resolve_olt_config_pack,
+            validate_config_pack_comprehensive,
+        )
+
+        config_pack = resolve_olt_config_pack(db, str(olt.id))
+        config_pack_validation = validate_config_pack_comprehensive(db, str(olt.id))
+
     tr069_profile, tr069_error = resolve_effective_tr069_profile_for_ont(db, ont)
     tr069_profiles, tr069_profiles_error = get_tr069_profiles_for_ont(db, ont)
     vlans = get_vlans_for_ont(db, ont)
@@ -906,8 +919,16 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     provision_preflight = preflight_result(
         db,
         ont_id=ont_id,
-        tr069_profile_id=getattr(tr069_profile, "profile_id", None),
     )
+
+    # Get the active assignment for this ONT (service config source)
+    active_assignment = None
+    assignment_subscriber = None
+    for assignment in getattr(ont, "assignments", []):
+        if getattr(assignment, "active", False):
+            active_assignment = assignment
+            assignment_subscriber = getattr(assignment, "subscriber", None)
+            break
 
     context: dict[str, Any] = {
         "request": request,
@@ -917,7 +938,8 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
         "ont": ont,
         "olt": olt,
-        "provisioning_profile": None,
+        "assignment": active_assignment,
+        "subscriber": assignment_subscriber,
         "tr069_profile": tr069_profile,
         "tr069_profile_error": tr069_error,
         "selected_tr069_profile_id": getattr(tr069_profile, "profile_id", None),
@@ -948,7 +970,6 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
             if getattr(ont, "board", None) and getattr(ont, "port", None)
             else None
         ),
-        "subscriber": None,
         "subscription": None,
         "acs_bound": bool(effective_values.get("tr069_acs_server_id")),
         "operational_acs_server_name": getattr(
@@ -958,15 +979,12 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "ont_plan": {},
         "provision_gate_issues": provision_gate_issues,
         "provision_preflight": provision_preflight,
+        "config_pack": config_pack.to_dict() if config_pack else None,
+        "config_pack_validation": config_pack_validation.to_dict()
+        if config_pack_validation
+        else None,
     }
     return context
-
-
-def resolve_effective_provisioning_profile(
-    db: Session, ont: Any, olt: Any | None = None
-) -> Any | None:
-    """Return None: provisioning profiles are templates, not runtime ONT state."""
-    return None
 
 
 def resolve_effective_tr069_profile_for_ont(

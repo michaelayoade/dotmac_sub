@@ -46,7 +46,6 @@ def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
         ["ont-a", "ont-b"],
         "provision",
         {
-            "tr069_olt_profile_id": "tr069-profile-1",
             "initiated_by": "admin",
             "max_parallel": 10,
             "chunk_delay_seconds": 20,
@@ -66,7 +65,6 @@ def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
     assert calls == [
         {
             "ont_ids": ["ont-a", "ont-b"],
-            "tr069_olt_profile_id": "tr069-profile-1",
             "max_workers": 10,
             "chunk_delay_seconds": 20,
             "initiated_by": "admin",

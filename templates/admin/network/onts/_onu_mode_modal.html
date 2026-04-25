@@ -1,5 +1,5 @@
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-     x-data='{ open: true, wanMode: "{{ ont.wan_mode.value if ont.wan_mode else "dhcp" }}" }'
+     x-data='{ open: true, wanMode: "{{ wan_mode or "" }}" }'
      x-show="open" x-transition
      @keydown.escape.window="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
      role="dialog"
@@ -28,7 +28,7 @@
                             class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">-- None --</option>
                         {% for vlan in vlans %}
-                        <option value="{{ vlan.id }}" {% if ont.wan_vlan_id and (ont.wan_vlan_id | string) == (vlan.id | string) %}selected{% endif %}>
+                        <option value="{{ vlan.id }}" {% if wan_vlan and (wan_vlan | string) == (vlan.tag | string) %}selected{% endif %}>
                             {{ vlan | vlan_label }}
                         </option>
                         {% endfor %}
@@ -42,7 +42,7 @@
                         {% for mode in onu_modes %}
                         <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                             <input type="radio" name="onu_mode" value="{{ mode }}"
-                                   {% if ont.onu_mode and ont.onu_mode.value == mode %}checked{% endif %}
+                                   {% if onu_mode == mode %}checked{% endif %}
                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             {{ mode | replace("_", " ") | title }}
                         </label>
@@ -57,7 +57,7 @@
                         {% for mode in wan_modes %}
                         <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                             <input type="radio" name="wan_mode" value="{{ mode }}"
-                                   {% if ont.wan_mode and ont.wan_mode.value == mode %}checked{% endif %}
+                                   {% if wan_mode == mode %}checked{% endif %}
                                    x-model="wanMode"
                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             {{ mode | replace("_", " ") | title }}
@@ -73,7 +73,7 @@
                         {% for method in config_methods %}
                         <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                             <input type="radio" name="config_method" value="{{ method }}"
-                                   {% if ont.config_method and ont.config_method.value == method %}checked{% endif %}
+                                   {% if config_method == method %}checked{% endif %}
                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             {{ method | upper }}
                         </label>
@@ -88,7 +88,7 @@
                         {% for proto in ip_protocols %}
                         <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                             <input type="radio" name="ip_protocol" value="{{ proto }}"
-                                   {% if ont.ip_protocol and ont.ip_protocol.value == proto %}checked{% endif %}
+                                   {% if ip_protocol == proto %}checked{% endif %}
                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             {% if proto == "ipv4" %}IPv4{% elif proto == "dual_stack" %}Dual Stack IPv4/IPv6{% else %}{{ proto | replace("_", " ") | title }}{% endif %}
                         </label>
@@ -100,7 +100,7 @@
                 <div x-show="wanMode === 'pppoe'" x-transition x-cloak>
                     <label for="pppoe_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Username</label>
                     <input type="text" name="pppoe_username" id="pppoe_username"
-                           value="{{ ont.pppoe_username or '' }}"
+                           value="{{ pppoe_username or '' }}"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                            placeholder="PPPoE username">
                 </div>

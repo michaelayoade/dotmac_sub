@@ -133,7 +133,7 @@ def test_desired_state_does_not_default_management_ip_mode_from_olt_vlan(
     from app.models.catalog import RegionZone
     from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
     from app.services.network.ont_provisioning.state import (
-        build_desired_state_from_profile,
+        build_desired_state_from_config,
     )
 
     region = RegionZone(name="Mgmt Region", code="mgmt-no-default")
@@ -164,7 +164,7 @@ def test_desired_state_does_not_default_management_ip_mode_from_olt_vlan(
         lambda db, ont_id: (SimpleNamespace(fsp="0/1/1", olt_ont_id=1), None),
     )
 
-    desired, err = build_desired_state_from_profile(db_session, str(ont.id))
+    desired, err = build_desired_state_from_config(db_session, str(ont.id))
 
     assert err == ""
     assert desired is not None
@@ -526,3 +526,42 @@ def test_direct_provision_route_ignores_posted_tr069_profile_override(
 
     assert response.status_code == 200
     assert "tr069_olt_profile_id" not in captured
+
+
+def test_provisioning_entrypoints_do_not_accept_tr069_profile_override():
+    import inspect
+
+    from app.services.network.bulk_provisioning import bulk_provision_onts
+    from app.services.network.ont_provisioning.orchestrator import (
+        provision_ont_from_desired_config,
+    )
+    from app.services.network.ont_provisioning.preflight import validate_prerequisites
+    from app.services.network.ont_provisioning.reconciler import reconcile_ont_state
+    from app.services.network.ont_provisioning.state import (
+        build_desired_state_from_config,
+    )
+    from app.services.network.ont_provision_steps import provision_with_reconciliation
+    from app.tasks.ont_provisioning import provision_ont, queue_bulk_provisioning
+
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        provision_ont_from_desired_config
+    ).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(provision_ont.run).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        queue_bulk_provisioning.run
+    ).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        bulk_provision_onts
+    ).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        validate_prerequisites
+    ).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        build_desired_state_from_config
+    ).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        reconcile_ont_state
+    ).parameters
+    assert "tr069_olt_profile_id" not in inspect.signature(
+        provision_with_reconciliation
+    ).parameters

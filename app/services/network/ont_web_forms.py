@@ -23,6 +23,7 @@ from app.models.network import (
     OnuMode,
     SplitterPort,
     SplitterPortType,
+    Vlan,
     WanMode,
 )
 from app.schemas.network import OntUnitCreate, OntUnitUpdate
@@ -30,6 +31,8 @@ from app.services import network as network_service
 from app.services import web_network_onts as web_onts_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.credential_crypto import encrypt_credential
+from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_desired_config import set_desired_config_value
 
 _LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
 
@@ -297,9 +300,27 @@ def update_onu_mode_from_form(
         ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return OntFormResult(not_found=True)
-    payload = build_onu_mode_payload(form)
     before_snapshot = model_to_dict(ont)
-    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+    wan_vlan_id = form_uuid_or_none(form, "wan_vlan_id")
+    wan_vlan_tag = None
+    if wan_vlan_id is not None:
+        vlan = db.get(Vlan, wan_vlan_id)
+        wan_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
+    intent_values = [
+        ("device.onu_mode", form_str(form, "onu_mode").strip() or None),
+        ("wan.vlan", wan_vlan_tag),
+        ("wan.mode", form_str(form, "wan_mode").strip() or None),
+        ("device.config_method", form_str(form, "config_method").strip() or None),
+        ("wan.ip_protocol", form_str(form, "ip_protocol").strip() or None),
+        ("wan.pppoe_username", form_str(form, "pppoe_username").strip() or None),
+    ]
+    if pw := form_str(form, "pppoe_password").strip():
+        intent_values.append(("wan.pppoe_password", encrypt_credential(pw)))
+    for field_name, value in intent_values:
+        set_desired_config_value(ont, field_name, value)
+    ont.wan_remote_access = form_str(form, "wan_remote_access") == "true"
+    db.add(ont)
+    db.flush()
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
     metadata: dict[str, object] | None = {"changes": changes} if changes else None
@@ -465,9 +486,16 @@ def update_gpon_channel_from_form(
 def onu_mode_modal_context(db: Session, ont_id: str) -> dict[str, object]:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     vlans = web_onts_service.get_vlans_for_ont(db, ont)
+    values = resolve_effective_ont_config(db, ont)["values"]
     return {
         "ont": ont,
         "vlans": vlans,
+        "wan_mode": values.get("wan_mode") or "",
+        "wan_vlan": str(values.get("wan_vlan") or ""),
+        "config_method": values.get("config_method") or "",
+        "ip_protocol": values.get("ip_protocol") or "",
+        "onu_mode": values.get("onu_mode") or "",
+        "pppoe_username": str(values.get("pppoe_username") or ""),
         "wan_modes": [e.value for e in WanMode],
         "config_methods": [e.value for e in ConfigMethod],
         "ip_protocols": [e.value for e in IpProtocol],
@@ -638,9 +666,28 @@ def update_mgmt_ip_from_form(
     except HTTPException:
         return OntFormResult(not_found=True)
 
-    payload = build_mgmt_ip_payload(form)
     before_snapshot = model_to_dict(ont)
-    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+    mgmt_vlan_id = form_uuid_or_none(form, "mgmt_vlan_id")
+    mgmt_vlan_tag = None
+    if mgmt_vlan_id is not None:
+        vlan = db.get(Vlan, mgmt_vlan_id)
+        mgmt_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
+    mgmt_ip_mode = form_str(form, "mgmt_ip_mode").strip() or None
+    for field_name, value in [
+        ("management.ip_mode", mgmt_ip_mode),
+        ("management.vlan", mgmt_vlan_tag),
+        (
+            "management.ip_address",
+            form_str(form, "mgmt_ip_address").strip()
+            if mgmt_ip_mode == "static_ip"
+            else None,
+        ),
+    ]:
+        set_desired_config_value(ont, field_name, value)
+    ont.mgmt_remote_access = form_str(form, "mgmt_remote_access") == "true"
+    ont.voip_enabled = form_str(form, "voip_enabled") == "true"
+    db.add(ont)
+    db.flush()
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
     metadata: dict[str, object] | None = {"changes": changes} if changes else None
@@ -658,19 +705,14 @@ def mgmt_ip_modal_context(db: Session, ont_id: str) -> dict[str, object]:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     vlans = web_onts_service.get_vlans_for_ont(db, ont)
     mgmt_ip_choices = web_onts_service.management_ip_choices_for_ont(db, ont, limit=50)
+    values = resolve_effective_ont_config(db, ont)["values"]
 
     return {
         "ont": ont,
         "vlans": vlans,
+        "mgmt_ip_mode": values.get("mgmt_ip_mode") or "",
+        "mgmt_vlan": str(values.get("mgmt_vlan") or ""),
+        "mgmt_ip_address": str(values.get("mgmt_ip_address") or ""),
         "mgmt_ip_modes": [e.value for e in MgmtIpMode],
         **mgmt_ip_choices,
-    }
-
-
-def profile_form_context(db: Session, ont_id: str) -> dict[str, object]:
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    return {
-        "ont_id": ont_id,
-        "available_profile_templates": [],
-        "current_profile_id": None,
     }

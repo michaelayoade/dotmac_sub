@@ -59,7 +59,7 @@ class TestUpdateExternalId:
 
 
 class TestUpdateManagementIp:
-    @patch("app.services.network.ont_write.upsert_ont_config_override")
+    @patch("app.services.network.ont_write.upsert_ont_desired_config_value")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")

@@ -14,7 +14,7 @@ from app.web.admin.network_onts_inventory import (
 
 # Compatibility: expose a router for callers that still import `router` from
 # this module, but compose it from the active split routers rather than the
-# parked legacy OLT bundle.
+# parked legacy monolith.
 router = APIRouter()
 router.include_router(_olt_inventory_router)
 router.include_router(_olt_profiles_router)

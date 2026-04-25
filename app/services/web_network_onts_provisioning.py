@@ -26,7 +26,7 @@ from app.services import web_network_onts as web_network_onts_service
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import upsert_ont_desired_config_value as upsert_ont_config_override
+from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
@@ -400,13 +400,12 @@ def _effective_tr069_profile_id(
     db: Session,
     *,
     ont_id: str,
-    tr069_profile_id: int | None,
 ) -> int | None:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     resolved_tr069_profile, _resolved_tr069_profile_error = (
         web_network_onts_service.resolve_effective_tr069_profile_for_ont(db, ont)
     )
-    return tr069_profile_id or getattr(
+    return getattr(
         resolved_tr069_profile,
         "profile_id",
         None,
@@ -417,13 +416,11 @@ def provisioning_preview_context(
     db: Session,
     *,
     ont_id: str,
-    tr069_profile_id: int | None,
 ) -> dict[str, object]:
     """Return command-preview context for desired-config provisioning."""
     effective_tr069_profile_id = _effective_tr069_profile_id(
         db,
         ont_id=ont_id,
-        tr069_profile_id=tr069_profile_id,
     )
     return {
         "ont_id": ont_id,
@@ -436,18 +433,11 @@ def preflight_result(
     db: Session,
     *,
     ont_id: str,
-    tr069_profile_id: int | None,
 ) -> dict[str, object]:
     """Run provisioning preflight using OLT defaults and desired_config."""
-    effective_tr069_profile_id = _effective_tr069_profile_id(
-        db,
-        ont_id=ont_id,
-        tr069_profile_id=tr069_profile_id,
-    )
     return validate_prerequisites(
         db,
         ont_id,
-        tr069_olt_profile_id=effective_tr069_profile_id,
     )
 
 
@@ -572,8 +562,7 @@ def save_provision_settings(
 
     if network_only_profile_save:
         try:
-            ont.tr069_olt_profile_id = tr069_profile_id_int
-            upsert_ont_config_override(
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name="tr069.olt_profile_id",
@@ -870,7 +859,7 @@ def save_provision_settings(
             payload_values.pop("wifi_password", None)
         for key, value in payload_values.items():
             setattr(ont, key, value)
-        for field_name, value in [
+        desired_updates = [
             ("device.onu_mode", onu_mode_value),
             ("management.ip_mode", mgmt_ip_mode_value),
             ("management.vlan", mgmt_vlan_tag_value),
@@ -886,12 +875,6 @@ def save_provision_settings(
                 "wan.pppoe_username",
                 pppoe_username_value if wan_protocol_value == "pppoe" else None,
             ),
-            (
-                "wan.pppoe_password",
-                encrypt_credential(pppoe_password_value)
-                if wan_protocol_value == "pppoe" and pppoe_password_value
-                else None,
-            ),
             ("wan.static_ip", static_ip_value if wan_protocol_value == "static" else None),
             ("wan.static_subnet", static_subnet_value if wan_protocol_value == "static" else None),
             ("wan.static_gateway", static_gateway_value if wan_protocol_value == "static" else None),
@@ -902,23 +885,25 @@ def save_provision_settings(
             ("lan.dhcp_start", dhcp_start_value),
             ("lan.dhcp_end", dhcp_end_value),
             ("wifi.ssid", wifi_ssid_value),
-            (
-                "wifi.password",
-                encrypt_credential(wifi_password_value) if wifi_password_value else None,
-            ),
             ("wifi.security_mode", wifi_security_mode_value),
             ("wifi.channel", wifi_channel_value),
             ("wifi.enabled", wifi_enabled_value),
-        ]:
-            upsert_ont_config_override(
+        ]
+        if wan_protocol_value == "pppoe" and pppoe_password_value:
+            desired_updates.append(
+                ("wan.pppoe_password", encrypt_credential(pppoe_password_value))
+            )
+        if wifi_password_value:
+            desired_updates.append(("wifi.password", encrypt_credential(wifi_password_value)))
+        for field_name, value in desired_updates:
+            upsert_ont_desired_config_value(
                 db,
                 ont=ont,
                 field_name=field_name,
                 value=value,
                 reason="save_provision_settings",
             )
-        ont.tr069_olt_profile_id = tr069_profile_id_int
-        upsert_ont_config_override(
+        upsert_ont_desired_config_value(
             db,
             ont=ont,
             field_name="tr069.olt_profile_id",
@@ -1111,12 +1096,6 @@ def _bool_from_form(value: str | None) -> bool | None:
 def _enum_value(value: object) -> str | None:
     raw = getattr(value, "value", value)
     text = str(raw or "").strip()
-    return text or None
-
-
-def _adapter_default_str(defaults: dict[str, object], key: str) -> str | None:
-    value = defaults.get(key)
-    text = str(value or "").strip()
     return text or None
 
 

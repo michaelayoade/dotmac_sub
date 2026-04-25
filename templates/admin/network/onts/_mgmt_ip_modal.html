@@ -2,7 +2,7 @@
      role="dialog"
      aria-modal="true"
      aria-labelledby="mgmt-ip-modal-title"
-     x-data='{ open: true, mgmtIpMode: "{{ ont.mgmt_ip_mode.value if ont.mgmt_ip_mode else "inactive" }}" }'
+     x-data='{ open: true, mgmtIpMode: "{{ mgmt_ip_mode or "" }}" }'
      x-show="open" x-transition
      @keydown.escape.window="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())">
     <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
@@ -32,8 +32,7 @@
                         {% for mode in mgmt_ip_modes %}
                         <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                             <input type="radio" name="mgmt_ip_mode" value="{{ mode }}"
-                                   {% if ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == mode %}checked{% endif %}
-                                   {% if not ont.mgmt_ip_mode and mode == "inactive" %}checked{% endif %}
+                                   {% if mgmt_ip_mode == mode %}checked{% endif %}
                                    x-model="mgmtIpMode"
                                    class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             {{ mode | replace("_", " ") | title }}
@@ -43,13 +42,13 @@
                 </div>
 
                 {# Mgmt VLAN-ID #}
-                <div x-show="mgmtIpMode !== 'inactive'" x-transition x-cloak>
+                <div x-show="mgmtIpMode && mgmtIpMode !== 'inactive'" x-transition x-cloak>
                     <label for="mgmt_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Mgmt VLAN-ID</label>
                     <select name="mgmt_vlan_id" id="mgmt_vlan_id"
                             class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">-- None --</option>
                         {% for vlan in vlans %}
-                        <option value="{{ vlan.id }}" {% if ont.mgmt_vlan_id and (ont.mgmt_vlan_id | string) == (vlan.id | string) %}selected{% endif %}>
+                        <option value="{{ vlan.id }}" {% if mgmt_vlan and (mgmt_vlan | string) == (vlan.tag | string) %}selected{% endif %}>
                             {{ vlan | vlan_label }}
                         </option>
                         {% endfor %}
@@ -77,7 +76,7 @@
                                     class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <option value="">Select an available IP</option>
                                 {% for ip in available_mgmt_ips %}
-                                <option value="{{ ip.address }}" {% if ont.mgmt_ip_address == ip.address %}selected{% endif %}>
+                                <option value="{{ ip.address }}" {% if mgmt_ip_address == ip.address %}selected{% endif %}>
                                     {{ ip.address }}
                                 </option>
                                 {% endfor %}
@@ -86,7 +85,7 @@
                         </div>
                         <div x-show="useManual" x-cloak>
                             <input type="text" name="mgmt_ip_address_manual" id="mgmt_ip_address_manual"
-                                   value="{{ ont.mgmt_ip_address or '' }}"
+                                   value="{{ mgmt_ip_address or '' }}"
                                    @input="$el.form.querySelector('[name=mgmt_ip_address]').value = $el.value"
                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                                    placeholder="e.g. 192.168.1.100">
@@ -96,7 +95,7 @@
                     {% else %}
                     {# No pool configured - show text input #}
                     <input type="text" name="mgmt_ip_address" id="mgmt_ip_address"
-                           value="{{ ont.mgmt_ip_address or '' }}"
+                           value="{{ mgmt_ip_address or '' }}"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                            placeholder="e.g. 192.168.1.100">
                     {% if mgmt_ip_pool %}
@@ -106,7 +105,7 @@
                 </div>
 
                 {# Allow Remote Access #}
-                <div x-show="mgmtIpMode !== 'inactive'" x-transition x-cloak>
+                <div x-show="mgmtIpMode && mgmtIpMode !== 'inactive'" x-transition x-cloak>
                     <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
                         <input type="checkbox" name="mgmt_remote_access" value="true"
                                {% if ont.mgmt_remote_access %}checked{% endif %}

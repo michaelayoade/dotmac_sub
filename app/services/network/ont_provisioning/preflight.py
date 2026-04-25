@@ -86,8 +86,6 @@ def ont_authorization_ready(ont: OntUnit) -> tuple[bool, str, str]:
 def validate_prerequisites(
     db: Session,
     ont_id: str,
-    *,
-    tr069_olt_profile_id: int | None = None,
 ) -> dict:
     """Check prerequisites before provisioning."""
     checks: list[dict] = []
@@ -288,9 +286,7 @@ def validate_prerequisites(
     acs_enabled = bool(acs_server_id)
     tr069_required = tr069_credentials_present or acs_enabled
 
-    effective_tr069_profile_id = tr069_olt_profile_id
-    if effective_tr069_profile_id is None:
-        effective_tr069_profile_id = resolved_values.get("tr069_olt_profile_id")
+    effective_tr069_profile_id = resolved_values.get("tr069_olt_profile_id")
 
     if not tr069_required:
         tr069_status = "ok"
