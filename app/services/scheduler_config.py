@@ -25,6 +25,7 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.wait_for_ont_bootstrap",
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
+    "app.tasks.tr069.heal_online_silent_onts",
 }
 
 
@@ -812,6 +813,21 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_poll_minutes * 60, 60),
         )
 
+        # OLT health retry - auto-retry failed ping/SNMP connections
+        olt_health_retry_minutes = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "olt_health_retry_interval_minutes",
+            5,
+        )
+        _sync_scheduled_task(
+            session,
+            name="olt_health_retry",
+            task_name="app.tasks.olt_health_retry.retry_failed_olt_connections",
+            enabled=True,
+            interval_seconds=max(olt_health_retry_minutes * 60, 60),
+        )
+
         # ONT discovery/reconciliation (SNMP walk → match existing OntUnit rows,
         # repair topology, and skip unlinked observations).
         ont_discovery_minutes = _resolve_int(
@@ -1064,6 +1080,29 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.tr069.refresh_ont_runtime_data",
             enabled=tr069_runtime_enabled,
             interval_seconds=tr069_runtime_interval,
+        )
+
+        # TR-069 online-silent ONT healing - auto-connects ONTs online on OLT but silent in ACS
+        tr069_heal_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_heal_online_silent_enabled",
+            "TR069_HEAL_ONLINE_SILENT_ENABLED",
+            True,
+        )
+        tr069_heal_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_heal_online_silent_interval_seconds",
+            600,  # 10 minutes
+        )
+        tr069_heal_interval = max(tr069_heal_interval, 300)  # Min: 5 minutes
+        _sync_scheduled_task(
+            session,
+            name="tr069_heal_online_silent",
+            task_name="app.tasks.tr069.heal_online_silent_onts",
+            enabled=tr069_heal_enabled,
+            interval_seconds=tr069_heal_interval,
         )
 
         # Event retry - retries failed event handlers

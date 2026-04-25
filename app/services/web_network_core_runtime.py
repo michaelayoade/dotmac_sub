@@ -26,6 +26,69 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
+def _maybe_trigger_olt_retry(db: Session, device: NetworkDevice, check_type: str) -> None:
+    """Trigger immediate OLT retry if this device is linked to an OLT.
+
+    Only triggers on first failure (when down_since was just set).
+
+    Args:
+        db: Database session.
+        device: The NetworkDevice that failed.
+        check_type: "ping" or "snmp".
+    """
+    from sqlalchemy import select
+
+    from app.models.network import OLTDevice
+
+    # Only trigger on first failure (transition from healthy to failed)
+    if check_type == "ping" and device.ping_down_since is None:
+        return  # Not a new failure
+    if check_type == "snmp" and device.snmp_down_since is None:
+        return  # Not a new failure
+
+    # Find linked OLT by matching IP, hostname, or name
+    olt = None
+    if device.mgmt_ip:
+        olt = db.scalar(
+            select(OLTDevice).where(
+                OLTDevice.mgmt_ip == device.mgmt_ip,
+                OLTDevice.is_active.is_(True),
+            )
+        )
+    if olt is None and device.hostname:
+        olt = db.scalar(
+            select(OLTDevice).where(
+                OLTDevice.hostname == device.hostname,
+                OLTDevice.is_active.is_(True),
+            )
+        )
+    if olt is None and device.name:
+        olt = db.scalar(
+            select(OLTDevice).where(
+                OLTDevice.name == device.name,
+                OLTDevice.is_active.is_(True),
+            )
+        )
+
+    if olt:
+        try:
+            from app.tasks.olt_health_retry import trigger_immediate_retry
+
+            logger.info(
+                "Triggering immediate %s retry for OLT %s (device %s)",
+                check_type,
+                olt.name,
+                device.name,
+            )
+            trigger_immediate_retry(str(olt.id), delay_seconds=10)
+        except Exception as exc:
+            logger.warning(
+                "Failed to trigger immediate retry for OLT %s: %s",
+                olt.name,
+                exc,
+            )
+
+
 def _bounded_max_workers(max_workers: int) -> int:
     try:
         configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", ""))
@@ -192,6 +255,9 @@ def ping_device(
     now = datetime.now(UTC)
     ping_success, latency_ms = ping_service.run_ping(device.mgmt_ip, timeout_seconds=4)
 
+    # Track if this is a new failure for immediate retry trigger
+    was_healthy = device.ping_down_since is None
+
     device.last_ping_at = now
     device.last_ping_ok = ping_success
     delay_minutes = max(0, int(device.notification_delay_minutes or 0))
@@ -207,6 +273,9 @@ def ping_device(
             device.ping_down_since = now
         if _delay_elapsed(device.ping_down_since, now, delay_minutes):
             device.status = DeviceStatus.offline
+        # Trigger immediate retry if this is a new failure
+        if was_healthy:
+            _maybe_trigger_olt_retry(db, device, "ping")
     _record_ping_metric(
         db, device, now=now, success=ping_success, latency_ms=latency_ms
     )
@@ -265,6 +334,9 @@ def snmp_check_device(
     if not device.snmp_enabled:
         return device, None
 
+    # Track if this is a new failure for immediate retry trigger
+    was_healthy = device.snmp_down_since is None
+
     if not device.mgmt_ip and not device.hostname:
         device.last_snmp_at = now
         device.last_snmp_ok = False
@@ -275,6 +347,9 @@ def snmp_check_device(
                 device.status = DeviceStatus.offline
             elif device.status != DeviceStatus.offline:
                 device.status = DeviceStatus.degraded
+        # Trigger immediate retry if this is a new failure
+        if was_healthy:
+            _maybe_trigger_olt_retry(db, device, "snmp")
         db.flush()
         _recompute_parent_rollup(db, device)
         db.flush()
@@ -304,6 +379,9 @@ def snmp_check_device(
                 device.status = DeviceStatus.offline
             elif device.status != DeviceStatus.offline:
                 device.status = DeviceStatus.degraded
+        # Trigger immediate retry if this is a new failure
+        if was_healthy:
+            _maybe_trigger_olt_retry(db, device, "snmp")
         db.flush()
         _recompute_parent_rollup(db, device)
         db.flush()
