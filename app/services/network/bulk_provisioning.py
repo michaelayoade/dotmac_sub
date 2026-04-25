@@ -81,7 +81,6 @@ def _create_bulk_run(
     db: Session,
     *,
     ont_ids: list[uuid.UUID],
-    bundle_id: str | uuid.UUID | None,
     provisioning_mode: str,
     max_workers: int,
     initiated_by: str | None,
@@ -96,7 +95,6 @@ def _create_bulk_run(
             "input_skipped_count": input_skipped_count,
         }
     )
-    del bundle_id
     run = BulkProvisioningRun(
         profile_id=None,
         status=BulkProvisioningRunStatus.pending,
@@ -142,7 +140,6 @@ def bulk_provision_onts(
     db: Session,
     ont_ids: list[str | uuid.UUID],
     *,
-    bundle_id: str | uuid.UUID | None = None,
     provisioning_mode: str = "direct",
     tr069_olt_profile_id: int | None = None,
     max_workers: int = 10,
@@ -165,7 +162,6 @@ def bulk_provision_onts(
     run = _create_bulk_run(
         db,
         ont_ids=unique_ont_ids,
-        bundle_id=bundle_id,
         provisioning_mode="direct",
         max_workers=workers,
         initiated_by=initiated_by,

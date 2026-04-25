@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.network import (
     AuthorizationPreset,
     OLTDevice,
-    OntProvisioningProfile,
     Vlan,
 )
 from app.services.common import apply_ordering, coerce_uuid
@@ -101,7 +100,6 @@ class AuthorizationPresets:
         *,
         name: str,
         description: str | None = None,
-        provisioning_profile_id: str | None = None,
         line_profile_id: int | None = None,
         service_profile_id: int | None = None,
         default_vlan_id: str | None = None,
@@ -119,12 +117,6 @@ class AuthorizationPresets:
                 re.compile(serial_pattern)
             except re.error as e:
                 raise ValueError(f"Invalid regex pattern: {e}") from e
-
-        # Validate foreign keys exist
-        if provisioning_profile_id:
-            profile = db.get(OntProvisioningProfile, coerce_uuid(provisioning_profile_id))
-            if not profile:
-                raise ValueError("Provisioning profile not found")
 
         if default_vlan_id:
             vlan = db.get(Vlan, coerce_uuid(default_vlan_id))
@@ -153,7 +145,7 @@ class AuthorizationPresets:
         preset = AuthorizationPreset(
             name=name,
             description=description,
-            provisioning_profile_id=coerce_uuid(provisioning_profile_id) if provisioning_profile_id else None,
+            provisioning_profile_id=None,
             line_profile_id=line_profile_id,
             service_profile_id=service_profile_id,
             default_vlan_id=coerce_uuid(default_vlan_id) if default_vlan_id else None,
@@ -176,7 +168,6 @@ class AuthorizationPresets:
         *,
         name: str | None = None,
         description: str | None = None,
-        provisioning_profile_id: str | None = None,
         line_profile_id: int | None = None,
         service_profile_id: int | None = None,
         default_vlan_id: str | None = None,
@@ -186,7 +177,6 @@ class AuthorizationPresets:
         priority: int | None = None,
         is_active: bool | None = None,
         is_default: bool | None = None,
-        clear_provisioning_profile: bool = False,
         clear_default_vlan: bool = False,
         clear_olt_device: bool = False,
     ) -> AuthorizationPreset | None:
@@ -200,14 +190,8 @@ class AuthorizationPresets:
         if description is not None:
             preset.description = description
 
-        # Handle nullable foreign keys with explicit clear flags
-        if clear_provisioning_profile:
-            preset.provisioning_profile_id = None
-        elif provisioning_profile_id is not None:
-            profile = db.get(OntProvisioningProfile, coerce_uuid(provisioning_profile_id))
-            if not profile:
-                raise ValueError("Provisioning profile not found")
-            preset.provisioning_profile_id = profile.id
+        # Provisioning profile templates are retired; clear any old link on edit.
+        preset.provisioning_profile_id = None
 
         if clear_default_vlan:
             preset.default_vlan_id = None

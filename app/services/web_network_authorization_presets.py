@@ -232,7 +232,6 @@ def handle_update(
         priority=int(str(form_data.get("priority") or 0)),
         is_active=bool(form_data.get("is_active")),
         is_default=bool(form_data.get("is_default")),
-        clear_provisioning_profile=True,
         clear_default_vlan=not form_data.get("default_vlan_id"),
         clear_olt_device=not form_data.get("olt_device_id"),
     )

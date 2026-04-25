@@ -745,16 +745,11 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
 
     effective = resolve_effective_ont_config(db, ont)
     values = effective["values"]
-    selected_bundle_id = ""
-    profile_preview = None
 
     context = {
         "ont": ont,
         "ont_id": ont_id,
         "vlans": vlans,
-        "provisioning_profiles": [],
-        "selected_bundle_id": selected_bundle_id,
-        "profile_preview": profile_preview,
         # Current values from DB
         "wan_mode": values.get("wan_mode"),
         "wan_vlan_id": str(values.get("wan_vlan") or ""),
@@ -774,12 +769,6 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
     }
     context.update(mgmt_ip_choices)
     return context
-
-
-def profile_preview_context(db: Session, profile_id: str) -> dict[str, object]:
-    """Return obsolete profile preview context."""
-    return {"profile": None, "error": "Provisioning profiles are obsolete"}
-
 
 def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build display context for OLT-side ONT config."""

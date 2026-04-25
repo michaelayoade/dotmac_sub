@@ -938,7 +938,6 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "provisioning_profile": None,
         "tr069_profile": tr069_profile,
         "tr069_profile_error": tr069_error,
-        "selected_bundle_id": "",
         "selected_tr069_profile_id": getattr(tr069_profile, "profile_id", None),
         "selected_tr069_profile_name": getattr(tr069_profile, "name", None)
         or getattr(tr069_profile, "profile_name", None),
