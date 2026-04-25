@@ -343,7 +343,6 @@ def get_celery_config() -> dict:
             "app.tasks.olt_firmware.rollback": long_limits,
             "app.tasks.provisioning.run_bulk_activation_job": long_limits,
             "app.tasks.provisioning.run_service_migration_job": long_limits,
-            "app.tasks.provisioning.run_coordinated_provisioning_task": long_limits,
         }
     )
     config["task_annotations"] = annotations

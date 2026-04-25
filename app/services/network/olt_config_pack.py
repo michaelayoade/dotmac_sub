@@ -94,9 +94,6 @@ class OltConfigPack:
     cr_username: str | None = None
     cr_password: str | None = None
 
-    # Default provisioning profile (bundle)
-    default_provisioning_profile_id: str | None = None
-
     @property
     def has_authorization_profiles(self) -> bool:
         """True if both line and service profiles are configured."""
@@ -157,7 +154,6 @@ class OltConfigPack:
             "voip_gem_index": self.voip_gem_index,
             "iptv_gem_index": self.iptv_gem_index,
             "cr_username": self.cr_username,
-            "default_provisioning_profile_id": self.default_provisioning_profile_id,
             "is_complete": self.is_complete,
         }
 
@@ -207,12 +203,6 @@ def resolve_olt_config_pack(
         # Connection request credentials
         cr_username=olt.default_cr_username,
         cr_password=olt.default_cr_password,
-        # Default bundle
-        default_provisioning_profile_id=(
-            str(olt.default_provisioning_profile_id)
-            if olt.default_provisioning_profile_id
-            else None
-        ),
     )
 
 
@@ -407,12 +397,6 @@ def validate_config_pack_comprehensive(
     if not config_pack.cr_username or not config_pack.cr_password:
         validation.warnings.append(
             "Missing connection request credentials - ACS cannot push config changes"
-        )
-
-    # Default provisioning profile helps with consistent bundles
-    if config_pack.default_provisioning_profile_id is None:
-        validation.warnings.append(
-            "No default provisioning profile - each ONT needs manual bundle assignment"
         )
 
     return validation

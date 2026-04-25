@@ -325,30 +325,6 @@ def return_to_inventory(
     return result
 
 
-def apply_bundle(
-    db: Session, ont_id: str, bundle_id: str, *, request: Request | None = None
-) -> Any:
-    """Reject obsolete bundle template application."""
-    from app.services.network.ont_action_common import ActionResult
-
-    result = ActionResult(
-        success=False,
-        message="Bundle templates are obsolete. Save ONT desired_config directly.",
-    )
-    _log_action_audit(
-        db,
-        request=request,
-        action="apply_bundle",
-        ont_id=ont_id,
-        metadata={
-            "bundle_id": bundle_id,
-            "success": result.success,
-            "fields_updated": result.fields_updated,
-        },
-    )
-    return result
-
-
 def firmware_upgrade(
     db: Session, ont_id: str, firmware_image_id: str, *, request: Request | None = None
 ) -> ActionResult:

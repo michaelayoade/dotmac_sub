@@ -144,16 +144,6 @@
 
                     <div>
                         <label class="flex items-center gap-2">
-                            <input type="checkbox" name="supports_bundle_overrides" value="true"
-                                {% if form_values and form_values.supports_bundle_overrides %}checked{% elif item and item.supports_bundle_overrides %}checked{% elif not item and not form_values %}checked{% endif %}
-                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
-                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Allow Bundle Overrides</span>
-                        </label>
-                        <p class="mt-1 ml-6 text-xs text-slate-500 dark:text-slate-400">Allow per-ONT overrides on top of the default bundle.</p>
-                    </div>
-
-                    <div>
-                        <label class="flex items-center gap-2">
                             <input type="checkbox" name="is_active" value="true" {% if not item or item.is_active %}checked{% endif %}
                                 class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                             <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</span>

@@ -183,19 +183,3 @@ def queue_bulk_provisioning(
     }
     logger.info("Bulk direct provisioning queued: %s", stats)
     return stats
-
-
-@celery_app.task(name="app.tasks.ont_provisioning.detect_profile_drift")
-def detect_profile_drift() -> dict[str, int]:
-    """Legacy compatibility no-op after profile/bundle removal."""
-    logger.info("Skipping obsolete ONT profile drift detection")
-    return {"drifted": 0, "total_field_mismatches": 0, "errors": 0}
-
-
-@celery_app.task(name="app.tasks.ont_provisioning.auto_link_profiles")
-def auto_link_profiles() -> dict[str, int]:
-    """Legacy compatibility task retained as a no-op after bundle cutover."""
-    logger.info(
-        "Skipping legacy ONT auto-link task because bundle templates are materialized onto ONT desired state"
-    )
-    return {"linked": 0, "skipped": 0, "errors": 0}

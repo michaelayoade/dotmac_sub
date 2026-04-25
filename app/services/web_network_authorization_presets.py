@@ -13,7 +13,6 @@ from starlette.datastructures import FormData
 from app.models.network import (
     AuthorizationPreset,
     OLTDevice,
-    OntProvisioningProfile,
     Vlan,
 )
 from app.services.network.authorization_presets import authorization_presets
@@ -43,15 +42,6 @@ def _form_bool(form: FormData, key: str) -> bool:
 def _active_olts(db: Session) -> list[OLTDevice]:
     stmt = (
         select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
-    )
-    return list(db.scalars(stmt).all())
-
-
-def _active_provisioning_profiles(db: Session) -> list[OntProvisioningProfile]:
-    stmt = (
-        select(OntProvisioningProfile)
-        .where(OntProvisioningProfile.is_active.is_(True))
-        .order_by(OntProvisioningProfile.name)
     )
     return list(db.scalars(stmt).all())
 
@@ -130,7 +120,6 @@ def form_context(
         "active_menu": "network",
         "item": item,
         "olt_devices": _active_olts(db),
-        "provisioning_profiles": _active_provisioning_profiles(db),
         "vlans": _active_vlans(db),
         "action_url": (
             f"/admin/network/authorization-presets/{preset_id}/edit"
@@ -147,7 +136,6 @@ def parse_preset_form(form: FormData) -> dict[str, object]:
     return {
         "name": _form_str(form, "name"),
         "description": _form_str(form, "description") or None,
-        "provisioning_profile_id": _form_str(form, "provisioning_profile_id") or None,
         "line_profile_id": _form_int(form, "line_profile_id"),
         "service_profile_id": _form_int(form, "service_profile_id"),
         "default_vlan_id": _form_str(form, "default_vlan_id") or None,
@@ -191,9 +179,6 @@ def handle_create(
         db,
         name=str(form_data["name"]),
         description=str(form_data["description"]) if form_data.get("description") else None,
-        provisioning_profile_id=str(form_data["provisioning_profile_id"])
-        if form_data.get("provisioning_profile_id")
-        else None,
         line_profile_id=int(str(form_data["line_profile_id"]))
         if form_data.get("line_profile_id") is not None
         else None,
@@ -228,9 +213,6 @@ def handle_update(
         preset_id,
         name=str(form_data["name"]),
         description=str(form_data["description"]) if form_data.get("description") else None,
-        provisioning_profile_id=str(form_data["provisioning_profile_id"])
-        if form_data.get("provisioning_profile_id")
-        else None,
         line_profile_id=int(str(form_data["line_profile_id"]))
         if form_data.get("line_profile_id") is not None
         else None,
@@ -250,7 +232,7 @@ def handle_update(
         priority=int(str(form_data.get("priority") or 0)),
         is_active=bool(form_data.get("is_active")),
         is_default=bool(form_data.get("is_default")),
-        clear_provisioning_profile=not form_data.get("provisioning_profile_id"),
+        clear_provisioning_profile=True,
         clear_default_vlan=not form_data.get("default_vlan_id"),
         clear_olt_device=not form_data.get("olt_device_id"),
     )

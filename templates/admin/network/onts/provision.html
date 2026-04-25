@@ -6,24 +6,14 @@
 {% block content %}
 <div class="space-y-6"
      x-data='{
-        bundleId: {{ (selected_bundle_id or "") | tojson }},
         tr069ProfileId: {{ (selected_tr069_profile_id or "") | tojson }},
         missingPrerequisites() {
-            const issues = [];
-            if (!this.bundleId) issues.push("Select OLT provisioning profile");
-            return issues;
+            return [];
         },
         canSave() {
             return this.missingPrerequisites().length === 0;
         }
-     }'
-     x-init="
-        if (bundleId) {
-            $nextTick(() => {
-                htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/profile-preview?bundle_id=' + bundleId, {target: '#profile-preview-panel', swap: 'innerHTML'});
-            });
-        }
-     ">
+     }">
 
     <div>
         <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
@@ -142,48 +132,6 @@
             </div>
             {% endcall %}
 
-            {% call card("OLT provisioning profile", color="blue") %}
-            <div class="space-y-2">
-                {% for profile in profiles %}
-                <label class="flex cursor-pointer items-center gap-4 rounded-xl border p-4 transition-all"
-                       :class="bundleId === '{{ profile.id }}' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-500/20 dark:border-blue-400 dark:bg-blue-900/20' : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600'">
-                    <input type="radio" name="profile_radio" value="{{ profile.id }}"
-                           x-model="bundleId"
-                           hx-get="/admin/network/onts/{{ ont.id }}/profile-preview?bundle_id={{ profile.id }}"
-                           hx-target="#profile-preview-panel"
-                           hx-swap="innerHTML"
-                           class="text-blue-600 focus:ring-blue-500">
-                    <div class="min-w-0 flex-1">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ profile.name }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">
-                            {{ profile.profile_type.value | title if profile.profile_type else 'General' }}
-                            &middot; {{ profile.config_method.value | upper if profile.config_method else 'OLT' }}
-                            {% if profile.authorization_line_profile_id is not none and profile.authorization_service_profile_id is not none %}
-                            &middot; line {{ profile.authorization_line_profile_id }} / service {{ profile.authorization_service_profile_id }}
-                            {% endif %}
-                        </p>
-                    </div>
-                    {% if selected_bundle_id and selected_bundle_id|string == profile.id|string %}
-                    <span class="text-[10px] font-bold uppercase text-blue-600 dark:text-blue-400">Selected</span>
-                    {% endif %}
-                </label>
-                {% endfor %}
-                {% if not profiles %}
-                <div class="py-6 text-center">
-                    <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No OLT provisioning profiles are available.</p>
-                </div>
-                {% endif %}
-            </div>
-            <div id="profile-preview-panel" class="mt-4">
-                {% if selected_bundle_id %}
-                <p class="text-sm text-slate-500 dark:text-slate-400">Loading profile details...</p>
-                {% else %}
-                <p class="text-sm text-slate-500 dark:text-slate-400">Select a profile to see OLT-side VLAN, GEM, and profile settings.</p>
-                {% endif %}
-            </div>
-            {% endcall %}
-
             {% call card("OLT TR-069 profile", color="blue") %}
             <div>
                 <label for="tr069_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">TR-069 Profile</label>
@@ -214,11 +162,11 @@
                     <div>
                         <h3 class="text-sm font-semibold"
                             :class="canSave() ? 'text-emerald-900 dark:text-emerald-200' : 'text-amber-900 dark:text-amber-200'">
-                            Network profile gate
+                            OLT desired config gate
                         </h3>
                         <p class="mt-1 text-sm"
                            :class="canSave() ? 'text-emerald-800 dark:text-emerald-300' : 'text-amber-800 dark:text-amber-300'">
-                            Save the selected OLT network profile before authorization.
+                            Save explicit OLT desired-config selections before authorization.
                         </p>
                     </div>
                     <span class="rounded-md px-2 py-1 text-xs font-semibold"
@@ -239,14 +187,13 @@
 
             <form method="POST" action="/admin/network/onts/{{ ont.id }}/save-provision-settings">
                 {% include "components/forms/csrf_input.html" %}
-                <input type="hidden" name="bundle_id" :value="bundleId">
                 <input type="hidden" name="tr069_profile_id" :value="tr069ProfileId">
                 <button type="submit"
                     :disabled="!canSave()"
                     :class="canSave() ? 'bg-blue-600 text-white hover:bg-blue-700' : 'cursor-not-allowed bg-slate-300 text-slate-500 dark:bg-slate-700 dark:text-slate-400'"
                     class="inline-flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-semibold shadow-sm transition-colors">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                    Save OLT Profile
+                    Save OLT Desired Config
                 </button>
                 <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
                     This does not configure customer internet service, PPPoE, LAN, DHCP, or WiFi.

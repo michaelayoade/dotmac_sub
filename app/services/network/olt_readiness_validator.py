@@ -56,16 +56,6 @@ class ValidationIssue:
 
 
 @dataclass
-class BundleValidationResult:
-    """Legacy validation result retained for report shape compatibility."""
-
-    bundle_id: str
-    bundle_name: str
-    is_valid: bool = True
-    issues: list[ValidationIssue] = field(default_factory=list)
-
-
-@dataclass
 class OltReadinessReport:
     """Complete readiness report for an OLT."""
 
@@ -73,7 +63,6 @@ class OltReadinessReport:
     olt_name: str
     is_ready: bool = True
     issues: list[ValidationIssue] = field(default_factory=list)
-    bundles: list[BundleValidationResult] = field(default_factory=list)
     connectivity_tested: bool = False
     ssh_ok: bool | None = None
     snmp_ok: bool | None = None
@@ -101,18 +90,6 @@ class OltReadinessReport:
             "warnings": [
                 {"category": i.category, "message": i.message, "code": i.code}
                 for i in self.warnings
-            ],
-            "bundles": [
-                {
-                    "id": b.bundle_id,
-                    "name": b.bundle_name,
-                    "is_valid": b.is_valid,
-                    "issues": [
-                        {"category": i.category, "message": i.message, "code": i.code}
-                        for i in b.issues
-                    ],
-                }
-                for b in self.bundles
             ],
             "connectivity": {
                 "tested": self.connectivity_tested,
@@ -296,148 +273,6 @@ def _validate_olt_vendor_model(olt: object, report: OltReadinessReport) -> None:
             )
         )
 
-
-def _validate_bundle(
-    db: Session,
-    profile: object,
-    olt: object,
-) -> BundleValidationResult:
-    """Validate a legacy provisioning bundle has required data."""
-    result = BundleValidationResult(
-        bundle_id=str(getattr(profile, "id", "")),
-        bundle_name=getattr(profile, "name", "Unnamed"),
-    )
-
-    is_active = getattr(profile, "is_active", False)
-    if not is_active:
-        result.issues.append(
-            ValidationIssue(
-                category="bundle",
-                message="Bundle is inactive",
-                severity=IssueSeverity.info,
-                code="INACTIVE",
-            )
-        )
-        # Don't validate inactive bundles further
-        return result
-
-    # Check authorization profiles (required for Huawei)
-    vendor = getattr(olt, "vendor", "").lower()
-    if "huawei" in vendor:
-        line_profile = getattr(profile, "authorization_line_profile_id", None)
-        service_profile = getattr(profile, "authorization_service_profile_id", None)
-
-        if not line_profile:
-            result.issues.append(
-                ValidationIssue(
-                    category="bundle",
-                    message="Missing authorization line profile ID",
-                    severity=IssueSeverity.blocking,
-                    code="NO_LINE_PROFILE",
-                    field="authorization_line_profile_id",
-                )
-            )
-            result.is_valid = False
-
-        if not service_profile:
-            result.issues.append(
-                ValidationIssue(
-                    category="bundle",
-                    message="Missing authorization service profile ID",
-                    severity=IssueSeverity.blocking,
-                    code="NO_SERVICE_PROFILE",
-                    field="authorization_service_profile_id",
-                )
-            )
-            result.is_valid = False
-
-    # Check VLANs exist
-    _validate_bundle_vlans(db, profile, result)
-
-    # Check IP pool availability
-    _validate_bundle_ip_pool(db, profile, result)
-
-    return result
-
-
-def _validate_bundle_vlans(
-    db: Session,
-    profile: object,
-    result: BundleValidationResult,
-) -> None:
-    """Validate bundle VLANs exist and are active."""
-    from app.models.network import Vlan
-
-    vlan_fields = [
-        ("data_vlan_id", "Data VLAN"),
-        ("mgmt_vlan_id", "Management VLAN"),
-        ("voip_vlan_id", "VoIP VLAN"),
-        ("iptv_vlan_id", "IPTV VLAN"),
-    ]
-
-    for field_name, label in vlan_fields:
-        vlan_id = getattr(profile, field_name, None)
-        if vlan_id:
-            vlan = db.scalars(
-                select(Vlan).where(Vlan.vlan_id == vlan_id)
-            ).first()
-            if not vlan:
-                result.issues.append(
-                    ValidationIssue(
-                        category="vlan",
-                        message=f"{label} {vlan_id} does not exist in database",
-                        severity=IssueSeverity.warning,
-                        code="VLAN_NOT_FOUND",
-                        field=field_name,
-                    )
-                )
-            elif not getattr(vlan, "is_active", True):
-                result.issues.append(
-                    ValidationIssue(
-                        category="vlan",
-                        message=f"{label} {vlan_id} is inactive",
-                        severity=IssueSeverity.warning,
-                        code="VLAN_INACTIVE",
-                        field=field_name,
-                    )
-                )
-
-
-def _validate_bundle_ip_pool(
-    db: Session,
-    profile: object,
-    result: BundleValidationResult,
-) -> None:
-    """Validate IP pool has available addresses."""
-    from app.models.network import IpPool
-
-    mgmt_ip_mode = getattr(profile, "mgmt_ip_mode", None)
-    mgmt_ip_pool_id = getattr(profile, "mgmt_ip_pool_id", None)
-
-    if mgmt_ip_mode == "static_ip" and mgmt_ip_pool_id:
-        pool = db.get(IpPool, mgmt_ip_pool_id)
-        if not pool:
-            result.issues.append(
-                ValidationIssue(
-                    category="ip_pool",
-                    message="Management IP pool not found",
-                    severity=IssueSeverity.blocking,
-                    code="POOL_NOT_FOUND",
-                    field="mgmt_ip_pool_id",
-                )
-            )
-            result.is_valid = False
-        elif not getattr(pool, "is_active", True):
-            result.issues.append(
-                ValidationIssue(
-                    category="ip_pool",
-                    message=f"Management IP pool '{pool.name}' is inactive",
-                    severity=IssueSeverity.blocking,
-                    code="POOL_INACTIVE",
-                    field="mgmt_ip_pool_id",
-                )
-            )
-            result.is_valid = False
         else:
             available = getattr(pool, "available_count", None)
             if available is not None and available <= 0:

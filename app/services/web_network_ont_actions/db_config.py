@@ -60,11 +60,10 @@ def _upsert_override(
     set_desired_config_value(ont, field_name, _normalize_override_value(value))
 
 
-def _persist_bundle_authoring_state(
+def _persist_desired_config_state(
     db: Session,
     *,
     ont,
-    bundle_id: str | None,
     wan_mode: str | None,
     wan_vlan_tag: int | None,
     config_method: str | None,
@@ -78,9 +77,6 @@ def _persist_bundle_authoring_state(
     wifi_channel: str | None,
     wifi_security_mode: str | None,
 ) -> None:
-    if bundle_id:
-        raise ValueError("Bundle templates are obsolete. Save ONT desired_config directly.")
-
     for field_name, value in {
         "device.config_method": config_method,
         "wan.ip_protocol": ip_protocol,
@@ -102,7 +98,6 @@ def update_ont_config(
     db: Session,
     ont_id: str,
     *,
-    bundle_id: str | None = None,
     wan_mode: str | None = None,
     wan_vlan_id: str | None = None,
     config_method: str | None = None,
@@ -184,10 +179,9 @@ def update_ont_config(
         )
 
     try:
-        _persist_bundle_authoring_state(
+        _persist_desired_config_state(
             db,
             ont=ont,
-            bundle_id=bundle_id,
             wan_mode=wan_mode,
             wan_vlan_tag=wan_vlan_tag,
             config_method=config_method,

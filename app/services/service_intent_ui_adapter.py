@@ -58,23 +58,6 @@ class ServiceIntentUiAdapter:
 
         return acs_service_intent_adapter.build_observed_intent(summary)
 
-    def apply_bundle_to_ont(
-        self,
-        db: Session,
-        *,
-        ont_id: str,
-        bundle_id: str,
-        create_wan_instances: bool = True,
-        push_to_device: bool = False,
-    ) -> object:
-        """Reject obsolete bundle application."""
-        from app.services.network.ont_action_common import ActionResult
-
-        return ActionResult(
-            success=False,
-            message="Bundle templates are obsolete. Save ONT desired_config directly.",
-        )
-
     def resolve_effective_tr069_profile(
         self, db: Session, *, ont: object
     ) -> tuple[object | None, str | None]:

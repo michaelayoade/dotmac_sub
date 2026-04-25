@@ -88,7 +88,6 @@ from app.services.web_network_ont_actions.diagnostics import (
 # Inventory management
 from app.services.web_network_ont_actions.inventory import (
     _cleanup_olt_state_for_return,
-    apply_bundle,
     firmware_upgrade,
     return_to_inventory,
     return_to_inventory_for_web,
@@ -170,7 +169,6 @@ __all__ = [
     "wan_config_context",
     "wifi_config_context",
     # Inventory
-    "apply_bundle",
     "firmware_upgrade",
     "return_to_inventory",
     "return_to_inventory_for_web",

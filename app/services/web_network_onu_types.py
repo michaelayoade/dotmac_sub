@@ -11,7 +11,6 @@ from starlette.datastructures import FormData
 
 from app.models.network import (
     GponChannel,
-    OntProvisioningProfile,
     OnuCapability,
     OnuType,
     PonType,
@@ -80,11 +79,6 @@ def form_context(
         .where(VendorModelCapability.is_active.is_(True))
         .order_by(VendorModelCapability.vendor, VendorModelCapability.model)
     ).all()
-    provisioning_bundles = db.scalars(
-        select(OntProvisioningProfile)
-        .where(OntProvisioningProfile.is_active.is_(True))
-        .order_by(OntProvisioningProfile.name)
-    ).all()
     return {
         "request": request,
         "active_page": "onu-types",
@@ -94,7 +88,6 @@ def form_context(
         "gpon_channels": list(GponChannel),
         "capabilities": list(OnuCapability),
         "vendor_capabilities": vendor_capabilities,
-        "provisioning_bundles": provisioning_bundles,
         "action_url": (
             f"/admin/network/onu-types/{onu_type_id}/edit"
             if onu_type_id
@@ -119,10 +112,6 @@ def parse_form_values(form: FormData) -> dict[str, object]:
         "capability": _form_str(form, "capability"),
         "vendor_model_capability_id": _form_uuid_str(
             form, "vendor_model_capability_id"
-        ),
-        "default_bundle_id": _form_uuid_str(form, "default_bundle_id"),
-        "supports_bundle_overrides": (
-            _form_str(form, "supports_bundle_overrides") == "true"
         ),
         "is_active": _form_str(form, "is_active") == "true",
         "notes": _form_str(form, "notes") or None,
@@ -177,14 +166,6 @@ def validate_form(values: dict[str, object], db: Session | None = None) -> str |
             return "Invalid vendor capability map."
         if db and not db.get(VendorModelCapability, capability_id):
             return "Selected vendor capability map was not found."
-    default_bundle_id = values.get("default_bundle_id")
-    if default_bundle_id:
-        try:
-            bundle_id = coerce_uuid(str(default_bundle_id))
-        except ValueError:
-            return "Invalid default configuration bundle."
-        if db and not db.get(OntProvisioningProfile, bundle_id):
-            return "Selected default configuration bundle was not found."
     return None
 
 
@@ -206,12 +187,8 @@ def handle_create(db: Session, form_data: dict[str, object]) -> OnuType:
             if form_data.get("vendor_model_capability_id")
             else None
         ),
-        default_bundle_id=(
-            coerce_uuid(str(form_data["default_bundle_id"]))
-            if form_data.get("default_bundle_id")
-            else None
-        ),
-        supports_bundle_overrides=bool(form_data.get("supports_bundle_overrides")),
+        default_bundle_id=None,
+        supports_bundle_overrides=False,
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
         # ACS Config Pack
@@ -252,12 +229,8 @@ def handle_update(
             if form_data.get("vendor_model_capability_id")
             else None
         ),
-        default_bundle_id=(
-            coerce_uuid(str(form_data["default_bundle_id"]))
-            if form_data.get("default_bundle_id")
-            else None
-        ),
-        supports_bundle_overrides=bool(form_data.get("supports_bundle_overrides")),
+        default_bundle_id=None,
+        supports_bundle_overrides=False,
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
         # ACS Config Pack

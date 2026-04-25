@@ -327,7 +327,7 @@ def configure_management_ip(
 def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool, str]:
     """Bind TR-069 server profile to ONT via OLT."""
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.ont_provision_steps import queue_wait_tr069_bootstrap
+    from app.services.network.ont_provision_steps import wait_tr069_bootstrap
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -344,7 +344,18 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     message = bind_result.message
     if ok:
         try:
+            from app.services.network.ont_desired_config import (
+                upsert_ont_desired_config_value,
+            )
+
             ont.tr069_olt_profile_id = profile_id
+            upsert_ont_desired_config_value(
+                db,
+                ont=ont,
+                field_name="tr069.olt_profile_id",
+                value=profile_id,
+                reason="manual_bind_tr069_profile",
+            )
             db.add(ont)
             db.flush()
             _persist_ont_plan_step(
@@ -353,7 +364,7 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
                 "bind_tr069",
                 {"tr069_olt_profile_id": profile_id},
             )
-            wait_result = queue_wait_tr069_bootstrap(db, ont_id)
+            wait_result = wait_tr069_bootstrap(db, ont_id)
             message = f"{message}; {wait_result.message}"
         except Exception as exc:
             logger.warning(

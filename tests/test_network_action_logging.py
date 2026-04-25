@@ -64,7 +64,6 @@ def test_log_network_action_result_ignores_successes(caplog):
 
 def test_validate_provision_form_fields_blocks_incomplete_config():
     issues = validate_provision_form_fields(
-        profile_id=None,
         onu_mode="routing",
         mgmt_vlan_id=None,
         mgmt_ip_mode="static",
@@ -89,7 +88,6 @@ def test_validate_provision_form_fields_blocks_incomplete_config():
         wifi_password="short",
     )
 
-    assert "Select service profile" in issues
     assert "Select management VLAN" in issues
     assert "Management subnet is required" in issues
     assert "Management gateway is invalid" in issues
@@ -103,7 +101,6 @@ def test_validate_provision_form_fields_blocks_incomplete_config():
 
 def test_validate_provision_form_fields_allows_complete_dhcp_config():
     issues = validate_provision_form_fields(
-        profile_id="profile-1",
         onu_mode="routing",
         mgmt_vlan_id="mgmt-vlan",
         mgmt_ip_mode="dhcp",

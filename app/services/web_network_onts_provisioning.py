@@ -396,20 +396,6 @@ def _ip_pool_scope_for_ont_error(
     return None
 
 
-def profile_preview_context(
-    db: Session,
-    *,
-    bundle_id: str,
-) -> dict[str, object] | None:
-    """Provisioning profile previews are obsolete after desired_config."""
-    del db, bundle_id
-    return {
-        "error": "Provisioning bundles were removed. Configure OntUnit.desired_config instead.",
-        "profile": None,
-        "wan_services": [],
-    }
-
-
 def _effective_tr069_profile_id(
     db: Session,
     *,
@@ -431,7 +417,6 @@ def provisioning_preview_context(
     db: Session,
     *,
     ont_id: str,
-    bundle_id: str | None,
     tr069_profile_id: int | None,
 ) -> dict[str, object]:
     """Return command-preview context for desired-config provisioning."""
@@ -440,7 +425,6 @@ def provisioning_preview_context(
         ont_id=ont_id,
         tr069_profile_id=tr069_profile_id,
     )
-    del bundle_id
     return {
         "ont_id": ont_id,
         "tr069_olt_profile_id": effective_tr069_profile_id,
@@ -452,7 +436,6 @@ def preflight_result(
     db: Session,
     *,
     ont_id: str,
-    bundle_id: str | None,
     tr069_profile_id: int | None,
 ) -> dict[str, object]:
     """Run provisioning preflight using OLT defaults and desired_config."""
@@ -461,11 +444,9 @@ def preflight_result(
         ont_id=ont_id,
         tr069_profile_id=tr069_profile_id,
     )
-    del bundle_id
     return validate_prerequisites(
         db,
         ont_id,
-        bundle_id=None,
         tr069_olt_profile_id=effective_tr069_profile_id,
     )
 
@@ -474,7 +455,6 @@ def save_provision_settings(
     db: Session,
     *,
     ont_id: str,
-    bundle_id: str | None,
     tr069_profile_id: str | None,
     onu_mode: str | None,
     mgmt_vlan_id: str | None,
@@ -513,7 +493,6 @@ def save_provision_settings(
         )
 
     onu_mode_value = (onu_mode or "").strip().lower() or None
-    del bundle_id
     tr069_profile_id_value = (tr069_profile_id or "").strip() or None
     mgmt_vlan_id_value = (mgmt_vlan_id or "").strip() or None
     mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower() or None
@@ -756,7 +735,6 @@ def save_provision_settings(
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
     field_issues = validate_provision_form_fields(
-        bundle_id=None,
         onu_mode=onu_mode_value,
         mgmt_vlan_id=mgmt_vlan_id_value,
         mgmt_ip_mode=mgmt_ip_mode_value,
@@ -1054,7 +1032,6 @@ def save_provision_settings(
 
 def validate_provision_form_fields(
     *,
-    bundle_id: str | None,
     onu_mode: str | None,
     mgmt_vlan_id: str | None,
     mgmt_ip_mode: str | None,
@@ -1084,7 +1061,6 @@ def validate_provision_form_fields(
     mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower()
     wan_protocol_value = (wan_protocol or "").strip().lower()
 
-    del bundle_id
     if onu_mode_value not in {OnuMode.routing.value, OnuMode.bridging.value}:
         issues.append("Select ONU mode")
     if not mgmt_vlan_id:

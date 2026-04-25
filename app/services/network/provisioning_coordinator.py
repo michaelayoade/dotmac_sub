@@ -718,129 +718,20 @@ def queue_provisioning(
     initiated_by: str | None = None,
     request: Request | None = None,
 ) -> AsyncProvisioningResult:
-    """Queue the complete provisioning workflow as a tracked operation.
+    """Retired F/S/P provisioning queue entry point.
 
-    This queues a Celery task that uses ProvisioningCoordinator to execute
-    all provisioning steps. Progress is tracked via NetworkOperation.
-
-    Args:
-        db: Database session
-        olt_id: OLT device ID
-        fsp: Frame/Slot/Port location
-        serial_number: ONT serial number
-        force_reauthorize: Delete existing registration first
-        initiated_by: User/system that initiated
-        request: HTTP request for audit
-
-    Returns:
-        AsyncProvisioningResult with operation tracking info
+    Authorization and reauthorization are now explicit OLT actions. ONT
+    provisioning is queued by ONT id through ``app.tasks.ont_provisioning`` and
+    resolves intent from OLT defaults plus ``OntUnit.desired_config``.
     """
-    from app.models.network_operation import (
-        NetworkOperation,
-        NetworkOperationStatus,
-        NetworkOperationTargetType,
-        NetworkOperationType,
+    del db, olt_id, fsp, serial_number, force_reauthorize, initiated_by, request
+    return AsyncProvisioningResult(
+        queued=False,
+        message=(
+            "The legacy OLT/F/S/P provisioning queue was retired. Authorize the "
+            "ONT first, then queue app.tasks.ont_provisioning.provision_ont by ONT id."
+        ),
     )
-    from app.services.network_operations import network_operations
-
-    if initiated_by is None and request is not None:
-        from app.services.network.action_logging import actor_label
-
-        initiated_by = actor_label(request)
-
-    normalized_serial = str(serial_number).replace("-", "").strip().upper()
-    mode = "force" if force_reauthorize else "normal"
-    correlation_key = f"provision:{mode}:{olt_id}:{fsp}:{normalized_serial}"
-
-    try:
-        op = network_operations.start(
-            db,
-            NetworkOperationType.ont_provision,
-            NetworkOperationTargetType.olt,
-            olt_id,
-            correlation_key=correlation_key,
-            initiated_by=initiated_by,
-            input_payload={
-                "phase": "provisioning",
-                "title": "ONT Provisioning",
-                "message": "Queued complete provisioning workflow.",
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force_reauthorize,
-            },
-        )
-    except Exception as exc:
-        # Check if already in progress
-        from fastapi import HTTPException
-
-        if isinstance(exc, HTTPException) and exc.status_code == 409:
-            from sqlalchemy import select
-
-            existing = db.scalars(
-                select(NetworkOperation.id).where(
-                    NetworkOperation.correlation_key == correlation_key,
-                    NetworkOperation.status.in_(
-                        (
-                            NetworkOperationStatus.pending,
-                            NetworkOperationStatus.running,
-                            NetworkOperationStatus.waiting,
-                        )
-                    ),
-                )
-            ).first()
-            return AsyncProvisioningResult(
-                queued=True,
-                message="Provisioning is already in progress.",
-                operation_id=str(existing) if existing else None,
-                correlation_key=correlation_key,
-            )
-        raise
-
-    network_operations.mark_waiting(db, str(op.id), "Queued provisioning workflow.")
-    db.commit()
-
-    try:
-        from app.services.queue_adapter import enqueue_task
-
-        dispatch = enqueue_task(
-            "app.tasks.provisioning.run_coordinated_provisioning_task",
-            args=[str(op.id), olt_id, fsp, serial_number],
-            kwargs={
-                "force_reauthorize": force_reauthorize,
-            },
-            correlation_id=correlation_key,
-            source="provisioning_coordinator",
-        )
-        if not dispatch.queued:
-            raise RuntimeError(dispatch.error or "Failed to queue provisioning task")
-
-        return AsyncProvisioningResult(
-            queued=True,
-            message="Provisioning workflow queued. Track progress in operation history.",
-            operation_id=str(op.id),
-            correlation_key=correlation_key,
-        )
-
-    except Exception as exc:
-        network_operations.mark_failed(
-            db,
-            str(op.id),
-            f"Failed to queue provisioning: {exc}",
-        )
-        db.commit()
-        logger.error(
-            "Failed to queue provisioning for %s on %s: %s",
-            serial_number,
-            olt_id,
-            exc,
-            exc_info=True,
-        )
-        return AsyncProvisioningResult(
-            queued=False,
-            message=f"Failed to queue provisioning: {exc}",
-            operation_id=str(op.id),
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -857,17 +748,13 @@ def provision_ont_sync(
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> ProvisioningResult:
-    """Execute synchronous provisioning (blocking).
-
-    Use this for testing or when Celery is unavailable.
-    For production, prefer queue_provisioning().
-    """
-    coordinator = ProvisioningCoordinator(db, request=request)
-    return coordinator.provision_ont(
-        olt_id,
-        fsp,
-        serial_number,
-        force_reauthorize=force_reauthorize,
+    """Retired synchronous F/S/P provisioning wrapper."""
+    del db, olt_id, fsp, serial_number, force_reauthorize, request
+    return ProvisioningResult(
+        success=False,
+        message=(
+            "The legacy OLT/F/S/P provisioning wrapper was retired. Use "
+            "provision_ont_from_desired_config() with an ONT id."
+        ),
     )
-
 

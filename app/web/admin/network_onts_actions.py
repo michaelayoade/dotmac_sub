@@ -518,39 +518,6 @@ def ont_factory_reset(
 
 
 @router.post(
-    "/onts/{ont_id}/apply-bundle",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_apply_bundle(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
-    """Reject obsolete provisioning-bundle apply requests."""
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-    form = parse_form_data_sync(request)
-    bundle_id = _form_str(form, "bundle_id")
-    if not bundle_id:
-        return _action_json_response(
-            success=False,
-            message="Provisioning bundles were removed. Edit desired_config instead.",
-            action="Apply Provisioning Bundle",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    result = web_network_ont_actions_service.apply_bundle(
-        db, ont_id, bundle_id, request=request
-    )
-    return _action_result_response(
-        result=result,
-        request=request,
-        ont_id=ont_id,
-        action="Apply Provisioning Bundle",
-    )
-
-
-@router.post(
     "/onts/{ont_id}/firmware-upgrade",
     dependencies=[Depends(require_permission("network:write"))],
 )

@@ -603,10 +603,10 @@ def reconcile_operational_state(
     ):
         try:
             from app.services.network.ont_provision_steps import (
-                queue_wait_tr069_bootstrap,
+                wait_tr069_bootstrap,
             )
 
-            wait_result = queue_wait_tr069_bootstrap(db, ont_id)
+            wait_result = wait_tr069_bootstrap(db, ont_id)
             messages.append(wait_result.message)
             success = success or wait_result.success
         except Exception as exc:

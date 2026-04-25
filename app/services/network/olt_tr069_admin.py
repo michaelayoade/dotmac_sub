@@ -626,10 +626,10 @@ def handle_rebind_tr069_profiles(
             rebound += 1
             try:
                 from app.services.network.ont_provision_steps import (
-                    queue_wait_tr069_bootstrap,
+                    wait_tr069_bootstrap,
                 )
 
-                wait_result = queue_wait_tr069_bootstrap(db, str(ont.id))
+                wait_result = wait_tr069_bootstrap(db, str(ont.id))
                 logger.info(
                     "Queued TR-069 bootstrap wait after OLT rebind: olt_id=%s ont_id=%s serial=%s message=%s",
                     olt_id,

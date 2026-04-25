@@ -249,7 +249,12 @@ def test_apply_saved_service_config_uses_desired_config_for_pppoe(
     ont = OntUnit(
         serial_number="DESIRED-CFG-004",
         desired_config={
-            "tr069": {"acs_server_id": "acs-1", "olt_profile_id": 30},
+            "tr069": {
+                "acs_server_id": "acs-1",
+                "olt_profile_id": 30,
+                "cr_username": "cr-user",
+                "cr_password": "cr-pass",
+            },
             "wan": {
                 "mode": "pppoe",
                 "vlan": 100,
@@ -279,6 +284,15 @@ def test_apply_saved_service_config_uses_desired_config_for_pppoe(
     monkeypatch.setattr(
         "app.services.network.ont_action_wan.set_pppoe_credentials",
         fake_set_pppoe,
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps._acs_config_writer",
+        lambda: SimpleNamespace(
+            set_connection_request_credentials=lambda *args, **kwargs: SimpleNamespace(
+                success=True,
+                message="credentials pushed",
+            )
+        ),
     )
 
     result = apply_saved_service_config(db_session, str(ont.id))
@@ -316,7 +330,11 @@ def test_apply_saved_service_config_skips_wan_when_wan_mode_absent(
 
     result = apply_saved_service_config(db_session, str(ont.id))
 
-    assert result.success is True
+    assert result.success is False
+    assert result.message == "Saved ONT service config is incomplete."
+    assert result.data["needs_input"] == [
+        "Connection request credentials are incomplete in desired_config/OLT defaults."
+    ]
     assert "probe_wan_capabilities" not in {
         step["step"] for step in result.data.get("steps", [])
     }
@@ -389,7 +407,6 @@ def test_save_provision_settings_persists_tr069_profile_to_desired_config(
     result = save_provision_settings(
         db_session,
         ont_id=str(ont.id),
-        bundle_id=None,
         tr069_profile_id="42",
         onu_mode=None,
         mgmt_vlan_id=None,
@@ -421,3 +438,91 @@ def test_save_provision_settings_persists_tr069_profile_to_desired_config(
 
     assert result.status_code == 200
     assert ont.desired_config["tr069"]["olt_profile_id"] == 42
+
+
+def test_manual_step_bind_tr069_persists_profile_to_desired_config(
+    db_session, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.models.network import OntUnit
+    from app.services.network.ont_provisioning.result import StepResult
+    from app.web.admin import network_onts_provisioning
+
+    ont = OntUnit(serial_number="DESIRED-CFG-TR069-BIND", desired_config={})
+    db_session.add(ont)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.bind_tr069",
+        lambda *args, **kwargs: StepResult("bind_tr069", True, "bound"),
+    )
+    monkeypatch.setattr(
+        network_onts_provisioning,
+        "_update_service_order_execution_context_for_ont",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        network_onts_provisioning,
+        "_record_ont_step_action",
+        lambda *args, **kwargs: None,
+    )
+
+    response = network_onts_provisioning.step_bind_tr069(
+        SimpleNamespace(headers={}),
+        str(ont.id),
+        tr069_olt_profile_id=77,
+        db=db_session,
+    )
+
+    assert response.status_code == 200
+    assert ont.desired_config["tr069"]["olt_profile_id"] == 77
+
+
+def test_direct_provision_route_ignores_posted_tr069_profile_override(
+    db_session, monkeypatch
+):
+    import inspect
+    from types import SimpleNamespace
+
+    from app.web.admin import network_onts_provisioning
+
+    captured: dict[str, object] = {}
+    signature = inspect.signature(network_onts_provisioning.provision_ont_direct)
+    assert "tr069_olt_profile_id" not in signature.parameters
+
+    monkeypatch.setattr(
+        "app.services.network.action_logging.actor_label",
+        lambda request: "admin",
+    )
+
+    def fake_provision(db, ont_id, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            success=True,
+            message="ok",
+            duration_ms=1,
+            steps=[],
+            failed_step=None,
+            to_dict=lambda: {"success": True},
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        fake_provision,
+    )
+    monkeypatch.setattr(
+        network_onts_provisioning,
+        "log_network_action_result",
+        lambda *args, **kwargs: None,
+    )
+
+    response = network_onts_provisioning.provision_ont_direct(
+        SimpleNamespace(headers={}),
+        "ont-1",
+        async_execution=False,
+        db=db_session,
+    )
+
+    assert response.status_code == 200
+    assert "tr069_olt_profile_id" not in captured

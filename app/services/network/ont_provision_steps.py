@@ -724,36 +724,6 @@ def wait_tr069_bootstrap(
         return result
 
 
-def queue_wait_tr069_bootstrap(
-    db: Session,
-    ont_id: str,
-    *,
-    initiated_by: str | None = None,
-    progress_callback: ProgressCallback | None = None,
-) -> StepResult:
-    """DEPRECATED: Execute TR-069 bootstrap polling synchronously.
-
-    This function previously queued a background task. It now executes
-    synchronously for immediate feedback. The 'queue_' prefix is retained
-    for backward compatibility but the function blocks until completion.
-
-    Use wait_tr069_bootstrap() directly for new code.
-    """
-    import warnings
-
-    warnings.warn(
-        "queue_wait_tr069_bootstrap is deprecated. Use wait_tr069_bootstrap() directly.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    # Execute synchronously instead of queueing
-    return wait_tr069_bootstrap(
-        db,
-        ont_id,
-        progress_callback=progress_callback,
-    )
-
-
 def _decrypt_optional_secret(value: object) -> str | None:
     if value in (None, ""):
         return None
@@ -1010,8 +980,9 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     WAN service provisioning is instance-backed. ONT-level desired settings are
     read from ``OntUnit.desired_config`` via ``resolve_effective_ont_config``.
 
-    Missing operator inputs are reported in ``data["needs_input"]`` and do not
-    fail the bootstrap operation; they can be supplied later and retried.
+    Missing operator inputs are reported in ``data["needs_input"]`` and fail the
+    ACS apply step so the end-to-end provisioning result is not marked complete
+    before the intended service config can be pushed.
     """
 
     from app.services.credential_crypto import decrypt_credential
@@ -1158,10 +1129,10 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         )
     message = "Saved ONT service config applied."
     if needs_input:
-        message += " Some inputs are still required."
+        message = "Saved ONT service config is incomplete."
     return StepResult(
         "apply_saved_service_config",
-        True,
+        not needs_input,
         message,
         ms,
         critical=False,

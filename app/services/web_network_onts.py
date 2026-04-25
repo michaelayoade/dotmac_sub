@@ -890,7 +890,6 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     mgmt_vlan_tag = effective_values.get("mgmt_vlan")
     wan_vlan_tag = effective_values.get("wan_vlan")
     provision_gate_issues = validate_provision_form_fields(
-        bundle_id=None,
         onu_mode=str(effective_values.get("onu_mode") or "") or None,
         mgmt_vlan_id=str(mgmt_vlan_tag) if mgmt_vlan_tag else None,
         mgmt_ip_mode=mgmt_mode,
@@ -925,7 +924,6 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     provision_preflight = preflight_result(
         db,
         ont_id=ont_id,
-        bundle_id=None,
         tr069_profile_id=getattr(tr069_profile, "profile_id", None),
     )
 

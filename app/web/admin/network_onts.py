@@ -664,7 +664,6 @@ def ont_configure_form(
 def ont_configure_submit(
     request: Request,
     ont_id: str,
-    bundle_id: str = Form(default=""),
     wan_mode: str = Form(default=""),
     wan_vlan_id: str = Form(default=""),
     config_method: str = Form(default=""),
@@ -700,7 +699,6 @@ def ont_configure_submit(
     result = web_network_ont_actions_service.update_ont_config(
         db,
         ont_id,
-        bundle_id=bundle_id,
         wan_mode=wan_mode or None,
         wan_vlan_id=wan_vlan_id or None,
         config_method=config_method or None,
@@ -750,28 +748,3 @@ def ont_configure_submit(
         )
     )
     return response
-
-
-@router.get(
-    "/onts/{ont_id}/profile-preview",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_profile_preview(
-    request: Request,
-    ont_id: str,
-    bundle_id: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: Profile configuration preview for profile selection."""
-    if not bundle_id:
-        return HTMLResponse("")
-    context = {"request": request, "ont_id": ont_id}
-    context.update(
-        web_network_ont_actions_service.profile_preview_context(
-            db, bundle_id
-        )
-    )
-    return templates.TemplateResponse(
-        "admin/network/onts/_profile_preview.html", context
-    )

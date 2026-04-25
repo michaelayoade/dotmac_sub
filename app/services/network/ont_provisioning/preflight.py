@@ -87,7 +87,6 @@ def validate_prerequisites(
     db: Session,
     ont_id: str,
     *,
-    bundle_id: str | None = None,
     tr069_olt_profile_id: int | None = None,
 ) -> dict:
     """Check prerequisites before provisioning."""

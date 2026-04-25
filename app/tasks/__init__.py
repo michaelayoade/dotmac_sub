@@ -59,8 +59,6 @@ from app.tasks.ont_autofind import autofind_single_olt, discover_all_olt_autofin
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_onts
 from app.tasks.ont_provisioning import (
-    auto_link_profiles,
-    detect_profile_drift,
     provision_ont,
     queue_bulk_provisioning,
 )
@@ -183,8 +181,6 @@ __all__ = [
     "deliver_webhook",
     "retry_failed_deliveries",
     "deliver_notification_queue",
-    "detect_profile_drift",
-    "auto_link_profiles",
     "snapshot_mrr",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",

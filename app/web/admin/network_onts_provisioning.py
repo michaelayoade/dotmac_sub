@@ -152,33 +152,6 @@ def _update_service_order_execution_context_for_ont(
 
 
 @router.get(
-    "/onts/{ont_id}/profile-preview",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_profile_preview(
-    request: Request,
-    ont_id: str,
-    bundle_id: str = Query(...),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: profile summary for the configure page."""
-    preview_context = web_onts_provisioning_service.profile_preview_context(
-        db,
-        bundle_id=bundle_id,
-    )
-    if not preview_context:
-        return HTMLResponse(
-            '<p class="text-sm text-slate-500 dark:text-slate-400">Profile not found.</p>'
-        )
-    context = _base_context(request, db, active_page="onts")
-    context.update(preview_context)
-    return templates.TemplateResponse(
-        "admin/network/onts/_profile_preview.html", context
-    )
-
-
-@router.get(
     "/onts/{ont_id}/available-static-ips",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
@@ -212,7 +185,6 @@ def ont_available_static_ips(
 def ont_provisioning_preview(
     request: Request,
     ont_id: str,
-    bundle_id: str | None = Query(default=None),
     tr069_profile_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -220,7 +192,6 @@ def ont_provisioning_preview(
     data = web_onts_provisioning_service.provisioning_preview_context(
         db,
         ont_id=ont_id,
-        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
     )
     context = _base_context(request, db, active_page="onts")
@@ -237,7 +208,6 @@ def ont_provisioning_preview(
 def ont_preflight_check(
     request: Request,
     ont_id: str,
-    bundle_id: str | None = Query(default=None),
     tr069_profile_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -245,7 +215,6 @@ def ont_preflight_check(
     result = web_onts_provisioning_service.preflight_result(
         db,
         ont_id=ont_id,
-        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
     )
     return JSONResponse(result)
@@ -258,7 +227,6 @@ def ont_preflight_check(
 def ont_save_provision_settings(
     request: Request,
     ont_id: str,
-    bundle_id: str | None = Form(default=None),
     tr069_profile_id: str | None = Form(default=None),
     onu_mode: str | None = Form(default=None),
     mgmt_vlan_id: str | None = Form(default=None),
@@ -292,7 +260,6 @@ def ont_save_provision_settings(
     result = web_onts_provisioning_service.save_provision_settings(
         db,
         ont_id=ont_id,
-        bundle_id=bundle_id,
         tr069_profile_id=tr069_profile_id,
         onu_mode=onu_mode,
         mgmt_vlan_id=mgmt_vlan_id,
@@ -352,7 +319,7 @@ def ont_save_provision_settings(
 )
 def ont_save_provision_settings_get(ont_id: str) -> Response:
     """Handle accidental GET navigations to the save endpoint gracefully."""
-    message = "Use the Save OLT Profile button to submit this form."
+    message = "Use the Save OLT Desired Config button to submit this form."
     return RedirectResponse(
         f"/admin/network/onts/{ont_id}/provision?status=error&message={quote_plus(message)}",
         status_code=303,
@@ -499,11 +466,24 @@ def step_bind_tr069(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bind a TR-069 server profile to the ONT via OLT SSH."""
+    from app.models.network import OntUnit
+    from app.services.network.ont_desired_config import upsert_ont_desired_config_value
+
     result = steps.bind_tr069(
         db,
         ont_id,
         tr069_olt_profile_id=tr069_olt_profile_id,
     )
+    if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont is not None:
+            upsert_ont_desired_config_value(
+                db,
+                ont=ont,
+                field_name="tr069.olt_profile_id",
+                value=tr069_olt_profile_id,
+                reason="step_bind_tr069",
+            )
     _update_service_order_execution_context_for_ont(
         db,
         ont_id,
@@ -524,7 +504,7 @@ def step_wait_tr069_bootstrap(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Poll GenieACS until the ONT registers after TR-069 binding."""
-    result = steps.queue_wait_tr069_bootstrap(db, ont_id)
+    result = steps.wait_tr069_bootstrap(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
 
@@ -637,7 +617,7 @@ def step_deprovision(
 
 
 # ---------------------------------------------------------------------------
-# Saga-based provisioning
+# Direct provisioning
 # ---------------------------------------------------------------------------
 
 
@@ -650,8 +630,6 @@ def provision_ont_direct(
     ont_id: str,
     internet_vlan_id: int | None = Form(default=None),
     mgmt_vlan_id: int | None = Form(default=None),
-    tr069_olt_profile_id: int | None = Form(default=None),
-    bundle_id: str | None = Form(default=None),
     dry_run: bool = Form(default=False),
     async_execution: bool = Form(default=True),
     db: Session = Depends(get_db),
@@ -661,38 +639,6 @@ def provision_ont_direct(
     from app.services.network.action_logging import actor_label
 
     initiated_by = actor_label(request)
-    effective_tr069_olt_profile_id = (
-        web_onts_provisioning_service._effective_tr069_profile_id(
-            db,
-            ont_id=ont_id,
-            tr069_profile_id=tr069_olt_profile_id,
-        )
-    )
-    if bundle_id:
-        apply_result = web_onts_provisioning_service.service_intent_ui_adapter.apply_bundle_to_ont(
-            db,
-            ont_id=ont_id,
-            bundle_id=bundle_id,
-            create_wan_instances=True,
-            push_to_device=False,
-        )
-        if not getattr(apply_result, "success", False):
-            return JSONResponse(
-                content={
-                    "success": False,
-                    "message": str(
-                        getattr(
-                            apply_result,
-                            "message",
-                            "Unable to apply provisioning bundle",
-                        )
-                    ),
-                },
-                status_code=422,
-                headers=_toast_headers("Provisioning blocked", "error"),
-            )
-        db.commit()
-
     if async_execution:
         from app.services.queue_adapter import enqueue_task
 
@@ -701,7 +647,6 @@ def provision_ont_direct(
             "app.tasks.ont_provisioning.provision_ont",
             kwargs={
                 "ont_id": ont_id,
-                "tr069_olt_profile_id": effective_tr069_olt_profile_id,
                 "dry_run": dry_run,
                 "initiated_by": initiated_by,
                 "correlation_key": correlation_key,
@@ -741,7 +686,6 @@ def provision_ont_direct(
     result = provision_ont_from_desired_config(
         db,
         ont_id,
-        tr069_olt_profile_id=effective_tr069_olt_profile_id,
         dry_run=dry_run,
     )
 
