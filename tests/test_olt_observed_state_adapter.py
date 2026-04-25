@@ -2,13 +2,9 @@
 
 from datetime import UTC, datetime
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import OLTDevice
 from app.services.network.olt_ssh_profiles import Tr069ServerProfile
-from app.services.olt_observed_state_adapter import (
-    get_cached_iphost_config,
-    get_tr069_profiles_for_olt,
-    persist_iphost_config,
-)
+from app.services.olt_observed_state_adapter import get_tr069_profiles_for_olt
 
 
 def test_get_tr069_profiles_for_olt_persists_live_result(db_session, monkeypatch):
@@ -87,24 +83,3 @@ def test_get_tr069_profiles_for_olt_falls_back_to_db_snapshot(db_session, monkey
     assert "SSH timeout" in result.message
 
 
-def test_persist_iphost_config_round_trips_cached_result(db_session):
-    ont = OntUnit(
-        name="ONT IPHOST",
-        serial_number="IPHOST-001",
-        is_active=True,
-    )
-    db_session.add(ont)
-    db_session.commit()
-
-    persist_iphost_config(
-        db_session,
-        ont,
-        {"IP Mode": "Static", "IP Address": "192.0.2.10"},
-    )
-    result = get_cached_iphost_config(ont)
-
-    assert result is not None
-    assert result.ok is True
-    assert result.source == "db"
-    assert result.stale is True
-    assert result.data["IP Address"] == "192.0.2.10"

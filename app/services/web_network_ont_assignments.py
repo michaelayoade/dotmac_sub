@@ -122,7 +122,10 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
 
     When ont is provided, auto-resolves PON port from discovered board/port.
     Subscriber accounts are fetched via HTMX typeahead search.
+    Also loads available VLANs from the ONT's OLT for dropdown selection.
     """
+    from app.models.network import Vlan, VlanPurpose
+
     result: dict[str, object] = {
         # Accounts fetched via HTMX typeahead, not static dropdown
         "accounts": [],
@@ -130,11 +133,46 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
         "addresses": [],
         # Subscriptions will be resolved from selected subscriber
         "subscriptions": [],
+        # VLANs for dropdown selection
+        "internet_vlans": [],
+        "mgmt_vlans": [],
     }
 
     # Auto-resolve PON port from ONT discovery data
     if ont is not None:
         result.update(resolve_pon_port_for_ont(db, ont))
+
+        # Load VLANs from ONT's OLT for dropdown selection
+        olt_device_id = getattr(ont, "olt_device_id", None)
+        if olt_device_id:
+            vlans = db.scalars(
+                select(Vlan)
+                .where(
+                    Vlan.olt_device_id == olt_device_id,
+                    Vlan.is_active.is_(True),
+                )
+                .order_by(Vlan.tag)
+            ).all()
+
+            # Separate by purpose for dropdown grouping
+            internet_vlans = []
+            mgmt_vlans = []
+            for vlan in vlans:
+                vlan_item = {
+                    "id": str(vlan.id),
+                    "tag": vlan.tag,
+                    "name": vlan.name or f"VLAN {vlan.tag}",
+                    "purpose": vlan.purpose.value if vlan.purpose else None,
+                }
+                # Internet VLANs
+                if vlan.purpose in (VlanPurpose.internet, None):
+                    internet_vlans.append(vlan_item)
+                # Management VLANs
+                if vlan.purpose in (VlanPurpose.management, None):
+                    mgmt_vlans.append(vlan_item)
+
+            result["internet_vlans"] = internet_vlans
+            result["mgmt_vlans"] = mgmt_vlans
     else:
         result["pon_port_id"] = None
         result["pon_port_label"] = None
@@ -144,12 +182,28 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
 
 
 def parse_form_values(form) -> dict[str, object]:
-    """Parse ONT assignment form values."""
+    """Parse ONT assignment form values including service config."""
     return {
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
+        # Service configuration fields
+        "wan_mode": form.get("wan_mode", "").strip() or None,
+        "ip_mode": form.get("ip_mode", "").strip() or None,
+        "static_ip": form.get("static_ip", "").strip() or None,
+        "static_gateway": form.get("static_gateway", "").strip() or None,
+        "static_subnet": form.get("static_subnet", "").strip() or None,
+        "pppoe_username": form.get("pppoe_username", "").strip() or None,
+        "pppoe_password": form.get("pppoe_password", "").strip() or None,
+        "wifi_ssid": form.get("wifi_ssid", "").strip() or None,
+        "wifi_password": form.get("wifi_password", "").strip() or None,
+        # VLAN configuration
+        "internet_vlan_id": form.get("internet_vlan_id", "").strip() or None,
+        "mgmt_vlan_id": form.get("mgmt_vlan_id", "").strip() or None,
+        # Management IP configuration
+        "mgmt_ip_mode": form.get("mgmt_ip_mode", "").strip() or None,
+        "mgmt_ip_address": form.get("mgmt_ip_address", "").strip() or None,
     }
 
 
@@ -219,6 +273,8 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
 
     Subscriber account is optional. When absent, the service address lookup
     is skipped and the assignment is created without a subscriber ref.
+    Service config fields (WAN mode, IP mode, PPPoE, WiFi) are saved for
+    provisioning use.
     """
     pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
     pon_port_id = coerce_uuid(pon_port_id_str) if pon_port_id_str else None
@@ -245,6 +301,22 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         assigned_at=datetime.now(UTC),
         active=True,
         notes=str(values.get("notes")) if values.get("notes") else None,
+        # Service configuration
+        wan_mode=str(values.get("wan_mode")) if values.get("wan_mode") else "routing",
+        ip_mode=str(values.get("ip_mode")) if values.get("ip_mode") else "dhcp",
+        static_ip=str(values.get("static_ip")) if values.get("static_ip") else None,
+        static_gateway=str(values.get("static_gateway")) if values.get("static_gateway") else None,
+        static_subnet=str(values.get("static_subnet")) if values.get("static_subnet") else None,
+        pppoe_username=str(values.get("pppoe_username")) if values.get("pppoe_username") else None,
+        pppoe_password=str(values.get("pppoe_password")) if values.get("pppoe_password") else None,
+        wifi_ssid=str(values.get("wifi_ssid")) if values.get("wifi_ssid") else None,
+        wifi_password=str(values.get("wifi_password")) if values.get("wifi_password") else None,
+        # VLAN configuration
+        internet_vlan_id=coerce_uuid(str(values.get("internet_vlan_id"))) if values.get("internet_vlan_id") else None,
+        mgmt_vlan_id=coerce_uuid(str(values.get("mgmt_vlan_id"))) if values.get("mgmt_vlan_id") else None,
+        # Management IP configuration
+        mgmt_ip_mode=str(values.get("mgmt_ip_mode")) if values.get("mgmt_ip_mode") else "inactive",
+        mgmt_ip_address=str(values.get("mgmt_ip_address")) if values.get("mgmt_ip_address") else None,
     )
     network_service.ont_assignments.create(db=db, payload=payload)
 
@@ -263,6 +335,22 @@ def form_payload(
         "account_label": "",
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
+        # Service config fields
+        "wan_mode": values.get("wan_mode"),
+        "ip_mode": values.get("ip_mode"),
+        "static_ip": values.get("static_ip"),
+        "static_gateway": values.get("static_gateway"),
+        "static_subnet": values.get("static_subnet"),
+        "pppoe_username": values.get("pppoe_username"),
+        "pppoe_password": values.get("pppoe_password"),
+        "wifi_ssid": values.get("wifi_ssid"),
+        "wifi_password": values.get("wifi_password"),
+        # VLAN config fields
+        "internet_vlan_id": values.get("internet_vlan_id"),
+        "mgmt_vlan_id": values.get("mgmt_vlan_id"),
+        # Management IP config fields
+        "mgmt_ip_mode": values.get("mgmt_ip_mode"),
+        "mgmt_ip_address": values.get("mgmt_ip_address"),
     }
     # Look up subscriber label for typeahead repopulation
     if db and values.get("account_id"):
@@ -291,6 +379,10 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
     """Return template-friendly form defaults for an existing assignment."""
     subscriber = getattr(assignment, "subscriber", None)
     account_label = getattr(subscriber, "name", "") if subscriber else ""
+    # Get enum values as strings for form display
+    wan_mode_val = getattr(assignment, "wan_mode", None)
+    ip_mode_val = getattr(assignment, "ip_mode", None)
+    mgmt_ip_mode_val = getattr(assignment, "mgmt_ip_mode", None)
     return {
         "pon_port_id": str(assignment.pon_port_id) if assignment.pon_port_id else "",
         "account_id": str(assignment.subscriber_id) if assignment.subscriber_id else "",
@@ -299,6 +391,26 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
             str(assignment.service_address_id) if assignment.service_address_id else ""
         ),
         "notes": assignment.notes or "",
+        # Service config fields
+        "wan_mode": wan_mode_val.value if wan_mode_val else "routing",
+        "ip_mode": ip_mode_val.value if ip_mode_val else "dhcp",
+        "static_ip": getattr(assignment, "static_ip", "") or "",
+        "static_gateway": getattr(assignment, "static_gateway", "") or "",
+        "static_subnet": getattr(assignment, "static_subnet", "") or "",
+        "pppoe_username": getattr(assignment, "pppoe_username", "") or "",
+        "pppoe_password": getattr(assignment, "pppoe_password", "") or "",
+        "wifi_ssid": getattr(assignment, "wifi_ssid", "") or "",
+        "wifi_password": getattr(assignment, "wifi_password", "") or "",
+        # VLAN config fields
+        "internet_vlan_id": (
+            str(assignment.internet_vlan_id) if assignment.internet_vlan_id else ""
+        ),
+        "mgmt_vlan_id": (
+            str(assignment.mgmt_vlan_id) if assignment.mgmt_vlan_id else ""
+        ),
+        # Management IP config fields
+        "mgmt_ip_mode": mgmt_ip_mode_val.value if mgmt_ip_mode_val else "inactive",
+        "mgmt_ip_address": getattr(assignment, "mgmt_ip_address", "") or "",
     }
 
 
@@ -413,6 +525,22 @@ def update_assignment_from_form(
             else None
         ),
         notes=str(values.get("notes")) if values.get("notes") else None,
+        # Service configuration
+        wan_mode=str(values.get("wan_mode")) if values.get("wan_mode") else None,
+        ip_mode=str(values.get("ip_mode")) if values.get("ip_mode") else None,
+        static_ip=str(values.get("static_ip")) if values.get("static_ip") else None,
+        static_gateway=str(values.get("static_gateway")) if values.get("static_gateway") else None,
+        static_subnet=str(values.get("static_subnet")) if values.get("static_subnet") else None,
+        pppoe_username=str(values.get("pppoe_username")) if values.get("pppoe_username") else None,
+        pppoe_password=str(values.get("pppoe_password")) if values.get("pppoe_password") else None,
+        wifi_ssid=str(values.get("wifi_ssid")) if values.get("wifi_ssid") else None,
+        wifi_password=str(values.get("wifi_password")) if values.get("wifi_password") else None,
+        # VLAN configuration
+        internet_vlan_id=coerce_uuid(str(values.get("internet_vlan_id"))) if values.get("internet_vlan_id") else None,
+        mgmt_vlan_id=coerce_uuid(str(values.get("mgmt_vlan_id"))) if values.get("mgmt_vlan_id") else None,
+        # Management IP configuration
+        mgmt_ip_mode=str(values.get("mgmt_ip_mode")) if values.get("mgmt_ip_mode") else None,
+        mgmt_ip_address=str(values.get("mgmt_ip_address")) if values.get("mgmt_ip_address") else None,
     )
     network_service.ont_assignments.update(db, assignment_id, payload)
     return AssignmentFormResult(ont=loaded.ont, assignment=assignment, values=values)

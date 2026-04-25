@@ -107,6 +107,159 @@
             </div>
         </div>
 
+        {# Network Configuration (VLAN Selection) #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Network Configuration</h2>
+                <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Override OLT Config Pack defaults for this assignment</p>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <label for="internet_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
+                        <select name="internet_vlan_id" id="internet_vlan_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Use OLT Config Pack default</option>
+                            {% for vlan in internet_vlans %}
+                            <option value="{{ vlan.id }}" {% if form and form.internet_vlan_id == vlan.id %}selected{% endif %}>
+                                VLAN {{ vlan.tag }} — {{ vlan.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">VLAN for subscriber internet traffic</p>
+                    </div>
+                    <div>
+                        <label for="mgmt_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management VLAN</label>
+                        <select name="mgmt_vlan_id" id="mgmt_vlan_id"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Use OLT Config Pack default</option>
+                            {% for vlan in mgmt_vlans %}
+                            <option value="{{ vlan.id }}" {% if form and form.mgmt_vlan_id == vlan.id %}selected{% endif %}>
+                                VLAN {{ vlan.tag }} — {{ vlan.name }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">VLAN for ONT management (TR-069, IPHOST)</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# Service Configuration #}
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
+             x-data="{ ipMode: '{{ form.ip_mode if form and form.ip_mode else 'dhcp' }}', mgmtIpMode: '{{ form.mgmt_ip_mode if form and form.mgmt_ip_mode else 'inactive' }}' }">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Service Configuration</h2>
+            </div>
+            <div class="p-6 space-y-6">
+                {# WAN/IP Configuration #}
+                <div>
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">WAN / Internet</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div>
+                            <label for="wan_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">WAN Mode</label>
+                            <select name="wan_mode" id="wan_mode"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="routing" {% if not form or form.wan_mode == 'routing' %}selected{% endif %}>Routing (NAT)</option>
+                                <option value="bridging" {% if form and form.wan_mode == 'bridging' %}selected{% endif %}>Bridge</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="ip_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Mode</label>
+                            <select name="ip_mode" id="ip_mode" x-model="ipMode"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="dhcp">DHCP</option>
+                                <option value="static_ip">Static IP</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="pppoe_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE Username</label>
+                            <input type="text" name="pppoe_username" id="pppoe_username" maxlength="200"
+                                value="{{ form.pppoe_username if form else '' }}"
+                                placeholder="user@domain"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="pppoe_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE Password</label>
+                            <input type="password" name="pppoe_password" id="pppoe_password" maxlength="200"
+                                placeholder="{{ '••••••••' if form and form.pppoe_password else '' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+
+                    {# Static IP fields (conditional) #}
+                    <div x-show="ipMode === 'static_ip'" x-cloak class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+                        <div>
+                            <label for="static_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Address</label>
+                            <input type="text" name="static_ip" id="static_ip" maxlength="64"
+                                value="{{ form.static_ip if form else '' }}"
+                                placeholder="192.168.1.100"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="static_gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway</label>
+                            <input type="text" name="static_gateway" id="static_gateway" maxlength="64"
+                                value="{{ form.static_gateway if form else '' }}"
+                                placeholder="192.168.1.1"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="static_subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subnet Mask</label>
+                            <input type="text" name="static_subnet" id="static_subnet" maxlength="64"
+                                value="{{ form.static_subnet if form else '' }}"
+                                placeholder="255.255.255.0"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                </div>
+
+                {# Management IP Configuration #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Management IP (IPHOST)</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="mgmt_ip_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP Mode</label>
+                            <select name="mgmt_ip_mode" id="mgmt_ip_mode" x-model="mgmtIpMode"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="inactive">Inactive (no management IP)</option>
+                                <option value="dhcp">DHCP (auto-assign from pool)</option>
+                                <option value="static_ip">Static IP (manual assignment)</option>
+                            </select>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Configure ONT-side management IP for remote access</p>
+                        </div>
+                        <div x-show="mgmtIpMode === 'static_ip'" x-cloak>
+                            <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP Address</label>
+                            <input type="text" name="mgmt_ip_address" id="mgmt_ip_address" maxlength="64"
+                                value="{{ form.mgmt_ip_address if form else '' }}"
+                                placeholder="172.16.202.100"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">IP from management VLAN pool</p>
+                        </div>
+                    </div>
+                </div>
+
+                {# WiFi fields #}
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-6">
+                    <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">WiFi</h3>
+                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="wifi_ssid" class="block text-sm font-medium text-slate-700 dark:text-slate-300">WiFi SSID</label>
+                            <input type="text" name="wifi_ssid" id="wifi_ssid" maxlength="64"
+                                value="{{ form.wifi_ssid if form else '' }}"
+                                placeholder="CustomerWiFi"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div>
+                            <label for="wifi_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">WiFi Password</label>
+                            <input type="password" name="wifi_password" id="wifi_password" maxlength="200"
+                                placeholder="{{ '••••••••' if form and form.wifi_password else '' }}"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="flex items-center justify-end gap-3">
             <a href="/admin/network/onts/{{ ont.id }}{% if return_to == 'provision' %}/provision{% endif %}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 Cancel

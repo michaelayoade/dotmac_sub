@@ -172,6 +172,28 @@ def _load_unified_observed_state(db: Session, ont: object) -> dict[str, object]:
     }
 
 
+def _resolve_cached_tr069_profile(
+    db: Session,
+    ont: object,
+    profiles: list[object],
+) -> object | None:
+    """Resolve the effective TR-069 profile from cached OLT profiles only."""
+    if not profiles:
+        return None
+
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    planned_profile_id = values.get("tr069_olt_profile_id")
+    if planned_profile_id is not None:
+        planned_profile_id_str = str(planned_profile_id).strip()
+        for profile in profiles:
+            profile_id = getattr(profile, "profile_id", None)
+            if profile_id is not None and str(profile_id).strip() == planned_profile_id_str:
+                return profile
+
+    return profiles[0] if len(profiles) == 1 else None
+
+
 def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
     assignment = db.scalars(
         select(OntAssignment)
@@ -226,8 +248,7 @@ def _load_ont_detail_config_state(db: Session, ont_id: str) -> dict[str, object]
 def _build_db_observed_service_intent(
     db: Session, linked_tr069: object, ont: object
 ) -> dict[str, object]:
-    # The DB-backed fallback should reflect current intended config for bundle-managed
-    # ONTs, not the cleared legacy projection fields on OntUnit.
+    # DB-backed observed intent is read-only display; desired config remains separate.
     values = resolve_effective_ont_config(db, ont)["values"]
     return service_intent_ui_adapter.build_acs_observed_service_intent(
         SimpleNamespace(
@@ -367,14 +388,16 @@ def _operator_summary_context(
     entry = olt_status.get("entry") or {}
     blockers: list[dict[str, str]] = []
     service_ports_error = str(service_ports_context.get("error") or "").strip()
-    if service_ports_error:
+    service_ports_deferred = bool(service_ports_context.get("deferred"))
+    service_ports_loaded = not service_ports_deferred and not service_ports_error
+    if service_ports_error and not service_ports_deferred:
         blockers.append(
             {
                 "severity": "critical",
                 "message": f"Service-port read failed: {service_ports_error}",
             }
         )
-    elif not port_rows:
+    elif service_ports_loaded and not port_rows:
         blockers.append(
             {
                 "severity": "critical",
@@ -384,14 +407,14 @@ def _operator_summary_context(
 
     desired_mgmt_vlan = str(desired_mgmt.get("vlan_id") or "").strip()
     desired_wan_vlan = str(desired_wan.get("wan_vlan") or "").strip()
-    if desired_mgmt_vlan and desired_mgmt_vlan not in observed_vlans:
+    if service_ports_loaded and desired_mgmt_vlan and desired_mgmt_vlan not in observed_vlans:
         blockers.append(
             {
                 "severity": "critical",
                 "message": f"Expected management VLAN {desired_mgmt_vlan} is missing from OLT service-ports.",
             }
         )
-    if desired_wan_vlan and desired_wan_vlan not in observed_vlans:
+    if service_ports_loaded and desired_wan_vlan and desired_wan_vlan not in observed_vlans:
         blockers.append(
             {
                 "severity": "critical",
@@ -424,6 +447,26 @@ def _operator_summary_context(
             }
         )
 
+    if bool(olt_status.get("deferred")):
+        olt_status_rows = [
+            ("F/S/P", entry.get("fsp") or "—"),
+            ("ONT-ID", entry.get("ont_id") or "—"),
+            ("Description", entry.get("description") or "—"),
+            ("TR-069 Profile", current_tr069_profile or "—"),
+            ("ACS Device", "Informed" if has_tr069_device else "Not informed"),
+        ]
+    else:
+        olt_status_rows = [
+            ("Run State", entry.get("run_state") or entry.get("online_status") or "—"),
+            ("Config State", entry.get("config_state") or "—"),
+            ("Match State", entry.get("match_state") or "—"),
+            ("F/S/P", entry.get("fsp") or "—"),
+            ("ONT-ID", entry.get("ont_id") or "—"),
+            ("Description", entry.get("description") or "—"),
+            ("TR-069 Profile", current_tr069_profile or "—"),
+            ("ACS Device", "Informed" if has_tr069_device else "Not informed"),
+        ]
+
     return {
         "operator_summary": {
             "blockers": blockers,
@@ -431,17 +474,9 @@ def _operator_summary_context(
             "service_ports_error": service_ports_error or None,
             "service_ports_count": len(port_rows),
             "service_ports_up_count": up_count,
+            "service_ports_deferred": service_ports_deferred,
             "observed_vlans": sorted(observed_vlans),
-            "olt_status_rows": [
-                ("Run State", entry.get("run_state") or entry.get("online_status") or "—"),
-                ("Config State", entry.get("config_state") or "—"),
-                ("Match State", entry.get("match_state") or "—"),
-                ("F/S/P", entry.get("fsp") or "—"),
-                ("ONT-ID", entry.get("ont_id") or "—"),
-                ("Description", entry.get("description") or "—"),
-                ("TR-069 Profile", current_tr069_profile or "—"),
-                ("ACS Device", "Informed" if has_tr069_device else "Not informed"),
-            ],
+            "olt_status_rows": olt_status_rows,
         }
     }
 
@@ -452,14 +487,7 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     ont = shared["ont"]
     linked_tr069 = shared["linked_tr069"]
     observed_state = shared["observed_state"]
-    subscriber_info = shared["subscriber_info"]
     ont_plan = shared["ont_plan"]
-    service_intent = service_intent_ui_adapter.build_ont_service_intent(
-        ont,
-        db=db,
-        subscriber_info=subscriber_info,
-        ont_plan=ont_plan,
-    )
     acs_observed_intent = shared["acs_observed_intent"]
     service_ports_context = {
         "ont": ont,
@@ -507,16 +535,11 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         ],
         "deferred": True,
     }
-    try:
-        current_profile, _current_profile_error = (
-            service_intent_ui_adapter.resolve_effective_tr069_profile(db, ont=ont)
-        )
-    except Exception:
-        logger.exception(
-            "Failed to resolve effective TR-069 profile for unified ONT config",
-            extra={"ont_id": ont_id},
-        )
-        current_profile = None
+    current_profile = _resolve_cached_tr069_profile(
+        db,
+        ont,
+        list(observed_state["tr069_profiles"]),
+    )
     current_profile_name = getattr(current_profile, "profile_name", None) or getattr(
         current_profile, "name", None
     )
@@ -531,8 +554,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     context = {
         "ont_id": ont_id,
         "ont": ont,
-        "service_intent": service_intent,
-        "acs_observed_intent": acs_observed_intent,
         "ont_plan": ont_plan,
         "tr069_available": bool(acs_observed_intent.get("available")),
         "iphost_config": observed_state["iphost_config"],
@@ -688,12 +709,8 @@ def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
-    """Build context for the ONT configure form (database-backed fields)."""
-    from app.services import web_network_onts as web_network_onts_service
-
+    """Build context for the ONT service configure form."""
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    mgmt_ip_choices = web_network_onts_service.management_ip_choices_for_ont(db, ont)
 
     effective = resolve_effective_ont_config(db, ont)
     values = effective["values"]
@@ -701,29 +718,12 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
     context = {
         "ont": ont,
         "ont_id": ont_id,
-        "vlans": vlans,
-        # Current values from DB
         "wan_mode": values.get("wan_mode"),
-        "wan_vlan_id": str(values.get("wan_vlan") or ""),
-        "config_method": values.get("config_method"),
-        "ip_protocol": values.get("ip_protocol"),
         "pppoe_username": str(values.get("pppoe_username") or ""),
-        "mgmt_ip_mode": values.get("mgmt_ip_mode"),
-        "mgmt_vlan_id": str(values.get("mgmt_vlan") or ""),
-        "mgmt_ip_address": str(values.get("mgmt_ip_address") or ""),
         "wifi_enabled": values.get("wifi_enabled"),
         "wifi_ssid": str(values.get("wifi_ssid") or ""),
-        "wifi_channel": str(values.get("wifi_channel") or ""),
         "wifi_security_mode": str(values.get("wifi_security_mode") or ""),
-        "mgmt_remote_access": getattr(ont, "mgmt_remote_access", False),
-        "lan_gateway_ip": str(values.get("lan_ip") or ""),
-        "lan_subnet_mask": str(values.get("lan_subnet") or ""),
-        "lan_dhcp_enabled": values.get("lan_dhcp_enabled"),
-        "lan_dhcp_start": str(values.get("lan_dhcp_start") or ""),
-        "lan_dhcp_end": str(values.get("lan_dhcp_end") or ""),
-        "voip_enabled": getattr(ont, "voip_enabled", False),
     }
-    context.update(mgmt_ip_choices)
     return context
 
 def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:

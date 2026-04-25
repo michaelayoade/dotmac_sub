@@ -1517,7 +1517,7 @@ def onts_list_page_data(
         .order_by(OntUnit.vendor)
     ).all()
 
-    # Bundles are templates only; displayed ONTs do not have active profile state.
+    # Displayed ONTs use desired_config directly; no active profile state is shown.
     profile_info: dict[str, dict[str, str]] = {}
 
     return {
@@ -1834,7 +1834,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             }
         )
 
-    # Bundle templates are materialized onto ONT intent and do not remain active.
+    # Per-ONT configuration is resolved from OLT config pack + OntUnit.desired_config.
     profile_state: dict[str, object] = {}
 
     # Note: available_profile_templates and available_firmware are now lazy-loaded
@@ -1843,12 +1843,6 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     capabilities = service_intent_ui_adapter.ont_capabilities(db, ont_id=ont_id)
-    service_intent = service_intent_ui_adapter.build_ont_service_intent(
-        ont,
-        db=db,
-        subscriber_info=subscriber_info,
-        ont_plan=ont_plan,
-    )
     try:
         from app.services.network.ont_tr069 import OntTR069
 
@@ -1897,8 +1891,6 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "provisioning_runs": provisioning_runs,
         "compensation_failures": compensation_failures,
         "ont_plan": ont_plan,
-        "service_intent": service_intent,
-        "acs_observed_intent": acs_observed_intent,
         "observed_runtime_summary": observed_runtime_summary,
         "last_config_summary": last_config_summary,
         "desired_config_summary": desired_config_summary,

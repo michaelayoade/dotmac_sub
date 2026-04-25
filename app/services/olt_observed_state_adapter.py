@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 if TYPE_CHECKING:
     from app.services.network.olt_ssh_profiles import Tr069ServerProfile
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import OLTDevice
 from app.services.adapters import adapter_registry
 
 logger = logging.getLogger(__name__)
@@ -235,44 +235,22 @@ class OltObservedStateAdapter:
             stale=True,
         )
 
-    def persist_iphost_config(
-        self,
-        db: Session,
-        ont: OntUnit,
-        config: dict[str, str],
-        *,
-        fetched_at: datetime | None = None,
-    ) -> None:
-        fetched_at = fetched_at or _utc_now()
-        snapshot = dict(ont.olt_observed_snapshot or {})
-        snapshot["iphost_config"] = dict(config)
-        snapshot["iphost_fetched_at"] = fetched_at.isoformat()
-        ont.olt_observed_snapshot = snapshot
-        ont.olt_observed_snapshot_at = fetched_at
-        db.add(ont)
-        db.flush()
+    def get_cached_iphost_config(self, ont: object) -> ObservedReadResult:
+        """Return cached IPHOST config without Redis or OLT reads.
 
-    def get_cached_iphost_config(self, ont: OntUnit) -> ObservedReadResult | None:
-        snapshot = (
-            ont.olt_observed_snapshot
-            if isinstance(ont.olt_observed_snapshot, dict)
-            else {}
-        )
-        config = snapshot.get("iphost_config")
-        if not isinstance(config, dict) or not config:
-            return None
-        fetched_at = (
-            _parse_datetime(snapshot.get("iphost_fetched_at"))
-            or ont.olt_observed_snapshot_at
-        )
+        IPHOST live reads are intentionally limited to the dedicated OLT action
+        views. The unified config overview derives desired state from durable
+        ONT/assignment/config-pack data.
+        """
         return ObservedReadResult(
             ok=True,
-            message="Using last known IPHOST configuration.",
-            data={str(key): str(value) for key, value in config.items()},
+            message="No cached IPHOST configuration.",
+            data={},
             source="db",
-            fetched_at=fetched_at,
+            fetched_at=None,
             stale=True,
         )
+
 
 
 olt_observed_state_adapter = OltObservedStateAdapter()
@@ -298,20 +276,5 @@ def get_cached_tr069_profiles_for_olt(olt: OLTDevice) -> ObservedReadResult:
     return olt_observed_state_adapter.get_cached_tr069_profiles_for_olt(olt)
 
 
-def persist_iphost_config(
-    db: Session,
-    ont: OntUnit,
-    config: dict[str, str],
-    *,
-    fetched_at: datetime | None = None,
-) -> None:
-    olt_observed_state_adapter.persist_iphost_config(
-        db,
-        ont,
-        config,
-        fetched_at=fetched_at,
-    )
-
-
-def get_cached_iphost_config(ont: OntUnit) -> ObservedReadResult | None:
+def get_cached_iphost_config(ont: object) -> ObservedReadResult:
     return olt_observed_state_adapter.get_cached_iphost_config(ont)

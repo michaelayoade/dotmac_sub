@@ -25,6 +25,7 @@
 {% set observed_service_ports = operator_summary.get('service_ports', []) %}
 {% set observed_vlans = operator_summary.get('observed_vlans', []) %}
 {% set service_ports_error = operator_summary.get('service_ports_error') %}
+{% set service_ports_deferred = operator_summary.get('service_ports_deferred') %}
 
 <div class="space-y-4" x-data="{ openSection: 'mgmt-ip' }">
     <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
@@ -39,9 +40,10 @@
         <div class="flex flex-wrap items-start justify-between gap-4">
             <div>
                 <h2 class="text-sm font-semibold text-slate-900 dark:text-white">OLT / Service Path</h2>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Operator view of observed provisioning state, OLT registration, and service transport.</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Configured OLT path from the ONT assignment and OLT config pack.</p>
             </div>
             <div class="flex flex-wrap items-center gap-2 text-xs">
+                {% if not service_ports_deferred %}
                 <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
                     {{ service_ports_count }} service-port{{ '' if service_ports_count == 1 else 's' }}
                 </span>
@@ -49,6 +51,7 @@
                 <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
                     {{ service_ports_up_count }} up
                 </span>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
@@ -63,9 +66,9 @@
         </div>
         {% endif %}
 
-        <div class="mt-4 grid gap-4 lg:grid-cols-2">
+        <div class="mt-4 grid gap-4 {% if not service_ports_deferred %}lg:grid-cols-2{% endif %}">
             <div class="rounded-lg border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/30">
-                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">OLT Status</h3>
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{% if service_ports_deferred %}Configured Path{% else %}OLT Status{% endif %}</h3>
                 <dl class="mt-3 space-y-2">
                     {% for label, value in operator_olt_status_rows %}
                     <div class="flex items-start justify-between gap-4 text-sm">
@@ -76,6 +79,7 @@
                 </dl>
             </div>
 
+            {% if not service_ports_deferred %}
             <div class="rounded-lg border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-700 dark:bg-slate-900/30">
                 <div class="flex items-center justify-between gap-3">
                     <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Observed Service Ports</h3>
@@ -118,10 +122,9 @@
                 <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">No service-ports were returned from the OLT for this ONT.</p>
                 {% endif %}
             </div>
+            {% endif %}
         </div>
     </div>
-
-    {% include "admin/network/onts/_service_intent_summary.html" %}
 
     {# ==================== MANAGEMENT IP SECTION ==================== #}
     <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">

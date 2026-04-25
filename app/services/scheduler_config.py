@@ -786,36 +786,6 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(snmp_discovery_interval, 60),
         )
 
-        # App-side core-device ping/SNMP refresh is disabled. Zabbix owns
-        # monitoring state, and Zabbix ingestion tasks below keep local data in
-        # sync.
-        core_ping_interval = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "core_device_ping_interval_seconds",
-            120,
-        )
-        core_snmp_interval = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "core_device_snmp_walk_interval_seconds",
-            300,
-        )
-        _sync_scheduled_task(
-            session,
-            name="core_device_ping_refresh",
-            task_name="app.tasks.network_monitoring.refresh_core_device_ping",
-            enabled=False,
-            interval_seconds=max(core_ping_interval, 10),
-        )
-        _sync_scheduled_task(
-            session,
-            name="core_device_snmp_refresh",
-            task_name="app.tasks.network_monitoring.refresh_core_device_snmp",
-            enabled=False,
-            interval_seconds=max(core_snmp_interval, 30),
-        )
-
         # Legacy bulk OLT signal polling.
         # Disabled because continuous monitoring is handled by Zabbix/vmagent.
         # ONT discovery below still performs inventory/topology reconciliation

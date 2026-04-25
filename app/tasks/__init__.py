@@ -37,10 +37,6 @@ from app.tasks.nas import (
     run_scheduled_backups,
     update_subscriber_counts,
 )
-from app.tasks.network_monitoring import (
-    refresh_core_device_ping,
-    refresh_core_device_snmp,
-)
 from app.tasks.network_operations import cleanup_old_operations
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
@@ -48,7 +44,6 @@ from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_polling import (
     finalize_olt_polling,
     poll_all_olt_signals,
-    poll_single_olt,
 )
 from app.tasks.olt_queue import (
     process_deferred_olt_operations,
@@ -152,8 +147,6 @@ __all__ = [
     "run_usage_rating",
     "import_radius_accounting",
     "cleanup_nas_backups",
-    "refresh_core_device_ping",
-    "refresh_core_device_snmp",
     "refresh_expiring_tokens",
     "check_token_health",
     "cleanup_wireguard_logs",
@@ -165,7 +158,6 @@ __all__ = [
     "trim_bandwidth_stream",
     "backup_all_olts",
     "poll_all_olt_signals",
-    "poll_single_olt",
     "finalize_olt_polling",
     "discover_all_olt_onts",
     "discover_single_olt_onts",

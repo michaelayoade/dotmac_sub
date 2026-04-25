@@ -292,14 +292,6 @@ class OntProvisioningStatus(enum.Enum):
     pending_service_config = "pending_service_config"  # ACS registered, config pending
 
 
-class OntBundleKind(enum.Enum):
-    residential = "residential"
-    business = "business"
-    voice = "voice"
-    bridge = "bridge"
-    custom = "custom"
-
-
 class WanServiceProvisioningStatus(enum.Enum):
     """Provisioning state of an individual WAN service instance."""
 
@@ -731,11 +723,6 @@ class OLTDevice(Base):
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
-    default_provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
-        doc="Default bundle for newly authorized ONTs on this OLT",
-    )
     tr069_profiles_snapshot: Mapped[dict | None] = mapped_column(JSON)
     tr069_profiles_snapshot_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -903,9 +890,6 @@ class OLTDevice(Base):
     shelves = relationship("OltShelf", back_populates="olt")
     config_backups = relationship("OltConfigBackup", back_populates="olt")
     tr069_acs_server = relationship("Tr069AcsServer")
-    default_provisioning_profile = relationship(
-        "OntProvisioningProfile", foreign_keys=[default_provisioning_profile_id]
-    )
     vlans = relationship("Vlan", back_populates="olt_device", foreign_keys="[Vlan.olt_device_id]")
     ip_pools = relationship(
         "IpPool", back_populates="olt_device", foreign_keys="[IpPool.olt_device_id]"
@@ -1686,6 +1670,69 @@ class OntAssignment(Base):
     active: Mapped[bool] = mapped_column("is_active", Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # -------------------------------------------------------------------------
+    # Service Configuration (subscriber's service settings for this ONT)
+    # -------------------------------------------------------------------------
+    wan_mode: Mapped[OnuMode | None] = mapped_column(
+        Enum(OnuMode, name="onumode", create_constraint=False),
+        default=OnuMode.routing,
+        doc="WAN mode: routing (NAT) or bridging (transparent)",
+    )
+    ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
+        Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
+        default=MgmtIpMode.dhcp,
+        doc="IP assignment mode: dhcp or static_ip",
+    )
+    static_ip: Mapped[str | None] = mapped_column(
+        String(64), doc="Static IP address (when ip_mode=static_ip)"
+    )
+    static_gateway: Mapped[str | None] = mapped_column(
+        String(64), doc="Static gateway (when ip_mode=static_ip)"
+    )
+    static_subnet: Mapped[str | None] = mapped_column(
+        String(64), doc="Static subnet mask (when ip_mode=static_ip)"
+    )
+    pppoe_username: Mapped[str | None] = mapped_column(
+        String(200), doc="PPPoE username for subscriber"
+    )
+    pppoe_password: Mapped[str | None] = mapped_column(
+        String(512), doc="PPPoE password (encrypted)"
+    )
+    wifi_ssid: Mapped[str | None] = mapped_column(
+        String(64), doc="WiFi SSID for subscriber"
+    )
+    wifi_password: Mapped[str | None] = mapped_column(
+        String(512), doc="WiFi password (encrypted)"
+    )
+
+    # -------------------------------------------------------------------------
+    # VLAN Configuration (override OLT config pack defaults)
+    # -------------------------------------------------------------------------
+    internet_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        index=True,
+        doc="Override internet VLAN from OLT config pack",
+    )
+    mgmt_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        index=True,
+        doc="Override management VLAN from OLT config pack",
+    )
+
+    # -------------------------------------------------------------------------
+    # Management IP Configuration (ONT-side management IP)
+    # -------------------------------------------------------------------------
+    mgmt_ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
+        Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
+        default=MgmtIpMode.inactive,
+        doc="Management IP mode: inactive, dhcp, or static_ip",
+    )
+    mgmt_ip_address: Mapped[str | None] = mapped_column(
+        String(64), doc="Static management IP (when mgmt_ip_mode=static_ip)"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1699,6 +1746,8 @@ class OntAssignment(Base):
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
     service_address = relationship("Address")
+    internet_vlan = relationship("Vlan", foreign_keys=[internet_vlan_id])
+    mgmt_vlan = relationship("Vlan", foreign_keys=[mgmt_vlan_id])
 
 
 class NetworkZone(Base):
@@ -2240,11 +2289,6 @@ class OnuType(Base):
         UUID(as_uuid=True),
         ForeignKey("vendor_model_capabilities.id", ondelete="SET NULL"),
     )
-    default_bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
-    )
-    supports_bundle_overrides: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -2317,13 +2361,6 @@ class OnuType(Base):
         "VendorModelCapability",
         foreign_keys=[vendor_model_capability_id],
     )
-    default_bundle = relationship(
-        "OntProvisioningProfile",
-        foreign_keys=[default_bundle_id],
-        post_update=True,
-    )
-
-
 class SpeedProfile(Base):
     """OLT-level speed profile catalog entry (download or upload)."""
 
@@ -2390,17 +2427,10 @@ class OntProvisioningProfile(Base):
         nullable=False,
         default=OntProfileType.residential,
     )
-    bundle_kind: Mapped[OntBundleKind | None] = mapped_column(
-        Enum(OntBundleKind, name="ontbundlekind", create_constraint=False),
-    )
     description: Mapped[str | None] = mapped_column(Text)
     ont_type_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("onu_types.id", ondelete="SET NULL"),
-    )
-    cloned_from_bundle_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
     )
     execution_policy: Mapped[dict | None] = mapped_column(JSON)
     required_capabilities: Mapped[dict | None] = mapped_column(JSON)
@@ -2510,11 +2540,6 @@ class OntProvisioningProfile(Base):
     )
     olt_device = relationship("OLTDevice", foreign_keys=[olt_device_id])
     ont_type = relationship("OnuType", foreign_keys=[ont_type_id])
-    cloned_from_bundle = relationship(
-        "OntProvisioningProfile",
-        remote_side=[id],
-        foreign_keys=[cloned_from_bundle_id],
-    )
     mgmt_ip_pool = relationship("IpPool", foreign_keys=[mgmt_ip_pool_id])
     download_speed_profile = relationship(
         "SpeedProfile", foreign_keys=[download_speed_profile_id]
@@ -2702,7 +2727,7 @@ class OntWanServiceInstance(Base):
     static_dns: Mapped[str | None] = mapped_column(String(200))
     static_ip_source: Mapped[str | None] = mapped_column(String(200))
 
-    # Binding / OMCI execution metadata copied from the bundle service template
+    # Binding / OMCI execution metadata for WAN service provisioning.
     bind_lan_ports: Mapped[dict | None] = mapped_column(JSON)
     bind_ssid_index: Mapped[int | None] = mapped_column(Integer)
     gem_port_id: Mapped[int | None] = mapped_column(Integer)
@@ -3228,13 +3253,6 @@ class AuthorizationPreset(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
 
-    # Link to provisioning profile applied after authorization
-    provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("ont_provisioning_profiles.id", ondelete="SET NULL"),
-        index=True,
-    )
-
     # OLT-level authorization profile IDs (from OLT CLI)
     line_profile_id: Mapped[int | None] = mapped_column(
         Integer, doc="OLT ont-lineprofile profile-id"
@@ -3287,6 +3305,5 @@ class AuthorizationPreset(Base):
     )
 
     # Relationships
-    provisioning_profile = relationship("OntProvisioningProfile")
     default_vlan = relationship("Vlan")
     olt_device = relationship("OLTDevice", foreign_keys=[olt_device_id])

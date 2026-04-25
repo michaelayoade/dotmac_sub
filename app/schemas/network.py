@@ -385,7 +385,6 @@ class OLTDeviceBase(BaseModel):
     netconf_enabled: bool = False
     netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
-    default_provisioning_profile_id: UUID | None = None
     supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     status: str | None = "active"
@@ -433,7 +432,6 @@ class OLTDeviceUpdate(BaseModel):
     netconf_enabled: bool | None = None
     netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
-    default_provisioning_profile_id: UUID | None = None
     supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     status: str | None = None
@@ -660,6 +658,27 @@ class OntAssignmentBase(BaseModel):
     active: bool = True
     notes: str | None = None
 
+    # Service configuration (subscriber settings for this ONT)
+    wan_mode: str | None = Field(default="routing", description="WAN mode: routing or bridging")
+    ip_mode: str | None = Field(default="dhcp", description="IP mode: dhcp or static_ip")
+    static_ip: str | None = Field(default=None, max_length=64)
+    static_gateway: str | None = Field(default=None, max_length=64)
+    static_subnet: str | None = Field(default=None, max_length=64)
+    pppoe_username: str | None = Field(default=None, max_length=200)
+    pppoe_password: str | None = Field(default=None, max_length=512)
+    wifi_ssid: str | None = Field(default=None, max_length=64)
+    wifi_password: str | None = Field(default=None, max_length=512)
+
+    # VLAN configuration (override OLT config pack defaults)
+    internet_vlan_id: UUID | None = Field(default=None, description="Override internet VLAN")
+    mgmt_vlan_id: UUID | None = Field(default=None, description="Override management VLAN")
+
+    # Management IP configuration (ONT-side management IP)
+    mgmt_ip_mode: str | None = Field(
+        default="inactive", description="Management IP mode: inactive, dhcp, or static_ip"
+    )
+    mgmt_ip_address: str | None = Field(default=None, max_length=64)
+
 
 class OntAssignmentCreate(OntAssignmentBase):
     pass
@@ -690,6 +709,25 @@ class OntAssignmentUpdate(BaseModel):
     assigned_at: datetime | None = None
     active: bool | None = None
     notes: str | None = None
+
+    # Service configuration (subscriber settings for this ONT)
+    wan_mode: str | None = None
+    ip_mode: str | None = None
+    static_ip: str | None = None
+    static_gateway: str | None = None
+    static_subnet: str | None = None
+    pppoe_username: str | None = None
+    pppoe_password: str | None = None
+    wifi_ssid: str | None = None
+    wifi_password: str | None = None
+
+    # VLAN configuration (override OLT config pack defaults)
+    internet_vlan_id: UUID | None = None
+    mgmt_vlan_id: UUID | None = None
+
+    # Management IP configuration
+    mgmt_ip_mode: str | None = None
+    mgmt_ip_address: str | None = None
 
 
 class OntAssignmentRead(OntAssignmentBase):

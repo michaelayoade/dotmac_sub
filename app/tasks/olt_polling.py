@@ -9,39 +9,10 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
-
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
-
-
-@celery_app.task(name="app.tasks.olt_polling.poll_single_olt")
-def poll_single_olt(olt_id: str) -> dict[str, int | str]:
-    """Poll a single OLT device for ONT signal levels and health.
-
-    DEPRECATED: OLT SNMP polling has been moved to Zabbix.
-    This task is retained for backwards compatibility but returns
-    an error indicating the function has been disabled.
-
-    Args:
-        olt_id: UUID string of the OLT to poll.
-
-    Returns:
-        Error dict indicating polling is disabled.
-    """
-    logger.warning(
-        "poll_single_olt called for %s but OLT SNMP polling is now handled by Zabbix",
-        olt_id,
-    )
-    return {
-        "olt_id": olt_id,
-        "polled": 0,
-        "updated": 0,
-        "errors": 1,
-        "error": "OLT SNMP polling disabled - now handled by Zabbix",
-    }
 
 
 @celery_app.task(name="app.tasks.olt_polling.poll_all_olt_signals")

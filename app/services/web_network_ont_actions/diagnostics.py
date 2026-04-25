@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.web_network_ont_actions._common import _log_action_audit
-
-IPHOST_CONFIG_TTL_SECONDS = 120
 
 
 def run_ping_diagnostic(
@@ -62,119 +58,50 @@ def fetch_running_config(db: Session, ont_id: str) -> ActionResult:
 
 
 def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, str]]:
-    """Fetch ONT IPHOST config from OLT."""
-    result = fetch_iphost_config_with_meta(db, ont_id)
-    return result.ok, result.message, dict(result.data or {})
+    """Get management IP config from ONT assignment.
 
+    Management IP configuration is now stored in OntAssignment rather than
+    polled from the OLT. This returns the configured values from the active
+    assignment.
+    """
+    from app.services import network as network_service
 
-def fetch_iphost_config_with_meta(db: Session, ont_id: str):
-    """Fetch ONT IPHOST config from OLT, falling back to last-known-good DB data."""
-    from app.services.network.olt_ssh_ont import get_ont_iphost_config
-    from app.services.olt_observed_state_adapter import (
-        ObservedReadResult,
-        get_cached_iphost_config,
-        persist_iphost_config,
-    )
-    from app.services.web_network_service_ports import _resolve_ont_olt_context
+    ont = network_service.ont_units.get_including_inactive(db, ont_id)
+    if not ont:
+        return False, "ONT not found", {}
 
-    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
-    if not olt or not fsp or olt_ont_id is None:
-        cached = get_cached_iphost_config(ont) if ont else None
-        if cached:
-            return cached
-        return ObservedReadResult(
-            ok=False,
-            message="Cannot resolve OLT context for this ONT",
-            data={},
-            source="none",
-        )
+    # Find active assignment
+    active_assignment = None
+    for assignment in getattr(ont, "assignments", []):
+        if getattr(assignment, "active", False):
+            active_assignment = assignment
+            break
 
-    cached = _read_iphost_cache(str(ont.id))
-    if cached is not None:
-        return ObservedReadResult(
-            ok=True,
-            message="Using recently fetched IPHOST configuration.",
-            data=cached["config"],
-            source="cache",
-            fetched_at=cached["fetched_at"],
-            stale=False,
-        )
+    if not active_assignment:
+        return True, "No active assignment - management IP not configured", {}
 
-    ok, message, config = get_ont_iphost_config(olt, fsp, olt_ont_id)
-    if ok:
-        persist_iphost_config(db, ont, config)
-        _write_iphost_cache(
-            str(ont.id),
-            config,
-            fetched_at=getattr(ont, "olt_observed_snapshot_at", None),
-        )
-        return ObservedReadResult(
-            ok=True,
-            message=message,
-            data=config,
-            source="live",
-            fetched_at=getattr(ont, "olt_observed_snapshot_at", None),
-            stale=False,
-        )
-    cached = get_cached_iphost_config(ont)
-    if cached:
-        return ObservedReadResult(
-            ok=True,
-            message=f"Live IPHOST read unavailable: {message}",
-            data=cached.data,
-            source=cached.source,
-            fetched_at=cached.fetched_at,
-            stale=True,
-        )
-    return ObservedReadResult(
-        ok=False,
-        message=message,
-        data={},
-        source="live",
-    )
+    mgmt_ip_mode = getattr(active_assignment, "mgmt_ip_mode", None)
+    if mgmt_ip_mode is None or (
+        hasattr(mgmt_ip_mode, "value") and mgmt_ip_mode.value == "inactive"
+    ):
+        return True, "Management IP mode is inactive", {}
 
+    # Build config dict from assignment
+    config: dict[str, str] = {}
+    mode_value = mgmt_ip_mode.value if hasattr(mgmt_ip_mode, "value") else str(mgmt_ip_mode)
+    config["IP Mode"] = mode_value.upper()
 
-def _iphost_cache_key(ont_id: str) -> str:
-    return f"ont:{ont_id}:iphost_config"
+    if mode_value == "static_ip":
+        ip_address = getattr(active_assignment, "mgmt_ip_address", None)
+        if ip_address:
+            config["IP Address"] = ip_address
 
+    # Get VLAN from assignment or OLT config pack
+    mgmt_vlan = getattr(active_assignment, "mgmt_vlan", None)
+    if mgmt_vlan:
+        config["VLAN"] = str(mgmt_vlan.tag)
 
-def _read_iphost_cache(ont_id: str) -> dict[str, object] | None:
-    from app.services.olt_observed_state_adapter import _parse_datetime
-    from app.services.redis_client import safe_get
-
-    raw = safe_get(_iphost_cache_key(ont_id))
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict) or not isinstance(payload.get("config"), dict):
-        return None
-    return {
-        "config": {str(key): str(value) for key, value in payload["config"].items()},
-        "fetched_at": _parse_datetime(payload.get("fetched_at")),
-    }
-
-
-def _write_iphost_cache(
-    ont_id: str, config: dict[str, str], *, fetched_at: object
-) -> None:
-    from app.services.redis_client import safe_set
-
-    payload = {
-        "config": dict(config),
-        "fetched_at": (
-            fetched_at.isoformat() if hasattr(fetched_at, "isoformat") else None
-        ),
-    }
-    safe_set(
-        _iphost_cache_key(ont_id),
-        json.dumps(payload),
-        ttl=IPHOST_CONFIG_TTL_SECONDS,
-    )
+    return True, f"Management IP configured ({mode_value})", config
 
 
 def running_config_context(db: Session, ont_id: str) -> dict[str, object]:
