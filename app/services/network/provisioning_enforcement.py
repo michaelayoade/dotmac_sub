@@ -201,11 +201,13 @@ class ProvisioningEnforcement:
             if not ont or not ont.olt_device_id:
                 skipped += 1
                 continue
-            olt = db.get(OLTDevice, str(ont.olt_device_id))
-            if not olt or not olt.tr069_acs_server_id:
+            from app.services import tr069 as tr069_service
+
+            acs_server_id = tr069_service.resolve_acs_server_for_ont(db, ont=ont)
+            if not acs_server_id:
                 skipped += 1
                 continue
-            ont.tr069_acs_server_id = olt.tr069_acs_server_id
+            ont.tr069_acs_server_id = acs_server_id
             updated += 1
 
         if updated:

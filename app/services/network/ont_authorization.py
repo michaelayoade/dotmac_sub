@@ -244,6 +244,13 @@ def _resolve_authorized_autofind_candidate(
         return True, "Authorization succeeded; autofind cleanup will run later."
 
 
+def _resolve_acs_for_new_ont(db: Session, olt_id: str) -> str | None:
+    """Resolve ACS server ID for a new ONT from config pack."""
+    from app.services import tr069 as tr069_service
+
+    return tr069_service.resolve_acs_server_for_ont(db, olt_id=olt_id)
+
+
 def create_or_find_ont_for_authorized_serial(
     db: Session,
     *,
@@ -343,7 +350,7 @@ def create_or_find_ont_for_authorized_serial(
         last_seen_at=datetime.now(UTC) if observed_online_status else None,
         last_sync_source="olt_authorization" if observed_online_status else None,
         last_sync_at=datetime.now(UTC) if observed_online_status else None,
-        tr069_acs_server_id=getattr(olt, "tr069_acs_server_id", None) if olt else None,
+        tr069_acs_server_id=_resolve_acs_for_new_ont(db, olt_id),
         pon_type="gpon",
         name=display_serial,
         desired_config={},

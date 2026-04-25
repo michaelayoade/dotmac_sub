@@ -53,6 +53,50 @@ _STALE_INFORM_SERVICE_APPLY_DAYS = 5
 logger = logging.getLogger(__name__)
 
 
+def resolve_acs_server_for_ont(
+    db: Session,
+    *,
+    ont: object | None = None,
+    olt_id: str | None = None,
+) -> str | None:
+    """Resolve the ACS server ID for an ONT using config pack.
+
+    Uses OLT config pack as the source of truth for ACS server.
+    Priority:
+    1. ONT's desired_config.tr069.acs_server_id (if ont provided)
+    2. OLT config pack's tr069_acs_server_id
+
+    Args:
+        ont: OntUnit instance (optional, used for desired_config lookup)
+        olt_id: OLT ID to resolve config pack from (used if ont not provided
+                or ont.olt_device_id is None)
+
+    Returns the UUID string of the ACS server, or None if none available.
+    """
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
+
+    # If ont provided, use resolve_effective_ont_config
+    if ont is not None:
+        effective = resolve_effective_ont_config(db, ont)
+        acs_server_id = effective.get("tr069_acs_server_id")
+        if acs_server_id:
+            return str(acs_server_id)
+
+    # Fall back to config pack from olt_id
+    resolved_olt_id = olt_id
+    if resolved_olt_id is None and ont is not None:
+        resolved_olt_id = getattr(ont, "olt_device_id", None)
+        if resolved_olt_id:
+            resolved_olt_id = str(resolved_olt_id)
+
+    if resolved_olt_id:
+        config_pack = resolve_olt_config_pack(db, resolved_olt_id)
+        if config_pack and config_pack.tr069_acs_server_id:
+            return config_pack.tr069_acs_server_id
+
+    return None
+
+
 def _job_extra(
     job: Tr069Job,
     *,

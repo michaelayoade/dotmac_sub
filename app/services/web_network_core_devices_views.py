@@ -49,6 +49,58 @@ from app.services.web_network_core_devices_inventory import (
 
 logger = logging.getLogger(__name__)
 
+# Staleness threshold for auto-refresh (15 minutes)
+_STALE_THRESHOLD_MINUTES = 15
+
+
+def _maybe_queue_stale_ont_refresh(ont: object, *, ont_id: str) -> bool:
+    """Queue a background TR-069 refresh if ONT data is stale.
+
+    Checks if tr069_last_snapshot_at is older than _STALE_THRESHOLD_MINUTES.
+    If stale and ONT has TR-069 configured, queues a Celery task to refresh.
+
+    Returns True if a refresh was queued, False otherwise.
+    """
+    snapshot_at = getattr(ont, "tr069_last_snapshot_at", None)
+    if snapshot_at is None:
+        return False
+
+    # Check if snapshot is stale
+    now = datetime.now(UTC)
+    if snapshot_at.tzinfo is None:
+        # Assume UTC if naive
+        from datetime import timezone
+
+        snapshot_at = snapshot_at.replace(tzinfo=timezone.utc)
+
+    age = now - snapshot_at
+    if age < timedelta(minutes=_STALE_THRESHOLD_MINUTES):
+        return False
+
+    # Check if ONT has TR-069 configured
+    acs_device_id = getattr(ont, "acs_device_id", None)
+    if not acs_device_id:
+        return False
+
+    # Queue background refresh
+    try:
+        from app.tasks.tr069 import refresh_single_ont_runtime
+
+        refresh_single_ont_runtime.delay(ont_id)
+        logger.info(
+            "Queued stale ONT refresh for %s (age=%s)",
+            ont_id,
+            age,
+        )
+        return True
+    except Exception:
+        logger.warning(
+            "Failed to queue stale ONT refresh for %s",
+            ont_id,
+            exc_info=True,
+        )
+        return False
+
 
 def _nas_status_to_monitoring_status(status: NasDeviceStatus | None) -> DeviceStatus:
     if status == NasDeviceStatus.maintenance:
@@ -1517,9 +1569,6 @@ def onts_list_page_data(
         .order_by(OntUnit.vendor)
     ).all()
 
-    # Displayed ONTs use desired_config directly; no active profile state is shown.
-    profile_info: dict[str, dict[str, str]] = {}
-
     return {
         "onts": onts,
         "diagnostics_onts": diagnostics_onts,
@@ -1527,7 +1576,6 @@ def onts_list_page_data(
         "status_filter": status_filter,
         "signal_data": signal_data,
         "assignment_info": assignment_info,
-        "profile_info": profile_info,
         "serial_display_by_ont_id": serial_display_by_ont_id,
         "hex_serial_by_ont_id": hex_serial_by_ont_id,
         "olts": olts,
@@ -1857,6 +1905,10 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
             None
         )
+
+    # Auto-refresh stale TR-069 data in background (> 15 min old)
+    _maybe_queue_stale_ont_refresh(ont, ont_id=ont_id)
+
     observed_runtime_summary = _acs_observed_runtime_summary(
         acs_observed_intent,
         db=db,

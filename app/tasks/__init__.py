@@ -94,6 +94,9 @@ from app.tasks.tr069 import (
     refresh_ont_runtime_data as tr069_refresh_ont_runtime,
 )
 from app.tasks.tr069 import (
+    refresh_single_ont_runtime as tr069_refresh_single_ont,
+)
+from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
 from app.tasks.usage import import_radius_accounting, run_usage_rating
@@ -180,6 +183,7 @@ __all__ = [
     "tr069_apply_acs_config",
     "tr069_check_device_health",
     "tr069_refresh_ont_runtime",
+    "tr069_refresh_single_ont",
     "cleanup_tr069_records",
     "run_scheduled_backups",
     "update_subscriber_counts",

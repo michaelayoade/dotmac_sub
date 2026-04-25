@@ -239,7 +239,11 @@ def sync_authorized_ont_from_olt_snmp(
         ont.last_sync_source = "olt_snmp_targeted"
         ont.last_sync_at = now
         if ont.tr069_acs_server_id is None:
-            ont.tr069_acs_server_id = olt.tr069_acs_server_id
+            from app.services import tr069 as tr069_service
+
+            ont.tr069_acs_server_id = tr069_service.resolve_acs_server_for_ont(
+                db, ont=ont, olt_id=str(olt.id)
+            )
         apply_resolved_status_for_model(ont, now=now)
         assignment_alignment = align_ont_assignment_to_authoritative_fsp(
             db,

@@ -874,6 +874,53 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
         db.close()
 
 
+@celery_app.task(name="app.tasks.tr069.refresh_single_ont_runtime")
+def refresh_single_ont_runtime(ont_id: str) -> dict[str, object]:
+    """Refresh TR-069 runtime data for a single ONT.
+
+    Called on-demand when viewing an ONT detail page with stale data.
+    Fetches TR-069 parameters from GenieACS and persists observed runtime
+    fields (WAN IP, PPPoE status, WiFi clients, etc.) to the OntUnit record.
+
+    Args:
+        ont_id: UUID string of the ONT to refresh.
+
+    Returns:
+        Stats: {ont_id, success, error, source}.
+    """
+    from app.services.acs_service_intent_adapter import acs_service_intent_adapter
+
+    logger.info("Refreshing TR-069 runtime for ONT %s", ont_id)
+    db = db_session_adapter.create_session()
+    try:
+        summary = acs_service_intent_adapter.refresh_observed_summary_for_ont(
+            db, ont_id=ont_id
+        )
+        success = bool(summary.available and not summary.error)
+        logger.info(
+            "TR-069 runtime refresh for ONT %s: success=%s source=%s",
+            ont_id,
+            success,
+            summary.source,
+        )
+        return {
+            "ont_id": ont_id,
+            "success": success,
+            "error": summary.error,
+            "source": summary.source,
+        }
+    except Exception as exc:
+        logger.exception("TR-069 runtime refresh failed for ONT %s", ont_id)
+        return {
+            "ont_id": ont_id,
+            "success": False,
+            "error": str(exc),
+            "source": None,
+        }
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.tr069.cleanup_stale_genieacs_tasks")
 def cleanup_stale_genieacs_tasks(
     max_age_hours: int = 1,

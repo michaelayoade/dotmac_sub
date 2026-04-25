@@ -1055,7 +1055,7 @@ def build_beat_schedule() -> dict:
             session,
             SettingDomain.network,
             "tr069_ont_runtime_refresh_interval_seconds",
-            1800,  # 30 minutes
+            900,  # 15 minutes
         )
         tr069_runtime_interval = max(tr069_runtime_interval, 300)  # Min: 5 minutes
         _sync_scheduled_task(

@@ -86,10 +86,11 @@ def persist_authorized_ont_inventory(
     ont.external_id = str(ont_id)
     ont.online_status = OnuOnlineStatus.unknown
     ont.authorization_status = OntAuthorizationStatus.authorized
-    ont.tr069_acs_server_id = olt.tr069_acs_server_id
+    acs_server_id = tr069_service.resolve_acs_server_for_ont(db, ont=ont, olt_id=str(olt.id))
+    ont.tr069_acs_server_id = acs_server_id
     ont.last_sync_source = "olt_ssh_authorize"
     ont.last_sync_at = now
-    tr069_service.sync_ont_acs_server(db, ont, olt.tr069_acs_server_id)
+    tr069_service.sync_ont_acs_server(db, ont, acs_server_id)
 
     if candidate is not None:
         if candidate.vendor_id:
