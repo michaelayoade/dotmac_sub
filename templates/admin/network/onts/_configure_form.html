@@ -18,20 +18,22 @@
 </div>
 {% endif %}
 
-{# Extract values from ont object for form defaults #}
-{% set wan_mode_val = ont.wan_mode.value if ont.wan_mode else '' %}
-{% set mgmt_ip_mode_val = ont.mgmt_ip_mode.value if ont.mgmt_ip_mode else '' %}
-{% set config_method_val = ont.config_method.value if ont.config_method else '' %}
-{% set ip_protocol_val = ont.ip_protocol.value if ont.ip_protocol else '' %}
-{% set wan_vlan_id_str = ont.wan_vlan_id|string if ont.wan_vlan_id else '' %}
-{% set mgmt_vlan_id_str = ont.mgmt_vlan_id|string if ont.mgmt_vlan_id else '' %}
+{# Form defaults come from resolved OLT defaults + OntUnit.desired_config. #}
+{% set wan_mode_val = wan_mode or '' %}
+{% set mgmt_ip_mode_val = mgmt_ip_mode or '' %}
+{% set config_method_val = config_method or '' %}
+{% set ip_protocol_val = ip_protocol or '' %}
+{% set wan_vlan_id_str = wan_vlan_id|string if wan_vlan_id else '' %}
+{% set mgmt_vlan_id_str = mgmt_vlan_id|string if mgmt_vlan_id else '' %}
+{% set lan_dhcp_enabled_val = lan_dhcp_enabled if lan_dhcp_enabled is defined else none %}
+{% set wifi_enabled_val = wifi_enabled if wifi_enabled is defined else none %}
 {% set available_mgmt_ips = available_mgmt_ips if available_mgmt_ips is defined else [] %}
 {% set mgmt_ip_pool = mgmt_ip_pool if mgmt_ip_pool is defined else none %}
 {% set mgmt_ip_choice_message = mgmt_ip_choice_message if mgmt_ip_choice_message is defined else '' %}
 
 {# Determine if advanced sections have content to show indicator badges #}
-{% set has_mgmt_config = mgmt_ip_mode_val or mgmt_vlan_id_str or ont.mgmt_ip_address %}
-{% set has_lan_config = ont.lan_gateway_ip or ont.lan_subnet_mask or ont.lan_dhcp_enabled is not none %}
+{% set has_mgmt_config = mgmt_ip_mode_val or mgmt_vlan_id_str or mgmt_ip_address %}
+{% set has_lan_config = lan_gateway_ip or lan_subnet_mask or lan_dhcp_enabled_val is not none %}
 
 <div class="space-y-6">
     <div class="flex items-center justify-between">
@@ -57,7 +59,7 @@
           x-data="{
               wanMode: '{{ wan_mode_val }}',
               mgmtIpMode: '{{ mgmt_ip_mode_val }}',
-              dhcpEnabled: {% if ont.lan_dhcp_enabled is not none %}{{ 'true' if ont.lan_dhcp_enabled else 'false' }}{% else %}null{% endif %}
+              dhcpEnabled: {% if lan_dhcp_enabled_val is not none %}{{ 'true' if lan_dhcp_enabled_val else 'false' }}{% else %}null{% endif %}
           }">
         {% include "components/forms/csrf_input.html" %}
 
@@ -109,7 +111,7 @@
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                     <label for="pppoe_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Username</label>
-                    <input type="text" id="pppoe_username" name="pppoe_username" value="{{ ont.pppoe_username or '' }}"
+                    <input type="text" id="pppoe_username" name="pppoe_username" value="{{ pppoe_username or '' }}"
                            placeholder="username@isp.com"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
@@ -130,14 +132,14 @@
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div class="flex items-end">
                     <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" name="wifi_enabled" value="true" {% if ont.wifi_enabled %}checked{% endif %}
+                        <input type="checkbox" name="wifi_enabled" value="true" {% if wifi_enabled_val %}checked{% endif %}
                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700">
                         <span class="text-sm text-slate-700 dark:text-slate-300">WiFi Enabled</span>
                     </label>
                 </div>
                 <div>
                     <label for="wifi_ssid" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SSID</label>
-                    <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ ont.wifi_ssid or '' }}"
+                    <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ wifi_ssid or '' }}"
                            maxlength="32" placeholder="Network name"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
@@ -159,22 +161,22 @@
                     <label for="wifi_security_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Security Mode</label>
                     <select id="wifi_security_mode" name="wifi_security_mode"
                             class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if not ont.wifi_security_mode %}selected{% endif %}>Not set</option>
-                        <option value="WPA2-Personal" {% if ont.wifi_security_mode == 'WPA2-Personal' %}selected{% endif %}>WPA2-Personal</option>
-                        <option value="WPA-WPA2-Personal" {% if ont.wifi_security_mode == 'WPA-WPA2-Personal' %}selected{% endif %}>WPA-WPA2-Personal</option>
-                        <option value="WPA3-Personal" {% if ont.wifi_security_mode == 'WPA3-Personal' %}selected{% endif %}>WPA3-Personal</option>
-                        <option value="Basic" {% if ont.wifi_security_mode == 'Basic' %}selected{% endif %}>Basic</option>
-                        <option value="None" {% if ont.wifi_security_mode == 'None' %}selected{% endif %}>None</option>
+                        <option value="" {% if not wifi_security_mode %}selected{% endif %}>Not set</option>
+                        <option value="WPA2-Personal" {% if wifi_security_mode == 'WPA2-Personal' %}selected{% endif %}>WPA2-Personal</option>
+                        <option value="WPA-WPA2-Personal" {% if wifi_security_mode == 'WPA-WPA2-Personal' %}selected{% endif %}>WPA-WPA2-Personal</option>
+                        <option value="WPA3-Personal" {% if wifi_security_mode == 'WPA3-Personal' %}selected{% endif %}>WPA3-Personal</option>
+                        <option value="Basic" {% if wifi_security_mode == 'Basic' %}selected{% endif %}>Basic</option>
+                        <option value="None" {% if wifi_security_mode == 'None' %}selected{% endif %}>None</option>
                     </select>
                 </div>
                 <div>
                     <label for="wifi_channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Channel</label>
                     <select id="wifi_channel" name="wifi_channel"
                             class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if not ont.wifi_channel %}selected{% endif %}>Leave unchanged</option>
-                        <option value="0" {% if ont.wifi_channel == '0' %}selected{% endif %}>Auto</option>
+                        <option value="" {% if not wifi_channel %}selected{% endif %}>Leave unchanged</option>
+                        <option value="0" {% if wifi_channel == '0' %}selected{% endif %}>Auto</option>
                         {% for channel in range(1, 14) %}
-                        <option value="{{ channel }}" {% if ont.wifi_channel|string == channel|string %}selected{% endif %}>Channel {{ channel }}</option>
+                        <option value="{{ channel }}" {% if wifi_channel|string == channel|string %}selected{% endif %}>Channel {{ channel }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -210,7 +212,7 @@
                 <div x-show="mgmtIpMode === 'static_ip'" x-transition x-cloak>
                     <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
                     {% if available_mgmt_ips %}
-                    {% set current_mgmt_ip = ont.mgmt_ip_address or '' %}
+                    {% set current_mgmt_ip = mgmt_ip_address or '' %}
                     {% set selected_state = namespace(found=false) %}
                     <select id="mgmt_ip_address" name="mgmt_ip_address"
                             class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -229,7 +231,7 @@
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Pool: {{ mgmt_ip_pool.name }} ({{ mgmt_ip_pool.cidr }})</p>
                     {% endif %}
                     {% else %}
-                    <input type="text" id="mgmt_ip_address" name="mgmt_ip_address" value="{{ ont.mgmt_ip_address or '' }}"
+                    <input type="text" id="mgmt_ip_address" name="mgmt_ip_address" value="{{ mgmt_ip_address or '' }}"
                            placeholder="192.168.1.100"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     {% if mgmt_ip_choice_message %}

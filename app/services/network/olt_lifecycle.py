@@ -18,7 +18,6 @@ from app.models.network import (
     IpPool,
     OLTDevice,
     OntAssignment,
-    OntProvisioningProfile,
     OntUnit,
     PonPort,
     Vlan,
@@ -89,7 +88,6 @@ class OltDeletionImpact:
     active_assignments: int
     vlans_to_orphan: int
     ip_pools_to_orphan: int
-    provisioning_profiles: int
     can_delete: bool
     blocking_reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -150,16 +148,6 @@ def get_deletion_impact(db: Session, olt_id: str) -> OltDeletionImpact | None:
         or 0
     )
 
-    # Count provisioning profiles scoped to this OLT
-    provisioning_profiles = (
-        db.scalar(
-            select(func.count(OntProvisioningProfile.id))
-            .where(OntProvisioningProfile.olt_device_id == olt.id)
-            .where(OntProvisioningProfile.is_active.is_(True))
-        )
-        or 0
-    )
-
     blocking_reasons: list[str] = []
     warnings: list[str] = []
 
@@ -176,11 +164,6 @@ def get_deletion_impact(db: Session, olt_id: str) -> OltDeletionImpact | None:
         warnings.append(
             f"{ip_pools_to_orphan} IP pool(s) will lose their OLT association"
         )
-    if provisioning_profiles > 0:
-        warnings.append(
-            f"{provisioning_profiles} provisioning profile(s) are scoped to this OLT"
-        )
-
     return OltDeletionImpact(
         olt_id=str(olt.id),
         olt_name=olt.name,
@@ -188,7 +171,6 @@ def get_deletion_impact(db: Session, olt_id: str) -> OltDeletionImpact | None:
         active_assignments=active_assignments,
         vlans_to_orphan=vlans_to_orphan,
         ip_pools_to_orphan=ip_pools_to_orphan,
-        provisioning_profiles=provisioning_profiles,
         can_delete=len(blocking_reasons) == 0,
         blocking_reasons=blocking_reasons,
         warnings=warnings,
