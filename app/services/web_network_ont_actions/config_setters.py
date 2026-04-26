@@ -766,3 +766,49 @@ def set_http_management(
         },
     )
     return result
+
+
+def normalize_wan_structure(
+    db: Session,
+    ont_id: str,
+    *,
+    preserve_mgmt: bool = True,
+    request: Request | None = None,
+) -> ActionResult:
+    """Normalize WAN structure to standard layout via TR-069.
+
+    Deletes non-management WAN instances to establish consistent WCD layout:
+    - WCD1 = Management (TR-069, static IP)
+    - WCD2 = Internet (PPPoE/DHCP)
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit ID.
+        preserve_mgmt: If True, preserve the management WAN service.
+        request: Optional request for audit logging.
+
+    Returns:
+        ActionResult with normalization details.
+    """
+    from app.services.network.ont_action_wan import (
+        normalize_wan_structure as _normalize_wan_structure,
+    )
+
+    result = _normalize_wan_structure(
+        db,
+        ont_id,
+        preserve_mgmt=preserve_mgmt,
+    )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="normalize_wan_structure",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "preserve_mgmt": preserve_mgmt,
+            "data": result.data,
+        },
+    )
+    return result

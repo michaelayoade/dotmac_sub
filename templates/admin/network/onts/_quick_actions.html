@@ -1,0 +1,212 @@
+{# Quick Actions Bar - Fast access to common ONT operations #}
+
+<div class="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+    {# Get Status #}
+    <button type="button"
+            hx-post="/admin/network/onts/{{ ont.id }}/refresh-status"
+            hx-swap="none"
+            hx-indicator="#status-spinner"
+            class="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+        <svg id="status-spinner" class="htmx-indicator h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <svg class="h-4 w-4 htmx-indicator-hide" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Get Status
+    </button>
+
+    {# Running Config #}
+    <button type="button"
+            hx-get="/admin/network/onts/{{ ont.id }}/running-config"
+            hx-target="#running-config-modal-content"
+            hx-swap="innerHTML"
+            @click="$dispatch('open-modal', { id: 'running-config-modal' })"
+            class="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+        Running Config
+    </button>
+
+    {# TR-069 Info #}
+    <button type="button"
+            hx-get="/admin/network/onts/{{ ont.id }}/tr069-status"
+            hx-target="#tr069-modal-content"
+            hx-swap="innerHTML"
+            @click="$dispatch('open-modal', { id: 'tr069-modal' })"
+            class="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+        TR-069 Info
+    </button>
+
+    {# LIVE! Toggle - Placeholder for real-time mode #}
+    <button type="button"
+            x-data="{ live: false }"
+            @click="live = !live; if(live) { $dispatch('enable-live-mode') } else { $dispatch('disable-live-mode') }"
+            :class="live ? 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'"
+            class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors">
+        <span class="relative flex h-2 w-2" x-show="live">
+            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75"></span>
+            <span class="relative inline-flex h-2 w-2 rounded-full bg-white"></span>
+        </span>
+        <svg x-show="!live" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+        <span x-text="live ? 'LIVE!' : 'LIVE'"></span>
+    </button>
+
+    {# Divider #}
+    <div class="hidden h-6 w-px bg-slate-300 dark:bg-slate-600 sm:block"></div>
+
+    {# Reboot dropdown #}
+    <div class="relative" x-data="{ open: false }">
+        <button type="button" @click="open = !open" @click.outside="open = false" class="inline-flex items-center gap-1.5 rounded-lg bg-amber-100 px-3 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Reboot
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+        <div x-show="open" x-cloak x-transition class="absolute right-0 z-50 mt-2 w-56 origin-top-right rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/reboot"
+                    hx-swap="none"
+                    @click="open = false"
+                    class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                <div>
+                    <div class="font-medium">Soft Reboot</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Request device restart via TR-069</div>
+                </div>
+            </button>
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/reboot?source=olt"
+                    hx-swap="none"
+                    @click="open = false"
+                    class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                <div>
+                    <div class="font-medium">OLT Reboot</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Power cycle via OLT command</div>
+                </div>
+            </button>
+            <hr class="my-1 border-slate-200 dark:border-slate-700">
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/connection-request"
+                    hx-swap="none"
+                    @click="open = false"
+                    class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+                <div>
+                    <div class="font-medium">Trigger Connection Request</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Wake up TR-069 session</div>
+                </div>
+            </button>
+            <hr class="my-1 border-slate-200 dark:border-slate-700">
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/wan/normalize"
+                    hx-swap="none"
+                    hx-confirm="Normalize WAN structure? This will delete non-management WAN services and may briefly interrupt connectivity."
+                    @click="open = false"
+                    class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"/></svg>
+                <div>
+                    <div class="font-medium">Normalize WAN</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Reset WAN services to standard layout</div>
+                </div>
+            </button>
+        </div>
+    </div>
+
+    {# Spacer #}
+    <div class="flex-1"></div>
+
+    {# Signal indicators (compact) #}
+    {% if signal_info %}
+    <div class="hidden items-center gap-3 text-sm lg:flex">
+        {# OLT RX #}
+        {% if signal_info.olt_rx_dbm is not none %}
+        <div class="flex items-center gap-1.5">
+            <span class="text-xs text-slate-500 dark:text-slate-400">OLT RX</span>
+            <span class="font-mono font-semibold tabular-nums {{ signal_info.olt_quality_class }}">{{ "%.1f"|format(signal_info.olt_rx_dbm) }} dBm</span>
+        </div>
+        {% endif %}
+
+        {# ONU RX #}
+        {% if signal_info.onu_rx_dbm is not none %}
+        <div class="flex items-center gap-1.5">
+            <span class="text-xs text-slate-500 dark:text-slate-400">ONU RX</span>
+            <span class="font-mono font-semibold tabular-nums {{ signal_info.onu_quality_class }}">{{ "%.1f"|format(signal_info.onu_rx_dbm) }} dBm</span>
+        </div>
+        {% endif %}
+
+        {# Distance #}
+        {% if signal_info.distance_meters is not none %}
+        <div class="flex items-center gap-1.5">
+            <span class="text-xs text-slate-500 dark:text-slate-400">Distance</span>
+            <span class="font-mono font-semibold tabular-nums text-slate-700 dark:text-slate-300">{{ "{:,}".format(signal_info.distance_meters) }}m</span>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+{# Running Config Modal #}
+<div x-data="{ show: false }"
+     x-show="show"
+     x-cloak
+     @open-modal.window="if ($event.detail.id === 'running-config-modal') show = true"
+     @keydown.escape.window="show = false"
+     class="fixed inset-0 z-50 overflow-y-auto"
+     aria-labelledby="modal-title"
+     role="dialog"
+     aria-modal="true">
+    <div class="flex min-h-screen items-center justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+        <div x-show="show" x-transition:enter="ease-out duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" @click="show = false" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity" aria-hidden="true"></div>
+        <span class="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
+        <div x-show="show" x-transition:enter="ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100" x-transition:leave="ease-in duration-200" x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100" x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" class="relative inline-block w-full max-w-3xl transform overflow-hidden rounded-2xl bg-white text-left align-bottom shadow-xl transition-all dark:bg-slate-800 sm:my-8 sm:align-middle">
+            <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white" id="modal-title">OLT Running Config</h3>
+                <button type="button" @click="show = false" class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div id="running-config-modal-content" class="max-h-[70vh] overflow-y-auto px-6 py-4">
+                <div class="flex items-center justify-center py-8 text-sm text-slate-400">
+                    <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    Loading running config...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# TR-069 Info Modal #}
+<div x-data="{ show: false }"
+     x-show="show"
+     x-cloak
+     @open-modal.window="if ($event.detail.id === 'tr069-modal') show = true"
+     @keydown.escape.window="show = false"
+     class="fixed inset-0 z-50 overflow-y-auto"
+     aria-labelledby="tr069-modal-title"
+     role="dialog"
+     aria-modal="true">
+    <div class="flex min-h-screen items-center justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+        <div x-show="show" x-transition:enter="ease-out duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" @click="show = false" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity" aria-hidden="true"></div>
+        <span class="hidden sm:inline-block sm:h-screen sm:align-middle" aria-hidden="true">&#8203;</span>
+        <div x-show="show" x-transition:enter="ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100" x-transition:leave="ease-in duration-200" x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100" x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" class="relative inline-block w-full max-w-2xl transform overflow-hidden rounded-2xl bg-white text-left align-bottom shadow-xl transition-all dark:bg-slate-800 sm:my-8 sm:align-middle">
+            <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white" id="tr069-modal-title">TR-069 / ACS Status</h3>
+                <button type="button" @click="show = false" class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-slate-300">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div id="tr069-modal-content" class="max-h-[70vh] overflow-y-auto px-6 py-4">
+                <div class="flex items-center justify-center py-8 text-sm text-slate-400">
+                    <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    Loading TR-069 status...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

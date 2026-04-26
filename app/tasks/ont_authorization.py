@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.ont_authorization.ensure_tr069_acs_connectivity")
-@idempotent_task(key_func=lambda ont_unit_id, **kw: f"tr069_connect:{ont_unit_id}")
+@idempotent_task(key_func=lambda ont_unit_id, *args, **kw: f"tr069_connect:{ont_unit_id}")
 def ensure_tr069_acs_connectivity(
     ont_unit_id: str,
     olt_id: str,
@@ -27,6 +27,7 @@ def ensure_tr069_acs_connectivity(
     2. Resolves the effective TR-069 profile ID from config pack / desired config
     3. Binds the TR-069 profile on the OLT (so ONT knows ACS URL)
     4. Waits for the ONT to send INFORM to GenieACS (up to 120s)
+    5. Normalizes WAN structure via TR-069 (deletes non-management WAN instances)
 
     This is non-blocking to authorization - if it fails, the ONT is still
     authorized but may need manual TR-069 binding later.
@@ -215,6 +216,51 @@ def ensure_tr069_acs_connectivity(
                     "TR-069 ACS connectivity: ONT %s successfully registered with ACS",
                     ont.serial_number,
                 )
+
+                # Step 4: Normalize WAN structure after ACS bootstrap
+                # This ensures consistent WCD layout for TR-069 configuration
+                try:
+                    from app.services.network.ont_action_wan import (
+                        normalize_wan_structure,
+                    )
+
+                    logger.info(
+                        "TR-069 ACS connectivity: Normalizing WAN structure for ONT %s",
+                        ont.serial_number,
+                    )
+                    normalize_result = normalize_wan_structure(
+                        db, ont_unit_id, preserve_mgmt=True
+                    )
+                    steps.append({
+                        "name": "Normalize WAN structure",
+                        "success": normalize_result.success,
+                        "message": normalize_result.message,
+                        "data": normalize_result.data,
+                    })
+                    if normalize_result.success:
+                        logger.info(
+                            "TR-069 ACS connectivity: WAN normalization complete for ONT %s",
+                            ont.serial_number,
+                        )
+                    else:
+                        logger.warning(
+                            "TR-069 ACS connectivity: WAN normalization failed for ONT %s: %s",
+                            ont.serial_number,
+                            normalize_result.message,
+                        )
+                        # Non-fatal - ONT is still usable, just may have non-standard WAN layout
+                except Exception as exc:
+                    logger.warning(
+                        "TR-069 ACS connectivity: Error normalizing WAN for ONT %s: %s",
+                        ont.serial_number,
+                        exc,
+                    )
+                    steps.append({
+                        "name": "Normalize WAN structure",
+                        "success": False,
+                        "message": str(exc),
+                    })
+                    # Non-fatal - continue with success since ACS bootstrap worked
             else:
                 logger.warning(
                     "TR-069 ACS connectivity: ONT %s did not inform ACS: %s",

@@ -1694,6 +1694,45 @@ def ont_set_http_management(
     )
 
 
+@router.post(
+    "/onts/{ont_id}/wan/normalize",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_normalize_wan_structure(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Normalize WAN structure to standard layout via TR-069.
+
+    Deletes non-management WAN instances and establishes consistent WCD layout:
+    - WCD1 = Management (TR-069, static IP)
+    - WCD2 = Internet (PPPoE/DHCP)
+
+    This ensures TR-069 parameter paths are predictable across all ONTs.
+    """
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+
+    form = parse_form_data_sync(request)
+    preserve_mgmt_raw = _form_str(form, "preserve_mgmt").strip().lower()
+    preserve_mgmt = preserve_mgmt_raw not in {"false", "0", "no", "off"}
+
+    result = web_network_ont_actions_service.normalize_wan_structure(
+        db,
+        ont_id,
+        preserve_mgmt=preserve_mgmt,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Normalize WAN Structure",
+    )
+
+
 # =============================================================================
 # ONT Decommission Routes
 # =============================================================================
@@ -1778,3 +1817,103 @@ def ont_decommission_execute(
             status_code=400,
             headers=_toast_headers(result.message, "error"),
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ONT Detail Tab Endpoints (for tabbed UI)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/onts/{ont_id}/hosts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_hosts_tab(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: Connected hosts table for the Hosts tab."""
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    lan_hosts = observed.get("lan_hosts", [])
+
+    # Normalize host data for template
+    hosts = []
+    for host in lan_hosts if isinstance(lan_hosts, list) else []:
+        if not isinstance(host, dict):
+            continue
+        hosts.append({
+            "hostname": host.get("host_name") or host.get("HostName") or "-",
+            "mac_address": host.get("mac_address") or host.get("MACAddress") or "-",
+            "ip_address": host.get("ip_address") or host.get("IPAddress") or "-",
+            "interface": host.get("interface_type") or host.get("InterfaceType") or "-",
+            "active": str(host.get("active", "")).lower() not in {"false", "0", "no"},
+        })
+
+    context = _base_context(request, db, active_page="onts")
+    context["hosts"] = hosts
+    context["ont_id"] = ont_id
+    return templates.TemplateResponse(
+        "admin/network/onts/_hosts_table.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/tr069-status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_tr069_status_modal(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: TR-069/ACS status modal content."""
+    data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_tr069_status_modal.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/logs",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_logs_tab(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: Device logs for the Logs tab."""
+    # For now, return a placeholder - actual log fetching would require
+    # TR-069 DeviceLog parameter queries
+    context = _base_context(request, db, active_page="onts")
+    context["ont_id"] = ont_id
+    context["logs"] = []  # Placeholder - would be populated from TR-069
+    return templates.TemplateResponse(
+        "admin/network/onts/_logs_table.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/refresh-status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_refresh_status_get(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Refresh ONT status from OLT and TR-069 (GET for HTMX compatibility)."""
+    from app.services.network.ont_actions import OntActions
+
+    result = OntActions.refresh_status(db, ont_id)
+    if result.success:
+        db.commit()
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        headers=_toast_headers(
+            result.message, "success" if result.success else "error"
+        ),
+    )

@@ -1325,3 +1325,257 @@ def delete_wan_instance(
             success=False,
             message=f"Failed to delete WAN instance: {exc}",
         )
+
+
+# ---------------------------------------------------------------------------
+# WAN Structure Normalization
+# ---------------------------------------------------------------------------
+
+
+def _discover_wan_instances(
+    client: Any,
+    device: dict[str, Any],
+    root: str,
+) -> list[dict[str, Any]]:
+    """Discover all WAN instances on an IGD device.
+
+    Returns list of dicts with wcd_index, type (ppp/ip), service, vlan, is_mgmt.
+    """
+    instances: list[dict[str, Any]] = []
+
+    if root != "InternetGatewayDevice":
+        return instances
+
+    wan_device = (
+        device.get(root, {})
+        .get("WANDevice", {})
+        .get("1", {})
+        .get("WANConnectionDevice", {})
+    )
+    if not isinstance(wan_device, dict):
+        return instances
+
+    for wcd_key in sorted(wan_device.keys(), key=lambda k: int(k) if k.isdigit() else 999):
+        if not wcd_key.isdigit():
+            continue
+        wcd = wan_device[wcd_key]
+        if not isinstance(wcd, dict):
+            continue
+
+        wcd_index = int(wcd_key)
+
+        # Check PPP connections
+        ppp_container = wcd.get("WANPPPConnection", {})
+        if isinstance(ppp_container, dict):
+            for conn_key in ppp_container.keys():
+                if not conn_key.isdigit():
+                    continue
+                conn = ppp_container[conn_key]
+                if not isinstance(conn, dict):
+                    continue
+
+                service = str(
+                    client.extract_parameter_value(conn, "X_HW_SERVICELIST") or ""
+                ).upper()
+                vlan = client.extract_parameter_value(conn, "X_HW_VLAN")
+                name = client.extract_parameter_value(conn, "Name") or ""
+                is_mgmt = "TR069" in service or "MGMT" in service.upper() or "MANAGEMENT" in str(name).upper()
+
+                instances.append({
+                    "wcd_index": wcd_index,
+                    "conn_index": int(conn_key),
+                    "type": "ppp",
+                    "service": service,
+                    "vlan": vlan,
+                    "name": name,
+                    "is_mgmt": is_mgmt,
+                })
+
+        # Check IP connections
+        ip_container = wcd.get("WANIPConnection", {})
+        if isinstance(ip_container, dict):
+            for conn_key in ip_container.keys():
+                if not conn_key.isdigit():
+                    continue
+                conn = ip_container[conn_key]
+                if not isinstance(conn, dict):
+                    continue
+
+                service = str(
+                    client.extract_parameter_value(conn, "X_HW_SERVICELIST") or ""
+                ).upper()
+                vlan = client.extract_parameter_value(conn, "X_HW_VLAN")
+                name = client.extract_parameter_value(conn, "Name") or ""
+                is_mgmt = "TR069" in service or "MGMT" in service.upper() or "MANAGEMENT" in str(name).upper()
+
+                instances.append({
+                    "wcd_index": wcd_index,
+                    "conn_index": int(conn_key),
+                    "type": "ip",
+                    "service": service,
+                    "vlan": vlan,
+                    "name": name,
+                    "is_mgmt": is_mgmt,
+                })
+
+    return instances
+
+
+def normalize_wan_structure(
+    db: Session,
+    ont_id: str,
+    *,
+    mgmt_vlan: int | None = None,
+    internet_vlan: int | None = None,
+    preserve_mgmt: bool = True,
+) -> ActionResult:
+    """Normalize WAN structure by removing non-management WAN instances.
+
+    Deletes non-management WAN instances to prepare for fresh provisioning
+    with a predictable layout:
+    - WCD1 = Management (TR-069, static IP) - preserved by default
+    - WCD2 = Internet (PPPoE/DHCP) - created during subsequent provisioning
+
+    This ensures consistent TR-069 parameter paths across all ONTs regardless
+    of how they were originally provisioned.
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit primary key.
+        mgmt_vlan: Management VLAN tag (from config pack if not specified).
+        internet_vlan: Internet VLAN tag (from config pack if not specified).
+        preserve_mgmt: If True, don't delete the management WAN (default True).
+
+    Returns:
+        ActionResult with normalization details.
+    """
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
+
+    if root != "InternetGatewayDevice":
+        return ActionResult(
+            success=False,
+            message="WAN normalization is only supported for TR-098 (IGD) devices.",
+            data={"root": root, "unsupported": True},
+        )
+
+    # Get VLANs from config pack if not provided
+    if mgmt_vlan is None or internet_vlan is None:
+        olt_id = getattr(ont, "olt_device_id", None)
+        if olt_id:
+            config_pack = resolve_olt_config_pack(db, str(olt_id))
+            if config_pack:
+                if mgmt_vlan is None:
+                    mgmt_vlan_obj = getattr(config_pack, "management_vlan", None)
+                    if mgmt_vlan_obj and getattr(mgmt_vlan_obj, "tag", None):
+                        mgmt_vlan = mgmt_vlan_obj.tag
+                if internet_vlan is None:
+                    internet_vlan_obj = getattr(config_pack, "internet_vlan", None)
+                    if internet_vlan_obj and getattr(internet_vlan_obj, "tag", None):
+                        internet_vlan = internet_vlan_obj.tag
+
+    try:
+        device = client.get_device(device_id)
+    except GenieACSError as exc:
+        return ActionResult(success=False, message=f"Failed to fetch device: {exc}")
+
+    # Discover existing WAN instances
+    instances = _discover_wan_instances(client, device, root)
+
+    if not instances:
+        return ActionResult(
+            success=True,
+            message="No WAN instances found. Device may need OLT re-provisioning.",
+            data={"instances_found": 0, "action": "none"},
+        )
+
+    deleted_count = 0
+    preserved_count = 0
+    errors: list[str] = []
+
+    # Delete non-management instances (or all if preserve_mgmt=False)
+    for instance in instances:
+        if preserve_mgmt and instance["is_mgmt"]:
+            logger.info(
+                "Preserving management WAN on ONT %s: WCD%d %s (VLAN %s)",
+                ont.serial_number,
+                instance["wcd_index"],
+                instance["service"],
+                instance["vlan"],
+            )
+            preserved_count += 1
+            continue
+
+        # Build delete path
+        wcd_idx = instance["wcd_index"]
+        conn_idx = instance["conn_index"]
+        wan_type = instance["type"]
+
+        if wan_type == "ppp":
+            delete_path = (
+                f"{root}.WANDevice.1.WANConnectionDevice.{wcd_idx}."
+                f"WANPPPConnection.{conn_idx}."
+            )
+        else:
+            delete_path = (
+                f"{root}.WANDevice.1.WANConnectionDevice.{wcd_idx}."
+                f"WANIPConnection.{conn_idx}."
+            )
+
+        try:
+            client.delete_object(device_id, delete_path)
+            deleted_count += 1
+            logger.info(
+                "Deleted WAN instance on ONT %s: WCD%d/%s.%d (VLAN %s, service %s)",
+                ont.serial_number,
+                wcd_idx,
+                wan_type,
+                conn_idx,
+                instance["vlan"],
+                instance["service"],
+            )
+        except GenieACSError as exc:
+            error_msg = f"Failed to delete WCD{wcd_idx}/{wan_type}.{conn_idx}: {exc}"
+            errors.append(error_msg)
+            logger.warning("WAN normalize error on ONT %s: %s", ont.serial_number, error_msg)
+
+    # Record normalization state
+    capabilities = _runtime_capabilities(ont)
+    capabilities["wan_normalized"] = True
+    capabilities["wan_normalized_at"] = _iso_now()
+    _persist_runtime_capabilities(ont, capabilities)
+    db.flush()
+
+    if errors:
+        return ActionResult(
+            success=False,
+            message=f"WAN normalization partially failed: {len(errors)} error(s).",
+            data={
+                "deleted": deleted_count,
+                "preserved": preserved_count,
+                "errors": errors,
+                "instances_found": len(instances),
+            },
+        )
+
+    return ActionResult(
+        success=True,
+        message=f"WAN structure normalized. Deleted {deleted_count}, preserved {preserved_count}.",
+        data={
+            "deleted": deleted_count,
+            "preserved": preserved_count,
+            "instances_found": len(instances),
+            "mgmt_vlan": mgmt_vlan,
+            "internet_vlan": internet_vlan,
+        },
+    )
