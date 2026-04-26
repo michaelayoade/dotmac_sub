@@ -15,16 +15,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
+from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
 )
-from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.provisioning_events import (
     current_provisioning_correlation_key,
 )
@@ -185,7 +184,8 @@ class OntWriteService:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
         config_pack = resolve_olt_config_pack(db, ctx.olt.id)
-        vlan_int = getattr(config_pack.management_vlan, "tag", None)
+        management_vlan = getattr(config_pack, "management_vlan", None)
+        vlan_int = getattr(management_vlan, "tag", None)
         if vlan_int is None:
             return ActionResult(
                 success=False,

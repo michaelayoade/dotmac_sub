@@ -13,6 +13,10 @@ FAKE_UUID = str(uuid.uuid4())
 FAKE_UUID2 = str(uuid.uuid4())
 
 
+def _config_pack(tag: int = 203) -> SimpleNamespace:
+    return SimpleNamespace(management_vlan=SimpleNamespace(tag=tag))
+
+
 class TestUpdateSpeedProfile:
     """Speed profile update tests."""
 
@@ -59,7 +63,7 @@ class TestUpdateExternalId:
 
 
 class TestUpdateManagementIp:
-    @patch("app.services.network.ont_write.upsert_ont_desired_config_value")
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
@@ -70,7 +74,7 @@ class TestUpdateManagementIp:
         mock_get,
         mock_resolve_context,
         mock_emit,
-        mock_upsert_override,
+        mock_config_pack,
     ):
         from app.services.network.olt_protocol_adapters import OltOperationResult
 
@@ -86,6 +90,7 @@ class TestUpdateManagementIp:
             success=True, message="ok", data={}
         )
         mock_get_adapter.return_value = mock_adapter
+        mock_config_pack.return_value = _config_pack()
         db = MagicMock()
         db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
@@ -93,19 +98,13 @@ class TestUpdateManagementIp:
             db,
             "ont-1",
             mgmt_ip_mode="dhcp",
-            mgmt_vlan_id=FAKE_UUID,
             mgmt_ip_address="172.16.201.10",
         )
 
         assert result.success is True
-        override_fields = [
-            call.kwargs["field_name"] for call in mock_upsert_override.call_args_list
-        ]
-        assert "management.ip_mode" in override_fields
-        assert "management.vlan" not in override_fields
-        assert "management.ip_address" in override_fields
         assert db.commit.called
 
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
@@ -118,6 +117,7 @@ class TestUpdateManagementIp:
         mock_get,
         mock_resolve_context,
         mock_emit,
+        mock_config_pack,
     ):
         from app.services.network.olt_protocol_adapters import OltOperationResult
 
@@ -135,6 +135,7 @@ class TestUpdateManagementIp:
             success=True, message="ok", data={}
         )
         mock_get_adapter.return_value = mock_adapter
+        mock_config_pack.return_value = _config_pack()
         db = MagicMock()
         db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
@@ -142,7 +143,6 @@ class TestUpdateManagementIp:
             db,
             "ont-1",
             mgmt_ip_mode="dhcp",
-            mgmt_vlan_id=FAKE_UUID,
         )
 
         assert result.success is True
@@ -150,6 +150,7 @@ class TestUpdateManagementIp:
         # Verify ont_id is passed correctly
         assert mock_adapter.configure_iphost.call_args.args[1] == 5
 
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
@@ -162,6 +163,7 @@ class TestUpdateManagementIp:
         mock_get,
         mock_resolve_context,
         mock_emit,
+        mock_config_pack,
     ):
         from app.services.network.olt_protocol_adapters import OltOperationResult
 
@@ -179,6 +181,7 @@ class TestUpdateManagementIp:
             success=True, message="ok", data={}
         )
         mock_get_adapter.return_value = mock_adapter
+        mock_config_pack.return_value = _config_pack()
         db = MagicMock()
         db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
@@ -186,7 +189,6 @@ class TestUpdateManagementIp:
             db,
             "ont-1",
             mgmt_ip_mode="dhcp",
-            mgmt_vlan_id=FAKE_UUID,
         )
 
         assert result.success is True
@@ -194,6 +196,7 @@ class TestUpdateManagementIp:
         assert mock_adapter.configure_iphost.call_args.args[0] == "0/1/3"
         assert mock_adapter.configure_iphost.call_args.args[1] == 5
 
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
@@ -204,6 +207,7 @@ class TestUpdateManagementIp:
         mock_get,
         mock_resolve_context,
         mock_emit,
+        mock_config_pack,
     ):
         from app.services.network.olt_protocol_adapters import OltOperationResult
 
@@ -224,6 +228,7 @@ class TestUpdateManagementIp:
             success=True, message="ok", data={}
         )
         mock_get_adapter.return_value = mock_adapter
+        mock_config_pack.return_value = _config_pack(201)
         db = MagicMock()
         db.scalars.return_value.first.return_value = None
 
@@ -231,7 +236,6 @@ class TestUpdateManagementIp:
             db,
             "ont-1",
             mgmt_ip_mode="dhcp",
-            mgmt_vlan_tag=201,
         )
 
         assert result.success is True
@@ -239,6 +243,7 @@ class TestUpdateManagementIp:
         assert mock_adapter.configure_iphost.call_args.kwargs["vlan"] == 201
         assert "mgmt_vlan_id" not in ont.__dict__
 
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
@@ -251,6 +256,7 @@ class TestUpdateManagementIp:
         mock_get,
         mock_resolve_context,
         mock_emit,
+        mock_config_pack,
     ):
         from app.services.network.olt_protocol_adapters import OltOperationResult
 
@@ -271,6 +277,7 @@ class TestUpdateManagementIp:
             error_code="TimeoutError",
         )
         mock_get_adapter.return_value = mock_adapter
+        mock_config_pack.return_value = _config_pack()
         db = MagicMock()
         db.get.return_value = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=olt.id)
 
@@ -278,7 +285,6 @@ class TestUpdateManagementIp:
             db,
             "ont-1",
             mgmt_ip_mode="dhcp",
-            mgmt_vlan_id=FAKE_UUID,
         )
 
         assert result.success is False
@@ -286,12 +292,14 @@ class TestUpdateManagementIp:
         db.commit.assert_not_called()
         mock_emit.assert_not_called()
 
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
     def test_rejects_global_management_vlan_id(
         self,
         mock_get,
         mock_resolve_context,
+        mock_config_pack,
     ):
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
@@ -303,16 +311,16 @@ class TestUpdateManagementIp:
         vlan = MagicMock(id=uuid.uuid4(), tag=203, olt_device_id=None)
         db = MagicMock()
         db.get.return_value = vlan
+        mock_config_pack.return_value = SimpleNamespace(management_vlan=None)
 
         result = OntWriteService.update_management_ip(
             db,
             "ont-1",
             mgmt_ip_mode="dhcp",
-            mgmt_vlan_id=str(vlan.id),
         )
 
         assert result.success is False
-        assert "not configured on this ont's olt" in result.message.lower()
+        assert "config pack" in result.message.lower()
         db.commit.assert_not_called()
 
 

@@ -15,7 +15,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import settings
 from app.models.domain_settings import SettingDomain
-from app.models.network import CPEDevice, Vlan
+from app.models.network import CPEDevice
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
 from app.services.genieacs import GenieACSError
@@ -628,24 +628,6 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
 
 def _normalize_serial(value: str | None) -> str:
     return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
-
-
-def _resolve_wan_vlan_tag(
-    db: Session, ont: Any, explicit_vlan: int | None
-) -> int | None:
-    if explicit_vlan is not None:
-        return explicit_vlan
-    wan_vlan = getattr(ont, "wan_vlan", None)
-    tag = getattr(wan_vlan, "tag", None)
-    if tag is not None:
-        return int(tag)
-    wan_vlan_id = getattr(ont, "wan_vlan_id", None)
-    if not wan_vlan_id:
-        return None
-    vlan = db.get(Vlan, wan_vlan_id)
-    if vlan is None:
-        return None
-    return int(vlan.tag)
 
 
 def _validate_ipv4(value: str, field_name: str) -> str | ActionResult:
