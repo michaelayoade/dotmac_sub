@@ -22,7 +22,6 @@ import time
 from collections.abc import Callable
 from typing import Any, cast
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -796,12 +795,12 @@ def _provision_wan_service_instances(
     ont_id: str,
 ) -> tuple[list[dict[str, object]], list[str], list[str]]:
     """Provision WAN from resolved desired_config only."""
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.ont_action_wan import (
         set_pppoe_credentials,
         set_wan_dhcp,
         set_wan_static,
     )
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     ont = db.get(OntUnit, ont_id)
     if not ont:
@@ -812,7 +811,9 @@ def _provision_wan_service_instances(
     wan_mode = str(effective_values.get("wan_mode") or "").strip().lower()
     wan_vlan = effective_values.get("wan_vlan")
     wan_vlan_int = int(wan_vlan) if wan_vlan not in (None, "") else None
-    instance_index = int(effective_values.get("wan_instance_index") or 1)
+    # Use OLT-derived WCD index as default for PPPoE (from config pack)
+    pppoe_wcd_default = effective_values.get("pppoe_wcd_index") or 2
+    instance_index = int(effective_values.get("wan_instance_index") or pppoe_wcd_default)
     steps: list[dict[str, object]] = []
     needs_input: list[str] = []
     hard_failures: list[str] = []

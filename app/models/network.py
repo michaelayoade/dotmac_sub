@@ -875,6 +875,40 @@ class OLTDevice(Base):
         doc="GEM index for IPTV service ports (typically 4)",
     )
 
+    # Traffic table indices for service-port QoS binding (OLT-specific)
+    mgmt_traffic_table_inbound: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Inbound traffic-table index for VLAN 201 (management) service-ports",
+    )
+    mgmt_traffic_table_outbound: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Outbound traffic-table index for VLAN 201 (management) service-ports",
+    )
+    internet_traffic_table_inbound: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Inbound traffic-table index for VLAN 203 (PPPoE/internet) service-ports",
+    )
+    internet_traffic_table_outbound: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="Outbound traffic-table index for VLAN 203 (PPPoE/internet) service-ports",
+    )
+
+    # TR-069 WAN Connection Device indices (varies by OLT provisioning)
+    # WCD numbering determines which WANConnectionDevice.{i} to target for TR-069 config
+    # Mapping: OLT ip-index N → TR-069 WANConnectionDevice.(N+1)
+    pppoe_wcd_index: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="WANConnectionDevice index for PPPoE/internet WAN (TR-069 path component)",
+    )
+    mgmt_wcd_index: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="WANConnectionDevice index for management WAN (TR-069 path component)",
+    )
+    voip_wcd_index: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="WANConnectionDevice index for VoIP WAN (TR-069 path component)",
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

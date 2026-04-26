@@ -1000,6 +1000,7 @@ def set_wan_config(
     subnet_mask: str | None = None,
     gateway: str | None = None,
     dns_servers: str | None = None,
+    ensure_instance: bool = True,
 ) -> ActionResult:
     """Unified entry point for WAN configuration.
 
@@ -1015,6 +1016,7 @@ def set_wan_config(
         subnet_mask: Subnet mask (required for static mode).
         gateway: Gateway (required for static mode).
         dns_servers: Optional DNS servers.
+        ensure_instance: If True, create WAN instance if missing.
 
     Returns:
         ActionResult indicating success/failure.
@@ -1033,7 +1035,7 @@ def set_wan_config(
             username=pppoe_username,
             password=pppoe_password,
             instance_index=instance_index,
-            ensure_instance=True,
+            ensure_instance=ensure_instance,
             wan_vlan=wan_vlan,
         )
 
@@ -1042,7 +1044,7 @@ def set_wan_config(
             db,
             ont_id,
             instance_index=instance_index,
-            ensure_instance=True,
+            ensure_instance=ensure_instance,
             wan_vlan=wan_vlan,
         )
 
@@ -1449,7 +1451,6 @@ def normalize_wan_structure(
     Returns:
         ActionResult with normalization details.
     """
-    from app.services.network.effective_ont_config import resolve_effective_ont_config
     from app.services.network.olt_config_pack import resolve_olt_config_pack
 
     resolved, error = get_ont_client_or_error(db, ont_id)

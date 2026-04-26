@@ -486,8 +486,6 @@ def step_bind_tr069(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bind a TR-069 server profile to the ONT via OLT SSH."""
-    from app.models.network import OntUnit
-    from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
@@ -497,16 +495,6 @@ def step_bind_tr069(
         ont_id,
         tr069_olt_profile_id=tr069_olt_profile_id,
     )
-    if result.success:
-        ont = db.get(OntUnit, ont_id)
-        if ont is not None:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="tr069.olt_profile_id",
-                value=tr069_olt_profile_id,
-                reason="step_bind_tr069",
-            )
     _update_service_order_execution_context_for_ont(
         db,
         ont_id,

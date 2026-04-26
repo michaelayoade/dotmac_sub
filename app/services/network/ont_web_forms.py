@@ -308,7 +308,6 @@ def update_onu_mode_from_form(
         wan_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
     intent_values = [
         ("device.onu_mode", form_str(form, "onu_mode").strip() or None),
-        ("wan.vlan", wan_vlan_tag),
         ("wan.mode", form_str(form, "wan_mode").strip() or None),
         ("device.config_method", form_str(form, "config_method").strip() or None),
         ("wan.ip_protocol", form_str(form, "ip_protocol").strip() or None),
@@ -675,7 +674,6 @@ def update_mgmt_ip_from_form(
     mgmt_ip_mode = form_str(form, "mgmt_ip_mode").strip() or None
     for field_name, value in [
         ("management.ip_mode", mgmt_ip_mode),
-        ("management.vlan", mgmt_vlan_tag),
         (
             "management.ip_address",
             form_str(form, "mgmt_ip_address").strip()

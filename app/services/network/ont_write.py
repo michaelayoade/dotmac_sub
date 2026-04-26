@@ -254,14 +254,6 @@ class OntWriteService:
             value=getattr(parsed_mgmt_mode, "value", mgmt_ip_mode),
             reason="ont_write.update_management_ip",
         )
-        if vlan_int is not None:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="management.vlan",
-                value=vlan_int,
-                reason="ont_write.update_management_ip",
-            )
         upsert_ont_desired_config_value(
             db,
             ont=ont,

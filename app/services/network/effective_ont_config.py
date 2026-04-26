@@ -60,14 +60,7 @@ def _values_from_desired_config(
         config.get("management") if isinstance(config.get("management"), dict) else {}
     )
     device = config.get("device") if isinstance(config.get("device"), dict) else {}
-    tr069 = config.get("tr069") if isinstance(config.get("tr069"), dict) else {}
-    omci = config.get("omci") if isinstance(config.get("omci"), dict) else {}
     lan = config.get("lan") if isinstance(config.get("lan"), dict) else {}
-    authorization = (
-        config.get("authorization")
-        if isinstance(config.get("authorization"), dict)
-        else {}
-    )
 
     # Extract service config from assignment (takes precedence over desired_config)
     asn_wan_mode = None
@@ -119,29 +112,39 @@ def _values_from_desired_config(
         "wan_mode": _first_present(asn_ip_mode, wan.get("mode")),
         "wan_vlan": _first_present(
             asn_internet_vlan,
-            wan.get("vlan"),
             getattr(config_pack.internet_vlan, "tag", None) if config_pack else None,
         ),
         # PPPoE: assignment > desired_config
         "pppoe_username": _first_present(asn_pppoe_username, wan.get("pppoe_username")),
         "pppoe_password": _first_present(asn_pppoe_password, wan.get("pppoe_password")),
         # Static IP: assignment > desired_config
-        "wan_static_ip": _first_present(asn_static_ip, wan.get("static_ip"), wan.get("ip_address")),
-        "wan_static_subnet": _first_present(asn_static_subnet, wan.get("static_subnet"), wan.get("subnet")),
-        "wan_static_gateway": _first_present(asn_static_gateway, wan.get("static_gateway"), wan.get("gateway")),
+        "wan_static_ip": _first_present(
+            asn_static_ip,
+            wan.get("static_ip"),
+            wan.get("ip_address"),
+        ),
+        "wan_static_subnet": _first_present(
+            asn_static_subnet,
+            wan.get("static_subnet"),
+            wan.get("subnet"),
+        ),
+        "wan_static_gateway": _first_present(
+            asn_static_gateway,
+            wan.get("static_gateway"),
+            wan.get("gateway"),
+        ),
         "wan_static_dns": _first_present(wan.get("static_dns"), wan.get("dns")),
         "wan_instance_index": _first_present(wan.get("instance_index"), 1),
-        "wan_gem_index": _first_present(
-            wan.get("gem_index"),
-            config_pack.internet_gem_index if config_pack else None,
-        ),
+        "wan_gem_index": config_pack.internet_gem_index if config_pack else None,
         "mgmt_ip_mode": _first_present(asn_mgmt_ip_mode, management.get("ip_mode")),
         "mgmt_vlan": _first_present(
             asn_mgmt_vlan,
-            management.get("vlan"),
             getattr(config_pack.management_vlan, "tag", None) if config_pack else None,
         ),
-        "mgmt_ip_address": _first_present(asn_mgmt_ip_address, management.get("ip_address")),
+        "mgmt_ip_address": _first_present(
+            asn_mgmt_ip_address,
+            management.get("ip_address"),
+        ),
         "mgmt_subnet": _first_present(management.get("subnet"), management.get("subnet_mask")),
         "mgmt_gateway": _first_present(management.get("gateway")),
         "lan_ip": _first_present(lan.get("ip"), lan.get("gateway_ip")),
@@ -158,38 +161,30 @@ def _values_from_desired_config(
         "wifi_password": _first_present(asn_wifi_password, wifi.get("password")),
         "wifi_channel": _first_present(wifi.get("channel")),
         "wifi_security_mode": _first_present(wifi.get("security_mode")),
-        "tr069_acs_server_id": _first_present(
-            tr069.get("acs_server_id"),
-            config_pack.tr069_acs_server_id if config_pack else None,
+        "tr069_acs_server_id": (
+            config_pack.tr069_acs_server_id if config_pack else None
         ),
-        "tr069_olt_profile_id": _first_present(
-            tr069.get("olt_profile_id"),
-            config_pack.tr069_olt_profile_id if config_pack else None,
+        "tr069_olt_profile_id": (
+            config_pack.tr069_olt_profile_id if config_pack else None
         ),
-        "cr_username": _first_present(
-            tr069.get("cr_username"),
-            config_pack.cr_username if config_pack else None,
+        "cr_username": config_pack.cr_username if config_pack else None,
+        "cr_password": config_pack.cr_password if config_pack else None,
+        "internet_config_ip_index": (
+            config_pack.internet_config_ip_index if config_pack else None
         ),
-        "cr_password": _first_present(
-            tr069.get("cr_password"),
-            config_pack.cr_password if config_pack else None,
+        "wan_config_profile_id": (
+            config_pack.wan_config_profile_id if config_pack else None
         ),
-        "internet_config_ip_index": _first_present(
-            omci.get("internet_config_ip_index"),
-            config_pack.internet_config_ip_index if config_pack else None,
+        "pppoe_omci_vlan": None,
+        # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i})
+        "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else 2,
+        "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else 1,
+        "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
+        "authorization_line_profile_id": (
+            config_pack.line_profile_id if config_pack else None
         ),
-        "wan_config_profile_id": _first_present(
-            omci.get("wan_config_profile_id"),
-            config_pack.wan_config_profile_id if config_pack else None,
-        ),
-        "pppoe_omci_vlan": _first_present(omci.get("pppoe_vlan")),
-        "authorization_line_profile_id": _first_present(
-            authorization.get("line_profile_id"),
-            config_pack.line_profile_id if config_pack else None,
-        ),
-        "authorization_service_profile_id": _first_present(
-            authorization.get("service_profile_id"),
-            config_pack.service_profile_id if config_pack else None,
+        "authorization_service_profile_id": (
+            config_pack.service_profile_id if config_pack else None
         ),
         "primary_wan_service": None,
     }

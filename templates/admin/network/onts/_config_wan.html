@@ -112,7 +112,7 @@
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WAN Service</h4>
     <form hx-post="/admin/network/onts/{{ ont_id }}/wan/config"
           hx-swap="none"
-          hx-confirm="Apply WAN configuration via TR-069?"
+          hx-confirm="Apply WAN configuration?"
           data-network-action
           data-loading-label="Applying WAN config..."
           class="space-y-4">
@@ -172,7 +172,7 @@
             <span class="text-xs text-slate-500 dark:text-slate-400" x-show="ipProtocol === 'ipv4'">IPv4 only</span>
             <span class="text-xs text-slate-500 dark:text-slate-400" x-show="ipProtocol === 'dual_stack'" x-cloak>IPv4 + IPv6 using DHCPv6 prefix delegation</span>
         </div>
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
                 <label for="wan_config_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">WAN Mode</label>
                 <select id="wan_config_mode" name="wan_mode" x-model="wanMode" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -181,19 +181,6 @@
                     <option value="dhcp">DHCP</option>
                     <option value="static">Static</option>
                     <option value="bridge">Bridge</option>
-                </select>
-            </div>
-            <div>
-                <label for="wan_config_vlan" class="block text-sm font-medium text-slate-700 dark:text-slate-300">
-                    Internet VLAN <span class="text-red-500" aria-hidden="true">*</span>
-                </label>
-                <select id="wan_config_vlan" name="wan_vlan" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">Leave unchanged</option>
-                    {% for vlan in vlans or [] %}
-                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan')|string == vlan.tag|string %}selected{% endif %}>
-                        {{ vlan | vlan_label }}
-                    </option>
-                    {% endfor %}
                 </select>
             </div>
             <div>
@@ -224,9 +211,6 @@
                        class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
         </div>
-        <div x-show="wanMode === 'pppoe'" x-transition x-cloak class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/10 dark:text-amber-200">
-            PPPoE requires an existing routed PPP WAN service and credentials. Use Create PPPoE WAN Service first when the ONT does not already have that service.
-        </div>
         <div x-show="wanMode === 'pppoe'" x-transition x-cloak class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
                 <label for="wan_config_pppoe_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -247,117 +231,7 @@
                 {% if not tr069_available %}disabled{% endif %}
                 class="inline-flex items-center gap-2 rounded-lg {% if tr069_available %}bg-blue-600 hover:bg-blue-700 text-white{% else %}cursor-not-allowed bg-slate-300 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %} px-4 py-2 text-sm font-medium">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-            Apply WAN via TR-069
+            Apply WAN
         </button>
-    </form>
-</div>
-
-<div class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/40 dark:bg-emerald-900/10"
-     x-data="{ showOmciPassword: false }">
-    <h4 class="text-xs font-semibold uppercase tracking-wider text-emerald-800 dark:text-emerald-200 mb-2">Create PPPoE WAN Service</h4>
-    <p class="text-xs text-emerald-800/80 dark:text-emerald-200/80 mb-4">Use this when the ONT has no PPP WAN service yet. It pushes VLAN, PPPoE username, and password together through the OLT/OMCI path.</p>
-    <form hx-post="/admin/network/onts/{{ ont_id }}/step/push-pppoe-omci"
-          hx-swap="none"
-          hx-confirm="Create or update the PPPoE WAN service on this ONT via OLT/OMCI?"
-          data-network-action
-          data-loading-label="Creating PPPoE WAN..."
-          class="space-y-4">
-        {% include "components/forms/csrf_input.html" %}
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <div>
-                <label for="wan_omci_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN <span class="text-red-500" aria-hidden="true">*</span></label>
-                <select id="wan_omci_vlan_id" name="vlan_id" required class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    {% for vlan in vlans or [] %}
-                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan')|string == vlan.tag|string %}selected{% endif %}>
-                        {{ vlan | vlan_label }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="wan_omci_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE Username <span class="text-red-500" aria-hidden="true">*</span></label>
-                <input id="wan_omci_username" type="text" name="username" value="{{ current_pppoe_user or '' }}" required
-                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label for="wan_omci_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE Password <span class="text-red-500" aria-hidden="true">*</span></label>
-                <input id="wan_omci_password" :type="showOmciPassword ? 'text' : 'password'" name="password" required autocomplete="new-password"
-                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label for="wan_omci_ip_index" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Index</label>
-                <input id="wan_omci_ip_index" type="number" name="ip_index" value="1" min="1" max="16"
-                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label for="wan_omci_priority" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Priority</label>
-                <input id="wan_omci_priority" type="number" name="priority" value="0" min="0" max="7"
-                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-        </div>
-        <div class="flex items-center justify-between gap-3">
-            <button type="button" @click="showOmciPassword = !showOmciPassword" class="text-sm font-medium text-emerald-800 hover:text-emerald-900 dark:text-emerald-200">
-                Toggle password visibility
-            </button>
-            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800">
-                Create PPPoE WAN Service
-            </button>
-        </div>
-    </form>
-</div>
-
-{# PPPoE Credentials Form #}
-<div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50"
-     x-data="{ showPassword: false }">
-    <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Push PPPoE Credentials via TR-069</h4>
-    <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">Use this only when a PPP WAN service already exists on the ONT. For new PPPoE service setup, use the Create PPPoE WAN Service form above.</p>
-    <form hx-post="/admin/network/onts/{{ ont_id }}/wan/pppoe-credentials"
-          hx-swap="none"
-          hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
-          data-network-action
-          data-loading-label="Pushing PPPoE credentials..."
-          class="space-y-4">
-        {% include "components/forms/csrf_input.html" %}
-        <input type="hidden" name="ensure_instance" value="true">
-        <input type="hidden" name="instance_index" value="1">
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-                <label for="wan_credentials_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Username</label>
-                <input type="text"
-                       id="wan_credentials_username"
-                       name="pppoe_username"
-                       value="{{ current_pppoe_user or '' }}"
-                       required
-                       placeholder="e.g. 100014919"
-                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label for="wan_credentials_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">PPPoE Password</label>
-                <div class="relative">
-                    <input :type="showPassword ? 'text' : 'password'"
-                           id="wan_credentials_password"
-                           name="pppoe_password"
-                           autocomplete="new-password"
-                           placeholder="Enter new password"
-                           required
-                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <button type="button"
-                            @click="showPassword = !showPassword"
-                            :aria-label="showPassword ? 'Hide PPPoE password' : 'Show PPPoE password'"
-                            class="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-slate-600">
-                        <svg x-show="!showPassword" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                        <svg x-show="showPassword" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-        <div class="flex justify-end">
-            <button type="submit"
-                    {% if not tr069_available %}disabled{% endif %}
-                    class="inline-flex items-center gap-2 rounded-lg {% if tr069_available %}bg-blue-600 hover:bg-blue-700 text-white{% else %}cursor-not-allowed bg-slate-300 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %} px-4 py-2 text-sm font-medium">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                Push PPPoE Credentials
-            </button>
-        </div>
     </form>
 </div>

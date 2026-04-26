@@ -40,17 +40,30 @@ def test_desired_config_setter_maps_legacy_fields_without_override_rows(db_sessi
 def test_effective_config_merges_olt_defaults_and_ont_desired_config(db_session):
     from app.models.catalog import RegionZone
     from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
+    from app.models.tr069 import Tr069AcsServer
     from app.services.network.effective_ont_config import resolve_effective_ont_config
 
     region = RegionZone(name="Test Region", code="desired-config")
+    acs = Tr069AcsServer(
+        name="Config Pack ACS",
+        base_url="http://config-pack-acs.example",
+        is_active=True,
+    )
     olt = OLTDevice(
         name="OLT Defaults",
         default_line_profile_id=10,
         default_service_profile_id=20,
+        tr069_acs_server_id=acs.id,
         default_tr069_olt_profile_id=30,
+        default_internet_config_ip_index=0,
+        default_wan_config_profile_id=5,
+        default_internet_gem_index=1,
+        default_cr_username="pack-cr-user",
+        default_cr_password="pack-cr-pass",
     )
-    db_session.add_all([region, olt])
+    db_session.add_all([region, acs, olt])
     db_session.flush()
+    olt.tr069_acs_server_id = acs.id
 
     internet_vlan = Vlan(
         region_id=region.id,
@@ -75,9 +88,25 @@ def test_effective_config_merges_olt_defaults_and_ont_desired_config(db_session)
         serial_number="DESIRED-CFG-002",
         olt_device_id=olt.id,
         desired_config={
-            "wan": {"pppoe_username": "subscriber@example"},
+            "wan": {
+                "pppoe_username": "subscriber@example",
+                "vlan": 999,
+                "gem_index": 9,
+            },
             "wifi": {"ssid": "Subscriber-WiFi"},
-            "management": {"ip_address": "192.0.2.20"},
+            "management": {"ip_address": "192.0.2.20", "vlan": 998},
+            "tr069": {
+                "acs_server_id": "ignored-acs",
+                "olt_profile_id": 99,
+                "cr_username": "ignored-cr-user",
+                "cr_password": "ignored-cr-pass",
+            },
+            "omci": {
+                "internet_config_ip_index": 9,
+                "wan_config_profile_id": 99,
+                "pppoe_vlan": 997,
+            },
+            "authorization": {"line_profile_id": 11, "service_profile_id": 21},
         },
     )
     db_session.add(ont)
@@ -87,9 +116,16 @@ def test_effective_config_merges_olt_defaults_and_ont_desired_config(db_session)
 
     assert values["wan_vlan"] == 100
     assert values["mgmt_vlan"] == 200
+    assert values["wan_gem_index"] == 1
     assert values["authorization_line_profile_id"] == 10
     assert values["authorization_service_profile_id"] == 20
+    assert values["tr069_acs_server_id"] == str(acs.id)
     assert values["tr069_olt_profile_id"] == 30
+    assert values["cr_username"] == "pack-cr-user"
+    assert values["cr_password"] == "pack-cr-pass"
+    assert values["internet_config_ip_index"] == 0
+    assert values["wan_config_profile_id"] == 5
+    assert values["pppoe_omci_vlan"] is None
     assert values["pppoe_username"] == "subscriber@example"
     assert values["wifi_ssid"] == "Subscriber-WiFi"
     assert values["mgmt_ip_address"] == "192.0.2.20"
@@ -243,21 +279,51 @@ def test_apply_saved_service_config_uses_desired_config_for_pppoe(
 ):
     from types import SimpleNamespace
 
-    from app.models.network import OntUnit
+    from app.models.catalog import RegionZone
+    from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
+    from app.models.tr069 import Tr069AcsServer
+    from app.services.credential_crypto import encrypt_credential
     from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    region = RegionZone(name="Saved Config Region", code="saved-config-region")
+    acs = Tr069AcsServer(
+        name="Saved Config ACS",
+        base_url="http://saved-config-acs.example",
+        is_active=True,
+    )
+    olt = OLTDevice(
+        name="Saved Config OLT",
+        default_tr069_olt_profile_id=30,
+        default_cr_username="cr-user",
+        default_cr_password=encrypt_credential("cr-pass"),
+    )
+    db_session.add_all([region, acs, olt])
+    db_session.flush()
+    olt.tr069_acs_server_id = acs.id
+    internet_vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        name="Internet",
+        tag=100,
+        purpose=VlanPurpose.internet,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.internet_vlan_id = internet_vlan.id
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-004",
+        olt_device_id=olt.id,
         desired_config={
             "tr069": {
-                "acs_server_id": "acs-1",
-                "olt_profile_id": 30,
-                "cr_username": "cr-user",
-                "cr_password": "cr-pass",
+                "acs_server_id": "ignored-acs",
+                "olt_profile_id": 99,
+                "cr_username": "ignored-cr-user",
+                "cr_password": "ignored-cr-pass",
             },
             "wan": {
                 "mode": "pppoe",
-                "vlan": 100,
+                "vlan": 999,
                 "pppoe_username": "subscriber@example",
                 "pppoe_password": "secret",
             },
@@ -310,12 +376,24 @@ def test_apply_saved_service_config_uses_desired_config_for_pppoe(
 def test_apply_saved_service_config_skips_wan_when_wan_mode_absent(
     db_session, monkeypatch
 ):
-    from app.models.network import OntUnit
+    from app.models.network import OLTDevice, OntUnit
+    from app.models.tr069 import Tr069AcsServer
     from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    acs = Tr069AcsServer(
+        name="ACS Only Server",
+        base_url="http://acs-only.example",
+        is_active=True,
+    )
+    olt = OLTDevice(name="ACS Only OLT", default_tr069_olt_profile_id=30)
+    db_session.add_all([acs, olt])
+    db_session.flush()
+    olt.tr069_acs_server_id = acs.id
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-ACS-ONLY",
-        desired_config={"tr069": {"acs_server_id": "acs-1", "olt_profile_id": 30}},
+        olt_device_id=olt.id,
+        desired_config={"tr069": {"acs_server_id": "ignored", "olt_profile_id": 99}},
     )
     db_session.add(ont)
     db_session.flush()
@@ -385,7 +463,7 @@ def test_provision_wizard_context_does_not_invent_missing_desired_config_default
     assert context["pppoe_username"] is None
 
 
-def test_save_provision_settings_persists_tr069_profile_to_desired_config(
+def test_save_provision_settings_does_not_persist_tr069_profile_override(
     db_session, monkeypatch
 ):
     from app.models.network import OntUnit
@@ -437,10 +515,10 @@ def test_save_provision_settings_persists_tr069_profile_to_desired_config(
     )
 
     assert result.status_code == 200
-    assert ont.desired_config["tr069"]["olt_profile_id"] == 42
+    assert "tr069" not in ont.desired_config
 
 
-def test_manual_step_bind_tr069_persists_profile_to_desired_config(
+def test_manual_step_bind_tr069_does_not_persist_profile_override(
     db_session, monkeypatch
 ):
     from types import SimpleNamespace
@@ -481,7 +559,7 @@ def test_manual_step_bind_tr069_persists_profile_to_desired_config(
     )
 
     assert response.status_code == 200
-    assert ont.desired_config["tr069"]["olt_profile_id"] == 77
+    assert "tr069" not in ont.desired_config
 
 
 def test_direct_provision_route_ignores_posted_tr069_profile_override(
@@ -833,3 +911,125 @@ def test_provisioning_entrypoints_do_not_accept_tr069_profile_override():
     assert "tr069_olt_profile_id" not in inspect.signature(
         provision_with_reconciliation
     ).parameters
+
+
+def test_web_wan_config_uses_config_pack_vlan_and_persists_desired_state(
+    db_session, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.models.catalog import RegionZone
+    from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
+    from app.services.network.ont_action_common import ActionResult
+    from app.services.web_network_ont_actions.config_setters import set_wan_config
+
+    region = RegionZone(name="WAN Config Region", code="wan-config-region")
+    olt = OLTDevice(name="WAN Config OLT")
+    db_session.add_all([region, olt])
+    db_session.flush()
+
+    internet_vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        name="PPPoE Internet",
+        tag=203,
+        purpose=VlanPurpose.internet,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.internet_vlan_id = internet_vlan.id
+
+    ont = OntUnit(serial_number="DESIRED-CFG-WAN", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    captured: dict[str, object] = {}
+
+    def fake_set_wan_config(db, ont_id, **kwargs):
+        captured.update(kwargs)
+        return ActionResult(success=True, message="applied", waiting=False)
+
+    monkeypatch.setattr(
+        "app.services.network.ont_action_wan.set_wan_config",
+        fake_set_wan_config,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._persist_ont_plan_step",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._log_action_audit",
+        lambda *args, **kwargs: None,
+    )
+
+    result = set_wan_config(
+        db_session,
+        str(ont.id),
+        wan_mode="pppoe",
+        pppoe_username="subscriber@example",
+        pppoe_password="secret",
+        instance_index=1,
+        wan_vlan=999,
+        request=SimpleNamespace(),
+    )
+
+    assert result.success is True
+    assert captured["wan_vlan"] == 203
+    assert ont.desired_config["wan"]["mode"] == "pppoe"
+    assert "vlan" not in ont.desired_config["wan"]
+    assert ont.desired_config["wan"]["instance_index"] == 1
+    assert ont.desired_config["wan"]["pppoe_username"] == "subscriber@example"
+    assert ont.desired_config["wan"]["pppoe_password"] != "secret"
+
+
+def test_web_wan_config_requires_config_pack_vlan(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.web_network_ont_actions.config_setters import set_wan_config
+
+    olt = OLTDevice(name="WAN Config Missing VLAN OLT")
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(serial_number="DESIRED-CFG-WAN-NO-VLAN", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    def fail_set_wan_config(*args, **kwargs):
+        raise AssertionError("WAN config should not apply without config pack VLAN")
+
+    monkeypatch.setattr(
+        "app.services.network.ont_action_wan.set_wan_config",
+        fail_set_wan_config,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._log_action_audit",
+        lambda *args, **kwargs: None,
+    )
+
+    result = set_wan_config(
+        db_session,
+        str(ont.id),
+        wan_mode="pppoe",
+        pppoe_username="subscriber@example",
+        pppoe_password="secret",
+        wan_vlan=999,
+        request=SimpleNamespace(),
+    )
+
+    assert result.success is False
+    assert result.message == (
+        "OLT config pack internet VLAN is required before applying WAN config."
+    )
+
+
+def test_ont_wan_partial_has_single_operator_path():
+    from pathlib import Path
+
+    source = Path("templates/admin/network/onts/_config_wan.html").read_text()
+
+    assert "Create PPPoE WAN Service" not in source
+    assert "Push PPPoE Credentials" not in source
+    assert "push-pppoe-omci" not in source
+    assert "wan/pppoe-credentials" not in source
+    assert "vlans or []" not in source

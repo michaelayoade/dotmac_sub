@@ -29,7 +29,6 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
-from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -562,13 +561,6 @@ def save_provision_settings(
 
     if network_only_profile_save:
         try:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="tr069.olt_profile_id",
-                value=tr069_profile_id_int,
-                reason="save_provision_settings",
-            )
             update_service_order_execution_context_for_ont(
                 db,
                 ont_id=ont_id,
@@ -862,7 +854,6 @@ def save_provision_settings(
         desired_updates = [
             ("device.onu_mode", onu_mode_value),
             ("management.ip_mode", mgmt_ip_mode_value),
-            ("management.vlan", mgmt_vlan_tag_value),
             (
                 "management.ip_address",
                 mgmt_ip_address_value if mgmt_ip_mode_value == "static_ip" else None,
@@ -870,7 +861,6 @@ def save_provision_settings(
             ("management.subnet", mgmt_subnet_value if mgmt_ip_mode_value == "static_ip" else None),
             ("management.gateway", mgmt_gateway_value if mgmt_ip_mode_value == "static_ip" else None),
             ("wan.mode", wan_mode_value),
-            ("wan.vlan", wan_vlan_tag_value),
             (
                 "wan.pppoe_username",
                 pppoe_username_value if wan_protocol_value == "pppoe" else None,
@@ -903,13 +893,6 @@ def save_provision_settings(
                 value=value,
                 reason="save_provision_settings",
             )
-        upsert_ont_desired_config_value(
-            db,
-            ont=ont,
-            field_name="tr069.olt_profile_id",
-            value=tr069_profile_id_int,
-            reason="save_provision_settings",
-        )
 
         if mgmt_vlan_id_value or mgmt_ip_mode_value:
             update_service_order_execution_context_for_ont(

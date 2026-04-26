@@ -94,6 +94,12 @@ class OltConfigPack:
     cr_username: str | None = None
     cr_password: str | None = None
 
+    # TR-069 WAN Connection Device indices (OLT-provisioning-specific)
+    # Mapping: OLT ip-index N → TR-069 WANConnectionDevice.(N+1)
+    pppoe_wcd_index: int = 2  # PPPoE typically uses ip-index 1 → WCD2
+    mgmt_wcd_index: int = 1  # Management typically uses ip-index 0 → WCD1
+    voip_wcd_index: int | None = None  # VoIP WCD if provisioned
+
     @property
     def has_authorization_profiles(self) -> bool:
         """True if both line and service profiles are configured."""
@@ -121,6 +127,7 @@ class OltConfigPack:
         return (
             self.has_authorization_profiles
             and self.has_vlans
+            and self.has_tr069_config
         )
 
     def to_dict(self) -> dict:
@@ -154,6 +161,9 @@ class OltConfigPack:
             "voip_gem_index": self.voip_gem_index,
             "iptv_gem_index": self.iptv_gem_index,
             "cr_username": self.cr_username,
+            "pppoe_wcd_index": self.pppoe_wcd_index,
+            "mgmt_wcd_index": self.mgmt_wcd_index,
+            "voip_wcd_index": self.voip_wcd_index,
             "is_complete": self.is_complete,
         }
 
@@ -203,6 +213,10 @@ def resolve_olt_config_pack(
         # Connection request credentials
         cr_username=olt.default_cr_username,
         cr_password=olt.default_cr_password,
+        # TR-069 WCD indices (OLT-provisioning-specific)
+        pppoe_wcd_index=olt.pppoe_wcd_index or 2,
+        mgmt_wcd_index=olt.mgmt_wcd_index or 1,
+        voip_wcd_index=olt.voip_wcd_index,
     )
 
 
@@ -313,14 +327,16 @@ def validate_config_pack_comprehensive(
     Checks all aspects of the config pack and returns warnings (non-blocking)
     and errors (blocking). Authorization can proceed with warnings but not errors.
 
-    Validated fields:
-    - Authorization profiles (line/service) - ERROR if missing
-    - Internet VLAN - ERROR if missing
-    - Management VLAN - WARNING if missing (breaks ACS connectivity)
-    - Management IP Pool - WARNING if missing (no static management IPs)
-    - TR-069 ACS server - WARNING if missing
-    - TR-069 OLT profile ID - WARNING if missing
-    - Connection request credentials - WARNING if missing
+    Required fields (ERROR if missing):
+    - Authorization profiles (line/service)
+    - Internet VLAN
+    - Management VLAN
+    - TR-069 ACS server
+    - TR-069 OLT profile ID
+
+    Optional fields (WARNING if missing):
+    - Management IP Pool
+    - Connection request credentials
 
     Args:
         db: Database session
@@ -367,30 +383,32 @@ def validate_config_pack_comprehensive(
             "Missing internet VLAN - ONTs cannot receive internet service"
         )
 
-    # ========== WARNINGS (non-blocking) ==========
-
-    # Management VLAN is needed for ACS connectivity
-    if config_pack.management_vlan.tag is None:
-        validation.warnings.append(
-            "Missing management VLAN - ONTs may not reach TR-069 ACS"
+    # TR-069 configuration is required for device management
+    if config_pack.tr069_acs_server_id is None:
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing TR-069 ACS server - ONTs cannot be managed remotely"
         )
+
+    if config_pack.tr069_olt_profile_id is None:
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing TR-069 OLT profile ID - ONTs cannot bind to ACS"
+        )
+
+    # Management VLAN is required for ACS connectivity
+    if config_pack.management_vlan.tag is None:
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing management VLAN - ONTs cannot reach TR-069 ACS"
+        )
+
+    # ========== WARNINGS (non-blocking) ==========
 
     # Management IP pool is needed for static IP allocation
     if not olt.mgmt_ip_pool_id:
         validation.warnings.append(
             "Missing management IP pool - ONTs will use DHCP for management"
-        )
-
-    # TR-069 ACS server is needed for device management
-    if config_pack.tr069_acs_server_id is None:
-        validation.warnings.append(
-            "Missing TR-069 ACS server - remote management unavailable"
-        )
-
-    # TR-069 OLT profile is needed to bind devices
-    if config_pack.tr069_olt_profile_id is None:
-        validation.warnings.append(
-            "Missing TR-069 OLT profile ID - ACS binding will be skipped"
         )
 
     # Connection request credentials enable push notifications

@@ -10,6 +10,7 @@ from starlette.requests import Request
 from app.models.network import OntUnit
 from app.services.acs_client import create_acs_config_writer
 from app.services.credential_crypto import encrypt_credential
+from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_desired_config import (
     upsert_ont_desired_config_value,
@@ -343,19 +344,6 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     message = bind_result.message
     if ok:
         try:
-            from app.services.network.ont_desired_config import (
-                upsert_ont_desired_config_value,
-            )
-
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="tr069.olt_profile_id",
-                value=profile_id,
-                reason="manual_bind_tr069_profile",
-            )
-            db.add(ont)
-            db.flush()
             _persist_ont_plan_step(
                 db,
                 ont_id,
@@ -586,6 +574,33 @@ def set_wan_config(
     """Unified WAN configuration via TR-069."""
     from app.services.network.ont_action_wan import set_wan_config as _set_wan_config
 
+    ont = db.get(OntUnit, ont_id)
+    config_pack_wan_vlan: int | None = None
+    if ont and ont.olt_device_id:
+        config_pack = resolve_olt_config_pack(db, ont.olt_device_id)
+        if config_pack and config_pack.internet_vlan:
+            config_pack_wan_vlan = config_pack.internet_vlan.tag
+
+    wan_mode_normalized = wan_mode.strip().lower()
+    resolved_wan_vlan = config_pack_wan_vlan
+    if wan_mode_normalized in {"pppoe", "dhcp", "static"} and resolved_wan_vlan is None:
+        result = ActionResult(
+            success=False,
+            message="OLT config pack internet VLAN is required before applying WAN config.",
+        )
+        _log_action_audit(
+            db,
+            request=request,
+            action="set_wan_config",
+            ont_id=ont_id,
+            metadata={
+                "success": False,
+                "wan_mode": wan_mode,
+                "missing_config_pack_vlan": True,
+            },
+        )
+        return result
+
     result = _set_wan_config(
         db,
         ont_id,
@@ -598,13 +613,26 @@ def set_wan_config(
         dns_servers=dns_servers,
         instance_index=instance_index,
         ensure_instance=ensure_instance,
-        wan_vlan=wan_vlan,
+        wan_vlan=resolved_wan_vlan,
     )
 
     if result.success:
-        ont = db.get(OntUnit, ont_id)
-        if ont and wan_mode == "pppoe" and pppoe_username and pppoe_password:
-            # Store PPPoE credentials as overrides
+        if ont:
+            upsert_ont_desired_config_value(
+                db,
+                ont=ont,
+                field_name="wan.mode",
+                value=wan_mode_normalized,
+                reason="config_setters.set_wan_config",
+            )
+            upsert_ont_desired_config_value(
+                db,
+                ont=ont,
+                field_name="wan.instance_index",
+                value=instance_index,
+                reason="config_setters.set_wan_config",
+            )
+        if ont and wan_mode_normalized == "pppoe" and pppoe_username and pppoe_password:
             upsert_ont_desired_config_value(
                 db,
                 ont=ont,
@@ -619,6 +647,21 @@ def set_wan_config(
                 value=encrypt_credential(pppoe_password),
                 reason="config_setters.set_wan_config",
             )
+        if ont and wan_mode_normalized == "static":
+            for field_name, value in {
+                "wan.ip_address": ip_address,
+                "wan.subnet_mask": subnet_mask,
+                "wan.gateway": gateway,
+                "wan.dns_servers": dns_servers,
+            }.items():
+                upsert_ont_desired_config_value(
+                    db,
+                    ont=ont,
+                    field_name=field_name,
+                    value=value,
+                    reason="config_setters.set_wan_config",
+                )
+        if ont:
             db.flush()
         _persist_ont_plan_step(
             db,
@@ -630,7 +673,7 @@ def set_wan_config(
                 "password_set": bool(pppoe_password),
                 "ip_address": ip_address,
                 "instance_index": instance_index,
-                "wan_vlan": wan_vlan,
+                "wan_vlan": resolved_wan_vlan,
             },
         )
 
@@ -644,7 +687,7 @@ def set_wan_config(
             "waiting": result.waiting,
             "wan_mode": wan_mode,
             "instance_index": instance_index,
-            "wan_vlan": wan_vlan,
+            "wan_vlan": resolved_wan_vlan,
         },
     )
     return result

@@ -9,6 +9,7 @@ from starlette.requests import Request
 from app.models.network import Vlan
 from app.services import network as network_service
 from app.services.network.ont_actions import ActionResult
+from app.services.network.ont_desired_config import set_desired_config_value
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
 )
@@ -16,7 +17,6 @@ from app.services.web_network_ont_actions.config_setters import (
     set_lan_config,
     set_wifi_config,
 )
-from app.services.network.ont_desired_config import set_desired_config_value
 
 
 def _resolve_ont_scoped_vlan(
@@ -86,7 +86,6 @@ def _persist_desired_config_state(
         "device.config_method": config_method,
         "wan.ip_protocol": ip_protocol,
         "wan.mode": wan_mode,
-        "wan.vlan": wan_vlan_tag,
         "wan.pppoe_username": pppoe_username,
         "lan.ip": lan_gateway_ip,
         "lan.subnet": lan_subnet_mask,
@@ -94,7 +93,6 @@ def _persist_desired_config_state(
         "lan.dhcp_start": lan_dhcp_start,
         "lan.dhcp_end": lan_dhcp_end,
         "management.ip_mode": mgmt_ip_mode,
-        "management.vlan": mgmt_vlan_tag,
         "management.ip_address": mgmt_ip_address,
         "wifi.enabled": wifi_enabled,
         "wifi.ssid": wifi_ssid,
