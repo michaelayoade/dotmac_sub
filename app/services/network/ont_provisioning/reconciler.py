@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy.orm import Session
 
 from app.services.network.ont_provisioning.state import (
+    ActualManagementConfig,
     ActualOntState,
     ActualServicePort,
+    DesiredManagementConfig,
     DesiredOntState,
     DesiredServicePort,
     ProvisioningAction,
@@ -138,26 +140,49 @@ def compute_delta(
 
     # Determine if management IP configuration is needed
     if desired.management:
-        # Check if management is already configured
-        # For now, we always include it if desired; future enhancement could check actual
-        delta.needs_mgmt_ip_config = True
+        delta.needs_mgmt_ip_config = not _management_matches(
+            desired.management,
+            actual.management,
+        )
 
     # Determine if TR-069 binding is needed
     if desired.tr069:
-        # Check if TR-069 is already bound
-        if actual.tr069_profile_id is None:
-            delta.needs_tr069_bind = True
-        # Note: We could also check if profile IDs match
+        delta.needs_tr069_bind = actual.tr069_profile_id != desired.tr069.olt_profile_id
 
     # Determine if internet-config is needed
     if desired.internet_config_ip_index is not None:
-        delta.needs_internet_config = True
+        delta.needs_internet_config = (
+            desired.internet_config_ip_index not in actual.internet_config_ip_indices
+        )
 
     # Determine if wan-config is needed
     if desired.wan_config_profile_id is not None:
-        delta.needs_wan_config = True
+        wan_ip_index = desired.internet_config_ip_index or 0
+        delta.needs_wan_config = (
+            actual.wan_config_profiles.get(wan_ip_index) != desired.wan_config_profile_id
+        )
 
     return delta
+
+
+def _management_matches(
+    desired: DesiredManagementConfig,
+    actual: ActualManagementConfig | None,
+) -> bool:
+    """Return True when OLT readback clearly matches desired IPHOST config."""
+    if actual is None:
+        return False
+    if actual.vlan_tag != desired.vlan_tag:
+        return False
+    if actual.ip_mode != desired.ip_mode:
+        return False
+    if desired.ip_mode == "dhcp":
+        return True
+    return (
+        (actual.ip_address or "") == (desired.ip_address or "")
+        and (actual.subnet or "") == (desired.subnet or "")
+        and (actual.gateway or "") == (desired.gateway or "")
+    )
 
 
 def _find_matching_actual_port(

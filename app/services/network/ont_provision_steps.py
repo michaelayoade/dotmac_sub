@@ -1785,7 +1785,11 @@ def provision_with_reconciliation(
                 ctx.ont.serial_number,
                 len(exec_result.compensation_log),
             )
-            rollback_results = exec_result.rollback(ctx.olt)
+            rollback_results = exec_result.rollback(
+                ctx.olt,
+                ont_unit_id=str(ctx.ont.id),
+                db=db,
+            )
 
         result = StepResult(
             "provision_reconciled",

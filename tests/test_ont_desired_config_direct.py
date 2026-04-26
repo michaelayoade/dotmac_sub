@@ -96,7 +96,7 @@ def test_effective_config_merges_olt_defaults_and_ont_desired_config(db_session)
 
 
 def test_effective_config_ignores_legacy_ont_flat_config_fields(db_session):
-    from app.models.network import OnuMode, OntUnit
+    from app.models.network import OntUnit, OnuMode
     from app.models.tr069 import Tr069AcsServer
     from app.services.network.effective_ont_config import resolve_effective_ont_config
 
@@ -467,6 +467,11 @@ def test_manual_step_bind_tr069_persists_profile_to_desired_config(
         "_record_ont_step_action",
         lambda *args, **kwargs: None,
     )
+    monkeypatch.setattr(
+        network_onts_provisioning,
+        "can_manage_ont_from_request",
+        lambda *args, **kwargs: True,
+    )
 
     response = network_onts_provisioning.step_bind_tr069(
         SimpleNamespace(headers={}),
@@ -516,6 +521,11 @@ def test_direct_provision_route_ignores_posted_tr069_profile_override(
         "log_network_action_result",
         lambda *args, **kwargs: None,
     )
+    monkeypatch.setattr(
+        network_onts_provisioning,
+        "can_manage_ont_from_request",
+        lambda *args, **kwargs: True,
+    )
 
     response = network_onts_provisioning.provision_ont_direct(
         SimpleNamespace(headers={}),
@@ -528,10 +538,269 @@ def test_direct_provision_route_ignores_posted_tr069_profile_override(
     assert "tr069_olt_profile_id" not in captured
 
 
+def test_provisioning_step_route_rejects_out_of_scope_ont(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.web.admin import network_onts_provisioning
+
+    called = False
+
+    def fake_wait(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        network_onts_provisioning,
+        "can_manage_ont_from_request",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
+        fake_wait,
+    )
+
+    response = network_onts_provisioning.step_wait_tr069_bootstrap(
+        SimpleNamespace(headers={}),
+        "out-of-scope-ont",
+        db=db_session,
+    )
+
+    assert response.status_code == 403
+    assert called is False
+
+
+def test_direct_orchestrator_updates_provisioning_status(db_session, monkeypatch):
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.ont_provisioning.orchestrator import (
+        provision_ont_from_desired_config,
+    )
+    from app.services.network.ont_provisioning.result import StepResult
+
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-STATUS",
+        desired_config={},
+        provisioning_status=OntProvisioningStatus.unprovisioned,
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.provision_with_reconciliation",
+        lambda *args, **kwargs: StepResult("provision_reconciled", True, "ok"),
+    )
+
+    result = provision_ont_from_desired_config(db_session, str(ont.id))
+
+    assert result.success is True
+    assert ont.provisioning_status == OntProvisioningStatus.provisioned
+
+
+def test_direct_orchestrator_marks_failed_status(db_session, monkeypatch):
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.ont_provisioning.orchestrator import (
+        provision_ont_from_desired_config,
+    )
+    from app.services.network.ont_provisioning.result import StepResult
+
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-STATUS-FAIL",
+        desired_config={},
+        provisioning_status=OntProvisioningStatus.unprovisioned,
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.provision_with_reconciliation",
+        lambda *args, **kwargs: StepResult(
+            "provision_reconciled", False, "OLT write failed"
+        ),
+    )
+
+    result = provision_ont_from_desired_config(db_session, str(ont.id))
+
+    assert result.success is False
+    assert ont.provisioning_status == OntProvisioningStatus.failed
+
+
+def test_failed_compensation_is_persisted_for_retry(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from app.models.compensation_failure import (
+        CompensationFailure,
+        CompensationStatus,
+    )
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.ont_provisioning.executor import (
+        CompensationEntry,
+        ProvisioningExecutionResult,
+    )
+
+    olt = OLTDevice(name="Rollback OLT")
+    ont = OntUnit(serial_number="DESIRED-CFG-ROLLBACK")
+    db_session.add_all([olt, ont])
+    db_session.flush()
+
+    class FakeSession:
+        def run_command(self, command, **kwargs):
+            return SimpleNamespace(
+                success=False,
+                is_idempotent_success=False,
+                message=f"failed {command}",
+            )
+
+    class FakeOltSession:
+        def __enter__(self):
+            return FakeSession()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.executor.olt_session",
+        lambda olt: FakeOltSession(),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.executor._emit_compensation_failure_alert",
+        lambda *args, **kwargs: None,
+    )
+
+    result = ProvisioningExecutionResult(
+        success=False,
+        message="failed",
+        compensation_log=[
+            CompensationEntry(
+                step_name="create_service_port_vlan_100",
+                undo_commands=["undo service-port 42"],
+                description="Delete service-port VLAN 100 GEM 1",
+                resource_id="42",
+            )
+        ],
+    )
+
+    rollback_results = result.rollback(olt, ont_unit_id=str(ont.id), db=db_session)
+
+    failure = db_session.scalars(select(CompensationFailure)).one()
+    assert rollback_results == [
+        (
+            "create_service_port_vlan_100",
+            False,
+            "Delete service-port VLAN 100 GEM 1",
+        )
+    ]
+    assert failure.ont_unit_id == ont.id
+    assert failure.olt_device_id == olt.id
+    assert failure.status == CompensationStatus.pending
+    assert failure.undo_commands == ["undo service-port 42"]
+
+
+def test_reconciler_noops_when_olt_side_config_matches():
+    from app.services.network.ont_provisioning.reconciler import compute_delta
+    from app.services.network.ont_provisioning.state import (
+        ActualManagementConfig,
+        ActualOntState,
+        ActualServicePort,
+        DesiredManagementConfig,
+        DesiredOntState,
+        DesiredServicePort,
+        DesiredTr069Config,
+    )
+
+    desired = DesiredOntState(
+        ont_id="ont-1",
+        serial_number="DESIRED-CFG-NOOP",
+        fsp="0/1/1",
+        olt_ont_id=7,
+        service_ports=(DesiredServicePort(vlan_id=100, gem_index=1),),
+        management=DesiredManagementConfig(vlan_tag=200, ip_mode="dhcp"),
+        tr069=DesiredTr069Config(olt_profile_id=30),
+        internet_config_ip_index=0,
+        wan_config_profile_id=5,
+    )
+    actual = ActualOntState(
+        is_authorized=True,
+        olt_ont_id=7,
+        service_ports=(
+            ActualServicePort(
+                index=42,
+                vlan_id=100,
+                gem_index=1,
+                ont_id=7,
+                state="up",
+                tag_transform="translate",
+            ),
+        ),
+        management=ActualManagementConfig(vlan_tag=200, ip_mode="dhcp"),
+        tr069_profile_id=30,
+        internet_config_ip_indices=(0,),
+        wan_config_profiles={0: 5},
+    )
+
+    delta = compute_delta(desired, actual)
+
+    assert delta.has_changes is False
+    assert delta.needs_mgmt_ip_config is False
+    assert delta.needs_tr069_bind is False
+    assert delta.needs_internet_config is False
+    assert delta.needs_wan_config is False
+
+
+def test_reconciler_writes_when_olt_side_config_differs():
+    from app.services.network.ont_provisioning.reconciler import compute_delta
+    from app.services.network.ont_provisioning.state import (
+        ActualManagementConfig,
+        ActualOntState,
+        DesiredManagementConfig,
+        DesiredOntState,
+        DesiredTr069Config,
+    )
+
+    desired = DesiredOntState(
+        ont_id="ont-1",
+        serial_number="DESIRED-CFG-DIFF",
+        fsp="0/1/1",
+        olt_ont_id=7,
+        management=DesiredManagementConfig(
+            vlan_tag=200,
+            ip_mode="static",
+            ip_address="192.0.2.10",
+            subnet="255.255.255.0",
+            gateway="192.0.2.1",
+        ),
+        tr069=DesiredTr069Config(olt_profile_id=30),
+        internet_config_ip_index=1,
+        wan_config_profile_id=5,
+    )
+    actual = ActualOntState(
+        is_authorized=True,
+        olt_ont_id=7,
+        management=ActualManagementConfig(
+            vlan_tag=201,
+            ip_mode="static",
+            ip_address="192.0.2.10",
+            subnet="255.255.255.0",
+            gateway="192.0.2.1",
+        ),
+        tr069_profile_id=31,
+        internet_config_ip_indices=(0,),
+        wan_config_profiles={1: 6},
+    )
+
+    delta = compute_delta(desired, actual)
+
+    assert delta.needs_mgmt_ip_config is True
+    assert delta.needs_tr069_bind is True
+    assert delta.needs_internet_config is True
+    assert delta.needs_wan_config is True
+
+
 def test_provisioning_entrypoints_do_not_accept_tr069_profile_override():
     import inspect
 
     from app.services.network.bulk_provisioning import bulk_provision_onts
+    from app.services.network.ont_provision_steps import provision_with_reconciliation
     from app.services.network.ont_provisioning.orchestrator import (
         provision_ont_from_desired_config,
     )
@@ -540,7 +809,6 @@ def test_provisioning_entrypoints_do_not_accept_tr069_profile_override():
     from app.services.network.ont_provisioning.state import (
         build_desired_state_from_config,
     )
-    from app.services.network.ont_provision_steps import provision_with_reconciliation
     from app.tasks.ont_provisioning import provision_ont, queue_bulk_provisioning
 
     assert "tr069_olt_profile_id" not in inspect.signature(

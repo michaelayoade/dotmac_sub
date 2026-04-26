@@ -78,13 +78,14 @@ def provision_ont_from_desired_config(
     apply_acs_config: bool = True,
 ) -> OntProvisioningResult:
     """Provision one ONT from OLT defaults plus ``OntUnit.desired_config``."""
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
     from app.services.network.ont_provision_steps import (
         apply_saved_service_config,
         provision_with_reconciliation,
         wait_tr069_bootstrap,
     )
-    from app.models.network import OntUnit
-    from app.services.network.effective_ont_config import resolve_effective_ont_config
+    from app.services.network.ont_status_transitions import set_provisioning_status
 
     t0 = time.monotonic()
     steps: list[StepResult] = []
@@ -100,6 +101,14 @@ def provision_ont_from_desired_config(
         and effective_values.get("tr069_olt_profile_id")
     )
 
+    def _set_status(status: OntProvisioningStatus) -> None:
+        if ont is None or dry_run:
+            return
+        set_provisioning_status(ont, status, strict=False)
+        db.flush()
+
+    _set_status(OntProvisioningStatus.partial)
+
     provision_result = provision_with_reconciliation(
         db,
         ont_id,
@@ -108,6 +117,7 @@ def provision_ont_from_desired_config(
     )
     steps.append(provision_result)
     if not provision_result.success:
+        _set_status(OntProvisioningStatus.failed)
         return _finish(
             ont_id=ont_id,
             t0=t0,
@@ -129,6 +139,7 @@ def provision_ont_from_desired_config(
         wait_result = wait_tr069_bootstrap(db, ont_id)
         steps.append(wait_result)
         if not wait_result.success:
+            _set_status(OntProvisioningStatus.failed)
             return _finish(
                 ont_id=ont_id,
                 t0=t0,
@@ -142,6 +153,7 @@ def provision_ont_from_desired_config(
         acs_result = apply_saved_service_config(db, ont_id)
         steps.append(acs_result)
         if not acs_result.success:
+            _set_status(OntProvisioningStatus.failed)
             return _finish(
                 ont_id=ont_id,
                 t0=t0,
@@ -151,6 +163,7 @@ def provision_ont_from_desired_config(
                 failed_step=acs_result.step_name,
             )
 
+    _set_status(OntProvisioningStatus.provisioned)
     return _finish(
         ont_id=ont_id,
         t0=t0,

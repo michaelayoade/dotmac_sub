@@ -14,6 +14,7 @@ Key concepts:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -130,14 +131,105 @@ class ActualServicePort:
 
 
 @dataclass(frozen=True)
+class ActualManagementConfig:
+    """Current management plane configuration read from the OLT."""
+
+    vlan_tag: int
+    ip_mode: str
+    ip_index: int = 0
+    ip_address: str | None = None
+    subnet: str | None = None
+    gateway: str | None = None
+
+
+@dataclass(frozen=True)
 class ActualOntState:
     """Current ONT state as read from the OLT."""
 
     is_authorized: bool
     olt_ont_id: int | None
     service_ports: tuple[ActualServicePort, ...] = field(default_factory=tuple)
-    mgmt_vlan: int | None = None
+    management: ActualManagementConfig | None = None
     tr069_profile_id: int | None = None
+    internet_config_ip_indices: tuple[int, ...] = field(default_factory=tuple)
+    wan_config_profiles: dict[int, int] = field(default_factory=dict)
+
+
+_INT_RE = re.compile(r"\b(\d+)\b")
+
+
+def _first_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    match = _INT_RE.search(str(value))
+    return int(match.group(1)) if match else None
+
+
+def _parse_actual_management_config(output: str) -> ActualManagementConfig | None:
+    from app.services.network.olt_ssh_ont.iphost import parse_iphost_config_output
+
+    config = parse_iphost_config_output(output)
+    vlan = _first_int(config.get("vlan"))
+    if vlan is None:
+        return None
+    raw_mode = str(config.get("mode") or "").strip().lower()
+    ip_mode = "static" if "static" in raw_mode else "dhcp"
+    return ActualManagementConfig(
+        vlan_tag=vlan,
+        ip_mode=ip_mode,
+        ip_index=_first_int(config.get("ip_index")) or 0,
+        ip_address=str(config.get("ip_address") or "") or None,
+        subnet=str(config.get("subnet_mask") or "") or None,
+        gateway=str(config.get("gateway") or "") or None,
+    )
+
+
+def _parse_ip_indices(output: str) -> tuple[int, ...]:
+    values: set[int] = set()
+    for line in output.splitlines():
+        lowered = line.lower()
+        if "ip-index" not in lowered and "ip index" not in lowered:
+            continue
+        index = _first_int(line)
+        if index is not None:
+            values.add(index)
+    return tuple(sorted(values))
+
+
+def _parse_tr069_profile_id(output: str) -> int | None:
+    for line in output.splitlines():
+        lowered = line.lower()
+        if "profile" not in lowered:
+            continue
+        value = _first_int(line)
+        if value is not None:
+            return value
+    return None
+
+
+def _parse_wan_config_profiles(output: str) -> dict[int, int]:
+    profiles: dict[int, int] = {}
+    current_ip_index: int | None = None
+    for line in output.splitlines():
+        lowered = line.lower()
+        if "ip-index" in lowered or "ip index" in lowered:
+            current_ip_index = _first_int(line)
+        if "profile" in lowered:
+            profile_id = _first_int(line)
+            if current_ip_index is not None and profile_id is not None:
+                profiles[current_ip_index] = profile_id
+    return profiles
+
+
+def _safe_display_command(channel, command: str, *, prompt: str) -> str:
+    from app.services.network.olt_ssh import _run_huawei_cmd, is_error_output
+
+    try:
+        output = _run_huawei_cmd(channel, command, prompt=prompt)
+    except Exception as exc:
+        logger.debug("OLT display command failed: %s: %s", command, exc)
+        return ""
+    return "" if is_error_output(output) else output
 
 
 # ---------------------------------------------------------------------------
@@ -358,11 +450,61 @@ def read_actual_state(
         if not is_authorized:
             return None, f"ONT {olt_ont_id} is not authorized on OLT port {fsp}"
 
+        management = None
+        tr069_profile_id = None
+        internet_config_ip_indices: tuple[int, ...] = ()
+        wan_config_profiles: dict[int, int] = {}
+
+        # Read ONT-scoped config in interface mode. These display commands vary
+        # across Huawei releases, so failures are treated as "unknown" and the
+        # reconciler keeps the existing conservative write behavior.
+        config_prompt = r"[#)]\s*$"
+        frame_slot = f"{parts[0]}/{parts[1]}"
+        port_num = parts[2]
+        _run_huawei_cmd(channel, "config", prompt=config_prompt)
+        _run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+
+        iphost_output = _safe_display_command(
+            channel,
+            f"display ont ipconfig {port_num} {olt_ont_id}",
+            prompt=config_prompt,
+        )
+        if iphost_output:
+            management = _parse_actual_management_config(iphost_output)
+
+        tr069_output = _safe_display_command(
+            channel,
+            f"display ont tr069-server-config {port_num} {olt_ont_id}",
+            prompt=config_prompt,
+        )
+        if tr069_output:
+            tr069_profile_id = _parse_tr069_profile_id(tr069_output)
+
+        internet_output = _safe_display_command(
+            channel,
+            f"display ont internet-config {port_num} {olt_ont_id}",
+            prompt=config_prompt,
+        )
+        if internet_output:
+            internet_config_ip_indices = _parse_ip_indices(internet_output)
+
+        wan_output = _safe_display_command(
+            channel,
+            f"display ont wan-config {port_num} {olt_ont_id}",
+            prompt=config_prompt,
+        )
+        if wan_output:
+            wan_config_profiles = _parse_wan_config_profiles(wan_output)
+
         return (
             ActualOntState(
                 is_authorized=is_authorized,
                 olt_ont_id=olt_ont_id,
                 service_ports=actual_ports,
+                management=management,
+                tr069_profile_id=tr069_profile_id,
+                internet_config_ip_indices=internet_config_ip_indices,
+                wan_config_profiles=wan_config_profiles,
             ),
             "",
         )

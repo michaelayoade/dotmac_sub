@@ -36,6 +36,10 @@ from app.services.network.ont_provisioning.optical_budget import (
     check_optical_budget_for_provisioning,
     validate_optical_budget,
 )
+from app.services.network.ont_provisioning.orchestrator import (
+    OntProvisioningResult,
+    provision_ont_from_desired_config,
+)
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.reconciler import (
     compute_delta,
@@ -44,13 +48,10 @@ from app.services.network.ont_provisioning.reconciler import (
     validate_delta,
 )
 from app.services.network.ont_provisioning.result import StepResult
-from app.services.network.ont_provisioning.orchestrator import (
-    OntProvisioningResult,
-    provision_ont_from_desired_config,
-)
 
 # State reconciliation exports
 from app.services.network.ont_provisioning.state import (
+    ActualManagementConfig,
     ActualOntState,
     ActualServicePort,
     DesiredOntState,
@@ -81,6 +82,7 @@ __all__ = [
     # State
     "DesiredOntState",
     "DesiredServicePort",
+    "ActualManagementConfig",
     "ActualOntState",
     "ActualServicePort",
     "ProvisioningAction",
