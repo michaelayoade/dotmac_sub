@@ -5,11 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
+def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
     db_session,
     monkeypatch,
 ) -> None:
-    import app.celery_app as celery_module
     from app.models.network import (
         BulkProvisioningItem,
         BulkProvisioningItemStatus,
@@ -26,13 +25,17 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
     db_session.refresh(ont_ok)
     db_session.refresh(ont_other)
 
-    enqueued: list[tuple[object, dict]] = []
+    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            success=True,
+            message=f"provisioned {ont_id}",
+            to_dict=lambda: {"success": True, "message": f"provisioned {ont_id}"},
+        )
 
-    def fake_enqueue(task_or_name, **kwargs):  # type: ignore[no-untyped-def]
-        enqueued.append((task_or_name, kwargs))
-        return SimpleNamespace(id="bulk-orchestrator-task")
-
-    monkeypatch.setattr(celery_module, "enqueue_celery_task", fake_enqueue)
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        fake_provision,
+    )
 
     missing_ont_id = "11111111-1111-1111-1111-111111111111"
     result = bulk_provisioning.bulk_provision_onts(
@@ -44,11 +47,11 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
         step_data={"wait_for_acs": False},
     )
 
-    assert result.status == BulkProvisioningRunStatus.running
+    assert result.status == BulkProvisioningRunStatus.partial
     assert result.total == 4
-    assert result.queued == 2
+    assert result.processed == 2
     assert result.skipped == 2
-    assert result.orchestrator_task_id == "bulk-orchestrator-task"
+    assert result.orchestrator_task_id is None
 
     run = db_session.get(BulkProvisioningRun, result.run_id)
     assert run is not None
@@ -63,30 +66,17 @@ def test_bulk_provision_onts_records_run_items_and_queues_orchestrator(
         .order_by(BulkProvisioningItem.requested_ont_id)
     )
     assert len(items) == 3
-    assert sum(1 for item in items if item.status == BulkProvisioningItemStatus.pending) == 2
+    assert sum(1 for item in items if item.status == BulkProvisioningItemStatus.succeeded) == 2
     assert sum(1 for item in items if item.status == BulkProvisioningItemStatus.skipped) == 1
     assert {item.correlation_key for item in items} == {
         f"bulk-test:ont:{item.requested_ont_id}" for item in items
     }
-
-    assert len(enqueued) == 1
-    task_name, kwargs = enqueued[0]
-    assert task_name == "app.tasks.ont_provisioning.queue_bulk_provisioning"
-    assert kwargs["correlation_id"] == "bulk-test"
-    assert kwargs["source"] == "bulk_provisioning_service"
-    task_kwargs = kwargs["kwargs"]
-    assert task_kwargs["bulk_run_id"] == str(run.id)
-    assert task_kwargs["max_parallel"] == 10
-    assert task_kwargs["wait_for_acs"] is False
-    assert task_kwargs["apply_acs_config"] is True
-    assert task_kwargs["allow_low_optical_margin"] is False
 
 
 def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
     db_session,
     monkeypatch,
 ) -> None:
-    import app.celery_app as celery_module
     from app.models.network import (
         BulkProvisioningItem,
         BulkProvisioningItemStatus,
@@ -108,10 +98,22 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
     db_session.refresh(ont_ok)
     db_session.refresh(ont_fail)
 
+    provision_results = {
+        str(ont_ok.id): {"success": True, "message": "ok"},
+        str(ont_fail.id): {"success": False, "message": "boom"},
+    }
+
+    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+        result = provision_results[str(ont_id)]
+        return SimpleNamespace(
+            success=result["success"],
+            message=result["message"],
+            to_dict=lambda: result,
+        )
+
     monkeypatch.setattr(
-        celery_module,
-        "enqueue_celery_task",
-        lambda *args, **kwargs: SimpleNamespace(id="task-1"),
+        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        fake_provision,
     )
 
     result = bulk_provisioning.bulk_provision_onts(
@@ -136,11 +138,6 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
             "provision_reconciled",
             StepResult("provision_reconciled", True, "ok"),
         )
-    bulk_provisioning.mark_bulk_item_completed(
-        db_session,
-        ok_item.id,
-        {"success": True, "message": "ok"},
-    )
 
     with provisioning_correlation(fail_item.correlation_key):
         record_ont_provisioning_event(
@@ -149,11 +146,6 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
             "provision_reconciled",
             StepResult("provision_reconciled", False, "boom"),
         )
-    bulk_provisioning.mark_bulk_item_completed(
-        db_session,
-        fail_item.id,
-        {"success": False, "message": "boom"},
-    )
     db_session.commit()
 
     run = bulk_provisioning.get_bulk_provisioning_run(db_session, result.run_id)

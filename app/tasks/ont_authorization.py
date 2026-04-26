@@ -5,11 +5,44 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy import select
+
 from app.celery_app import celery_app
+from app.models.network import OntProvisioningStatus, OntUnit
+from app.models.ont_autofind import OltAutofindCandidate
 from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
+
+
+def can_auto_normalize_wan_after_authorization(db: Any, ont: OntUnit) -> bool:
+    """Return True only for newly authorized autofind ONTs with no service history."""
+    if getattr(ont, "provisioning_status", None) not in (
+        None,
+        OntProvisioningStatus.unprovisioned,
+    ):
+        return False
+    if getattr(ont, "tr069_last_snapshot", None):
+        return False
+    if getattr(ont, "olt_observed_snapshot", None):
+        return False
+    if getattr(ont, "observed_wan_ip", None):
+        return False
+    if getattr(ont, "observed_pppoe_status", None):
+        return False
+    if getattr(ont, "last_provisioned_at", None):
+        return False
+
+    candidate = db.scalars(
+        select(OltAutofindCandidate)
+        .where(OltAutofindCandidate.ont_unit_id == ont.id)
+        .where(OltAutofindCandidate.is_active.is_(False))
+        .where(OltAutofindCandidate.resolution_reason == "authorized")
+        .order_by(OltAutofindCandidate.resolved_at.desc().nullslast())
+        .limit(1)
+    ).first()
+    return candidate is not None
 
 
 @celery_app.task(name="app.tasks.ont_authorization.ensure_tr069_acs_connectivity")
@@ -27,7 +60,7 @@ def ensure_tr069_acs_connectivity(
     2. Resolves the effective TR-069 profile ID from config pack / desired config
     3. Binds the TR-069 profile on the OLT (so ONT knows ACS URL)
     4. Waits for the ONT to send INFORM to GenieACS (up to 120s)
-    5. Normalizes WAN structure via TR-069 (deletes non-management WAN instances)
+    5. Normalizes WAN structure only for newly authorized autofind ONTs
 
     This is non-blocking to authorization - if it fails, the ONT is still
     authorized but may need manual TR-069 binding later.
@@ -217,8 +250,27 @@ def ensure_tr069_acs_connectivity(
                     ont.serial_number,
                 )
 
-                # Step 4: Normalize WAN structure after ACS bootstrap
-                # This ensures consistent WCD layout for TR-069 configuration
+                # Step 4: Normalize WAN structure only for newly authorized
+                # autofind ONTs. Existing ONTs keep their WAN layout unless an
+                # operator explicitly runs the manual normalize action.
+                if not can_auto_normalize_wan_after_authorization(db, ont):
+                    steps.append({
+                        "name": "Normalize WAN structure",
+                        "success": True,
+                        "message": (
+                            "Skipped automatic WAN normalization; ONT is not a "
+                            "newly authorized autofind device or has prior service state."
+                        ),
+                        "skipped": True,
+                    })
+                    db.flush()
+                    db.commit()
+                    return {
+                        "success": bootstrap_result.success,
+                        "message": bootstrap_result.message,
+                        "steps": steps,
+                    }
+
                 try:
                     from app.services.network.ont_action_wan import (
                         normalize_wan_structure,
@@ -365,4 +417,3 @@ def run_post_authorization_follow_up_task(
         raise
     finally:
         db.close()
-

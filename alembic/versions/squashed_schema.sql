@@ -4766,7 +4766,7 @@ CREATE TABLE public.ont_assignments (
     subscription_id uuid,
     service_address_id uuid,
     assigned_at timestamp with time zone,
-    active boolean NOT NULL,
+    is_active boolean NOT NULL,
     notes text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
@@ -10217,7 +10217,7 @@ CREATE INDEX ix_olt_config_backups_olt_device_id ON public.olt_config_backups US
 -- Name: ix_ont_assignments_active_unit; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX ix_ont_assignments_active_unit ON public.ont_assignments USING btree (ont_unit_id) WHERE active;
+CREATE UNIQUE INDEX ix_ont_assignments_active_unit ON public.ont_assignments USING btree (ont_unit_id) WHERE is_active;
 
 
 --

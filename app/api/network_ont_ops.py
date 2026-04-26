@@ -569,7 +569,7 @@ def submit_bulk_action(
             bulk_run_id=str(result.run_id),
             correlation_key=result.correlation_key,
             message=(
-                f"Bulk provisioning queued for {result.queued} ONT(s); "
+                f"Bulk provisioning completed for {result.processed} ONT(s); "
                 f"{result.skipped} skipped"
             ),
         )

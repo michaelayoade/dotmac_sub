@@ -56,6 +56,18 @@ def _toast_headers(message: str, toast_type: str = "success") -> dict[str, str]:
     }
 
 
+def _ensure_ont_write_scope(
+    request: Request, db: Session, ont_id: str
+) -> JSONResponse | None:
+    if can_manage_ont_from_request(request, db, ont_id):
+        return None
+    return JSONResponse(
+        {"success": False, "message": "ONT scope check failed"},
+        status_code=403,
+        headers=_toast_headers("ONT scope check failed", "error"),
+    )
+
+
 def _redirect_to_request_target(
     request: Request,
     fallback_path: str,
@@ -341,6 +353,9 @@ def step_create_service_port(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Create a single OLT service-port VLAN/GEM mapping."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.create_service_port(
         db,
         ont_id,
@@ -379,6 +394,9 @@ def step_configure_mgmt_ip(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Configure management IP (IPHOST) via OLT SSH."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.configure_management_ip(
         db,
         ont_id,
@@ -415,6 +433,9 @@ def step_activate_internet_config(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Activate TCP stack on ONT management WAN."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.activate_internet_config(db, ont_id, ip_index=ip_index)
     _update_service_order_execution_context_for_ont(
         db, ont_id, "activate_internet_config", {"ip_index": ip_index}
@@ -435,6 +456,9 @@ def step_configure_wan_olt(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Set route+NAT mode on ONT management WAN via OLT SSH."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.configure_wan_olt(
         db,
         ont_id,
@@ -465,6 +489,9 @@ def step_bind_tr069(
     from app.models.network import OntUnit
     from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.bind_tr069(
         db,
         ont_id,
@@ -500,6 +527,9 @@ def step_wait_tr069_bootstrap(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Poll GenieACS until the ONT registers after TR-069 binding."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.wait_tr069_bootstrap(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -522,6 +552,9 @@ def step_set_cr_credentials(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Set TR-069 connection request credentials via ACS."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.set_connection_request_credentials(
         db,
         ont_id,
@@ -553,6 +586,9 @@ def step_push_pppoe_omci(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Push PPPoE credentials via OMCI (OLT-side, pre-boot)."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.push_pppoe_omci(
         db,
         ont_id,
@@ -592,6 +628,9 @@ def step_rollback_service_ports(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Remove all service-ports for this ONT from the OLT."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.rollback_service_ports(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -607,6 +646,9 @@ def step_deprovision(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Full deprovision: remove service-ports, deauthorize, clear DB state."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     result = steps.deprovision(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -627,52 +669,18 @@ def provision_ont_direct(
     internet_vlan_id: int | None = Form(default=None),
     mgmt_vlan_id: int | None = Form(default=None),
     dry_run: bool = Form(default=False),
-    async_execution: bool = Form(default=True),
+    async_execution: bool = Form(default=False),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Execute direct ONT provisioning from desired config."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
     del internet_vlan_id, mgmt_vlan_id
     from app.services.network.action_logging import actor_label
 
     initiated_by = actor_label(request)
-    if async_execution:
-        from app.services.queue_adapter import enqueue_task
-
-        correlation_key = f"provision:{ont_id}"
-        queue_result = enqueue_task(
-            "app.tasks.ont_provisioning.provision_ont",
-            kwargs={
-                "ont_id": ont_id,
-                "dry_run": dry_run,
-                "initiated_by": initiated_by,
-                "correlation_key": correlation_key,
-            },
-            correlation_id=correlation_key,
-            source="web_network_onts_provisioning",
-        )
-
-        log_network_action_result(
-            request=request,
-            resource_type="ont",
-            resource_id=ont_id,
-            action="Queue Provisioning",
-            success=queue_result.queued,
-            message="Provisioning queued for background execution",
-            metadata={"task_id": queue_result.task_id},
-        )
-
-        return JSONResponse(
-            content={
-                "success": queue_result.queued,
-                "message": "Provisioning queued for execution",
-                "queued": queue_result.queued,
-                "task_id": queue_result.task_id,
-                "correlation_key": correlation_key,
-                "error": queue_result.error,
-            },
-            status_code=202 if queue_result.queued else 500,
-            headers=_toast_headers("Provisioning started", "info"),
-        )
+    del async_execution
 
     # Synchronous execution
     from app.services.network.ont_provisioning.orchestrator import (

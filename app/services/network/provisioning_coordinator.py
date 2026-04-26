@@ -721,15 +721,15 @@ def queue_provisioning(
     """Retired F/S/P provisioning queue entry point.
 
     Authorization and reauthorization are now explicit OLT actions. ONT
-    provisioning is queued by ONT id through ``app.tasks.ont_provisioning`` and
-    resolves intent from OLT defaults plus ``OntUnit.desired_config``.
+    provisioning runs synchronously by ONT id and resolves intent from OLT
+    defaults plus ``OntUnit.desired_config``.
     """
     del db, olt_id, fsp, serial_number, force_reauthorize, initiated_by, request
     return AsyncProvisioningResult(
         queued=False,
         message=(
             "The legacy OLT/F/S/P provisioning queue was retired. Authorize the "
-            "ONT first, then queue app.tasks.ont_provisioning.provision_ont by ONT id."
+            "ONT first, then run provision_ont_from_desired_config() with an ONT id."
         ),
     )
 
@@ -757,4 +757,3 @@ def provision_ont_sync(
             "provision_ont_from_desired_config() with an ONT id."
         ),
     )
-

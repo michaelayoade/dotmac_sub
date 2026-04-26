@@ -1,4 +1,4 @@
-"""Tests for bulk direct ONT provisioning dispatch."""
+"""Tests for bulk direct ONT provisioning."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class _SessionContext:
         return False
 
 
-def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
+def test_bulk_provision_action_executes_direct_provisioning(monkeypatch):
     from app.models.network import BulkProvisioningRunStatus
     from app.services.network.bulk_provisioning import BulkProvisioningDispatchResult
     from app.tasks.ont_bulk import execute_bulk_action
@@ -32,9 +32,9 @@ def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
             correlation_key="bulk-test",
             status=BulkProvisioningRunStatus.running,
             total=2,
-            queued=2,
+            processed=2,
             skipped=0,
-            orchestrator_task_id="bulk-orchestrator-task",
+            orchestrator_task_id=None,
         )
 
     monkeypatch.setattr(
@@ -53,13 +53,12 @@ def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
     )
 
     assert result == {
-        "processed": 0,
+        "processed": 2,
         "errors": 0,
         "skipped": 0,
-        "queued": 2,
         "bulk_run_id": "00000000-0000-0000-0000-000000000001",
         "correlation_key": "bulk-test",
-        "orchestrator_task_id": "bulk-orchestrator-task",
+        "orchestrator_task_id": None,
         "provisioning_mode": "direct",
     }
     assert calls == [
@@ -77,17 +76,23 @@ def test_bulk_provision_action_queues_direct_orchestrator(monkeypatch):
     ]
 
 
-def test_bulk_direct_orchestrator_dedupes_and_chunks(monkeypatch):
-    import app.celery_app as celery_module
+def test_bulk_direct_compat_task_dedupes_and_executes(monkeypatch):
     from app.tasks.ont_provisioning import queue_bulk_provisioning
 
-    enqueued: list[tuple[Any, dict[str, Any]]] = []
+    provisioned: list[str] = []
 
-    def fake_enqueue(task_or_name, **kwargs):  # type: ignore[no-untyped-def]
-        enqueued.append((task_or_name, kwargs))
-        return SimpleNamespace(id=f"provision-task-{len(enqueued)}")
+    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+        provisioned.append(ont_id)
+        return SimpleNamespace(
+            success=True,
+            message=f"provisioned {ont_id}",
+            to_dict=lambda: {"success": True, "message": f"provisioned {ont_id}"},
+        )
 
-    monkeypatch.setattr(celery_module, "enqueue_celery_task", fake_enqueue)
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        fake_provision,
+    )
 
     result = queue_bulk_provisioning.run(
         ["ont-1", "ont-2", "ont-1", "", "ont-3"],
@@ -97,29 +102,19 @@ def test_bulk_direct_orchestrator_dedupes_and_chunks(monkeypatch):
         chunk_delay_seconds=30,
     )
 
-    assert result["queued"] == 3
+    assert result["processed"] == 3
     assert result["skipped"] == 2
     assert result["errors"] == 0
-    assert result["chunks"] == 2
+    assert result["chunks"] == 1
     assert [task["ont_id"] for task in result["tasks"]] == ["ont-1", "ont-2", "ont-3"]
-    assert [task["countdown"] for task in result["tasks"]] == [0, 0, 30]
-
-    assert len(enqueued) == 3
-    assert [kwargs["countdown"] for _, kwargs in enqueued] == [0, 0, 30]
-    assert [
-        kwargs["kwargs"]["ont_id"] for _, kwargs in enqueued
-    ] == ["ont-1", "ont-2", "ont-3"]
-    assert all(
-        task_or_name == "app.tasks.ont_provisioning.provision_ont"
-        for task_or_name, _ in enqueued
-    )
+    assert provisioned == ["ont-1", "ont-2", "ont-3"]
 
 
-def test_bulk_direct_orchestrator_uses_bulk_item_correlation(
+def test_bulk_direct_compat_task_uses_bulk_item_correlation(
     db_session,
     monkeypatch,
 ):
-    import app.celery_app as celery_module
+    import app.tasks.ont_provisioning as provisioning_task_module
     from app.models.network import (
         BulkProvisioningItem,
         BulkProvisioningItemStatus,
@@ -128,7 +123,6 @@ def test_bulk_direct_orchestrator_uses_bulk_item_correlation(
         OntUnit,
     )
     from app.tasks.ont_provisioning import queue_bulk_provisioning
-    import app.tasks.ont_provisioning as provisioning_task_module
 
     ont = OntUnit(serial_number="BULK-DIRECT-CORR")
     db_session.add(ont)
@@ -152,16 +146,28 @@ def test_bulk_direct_orchestrator_uses_bulk_item_correlation(
     db_session.add(item)
     db_session.commit()
 
-    enqueued: list[tuple[Any, dict[str, Any]]] = []
+    captured: dict[str, Any] = {}
 
-    def fake_enqueue(task_or_name, **kwargs):  # type: ignore[no-untyped-def]
-        enqueued.append((task_or_name, kwargs))
-        return SimpleNamespace(id="provision-task-1")
+    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+        captured["ont_id"] = ont_id
+        return SimpleNamespace(
+            success=True,
+            message="ok",
+            to_dict=lambda: {"success": True, "message": "ok"},
+        )
 
-    monkeypatch.setattr(celery_module, "enqueue_celery_task", fake_enqueue)
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        fake_provision,
+    )
     monkeypatch.setattr(
         provisioning_task_module.db_session_adapter,
         "read_session",
+        lambda: _SessionContext(db_session),
+    )
+    monkeypatch.setattr(
+        provisioning_task_module.db_session_adapter,
+        "session",
         lambda: _SessionContext(db_session),
     )
 
@@ -171,11 +177,9 @@ def test_bulk_direct_orchestrator_uses_bulk_item_correlation(
     )
 
     assert result["bulk_run_id"] == str(run.id)
-    assert result["queued"] == 1
+    assert result["processed"] == 1
     assert result["tasks"][0]["bulk_item_id"] == str(item.id)
     assert result["tasks"][0]["correlation_key"] == item.correlation_key
-    assert enqueued[0][1]["correlation_id"] == item.correlation_key
-    child_kwargs = enqueued[0][1]["kwargs"]
-    assert child_kwargs["bulk_run_id"] == str(run.id)
-    assert child_kwargs["bulk_item_id"] == str(item.id)
-    assert child_kwargs["correlation_key"] == item.correlation_key
+    assert captured["ont_id"] == str(ont.id)
+    db_session.refresh(item)
+    assert item.status == BulkProvisioningItemStatus.succeeded

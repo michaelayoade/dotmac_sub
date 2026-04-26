@@ -115,7 +115,7 @@ def _queue_bulk_provisioning(
     ont_ids: list[str],
     params: dict[str, Any],
 ) -> dict[str, Any]:
-    """Queue many per-ONT direct provisioning tasks with bounded fan-out."""
+    """Execute many per-ONT direct provisioning operations synchronously."""
     from app.services.network.bulk_provisioning import bulk_provision_onts
 
     params = dict(params or {})
@@ -136,12 +136,11 @@ def _queue_bulk_provisioning(
         )
 
     return {
-        "processed": 0,
+        "processed": result.processed,
         "errors": 0,
         "skipped": result.skipped,
-        "queued": result.queued,
-            "bulk_run_id": str(result.run_id),
-            "correlation_key": result.correlation_key,
-            "orchestrator_task_id": result.orchestrator_task_id,
+        "bulk_run_id": str(result.run_id),
+        "correlation_key": result.correlation_key,
+        "orchestrator_task_id": result.orchestrator_task_id,
         "provisioning_mode": "direct",
     }
