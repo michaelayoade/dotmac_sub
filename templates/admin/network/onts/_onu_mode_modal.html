@@ -21,20 +21,6 @@
             {% include "components/forms/csrf_input.html" %}
 
             <div class="space-y-5">
-                {# WAN VLAN-ID #}
-                <div>
-                    <label for="wan_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">WAN VLAN-ID</label>
-                    <select name="wan_vlan_id" id="wan_vlan_id"
-                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">-- None --</option>
-                        {% for vlan in vlans %}
-                        <option value="{{ vlan.id }}" {% if wan_vlan and (wan_vlan | string) == (vlan.tag | string) %}selected{% endif %}>
-                            {{ vlan | vlan_label }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-
                 {# ONU Mode #}
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">ONU Mode</label>

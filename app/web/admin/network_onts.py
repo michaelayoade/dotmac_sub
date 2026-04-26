@@ -551,74 +551,6 @@ def ont_service_port_clone(
     )
 
 
-@router.get(
-    "/onts/{ont_id}/config/wan",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_config_wan(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: WAN/PPPoE section for unified config."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(web_network_ont_actions_service.wan_config_context(db, ont_id))
-    return templates.TemplateResponse("admin/network/onts/_config_wan.html", context)
-
-
-@router.get(
-    "/onts/{ont_id}/config/wifi",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_config_wifi(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: WiFi section for unified config."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(web_network_ont_actions_service.wifi_config_context(db, ont_id))
-    return templates.TemplateResponse("admin/network/onts/_config_wifi.html", context)
-
-
-@router.get(
-    "/onts/{ont_id}/config/tr069-profile",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_config_tr069_profile(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: TR-069 profile binding section for unified config."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(
-        web_network_ont_actions_service.tr069_profile_config_context(db, ont_id)
-    )
-    return templates.TemplateResponse(
-        "admin/network/onts/_config_tr069_profile.html", context
-    )
-
-
-@router.get(
-    "/onts/{ont_id}/config/lan",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_config_lan(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: LAN/Ethernet section for unified config."""
-    context = _base_context(request, db, active_page="onts")
-    context.update(web_network_ont_actions_service.lan_config_context(db, ont_id))
-    return templates.TemplateResponse("admin/network/onts/_config_lan.html", context)
-
-
 # -- Configure Tab Routes (Database-backed ONT configuration) ------------------
 
 
@@ -649,10 +581,17 @@ def ont_configure_submit(
     request: Request,
     ont_id: str,
     wan_mode: str = Form(default=""),
+    ip_protocol: str = Form(default=""),
     pppoe_username: str = Form(default=""),
     pppoe_password: str = Form(default=""),
+    lan_gateway_ip: str = Form(default=""),
+    lan_subnet_mask: str = Form(default=""),
+    lan_dhcp_enabled: bool = Form(default=False),
+    lan_dhcp_start: str = Form(default=""),
+    lan_dhcp_end: str = Form(default=""),
     wifi_enabled: bool = Form(default=False),
     wifi_ssid: str = Form(default=""),
+    wifi_channel: str = Form(default=""),
     wifi_security_mode: str = Form(default=""),
     wifi_password: str = Form(default=""),
     push_to_device: bool = Form(default=False),
@@ -663,10 +602,17 @@ def ont_configure_submit(
         db,
         ont_id,
         wan_mode=wan_mode or None,
+        ip_protocol=ip_protocol or None,
         pppoe_username=pppoe_username or None,
         pppoe_password=pppoe_password or None,
+        lan_gateway_ip=lan_gateway_ip or None,
+        lan_subnet_mask=lan_subnet_mask or None,
+        lan_dhcp_enabled=lan_dhcp_enabled,
+        lan_dhcp_start=lan_dhcp_start or None,
+        lan_dhcp_end=lan_dhcp_end or None,
         wifi_enabled=wifi_enabled,
         wifi_ssid=wifi_ssid or None,
+        wifi_channel=wifi_channel or None,
         wifi_security_mode=wifi_security_mode or None,
         wifi_password=wifi_password or None,
         push_to_device=push_to_device,

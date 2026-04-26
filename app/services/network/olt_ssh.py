@@ -1369,6 +1369,8 @@ def create_single_service_port(
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
     port_index: int | None = None,
+    traffic_table_inbound: int | None = None,
+    traffic_table_outbound: int | None = None,
 ) -> tuple[bool, str, int | None]:
     """Create a single service-port on an OLT.
 
@@ -1385,6 +1387,8 @@ def create_single_service_port(
         user_vlan: User VLAN (default: same as vlan_id).
         tag_transform: VLAN tag transform mode.
         port_index: Pre-allocated service-port index. If None, OLT auto-assigns.
+        traffic_table_inbound: OLT traffic-table index for inbound QoS (optional).
+        traffic_table_outbound: OLT traffic-table index for outbound QoS (optional).
 
     Returns:
         Tuple of (success, message, assigned_index).
@@ -1413,6 +1417,8 @@ def create_single_service_port(
             user_vlan=user_vlan,
             tag_transform=tag_transform,
             port_index=port_index,
+            traffic_table_inbound=traffic_table_inbound,
+            traffic_table_outbound=traffic_table_outbound,
         )
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
 
@@ -1444,117 +1450,6 @@ def create_single_service_port(
         return False, f"Error: {exc}", None
     finally:
         transport.close()
-
-
-# Backward compatibility re-exports (functions moved to olt_ssh_ont.py)
-# These functions are now defined in olt_ssh_ont.py but re-exported here
-# to maintain backward compatibility with existing imports.
-from app.services.network.olt_ssh_ont import (
-    authorize_ont as authorize_ont,
-)
-from app.services.network.olt_ssh_ont import (
-    bind_tr069_server_profile as bind_tr069_server_profile,
-)
-from app.services.network.olt_ssh_ont import (
-    configure_ont_iphost as configure_ont_iphost,
-)
-from app.services.network.olt_ssh_ont import (
-    get_ont_iphost_config as get_ont_iphost_config,
-)
-from app.services.network.olt_ssh_ont import (
-    reboot_ont_omci as reboot_ont_omci,
-)
-
-# Backward compatibility re-exports (profile functions moved to olt_ssh_profiles.py)
-from app.services.network.olt_ssh_profiles import (
-    OltProfileEntry as OltProfileEntry,
-)
-from app.services.network.olt_ssh_profiles import (
-    Tr069ServerProfile as Tr069ServerProfile,
-)
-from app.services.network.olt_ssh_profiles import (
-    _parse_profile_table as _parse_profile_table,
-)
-from app.services.network.olt_ssh_profiles import (
-    _parse_profile_table_legacy as _parse_profile_table_legacy,
-)
-from app.services.network.olt_ssh_profiles import (
-    _parse_tr069_profile_detail as _parse_tr069_profile_detail,
-)
-from app.services.network.olt_ssh_profiles import (
-    _parse_tr069_profile_detail_legacy as _parse_tr069_profile_detail_legacy,
-)
-from app.services.network.olt_ssh_profiles import (
-    create_tr069_server_profile as create_tr069_server_profile,
-)
-from app.services.network.olt_ssh_profiles import (
-    ensure_wan_srvprofile as ensure_wan_srvprofile,
-)
-from app.services.network.olt_ssh_profiles import (
-    get_line_profiles as get_line_profiles,
-)
-from app.services.network.olt_ssh_profiles import (
-    get_service_profiles as get_service_profiles,
-)
-from app.services.network.olt_ssh_profiles import (
-    get_tr069_server_profiles as get_tr069_server_profiles,
-)
-
-
-def _auto_bind_tr069_after_authorize(
-    olt: OLTDevice, fsp: str, ont_id: int | None
-) -> None:
-    """Backward-compatible TR-069 auto-bind helper.
-
-    Kept here so legacy callers and tests that monkeypatch this module's profile
-    helpers continue to influence the binding flow.
-    """
-    from app.services.network.olt_ssh_ont import (
-        _load_linked_acs_payload,
-        _safe_profile_name,
-    )
-    from app.services.network.tr069_profile_matching import match_tr069_profile
-
-    if ont_id is None:
-        return
-    payload = _load_linked_acs_payload(olt)
-    if payload is None or not str(payload.get("acs_url") or "").strip():
-        return
-
-    ok, _msg, profiles = get_tr069_server_profiles(olt)
-    if not ok:
-        return
-    target_username = str(payload.get("username") or "").strip()
-    profile = match_tr069_profile(
-        profiles,
-        acs_url=str(payload["acs_url"]),
-        acs_username=target_username,
-    )
-    profile_id = profile.profile_id if profile else None
-
-    if profile_id is None:
-        ok, _msg = create_tr069_server_profile(
-            olt,
-            profile_name=f"ACS {_safe_profile_name(str(payload.get('name') or ''))}",
-            acs_url=str(payload["acs_url"]),
-            username=target_username,
-            password=str(payload.get("password") or ""),
-            inform_interval=int(str(payload.get("inform_interval") or 300)),
-        )
-        if not ok:
-            return
-        ok, _msg, profiles = get_tr069_server_profiles(olt)
-        if not ok:
-            return
-        profile = match_tr069_profile(
-            profiles,
-            acs_url=str(payload["acs_url"]),
-            acs_username=target_username,
-        )
-        profile_id = profile.profile_id if profile else None
-
-    if profile_id is not None:
-        bind_tr069_server_profile(olt, fsp=fsp, ont_id=ont_id, profile_id=profile_id)
 
 
 def test_connection(olt: OLTDevice) -> tuple[bool, str, str | None]:

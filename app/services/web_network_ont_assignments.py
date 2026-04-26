@@ -122,7 +122,6 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
 
     When ont is provided, auto-resolves PON port from discovered board/port.
     Subscriber accounts are fetched via HTMX typeahead search.
-    Also loads available VLANs from the ONT's OLT for dropdown selection.
     """
     from app.models.network import Vlan, VlanPurpose
 
@@ -133,46 +132,12 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
         "addresses": [],
         # Subscriptions will be resolved from selected subscriber
         "subscriptions": [],
-        # VLANs for dropdown selection
-        "internet_vlans": [],
-        "mgmt_vlans": [],
     }
 
     # Auto-resolve PON port from ONT discovery data
     if ont is not None:
         result.update(resolve_pon_port_for_ont(db, ont))
 
-        # Load VLANs from ONT's OLT for dropdown selection
-        olt_device_id = getattr(ont, "olt_device_id", None)
-        if olt_device_id:
-            vlans = db.scalars(
-                select(Vlan)
-                .where(
-                    Vlan.olt_device_id == olt_device_id,
-                    Vlan.is_active.is_(True),
-                )
-                .order_by(Vlan.tag)
-            ).all()
-
-            # Separate by purpose for dropdown grouping
-            internet_vlans = []
-            mgmt_vlans = []
-            for vlan in vlans:
-                vlan_item = {
-                    "id": str(vlan.id),
-                    "tag": vlan.tag,
-                    "name": vlan.name or f"VLAN {vlan.tag}",
-                    "purpose": vlan.purpose.value if vlan.purpose else None,
-                }
-                # Internet VLANs
-                if vlan.purpose in (VlanPurpose.internet, None):
-                    internet_vlans.append(vlan_item)
-                # Management VLANs
-                if vlan.purpose in (VlanPurpose.management, None):
-                    mgmt_vlans.append(vlan_item)
-
-            result["internet_vlans"] = internet_vlans
-            result["mgmt_vlans"] = mgmt_vlans
     else:
         result["pon_port_id"] = None
         result["pon_port_label"] = None
@@ -248,9 +213,6 @@ def parse_form_values(form) -> dict[str, object]:
         "pppoe_password": form.get("pppoe_password", "").strip() or None,
         "wifi_ssid": form.get("wifi_ssid", "").strip() or None,
         "wifi_password": form.get("wifi_password", "").strip() or None,
-        # VLAN configuration
-        "internet_vlan_id": form.get("internet_vlan_id", "").strip() or None,
-        "mgmt_vlan_id": form.get("mgmt_vlan_id", "").strip() or None,
         # Management IP configuration
         "mgmt_ip_mode": form.get("mgmt_ip_mode", "").strip() or None,
         "mgmt_ip_address": form.get("mgmt_ip_address", "").strip() or None,
@@ -361,9 +323,6 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         pppoe_password=str(values.get("pppoe_password")) if values.get("pppoe_password") else None,
         wifi_ssid=str(values.get("wifi_ssid")) if values.get("wifi_ssid") else None,
         wifi_password=str(values.get("wifi_password")) if values.get("wifi_password") else None,
-        # VLAN configuration
-        internet_vlan_id=coerce_uuid(str(values.get("internet_vlan_id"))) if values.get("internet_vlan_id") else None,
-        mgmt_vlan_id=coerce_uuid(str(values.get("mgmt_vlan_id"))) if values.get("mgmt_vlan_id") else None,
         # Management IP configuration
         mgmt_ip_mode=str(values.get("mgmt_ip_mode")) if values.get("mgmt_ip_mode") else "inactive",
         mgmt_ip_address=str(values.get("mgmt_ip_address")) if values.get("mgmt_ip_address") else None,
@@ -395,9 +354,6 @@ def form_payload(
         "pppoe_password": values.get("pppoe_password"),
         "wifi_ssid": values.get("wifi_ssid"),
         "wifi_password": values.get("wifi_password"),
-        # VLAN config fields
-        "internet_vlan_id": values.get("internet_vlan_id"),
-        "mgmt_vlan_id": values.get("mgmt_vlan_id"),
         # Management IP config fields
         "mgmt_ip_mode": values.get("mgmt_ip_mode"),
         "mgmt_ip_address": values.get("mgmt_ip_address"),
@@ -451,13 +407,6 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
         "pppoe_password": getattr(assignment, "pppoe_password", "") or "",
         "wifi_ssid": getattr(assignment, "wifi_ssid", "") or "",
         "wifi_password": getattr(assignment, "wifi_password", "") or "",
-        # VLAN config fields
-        "internet_vlan_id": (
-            str(assignment.internet_vlan_id) if assignment.internet_vlan_id else ""
-        ),
-        "mgmt_vlan_id": (
-            str(assignment.mgmt_vlan_id) if assignment.mgmt_vlan_id else ""
-        ),
         # Management IP config fields
         "mgmt_ip_mode": mgmt_ip_mode_val.value if mgmt_ip_mode_val else "inactive",
         "mgmt_ip_address": getattr(assignment, "mgmt_ip_address", "") or "",
@@ -585,9 +534,6 @@ def update_assignment_from_form(
         pppoe_password=str(values.get("pppoe_password")) if values.get("pppoe_password") else None,
         wifi_ssid=str(values.get("wifi_ssid")) if values.get("wifi_ssid") else None,
         wifi_password=str(values.get("wifi_password")) if values.get("wifi_password") else None,
-        # VLAN configuration
-        internet_vlan_id=coerce_uuid(str(values.get("internet_vlan_id"))) if values.get("internet_vlan_id") else None,
-        mgmt_vlan_id=coerce_uuid(str(values.get("mgmt_vlan_id"))) if values.get("mgmt_vlan_id") else None,
         # Management IP configuration
         mgmt_ip_mode=str(values.get("mgmt_ip_mode")) if values.get("mgmt_ip_mode") else None,
         mgmt_ip_address=str(values.get("mgmt_ip_address")) if values.get("mgmt_ip_address") else None,

@@ -33,7 +33,7 @@ _AUTHORIZATION_BLOCKER_NAMES = {
     "Authorization profiles",
     "OLT SSH credentials",
     "Active PON assignment",
-    "TR-069 OLT profile",
+    "OLT config pack",
 }
 
 
@@ -260,60 +260,34 @@ def validate_prerequisites(
         }
     )
 
-    acs_server_id = resolved_values.get("tr069_acs_server_id")
-    if acs_server_id:
+    # OLT config pack validation - all required fields must be set on the OLT
+    config_pack = resolved_config.get("config_pack")
+    if config_pack and config_pack.is_complete:
         checks.append(
             {
-                "name": "TR-069 ACS server",
+                "name": "OLT config pack",
                 "status": "ok",
-                "message": "Configured",
+                "message": f"TR-069 profile {config_pack.tr069_olt_profile_id}",
                 "can_auto_fix": False,
             }
         )
     else:
+        missing = []
+        if config_pack:
+            if not config_pack.has_authorization_profiles:
+                missing.append("auth profiles")
+            if not config_pack.has_vlans:
+                missing.append("VLANs")
+            if not config_pack.has_tr069_config:
+                missing.append("TR-069")
         checks.append(
             {
-                "name": "TR-069 ACS server",
-                "status": "warn",
-                "message": "Not configured - TR-069 steps will be skipped",
+                "name": "OLT config pack",
+                "status": "fail",
+                "message": f"OLT missing: {', '.join(missing) if missing else 'config pack'}",
                 "can_auto_fix": False,
             }
         )
-
-    tr069_credentials_present = bool(
-        resolved_values.get("cr_username") or resolved_values.get("cr_password")
-    )
-    acs_enabled = bool(acs_server_id)
-    tr069_required = tr069_credentials_present or acs_enabled
-
-    effective_tr069_profile_id = resolved_values.get("tr069_olt_profile_id")
-
-    if not tr069_required:
-        tr069_status = "ok"
-        tr069_msg = "Not required"
-    elif effective_tr069_profile_id is not None:
-        tr069_status = "ok"
-        tr069_msg = f"Profile ID {effective_tr069_profile_id}"
-    elif acs_enabled:
-        tr069_status = "ok"
-        tr069_msg = "Profile will be resolved dynamically at provisioning time"
-    elif tr069_credentials_present and not acs_enabled:
-        tr069_status = "fail"
-        tr069_msg = (
-            "TR-069 connection request credentials are set, but no ACS-enabled OLT "
-            "or ONT is configured."
-        )
-    else:
-        tr069_status = "fail"
-        tr069_msg = "Resolve or create an OLT TR-069 profile before provisioning."
-    checks.append(
-        {
-            "name": "TR-069 OLT profile",
-            "status": tr069_status,
-            "message": tr069_msg,
-            "can_auto_fix": False,
-        }
-    )
 
     for check in checks:
         check["blocks_authorization"] = check["name"] in _AUTHORIZATION_BLOCKER_NAMES

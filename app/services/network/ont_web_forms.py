@@ -20,10 +20,10 @@ from app.models.network import (
     GponChannel,
     IpProtocol,
     MgmtIpMode,
+    OntAssignment,
     OnuMode,
     SplitterPort,
     SplitterPortType,
-    Vlan,
     WanMode,
 )
 from app.schemas.network import OntUnitCreate, OntUnitUpdate
@@ -32,7 +32,6 @@ from app.services import web_network_onts as web_onts_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import set_desired_config_value
 
 _LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
 
@@ -162,6 +161,15 @@ def form_int_or_none(form: FormData, key: str) -> int | None:
         return None
 
 
+def active_assignment_for_ont(db: Session, ont: Any) -> OntAssignment:
+    for assignment in getattr(ont, "assignments", []) or []:
+        if getattr(assignment, "active", False):
+            return assignment
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db.add(assignment)
+    return assignment
+
+
 def normalize_vendor_serial(value: str) -> str | None:
     normalized = "".join(ch for ch in value.upper() if ch.isalnum()).strip()
     return normalized or None
@@ -281,7 +289,6 @@ def create_ont_from_form(
 def build_onu_mode_payload(form: FormData) -> OntUnitUpdate:
     return OntUnitUpdate(
         onu_mode=form_str(form, "onu_mode").strip() or None,
-        wan_vlan_id=form_uuid_or_none(form, "wan_vlan_id"),
         wan_mode=form_str(form, "wan_mode").strip() or None,
         config_method=form_str(form, "config_method").strip() or None,
         ip_protocol=form_str(form, "ip_protocol").strip() or None,
@@ -301,22 +308,26 @@ def update_onu_mode_from_form(
     except HTTPException:
         return OntFormResult(not_found=True)
     before_snapshot = model_to_dict(ont)
-    wan_vlan_id = form_uuid_or_none(form, "wan_vlan_id")
-    wan_vlan_tag = None
-    if wan_vlan_id is not None:
-        vlan = db.get(Vlan, wan_vlan_id)
-        wan_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
-    intent_values = [
-        ("device.onu_mode", form_str(form, "onu_mode").strip() or None),
-        ("wan.mode", form_str(form, "wan_mode").strip() or None),
-        ("device.config_method", form_str(form, "config_method").strip() or None),
-        ("wan.ip_protocol", form_str(form, "ip_protocol").strip() or None),
-        ("wan.pppoe_username", form_str(form, "pppoe_username").strip() or None),
-    ]
-    if pw := form_str(form, "pppoe_password").strip():
-        intent_values.append(("wan.pppoe_password", encrypt_credential(pw)))
-    for field_name, value in intent_values:
-        set_desired_config_value(ont, field_name, value)
+    assignment = active_assignment_for_ont(db, ont)
+    onu_mode = form_str(form, "onu_mode").strip() or None
+    wan_mode = form_str(form, "wan_mode").strip() or None
+    assignment.wan_mode = (
+        OnuMode.bridging if onu_mode == OnuMode.bridging.value else OnuMode.routing
+    )
+    assignment.ip_mode = (
+        MgmtIpMode.static_ip
+        if wan_mode == WanMode.static_ip.value
+        else MgmtIpMode.dhcp
+    )
+    assignment.pppoe_username = (
+        form_str(form, "pppoe_username").strip()
+        if wan_mode == WanMode.pppoe.value
+        else None
+    )
+    if wan_mode != WanMode.pppoe.value:
+        assignment.pppoe_password = None
+    elif pw := form_str(form, "pppoe_password").strip():
+        assignment.pppoe_password = encrypt_credential(pw)
     ont.wan_remote_access = form_str(form, "wan_remote_access") == "true"
     db.add(ont)
     db.flush()
@@ -650,7 +661,6 @@ def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
 def build_mgmt_ip_payload(form: FormData) -> OntUnitUpdate:
     return OntUnitUpdate(
         mgmt_ip_mode=form_str(form, "mgmt_ip_mode").strip() or None,
-        mgmt_vlan_id=form_uuid_or_none(form, "mgmt_vlan_id"),
         mgmt_ip_address=form_str(form, "mgmt_ip_address").strip() or None,
         mgmt_remote_access=form_str(form, "mgmt_remote_access") == "true",
         voip_enabled=form_str(form, "voip_enabled") == "true",
@@ -666,22 +676,20 @@ def update_mgmt_ip_from_form(
         return OntFormResult(not_found=True)
 
     before_snapshot = model_to_dict(ont)
-    mgmt_vlan_id = form_uuid_or_none(form, "mgmt_vlan_id")
-    mgmt_vlan_tag = None
-    if mgmt_vlan_id is not None:
-        vlan = db.get(Vlan, mgmt_vlan_id)
-        mgmt_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
     mgmt_ip_mode = form_str(form, "mgmt_ip_mode").strip() or None
-    for field_name, value in [
-        ("management.ip_mode", mgmt_ip_mode),
-        (
-            "management.ip_address",
-            form_str(form, "mgmt_ip_address").strip()
-            if mgmt_ip_mode == "static_ip"
-            else None,
-        ),
-    ]:
-        set_desired_config_value(ont, field_name, value)
+    assignment = active_assignment_for_ont(db, ont)
+    assignment.mgmt_ip_mode = (
+        MgmtIpMode.static_ip
+        if mgmt_ip_mode == "static_ip"
+        else MgmtIpMode.dhcp
+        if mgmt_ip_mode == "dhcp"
+        else MgmtIpMode.inactive
+    )
+    assignment.mgmt_ip_address = (
+        form_str(form, "mgmt_ip_address").strip()
+        if mgmt_ip_mode == "static_ip"
+        else None
+    )
     ont.mgmt_remote_access = form_str(form, "mgmt_remote_access") == "true"
     ont.voip_enabled = form_str(form, "voip_enabled") == "true"
     db.add(ont)

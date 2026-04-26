@@ -1,0 +1,41 @@
+{# Hosts Tab - Connected devices from TR-069 #}
+
+<div class="space-y-4">
+    {# ==================== CONNECTED DEVICES ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <div class="flex items-center gap-3">
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Connected Devices</h2>
+                {% if connected_customer_devices is not none %}
+                <span class="inline-flex items-center rounded-full bg-cyan-100 px-2.5 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">
+                    {{ connected_customer_devices }} device{{ 's' if connected_customer_devices != 1 else '' }}
+                </span>
+                {% endif %}
+            </div>
+            <button type="button"
+                    hx-get="/admin/network/onts/{{ ont.id }}/hosts"
+                    hx-target="#hosts-table-content"
+                    hx-swap="innerHTML"
+                    hx-indicator="#hosts-refresh-spinner"
+                    class="inline-flex items-center gap-1.5 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">
+                <svg id="hosts-refresh-spinner" class="htmx-indicator h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Refresh
+            </button>
+        </div>
+
+        <div id="hosts-table-content" class="p-5" hx-get="/admin/network/onts/{{ ont.id }}/hosts" hx-trigger="revealed" hx-swap="innerHTML">
+            {# Initial loading state - will be replaced by HTMX #}
+            <div class="flex items-center justify-center py-8 text-sm text-slate-400">
+                <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Loading connected devices...
+            </div>
+        </div>
+    </div>
+
+</div>

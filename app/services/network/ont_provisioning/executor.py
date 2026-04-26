@@ -612,6 +612,8 @@ def _execute_create_service_port(
         vlan_id=desired_port.vlan_id,
         user_vlan=desired_port.user_vlan,
         tag_transform=desired_port.tag_transform,
+        traffic_table_inbound=desired_port.traffic_table_inbound,
+        traffic_table_outbound=desired_port.traffic_table_outbound,
     )
 
     # Execute command

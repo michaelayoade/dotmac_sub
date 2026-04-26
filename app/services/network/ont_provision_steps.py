@@ -310,7 +310,6 @@ def configure_management_ip(
     db: Session,
     ont_id: str,
     *,
-    vlan_id: int,
     ip_mode: str = "dhcp",
     priority: int | None = None,
     ip_address: str | None = None,
@@ -324,15 +323,31 @@ def configure_management_ip(
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        vlan_id: Management VLAN tag.
         ip_mode: "dhcp" or "static".
         ip_address: Required if ip_mode is "static".
         subnet: Required if ip_mode is "static".
         gateway: Required if ip_mode is "static".
     """
     from app.services.network.ont_write import ont_write
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
 
     t0 = time.monotonic()
+    ctx, err = resolve_olt_context(db, ont_id)
+    if not ctx:
+        return StepResult("configure_management_ip", False, err, critical=False)
+    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
+    vlan_id = (
+        config_pack.management_vlan.tag
+        if config_pack and config_pack.management_vlan
+        else None
+    )
+    if vlan_id is None:
+        return StepResult(
+            "configure_management_ip",
+            False,
+            "OLT config pack management VLAN is required.",
+            critical=False,
+        )
     action_result = ont_write.update_management_ip(
         db,
         ont_id,
@@ -365,22 +380,24 @@ def configure_management_ip(
 def activate_internet_config(
     db: Session,
     ont_id: str,
-    *,
-    ip_index: int = 0,
 ) -> StepResult:
     """Activate TCP stack on ONT management WAN via internet-config.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        ip_index: IP index for the internet-config command (default 0).
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("activate_internet_config", False, err, critical=False)
+    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
+    if config_pack is None:
+        return StepResult("activate_internet_config", False, "OLT config pack not found")
+    ip_index = config_pack.internet_config_ip_index
 
     action_result = get_protocol_adapter(ctx.olt).configure_internet_config(
         ctx.fsp,
@@ -407,24 +424,32 @@ def activate_internet_config(
 def configure_wan_olt(
     db: Session,
     ont_id: str,
-    *,
-    ip_index: int = 0,
-    profile_id: int = 0,
 ) -> StepResult:
     """Set route+NAT mode on ONT management WAN via OLT SSH wan-config.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        ip_index: IP index (default 0).
-        profile_id: OLT wan-config profile ID (default 0).
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("configure_wan_olt", False, err, critical=False)
+    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
+    if config_pack is None:
+        return StepResult("configure_wan_olt", False, "OLT config pack not found")
+    ip_index = config_pack.internet_config_ip_index
+    profile_id = config_pack.wan_config_profile_id
+    if not profile_id:
+        return StepResult(
+            "configure_wan_olt",
+            False,
+            "OLT config pack WAN config profile ID is required.",
+            critical=False,
+        )
 
     action_result = get_protocol_adapter(ctx.olt).configure_wan_config(
         ctx.fsp,
@@ -452,22 +477,28 @@ def configure_wan_olt(
 def bind_tr069(
     db: Session,
     ont_id: str,
-    *,
-    tr069_olt_profile_id: int,
 ) -> StepResult:
     """Bind a TR-069 server profile to the ONT via OLT SSH.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        tr069_olt_profile_id: OLT-level TR-069 server profile ID.
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.olt_config_pack import resolve_olt_config_pack
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
         return StepResult("bind_tr069", False, err)
+    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
+    tr069_olt_profile_id = config_pack.tr069_olt_profile_id if config_pack else None
+    if tr069_olt_profile_id is None:
+        return StepResult(
+            "bind_tr069",
+            False,
+            "OLT config pack TR-069 profile ID is required.",
+        )
 
     logger.info(
         "Provisioning TR-069 bind starting: ont_id=%s serial=%s olt=%s fsp=%s olt_ont_id=%s profile_id=%s",

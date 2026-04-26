@@ -63,6 +63,8 @@ class DesiredServicePort:
     gem_index: int
     user_vlan: int | str | None = None
     tag_transform: str = "translate"
+    traffic_table_inbound: int | None = None
+    traffic_table_outbound: int | None = None
 
     def matches(self, actual: ActualServicePort) -> ServicePortMatchResult:
         """Check if this desired port matches an actual port."""
@@ -335,6 +337,12 @@ def build_desired_state_from_config(
             DesiredServicePort(
                 vlan_id=int(effective_values["wan_vlan"]),
                 gem_index=int(effective_values.get("wan_gem_index") or 1),
+                traffic_table_inbound=getattr(
+                    ctx.olt, "internet_traffic_table_inbound", None
+                ),
+                traffic_table_outbound=getattr(
+                    ctx.olt, "internet_traffic_table_outbound", None
+                ),
             )
         )
 

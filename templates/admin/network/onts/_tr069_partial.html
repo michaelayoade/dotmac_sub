@@ -3,9 +3,7 @@
 
 {% if tr069 and tr069.available %}
 <div class="space-y-6"
-     data-initial-ssid="{{ (tr069.wireless.SSID or '')|tojson|forceescape }}"
-     data-initial-pppoe-user="{{ (tr069.wan.get('Username', '') or '')|tojson|forceescape }}"
-     x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, diagOpen: false, showSsidModal: false, showPasswordModal: false, showPppoeModal: false, showPingModal: false, ssid: JSON.parse($el.dataset.initialSsid || '&quot;&quot;'), wifiPassword: '', pppoeUser: JSON.parse($el.dataset.initialPppoeUser || '&quot;&quot;'), pppoePass: '', pingHost: '8.8.8.8', pingCount: 4, actionPending: false, actionMessage: '', actionType: 'info', getCsrfToken: function() { const meta = document.querySelector('meta[name=\\'csrf-token\\']'); if (meta && meta.content) return meta.content; const cookie = document.cookie.match(new RegExp('csrf_token=([^;]+)')); return cookie ? cookie[1] : ''; }, submitAction: async function(url, options, pendingMessage) { this.actionPending = true; this.actionMessage = pendingMessage || 'Applying change...'; this.actionType = 'info'; try { const token = this.getCsrfToken(); const requestOptions = Object.assign({}, options || {}); requestOptions.headers = Object.assign({}, (options && options.headers) || {}, token ? {'X-CSRF-Token': token} : {}); if (requestOptions.body instanceof FormData && token && !requestOptions.body.has('_csrf_token')) { requestOptions.body.append('_csrf_token', token); } const response = await fetch(url, requestOptions); const raw = await response.text(); let data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { message: raw, success: response.ok }; } } const ok = response.ok && data.success !== false; const message = data.message || (ok ? 'Action completed.' : 'Request failed (' + response.status + ')'); const type = ok ? 'success' : 'error'; this.actionMessage = message; this.actionType = type; htmx.trigger(document.body, 'showToast', {message: message, type: type}); return ok; } catch (error) { const message = (error && error.message) ? error.message : 'Request failed.'; this.actionMessage = message; this.actionType = 'error'; htmx.trigger(document.body, 'showToast', {message: message, type: 'error'}); return false; } finally { this.actionPending = false; } } }">
+     x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, diagOpen: false, showPingModal: false, pingHost: '8.8.8.8', pingCount: 4, actionPending: false, actionMessage: '', actionType: 'info', getCsrfToken: function() { const meta = document.querySelector('meta[name=\\'csrf-token\\']'); if (meta && meta.content) return meta.content; const cookie = document.cookie.match(new RegExp('csrf_token=([^;]+)')); return cookie ? cookie[1] : ''; }, submitAction: async function(url, options, pendingMessage) { this.actionPending = true; this.actionMessage = pendingMessage || 'Applying change...'; this.actionType = 'info'; try { const token = this.getCsrfToken(); const requestOptions = Object.assign({}, options || {}); requestOptions.headers = Object.assign({}, (options && options.headers) || {}, token ? {'X-CSRF-Token': token} : {}); if (requestOptions.body instanceof FormData && token && !requestOptions.body.has('_csrf_token')) { requestOptions.body.append('_csrf_token', token); } const response = await fetch(url, requestOptions); const raw = await response.text(); let data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { message: raw, success: response.ok }; } } const ok = response.ok && data.success !== false; const message = data.message || (ok ? 'Action completed.' : 'Request failed (' + response.status + ')'); const type = ok ? 'success' : 'error'; this.actionMessage = message; this.actionType = type; htmx.trigger(document.body, 'showToast', {message: message, type: type}); return ok; } catch (error) { const message = (error && error.message) ? error.message : 'Request failed.'; this.actionMessage = message; this.actionType = 'error'; htmx.trigger(document.body, 'showToast', {message: message, type: 'error'}); return false; } finally { this.actionPending = false; } } }">
     <div class="rounded-xl border px-4 py-3 {% if tr069.source == 'cache' %}border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200{% endif %}">
         <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
             <div class="flex items-center gap-2">
@@ -88,9 +86,6 @@
                 <span class="text-sm font-semibold text-slate-900 dark:text-white">WAN / Internet</span>
                 <svg :class="wanOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
             </button>
-            <button @click.stop="showPppoeModal = true" class="rounded-md px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">
-                Set PPPoE
-            </button>
         </div>
         <div x-show="wanOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
             <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -137,14 +132,6 @@
                 <span class="text-sm font-semibold text-slate-900 dark:text-white">Wireless</span>
                 <svg :class="wifiOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
             </button>
-            <div class="flex items-center gap-1">
-                <button @click.stop="showSsidModal = true" class="rounded-md px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20" title="Change SSID">
-                    Change SSID
-                </button>
-                <button @click.stop="showPasswordModal = true" class="rounded-md px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20" title="Change Password">
-                    Change Password
-                </button>
-            </div>
         </div>
         <div x-show="wifiOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
             <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -375,41 +362,6 @@
         </div>
     </details>
 
-    {# PPPoE Credentials Modal #}
-    <div x-show="showPppoeModal" x-transition.opacity x-cloak
-         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-         @keydown.escape.window="showPppoeModal = false">
-        <div @click.outside="showPppoeModal = false"
-             class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Set PPPoE Credentials</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Direct PPPoE pushes are disabled. Update and provision the active WAN service instance instead.</p>
-            <div class="mt-4 space-y-3">
-                <div>
-                    <label for="pppoe-user-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
-                    <input type="text" id="pppoe-user-input" x-model="pppoeUser"
-                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono"
-                           placeholder="100014919">
-                </div>
-                <div>
-                    <label for="pppoe-pass-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
-                    <input type="password" id="pppoe-pass-input" x-model="pppoePass"
-                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                           placeholder="PPPoE password">
-                </div>
-            </div>
-            <div class="mt-6 flex justify-end gap-3">
-                <button @click="showPppoeModal = false"
-                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
-                    Cancel
-                </button>
-                <button disabled
-                        class="cursor-not-allowed rounded-lg bg-slate-300 px-4 py-2 text-sm font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">
-                    Push Credentials via Instance
-                </button>
-            </div>
-        </div>
-    </div>
-
     {# Ping Diagnostic Modal #}
     <div x-show="showPingModal" x-transition.opacity x-cloak
          class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
@@ -444,65 +396,6 @@
         </div>
     </div>
 
-    {# WiFi SSID Modal #}
-    <div x-show="showSsidModal" x-transition.opacity x-cloak
-         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-         @keydown.escape.window="showSsidModal = false">
-        <div @click.outside="showSsidModal = false"
-             class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change WiFi SSID</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This will push a new SSID to the device via TR-069.</p>
-            <div class="mt-4">
-                <label for="wifi-ssid-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SSID</label>
-                <input type="text" id="wifi-ssid-input" x-model="ssid" maxlength="32"
-                       class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                       placeholder="MyNetwork">
-                <p class="mt-1 text-xs text-slate-500">1-32 characters</p>
-            </div>
-            <div class="mt-6 flex justify-end gap-3">
-                <button @click="showSsidModal = false"
-                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
-                    Cancel
-                </button>
-                <button @click="if (!confirm('Update the WiFi SSID on this ONT via TR-069?')) return; submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-ssid?ssid=' + encodeURIComponent(ssid), {method:'POST'}, 'Applying WiFi SSID...').then(ok => { if (ok) { showSsidModal = false; } })"
-                        :disabled="actionPending"
-                        :class="actionPending && 'opacity-75 cursor-wait'"
-                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-wait">
-                    <span x-text="actionPending ? 'Applying...' : 'Apply'"></span>
-                </button>
-            </div>
-        </div>
-    </div>
-
-    {# WiFi Password Modal #}
-    <div x-show="showPasswordModal" x-transition.opacity x-cloak
-         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-         @keydown.escape.window="showPasswordModal = false">
-        <div @click.outside="showPasswordModal = false"
-             class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change WiFi Password</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This will push a new WiFi password to the device via TR-069.</p>
-            <div class="mt-4">
-                <label for="wifi-password-input" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
-                <input type="password" id="wifi-password-input" x-model="wifiPassword" minlength="8"
-                       class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                       placeholder="New WiFi password">
-                <p class="mt-1 text-xs text-slate-500">Minimum 8 characters</p>
-            </div>
-            <div class="mt-6 flex justify-end gap-3">
-                <button @click="showPasswordModal = false"
-                        class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
-                    Cancel
-                </button>
-                <button @click="if (!confirm('Update the WiFi password on this ONT via TR-069?')) return; const fd = new FormData(); fd.append('password', wifiPassword); submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-password', {method:'POST', body: fd}, 'Applying WiFi password...').then(ok => { if (ok) { showPasswordModal = false; wifiPassword = ''; } })"
-                        :disabled="actionPending"
-                        :class="actionPending && 'opacity-75 cursor-wait'"
-                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-wait">
-                    <span x-text="actionPending ? 'Applying...' : 'Apply'"></span>
-                </button>
-            </div>
-        </div>
-    </div>
 </div>
 
 {% elif tr069 and tr069.error %}

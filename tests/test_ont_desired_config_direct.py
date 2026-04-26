@@ -33,13 +33,48 @@ def test_desired_config_setter_maps_legacy_fields_without_override_rows(db_sessi
     assert ont.desired_config == {
         "wifi": {"ssid": "Dotmac-WiFi"},
         "management": {"ip_address": "192.0.2.10"},
-        "authorization": {"line_profile_id": 10},
     }
 
 
-def test_effective_config_merges_olt_defaults_and_ont_desired_config(db_session):
+def test_desired_config_strips_olt_config_pack_owned_bloat():
+    from app.models.network import OntUnit
+    from app.services.network.ont_desired_config import (
+        desired_config,
+        set_desired_config_value,
+        strip_config_pack_owned_desired_config,
+    )
+
+    config = strip_config_pack_owned_desired_config(
+        {
+            "tr069": {"olt_profile_id": 30},
+            "authorization": {"line_profile_id": 10},
+            "omci": {"wan_config_profile_id": 5},
+            "wan": {
+                "mode": "pppoe",
+                "vlan": 100,
+                "gem_index": 1,
+                "pppoe_username": "subscriber@example",
+            },
+            "management": {"vlan": 200, "ip_address": "192.0.2.10"},
+        }
+    )
+
+    assert config == {
+        "wan": {"mode": "pppoe", "pppoe_username": "subscriber@example"},
+        "management": {"ip_address": "192.0.2.10"},
+    }
+
+    ont = OntUnit(serial_number="DESIRED-CFG-BLOAT", desired_config={})
+    set_desired_config_value(ont, "wan.vlan", 100)
+    set_desired_config_value(ont, "management.vlan", 200)
+    set_desired_config_value(ont, "tr069.olt_profile_id", 30)
+
+    assert desired_config(ont) == {}
+
+
+def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     from app.models.catalog import RegionZone
-    from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
+    from app.models.network import OLTDevice, OntAssignment, OntUnit, Vlan, VlanPurpose
     from app.models.tr069 import Tr069AcsServer
     from app.services.network.effective_ont_config import resolve_effective_ont_config
 
@@ -111,6 +146,16 @@ def test_effective_config_merges_olt_defaults_and_ont_desired_config(db_session)
     )
     db_session.add(ont)
     db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            active=True,
+            pppoe_username="subscriber@example",
+            wifi_ssid="Subscriber-WiFi",
+            mgmt_ip_address="192.0.2.20",
+        )
+    )
+    db_session.flush()
 
     values = resolve_effective_ont_config(db_session, ont)["values"]
 
@@ -148,7 +193,6 @@ def test_effective_config_ignores_legacy_ont_flat_config_fields(db_session):
         serial_number="DESIRED-CFG-FLAT-IGNORED",
         onu_mode=OnuMode.routing,
         tr069_acs_server_id=acs.id,
-        tr069_olt_profile_id=99,
         desired_config={},
     )
     db_session.add(ont)
@@ -274,13 +318,13 @@ def test_direct_orchestrator_skips_acs_when_tr069_not_configured(
     assert calls == ["provision"]
 
 
-def test_apply_saved_service_config_uses_desired_config_for_pppoe(
+def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
     db_session, monkeypatch
 ):
     from types import SimpleNamespace
 
     from app.models.catalog import RegionZone
-    from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
+    from app.models.network import OLTDevice, OntAssignment, OntUnit, Vlan, VlanPurpose
     from app.models.tr069 import Tr069AcsServer
     from app.services.credential_crypto import encrypt_credential
     from app.services.network.ont_provision_steps import apply_saved_service_config
@@ -330,6 +374,15 @@ def test_apply_saved_service_config_uses_desired_config_for_pppoe(
         },
     )
     db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            active=True,
+            pppoe_username="subscriber@example",
+            pppoe_password="secret",
+        )
+    )
     db_session.flush()
 
     calls: dict[str, object] = {}
@@ -485,23 +538,20 @@ def test_save_provision_settings_does_not_persist_tr069_profile_override(
     result = save_provision_settings(
         db_session,
         ont_id=str(ont.id),
-        tr069_profile_id="42",
-        onu_mode=None,
-        mgmt_vlan_id=None,
-        mgmt_ip_mode=None,
+        onu_mode="routing",
+        mgmt_ip_mode="dhcp",
         mgmt_ip_address=None,
         mgmt_subnet=None,
         mgmt_gateway=None,
-        wan_protocol=None,
-        wan_vlan_id=None,
+        wan_protocol="dhcp",
         ip_pool_id=None,
         static_ip_pool_id=None,
         static_ip=None,
         static_subnet=None,
         static_gateway=None,
         static_dns=None,
-        lan_ip=None,
-        lan_subnet=None,
+        lan_ip="192.168.1.1",
+        lan_subnet="255.255.255.0",
         dhcp_enabled=None,
         dhcp_start=None,
         dhcp_end=None,
@@ -554,7 +604,6 @@ def test_manual_step_bind_tr069_does_not_persist_profile_override(
     response = network_onts_provisioning.step_bind_tr069(
         SimpleNamespace(headers={}),
         str(ont.id),
-        tr069_olt_profile_id=77,
         db=db_session,
     )
 
@@ -1019,14 +1068,14 @@ def test_web_wan_config_requires_config_pack_vlan(db_session, monkeypatch):
 
     assert result.success is False
     assert result.message == (
-        "OLT config pack internet VLAN is required before applying WAN config."
+        "OLT internet VLAN is required before applying WAN config."
     )
 
 
-def test_ont_wan_partial_has_single_operator_path():
+def test_ont_config_form_has_single_operator_path():
     from pathlib import Path
 
-    source = Path("templates/admin/network/onts/_config_wan.html").read_text()
+    source = Path("templates/admin/network/onts/_configure_form.html").read_text()
 
     assert "Create PPPoE WAN Service" not in source
     assert "Push PPPoE Credentials" not in source

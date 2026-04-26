@@ -12,13 +12,13 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OntAssignment
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
+from app.services.network._util import first_present as _first_present
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
-from app.services.web_network_onts import management_ip_choices_for_ont
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
 )
-from app.services.network._util import first_present as _first_present
+from app.services.web_network_onts import management_ip_choices_for_ont
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ def _desired_config_context(
             "config_pack": effective.get("config_pack"),
             "desired_config_keys": effective.get("desired_config_keys", []),
         },
+        "config_pack": effective.get("config_pack"),
         "effective_config": effective,
     }
 
@@ -625,97 +626,6 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     return context
 
 
-def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    shared = _load_ont_detail_config_state(db, ont_id)
-    ont = shared["ont"]
-    ont_plan = shared["ont_plan"]
-    observed_intent = shared["acs_observed_intent"]
-    observed_state = shared["observed_state"]
-    observed = observed_intent.get("observed", {})
-    wan = observed.get("wan", {}) if isinstance(observed, dict) else {}
-    context = {
-        "ont_id": ont_id,
-        "tr069_available": bool(observed_intent.get("available")),
-        "ont": ont,
-        "ont_plan": ont_plan,
-        "acs_observed_intent": observed_intent,
-        "wan_info": wan,
-        "current_pppoe_user": (wan or {}).get("pppoe_username"),
-        "vlans": observed_state["vlans"],
-        "observed_config_freshness": _observed_config_freshness(observed_intent),
-    }
-    context.update(_desired_config_context(db, ont, ont_plan=ont_plan))
-    desired_wan = context["desired_wan_config"]
-    context["current_pppoe_user"] = (
-        context["current_pppoe_user"] or desired_wan.get("pppoe_username")
-    )
-    return context
-
-
-def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    shared = _load_ont_detail_config_state(db, ont_id)
-    ont = shared["ont"]
-    ont_plan = shared["ont_plan"]
-    observed_intent = shared["acs_observed_intent"]
-    observed = observed_intent.get("observed", {})
-    wireless = observed.get("wifi", {}) if isinstance(observed, dict) else {}
-    context = {
-        "ont_id": ont_id,
-        "tr069_available": bool(observed_intent.get("available")),
-        "acs_observed_intent": observed_intent,
-        "ont_plan": ont_plan,
-        "wireless_info": wireless,
-        "current_ssid": (wireless or {}).get("ssid"),
-        "observed_config_freshness": _observed_config_freshness(observed_intent),
-    }
-    context.update(_desired_config_context(db, ont, ont_plan=ont_plan))
-    desired_wifi = context["desired_wifi_config"]
-    context["current_ssid"] = context["current_ssid"] or desired_wifi.get("ssid")
-    return context
-
-
-def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    shared = _load_ont_detail_config_state(db, ont_id)
-    ont = shared["ont"]
-    observed_state = shared["observed_state"]
-    profiles_result = observed_state["profiles_result"]
-    current_profile, current_profile_error = (
-        service_intent_ui_adapter.resolve_effective_tr069_profile(db, ont=ont)
-    )
-    return {
-        "ont_id": ont_id,
-        "tr069_profiles": observed_state["tr069_profiles"],
-        "tr069_profiles_error": (
-            observed_state["tr069_profiles_error"] or current_profile_error
-        ),
-        "tr069_profiles_freshness": profiles_result.freshness,
-        "current_profile": getattr(current_profile, "profile_name", None)
-        or getattr(current_profile, "name", None),
-        "current_profile_id": getattr(current_profile, "profile_id", None),
-    }
-
-
-def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
-    shared = _load_ont_detail_config_state(db, ont_id)
-    ont = shared["ont"]
-    ont_plan = shared["ont_plan"]
-    observed_intent = shared["acs_observed_intent"]
-    observed = observed_intent.get("observed", {})
-    observed = observed if isinstance(observed, dict) else {}
-    context = {
-        "ont_id": ont_id,
-        "tr069_available": bool(observed_intent.get("available")),
-        "acs_observed_intent": observed_intent,
-        "ont_plan": ont_plan,
-        "lan_info": observed.get("lan", {}),
-        "ethernet_ports": observed.get("ethernet_ports", []),
-        "lan_hosts": observed.get("lan_hosts", []),
-        "observed_config_freshness": _observed_config_freshness(observed_intent),
-    }
-    context.update(_desired_config_context(db, ont, ont_plan=ont_plan))
-    return context
-
-
 def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build context for the ONT service configure form."""
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -727,9 +637,16 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
         "ont": ont,
         "ont_id": ont_id,
         "wan_mode": values.get("wan_mode"),
+        "ip_protocol": values.get("ip_protocol"),
         "pppoe_username": str(values.get("pppoe_username") or ""),
+        "lan_gateway_ip": str(values.get("lan_ip") or ""),
+        "lan_subnet_mask": str(values.get("lan_subnet") or ""),
+        "lan_dhcp_enabled": values.get("lan_dhcp_enabled"),
+        "lan_dhcp_start": str(values.get("lan_dhcp_start") or ""),
+        "lan_dhcp_end": str(values.get("lan_dhcp_end") or ""),
         "wifi_enabled": values.get("wifi_enabled"),
         "wifi_ssid": str(values.get("wifi_ssid") or ""),
+        "wifi_channel": str(values.get("wifi_channel") or ""),
         "wifi_security_mode": str(values.get("wifi_security_mode") or ""),
     }
     return context

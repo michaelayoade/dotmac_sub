@@ -259,7 +259,7 @@ class OltProtocolAdapter(Protocol):
 
     def configure_management_batch(
         self,
-        spec: "BatchedMgmtSpec",
+        spec: BatchedMgmtSpec,
     ) -> OltOperationResult:
         """Execute batched management configuration in one session.
 
@@ -554,7 +554,7 @@ class BaseProtocolAdapter(ABC):
 
     def configure_management_batch(
         self,
-        spec: "BatchedMgmtSpec",
+        spec: BatchedMgmtSpec,
     ) -> OltOperationResult:
         return self._not_supported("configure_management_batch")
 
@@ -741,7 +741,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         description: str = "",
     ) -> OltOperationResult:
         """Authorize ONT via SSH CLI."""
-        from app.services.network.olt_ssh import authorize_ont as ssh_authorize
+        from app.services.network.olt_ssh_ont import authorize_ont as ssh_authorize
 
         try:
             ok, message, ont_id = ssh_authorize(
@@ -1101,7 +1101,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
     def configure_management_batch(
         self,
-        spec: "BatchedMgmtSpec",
+        spec: BatchedMgmtSpec,
     ) -> OltOperationResult:
         """Execute batched management configuration in one SSH session.
 
@@ -1109,7 +1109,9 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         wan-config, and TR-069 binding into a single SSH session for
         improved performance (~5x faster than individual calls).
         """
-        from app.services.network.olt_batched_mgmt import execute_batched_management_setup
+        from app.services.network.olt_batched_mgmt import (
+            execute_batched_management_setup,
+        )
 
         try:
             result = execute_batched_management_setup(self._olt, spec)
@@ -1479,7 +1481,7 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         inform_interval: int,
     ) -> OltOperationResult:
         """Create a TR-069 server profile via SSH CLI."""
-        from app.services.network.olt_ssh import create_tr069_server_profile
+        from app.services.network.olt_ssh_profiles import create_tr069_server_profile
 
         try:
             ok, message = create_tr069_server_profile(

@@ -802,8 +802,8 @@ def ont_running_config(
     from app.models.network import OntAssignment, OntUnit
     from app.services.common import coerce_uuid
     from app.services.network.olt_read_cache import olt_cache
-    from app.services.network.serial_utils import parse_ont_id_on_olt
     from app.services.network.olt_ssh import run_cli_command
+    from app.services.network.serial_utils import parse_ont_id_on_olt
 
     ont = db.get(OntUnit, coerce_uuid(ont_id))
     if not ont:
@@ -1191,7 +1191,6 @@ def ont_omci_reboot(
 def ont_configure_mgmt_ip(
     request: Request,
     ont_id: str,
-    vlan_id: int = Form(...),
     ip_mode: str = Form(default="dhcp"),
     ip_address: str = Form(default=""),
     subnet: str = Form(default=""),
@@ -1205,7 +1204,6 @@ def ont_configure_mgmt_ip(
     ok, msg = web_network_ont_actions_service.configure_management_ip(
         db,
         ont_id,
-        vlan_id,
         ip_mode,
         ip_address=ip_address or None,
         subnet=subnet or None,
@@ -1228,14 +1226,13 @@ def ont_configure_mgmt_ip(
 def ont_bind_tr069_profile(
     request: Request,
     ont_id: str,
-    profile_id: int = Form(...),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bind TR-069 server profile to ONT via OLT."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    ok, msg = web_network_ont_actions_service.bind_tr069_profile(db, ont_id, profile_id)
+    ok, msg = web_network_ont_actions_service.bind_tr069_profile(db, ont_id)
     return _action_json_response(
         success=ok,
         message=msg,
@@ -1247,6 +1244,33 @@ def ont_bind_tr069_profile(
 
 
 # ── Config Snapshots ──────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/onts/{ont_id}/config-snapshots",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_snapshots(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Return the current config snapshot list."""
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont_id": ont_id,
+            "config_snapshots": web_network_ont_actions_service.list_config_snapshots(
+                db,
+                ont_id,
+            ),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/network/onts/_config_snapshot_list.html",
+        context,
+    )
 
 
 @router.post(

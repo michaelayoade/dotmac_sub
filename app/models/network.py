@@ -1426,8 +1426,6 @@ class OntUnit(Base):
     tr069_data_model: Mapped[str | None] = mapped_column(
         String(40), doc="'Device' (TR-181) or 'InternetGatewayDevice' (TR-098)"
     )
-    tr069_olt_profile_id: Mapped[int | None] = mapped_column(Integer)
-
     # Sync tracking — which external source last modified this ONT, and when
     last_sync_source: Mapped[str | None] = mapped_column(String(40))
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1726,6 +1724,9 @@ class OntAssignment(Base):
     static_subnet: Mapped[str | None] = mapped_column(
         String(64), doc="Static subnet mask (when ip_mode=static_ip)"
     )
+    static_dns: Mapped[str | None] = mapped_column(
+        String(200), doc="Static DNS servers (when ip_mode=static_ip)"
+    )
     pppoe_username: Mapped[str | None] = mapped_column(
         String(200), doc="PPPoE username for subscriber"
     )
@@ -1740,22 +1741,6 @@ class OntAssignment(Base):
     )
 
     # -------------------------------------------------------------------------
-    # VLAN Configuration (override OLT config pack defaults)
-    # -------------------------------------------------------------------------
-    internet_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        index=True,
-        doc="Override internet VLAN from OLT config pack",
-    )
-    mgmt_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        index=True,
-        doc="Override management VLAN from OLT config pack",
-    )
-
-    # -------------------------------------------------------------------------
     # Management IP Configuration (ONT-side management IP)
     # -------------------------------------------------------------------------
     mgmt_ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
@@ -1766,6 +1751,20 @@ class OntAssignment(Base):
     mgmt_ip_address: Mapped[str | None] = mapped_column(
         String(64), doc="Static management IP (when mgmt_ip_mode=static_ip)"
     )
+    mgmt_subnet: Mapped[str | None] = mapped_column(
+        String(64), doc="Static management subnet (when mgmt_ip_mode=static_ip)"
+    )
+    mgmt_gateway: Mapped[str | None] = mapped_column(
+        String(64), doc="Static management gateway (when mgmt_ip_mode=static_ip)"
+    )
+    lan_ip: Mapped[str | None] = mapped_column(String(64))
+    lan_subnet: Mapped[str | None] = mapped_column(String(64))
+    lan_dhcp_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    lan_dhcp_start: Mapped[str | None] = mapped_column(String(64))
+    lan_dhcp_end: Mapped[str | None] = mapped_column(String(64))
+    wifi_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    wifi_security_mode: Mapped[str | None] = mapped_column(String(40))
+    wifi_channel: Mapped[str | None] = mapped_column(String(10))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -1780,9 +1779,6 @@ class OntAssignment(Base):
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
     service_address = relationship("Address")
-    internet_vlan = relationship("Vlan", foreign_keys=[internet_vlan_id])
-    mgmt_vlan = relationship("Vlan", foreign_keys=[mgmt_vlan_id])
-
 
 class NetworkZone(Base):
     """Geographic zone for organizing network infrastructure."""

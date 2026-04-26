@@ -39,6 +39,11 @@ def config_snapshot_detail_context(
     return {"snapshot": snapshot}
 
 
+def list_config_snapshots(db: Session, ont_id: str, *, limit: int = 5) -> list[object]:
+    """Return recent config snapshots for an ONT."""
+    return list(_config_snapshot_service().list_for_ont(db, ont_id, limit=limit))
+
+
 def delete_config_snapshot_list_context(
     db: Session,
     *,

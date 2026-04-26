@@ -295,7 +295,6 @@ def set_lan_config(
 def configure_management_ip(
     db: Session,
     ont_id: str,
-    vlan_id: int,
     ip_mode: str = "dhcp",
     priority: int | None = None,
     ip_address: str | None = None,
@@ -311,6 +310,14 @@ def configure_management_ip(
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
+    config_pack = resolve_olt_config_pack(db, olt.id)
+    vlan_id = (
+        config_pack.management_vlan.tag
+        if config_pack and config_pack.management_vlan
+        else None
+    )
+    if vlan_id is None:
+        return False, "OLT config pack management VLAN is not configured."
     result = get_protocol_adapter(olt).configure_iphost(
         fsp,
         olt_ont_id,
@@ -324,7 +331,7 @@ def configure_management_ip(
     return result.success, result.message
 
 
-def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool, str]:
+def bind_tr069_profile(db: Session, ont_id: str) -> tuple[bool, str]:
     """Bind TR-069 server profile to ONT via OLT."""
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.ont_provision_steps import wait_tr069_bootstrap
@@ -335,6 +342,10 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
+    config_pack = resolve_olt_config_pack(db, olt.id)
+    profile_id = config_pack.tr069_olt_profile_id if config_pack else None
+    if profile_id is None:
+        return False, "OLT config pack TR-069 profile is not configured."
     bind_result = get_protocol_adapter(olt).bind_tr069_profile(
         fsp,
         olt_ont_id,
@@ -586,7 +597,7 @@ def set_wan_config(
     if wan_mode_normalized in {"pppoe", "dhcp", "static"} and resolved_wan_vlan is None:
         result = ActionResult(
             success=False,
-            message="OLT config pack internet VLAN is required before applying WAN config.",
+            message="OLT internet VLAN is required before applying WAN config.",
         )
         _log_action_audit(
             db,

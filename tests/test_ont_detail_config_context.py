@@ -39,6 +39,11 @@ def test_desired_config_context_prefers_durable_ont_fields(monkeypatch) -> None:
                 "wan_mode": "pppoe",
                 "wan_vlan": 203,
                 "pppoe_username": "customer@example",
+                "lan_ip": "192.168.44.1",
+                "lan_subnet": "255.255.255.0",
+                "lan_dhcp_enabled": True,
+                "lan_dhcp_start": "192.168.44.20",
+                "lan_dhcp_end": "192.168.44.200",
                 "wifi_enabled": True,
                 "wifi_ssid": "CustomerWiFi",
                 "wifi_channel": "6",
@@ -152,9 +157,9 @@ def test_unified_config_context_does_not_perform_live_reads(
 
     context = context_builders.unified_config_context(db_session, str(ont.id))
 
-    assert context["desired_wan_config"]["pppoe_username"] == "customer@example"
-    assert context["desired_wifi_config"]["ssid"] == "CustomerWiFi"
-    assert context["desired_lan_config"]["lan_ip"] == "192.168.44.1"
+    assert context["desired_wan_config"]["pppoe_username"] == ""
+    assert context["desired_wifi_config"]["ssid"] == ""
+    assert context["desired_lan_config"]["lan_ip"] == ""
     assert context["iphost_freshness"]["source"] == "db"
 
 
@@ -221,14 +226,17 @@ def test_unified_config_context_preserves_cached_freshness_and_summaries(
     assert context["iphost_freshness"]["stale"] is True
     assert context["iphost_freshness"]["fetched_at"] == fetched_at
     assert context["tr069_profiles_freshness"]["stale"] is True
-    assert context["mgmt_ip_summary"]["ip"] == "10.30.0.44"
-    assert context["wan_summary"]["pppoe_user"] == "db-user"
+    assert context["iphost_config"]["mode"] == "static"
+    assert context["mgmt_ip_summary"]["ip"] is None
+    assert context["wan_summary"]["pppoe_user"] == ""
     assert context["wan_summary"]["wan_ip"] == "41.0.0.10"
     assert context["wan_summary"]["status"] == "connected"
-    assert context["wifi_summary"]["ssid"] == "DB-SSID"
+    assert context["wifi_summary"]["ssid"] == ""
 
 
-def test_detail_tab_contexts_share_db_observed_state(db_session, monkeypatch) -> None:
+def test_unified_config_context_exposes_shared_db_observed_state(
+    db_session, monkeypatch
+) -> None:
     from datetime import UTC, datetime
 
     from app.models.network import OLTDevice, OntUnit
@@ -287,19 +295,14 @@ def test_detail_tab_contexts_share_db_observed_state(db_session, monkeypatch) ->
         lambda *_args, **_kwargs: (None, None),
     )
 
-    wan_context = context_builders.wan_config_context(db_session, str(ont.id))
-    wifi_context = context_builders.wifi_config_context(db_session, str(ont.id))
-    lan_context = context_builders.lan_config_context(db_session, str(ont.id))
-    tr069_context = context_builders.tr069_profile_config_context(
-        db_session, str(ont.id)
-    )
+    context = context_builders.unified_config_context(db_session, str(ont.id))
 
-    assert wan_context["wan_info"]["pppoe_username"] == "shared-user"
-    assert wan_context["wan_info"]["wan_ip"] == "41.0.0.20"
-    assert wifi_context["wireless_info"]["ssid"] == "Shared-SSID"
-    assert lan_context["lan_info"]["lan_ip"] == "192.168.55.1"
-    assert tr069_context["tr069_profiles"][0].name == "ACS Primary"
-    assert tr069_context["tr069_profiles_freshness"]["fetched_at"] == fetched_at
+    assert context["wan_info"]["pppoe_username"] is None
+    assert context["wan_info"]["wan_ip"] == "41.0.0.20"
+    assert context["wireless_info"]["ssid"] is None
+    assert context["lan_info"]["lan_ip"] == "192.168.55.1"
+    assert context["tr069_profiles"][0].name == "ACS Primary"
+    assert context["tr069_profiles_freshness"]["fetched_at"] == fetched_at
 
 
 def test_tr069_profiles_resolve_olt_from_active_assignment(db_session, monkeypatch) -> None:

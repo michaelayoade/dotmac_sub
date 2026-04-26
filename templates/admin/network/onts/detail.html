@@ -11,9 +11,7 @@
 {%- set fsp = (assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '')) -%}
 {%- set is_online = signal_info and signal_info.online_status == 'online' -%}
 {%- set is_offline = signal_info and signal_info.online_status == 'offline' -%}
-{%- set config_pack_name = config_pack.name if config_pack is defined and config_pack else none -%}
-
-<div class="space-y-4">
+<div class="space-y-4" x-data="{ activeTab: '{{ ont_active_tab | default('overview') }}' }">
     {# Breadcrumb #}
     <nav class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
         <a href="/admin/network/onts" class="hover:text-slate-700 dark:hover:text-slate-200">ONTs</a>
@@ -21,112 +19,104 @@
         <span class="text-slate-900 dark:text-white">{{ display_serial_label }}</span>
     </nav>
 
-    {# ==================== OVERVIEW: Identity + Status + Optical ==================== #}
-    {% include "admin/network/onts/_detail_overview.html" %}
+    {# ==================== HERO HEADER ==================== #}
+    {% include "admin/network/onts/_hero_header.html" %}
 
-    {# ==================== SERVICE CONFIGURATION ==================== #}
-    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-700">
-            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Service Configuration</h2>
-            {% if assignment %}
-            <a href="/admin/network/onts/{{ ont.id }}/assignments/{{ assignment.id }}/edit" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">Edit assignment &rarr;</a>
-            {% endif %}
-        </div>
-        <div class="p-5" id="device-config-content">
-            {% include "admin/network/onts/_unified_config.html" %}
-        </div>
+    {# ==================== QUICK ACTIONS BAR ==================== #}
+    {% include "admin/network/onts/_quick_actions.html" %}
+
+    {# ==================== TAB NAVIGATION ==================== #}
+    <div class="border-b border-slate-200 dark:border-slate-700">
+        <nav class="-mb-px flex gap-1 overflow-x-auto" aria-label="Tabs">
+            <button type="button"
+                    @click="activeTab = 'overview'"
+                    :class="activeTab === 'overview' ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    Overview
+                </span>
+            </button>
+            <button type="button"
+                    @click="activeTab = 'configuration'"
+                    :class="activeTab === 'configuration' ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Configuration
+                </span>
+            </button>
+            <button type="button"
+                    @click="activeTab = 'diagnostics'"
+                    :class="activeTab === 'diagnostics' ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    Diagnostics
+                </span>
+            </button>
+            <button type="button"
+                    @click="activeTab = 'hosts'"
+                    :class="activeTab === 'hosts' ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                    Hosts
+                    {% if connected_customer_devices is defined and connected_customer_devices is not none %}
+                    <span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ connected_customer_devices }}</span>
+                    {% endif %}
+                </span>
+            </button>
+            <button type="button"
+                    @click="activeTab = 'logs'"
+                    :class="activeTab === 'logs' ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Logs
+                </span>
+            </button>
+            <button type="button"
+                    @click="activeTab = 'files'"
+                    :class="activeTab === 'files' ? 'border-cyan-500 text-cyan-600 dark:text-cyan-400' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors">
+                <span class="flex items-center gap-2">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                    Files
+                </span>
+            </button>
+        </nav>
     </div>
 
-    {# ==================== OLT RUNNING CONFIG (collapsible) ==================== #}
-    <details class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-        <summary class="cursor-pointer px-5 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50">OLT Running Config</summary>
-        <div id="running-config-content" class="border-t border-slate-200 p-5 dark:border-slate-700" hx-get="/admin/network/onts/{{ ont.id }}/running-config" hx-trigger="revealed" hx-swap="innerHTML">
-            <div class="flex items-center justify-center py-6 text-sm text-slate-400"><svg class="mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Loading...</div>
-        </div>
-    </details>
+    {# ==================== TAB CONTENT ==================== #}
+    {# Overview Tab #}
+    <div x-show="activeTab === 'overview'" x-cloak>
+        {% include "admin/network/onts/_tab_overview.html" %}
+    </div>
 
-    {# ==================== HISTORY (collapsible) ==================== #}
-    <details class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-        <summary class="cursor-pointer px-5 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50">History &amp; Operations</summary>
-        <div class="border-t border-slate-200 p-5 space-y-4 dark:border-slate-700">
-            {# Past Assignments #}
-            {% if past_assignments %}
-            <div>
-                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Past Assignments</h3>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full text-sm">
-                        <thead class="bg-slate-50 dark:bg-slate-800">
-                            <tr>
-                                <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PON</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">OLT</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Subscriber</th>
-                                <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Date</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                            {% for pa in past_assignments %}
-                            <tr>
-                                <td class="px-3 py-2 font-mono text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '—' }}</td>
-                                <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{% if pa.pon_port and pa.pon_port.olt %}{{ pa.pon_port.olt.name }}{% else %}—{% endif %}</td>
-                                <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{% if pa.subscriber %}<a href="/admin/customers/person/{{ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">{{ pa.subscriber.name }}</a>{% else %}—{% endif %}</td>
-                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '—' }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            {% endif %}
+    {# Configuration Tab #}
+    <div x-show="activeTab === 'configuration'" x-cloak>
+        {% include "admin/network/onts/_tab_configuration.html" %}
+    </div>
 
-            {# Network Operations #}
-            <div>
-                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Operations</h3>
-                {% include "admin/network/_operations_history.html" %}
-            </div>
+    {# Diagnostics Tab #}
+    <div x-show="activeTab === 'diagnostics'" x-cloak>
+        {% include "admin/network/onts/_tab_diagnostics.html" %}
+    </div>
 
-            {# Rollback Cleanup #}
-            {% if compensation_failures %}
-            <div class="rounded-lg border border-amber-200 bg-amber-50/50 p-4 dark:border-amber-900/50 dark:bg-amber-950/20">
-                <h3 class="text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-200 mb-2">Rollback Cleanup</h3>
-                <div class="space-y-2">
-                    {% for failure in compensation_failures %}
-                    <div class="flex items-center justify-between rounded border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
-                        <div>
-                            <p class="text-sm font-medium text-slate-900 dark:text-white">{{ failure.step_name | replace('_', ' ') | title }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ failure.error_message }}</p>
-                        </div>
-                        {% if failure.status == 'pending' %}
-                        <div class="flex gap-2">
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/retry"><button type="submit" class="rounded bg-amber-600 px-2 py-1 text-xs font-medium text-white hover:bg-amber-700">Retry</button></form>
-                            <form method="post" action="/admin/network/onts/{{ ont.id }}/compensation-failures/{{ failure.id }}/resolve"><button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">Resolve</button></form>
-                        </div>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
+    {# Hosts Tab #}
+    <div x-show="activeTab === 'hosts'" x-cloak>
+        {% include "admin/network/onts/_tab_hosts.html" %}
+    </div>
 
-            {# Activity Log #}
-            {% if activities %}
-            <div>
-                <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Activity</h3>
-                <div class="space-y-2">
-                    {% for activity in activities %}
-                    <div class="flex items-start justify-between gap-3 text-sm">
-                        <div><p class="font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>{% if activity.description %}<p class="text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>{% endif %}</div>
-                        {% if activity.occurred_at %}<span class="shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %H:%M') }}</span>{% endif %}
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
-        </div>
-    </details>
+    {# Logs Tab #}
+    <div x-show="activeTab === 'logs'" x-cloak>
+        {% include "admin/network/onts/_tab_logs.html" %}
+    </div>
 
-    {# Charts (lazy) #}
-    <div id="charts-content" hx-get="/admin/network/onts/{{ ont.id }}/charts" hx-trigger="intersect once" hx-swap="innerHTML">
-        <div class="flex items-center justify-center py-6 text-sm text-slate-400"><svg class="mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Loading charts...</div>
+    {# Files Tab #}
+    <div x-show="activeTab === 'files'" x-cloak>
+        {% include "admin/network/onts/_tab_files.html" %}
     </div>
 </div>
 {% endblock %}

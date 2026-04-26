@@ -14,11 +14,11 @@ from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services.auth_dependencies import require_permission
+from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.services.network.result_adapter import OperationResult
-from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-olt-profiles"])

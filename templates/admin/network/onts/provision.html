@@ -76,52 +76,8 @@
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Settings that will be applied during provisioning</p>
                 </div>
                 <div class="p-4 space-y-4">
-                    {# Network Config (from OLT Config Pack) #}
-                    <div>
-                        <div class="flex items-center gap-2 mb-2">
-                            <span class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Network</span>
-                            <span class="text-xs text-slate-400 dark:text-slate-500">from OLT Config Pack</span>
-                        </div>
-                        {% if config_pack %}
-                        <dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                            <div class="flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">Line Profile</dt>
-                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.line_profile_id or '—' }}</dd>
-                            </div>
-                            <div class="flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">Service Profile</dt>
-                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.service_profile_id or '—' }}</dd>
-                            </div>
-                            <div class="flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">Internet VLAN</dt>
-                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.internet_vlan.tag if config_pack.internet_vlan else '—' }}</dd>
-                            </div>
-                            <div class="flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">Management VLAN</dt>
-                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.management_vlan.tag if config_pack.management_vlan else '—' }}</dd>
-                            </div>
-                            <div class="flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">Internet GEM</dt>
-                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.internet_gem_index }}</dd>
-                            </div>
-                            <div class="flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">Management GEM</dt>
-                                <dd class="font-mono text-slate-900 dark:text-white">{{ config_pack.mgmt_gem_index }}</dd>
-                            </div>
-                            {% if selected_tr069_profile_name %}
-                            <div class="col-span-2 flex justify-between">
-                                <dt class="text-slate-500 dark:text-slate-400">TR-069 Profile</dt>
-                                <dd class="text-slate-900 dark:text-white">{{ selected_tr069_profile_name }}</dd>
-                            </div>
-                            {% endif %}
-                        </dl>
-                        {% else %}
-                        <p class="text-sm text-amber-600 dark:text-amber-400">No OLT config pack found. Configure the OLT first.</p>
-                        {% endif %}
-                    </div>
-
                     {# Service Config (from Assignment) #}
-                    <div class="border-t border-slate-100 dark:border-slate-700 pt-4">
+                    <div>
                         <div class="flex items-center gap-2 mb-2">
                             <span class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Service</span>
                             <span class="text-xs text-slate-400 dark:text-slate-500">from Subscriber Assignment</span>
@@ -175,7 +131,6 @@
             </div>
 
             {# Provision Action #}
-            {% if config_pack %}
             <form method="POST" action="/admin/network/onts/{{ ont.id }}/provision" class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="async_execution" value="true">
@@ -194,7 +149,6 @@
                     </button>
                 </div>
             </form>
-            {% endif %}
         </div>
 
         {# Sidebar #}
@@ -208,9 +162,6 @@
                     <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">ONT-ID</dt><dd class="font-mono text-slate-900 dark:text-white">{{ ont.external_id or '—' }}</dd></div>
                     <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Auth</dt><dd class="text-slate-900 dark:text-white">{{ ont.authorization_status.value | replace('_', ' ') | title if ont.authorization_status else 'Pending' }}</dd></div>
                 </dl>
-                {% if olt %}
-                <a href="/admin/network/olts/{{ olt.id }}/edit" class="mt-2 block text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400">Edit OLT config &rarr;</a>
-                {% endif %}
             </div>
 
             {# Subscriber #}

@@ -12,18 +12,55 @@ from typing import Any
 
 from app.models.network import OntUnit
 
-
 # Legacy field mappings are no longer needed. All callers now use canonical
 # dotted paths (e.g., "wan.mode", "management.vlan") which resolve_field_path()
 # handles via the default split(".") fallback.
 _LEGACY_FIELD_PATHS: dict[str, tuple[str, ...]] = {}
+
+_CONFIG_PACK_OWNED_PATHS: tuple[tuple[str, ...], ...] = (
+    ("tr069",),
+    ("authorization",),
+    ("omci",),
+    ("wan", "vlan"),
+    ("wan", "gem_index"),
+    ("management", "vlan"),
+)
+
+
+def _is_config_pack_owned_path(path: tuple[str, ...]) -> bool:
+    return any(path[: len(owned)] == owned for owned in _CONFIG_PACK_OWNED_PATHS)
+
+
+def strip_config_pack_owned_desired_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return desired config without fields owned by the OLT config pack."""
+    cleaned = deepcopy(config)
+
+    for path in _CONFIG_PACK_OWNED_PATHS:
+        cursor: Any = cleaned
+        parents: list[tuple[dict[str, Any], str]] = []
+        for part in path[:-1]:
+            if not isinstance(cursor, dict):
+                break
+            parents.append((cursor, part))
+            cursor = cursor.get(part)
+        else:
+            if isinstance(cursor, dict):
+                cursor.pop(path[-1], None)
+                for parent, key in reversed(parents):
+                    child = parent.get(key)
+                    if isinstance(child, dict) and not child:
+                        parent.pop(key, None)
+                    else:
+                        break
+
+    return cleaned
 
 
 def desired_config(ont: OntUnit) -> dict[str, Any]:
     """Return a mutable desired-config dict for an ONT."""
     current = getattr(ont, "desired_config", None)
     if isinstance(current, dict):
-        return deepcopy(current)
+        return strip_config_pack_owned_desired_config(current)
     return {}
 
 
@@ -50,6 +87,9 @@ def set_desired_config_value(
     """Set or clear one desired-config value on an ONT."""
     path = resolve_field_path(field_name)
     if not path:
+        return
+    if _is_config_pack_owned_path(path):
+        ont.desired_config = strip_config_pack_owned_desired_config(desired_config(ont))
         return
 
     config = desired_config(ont)

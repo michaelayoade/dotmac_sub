@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntProvisioningProfile, OnuType
-from app.services.network.olt_ssh import OltProfileEntry
+from app.services.network.olt_ssh_profiles import OltProfileEntry
 
 logger = logging.getLogger(__name__)
 

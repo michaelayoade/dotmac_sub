@@ -313,7 +313,6 @@ def update_ont_management_ip(
         db,
         ont_id,
         mgmt_ip_mode=payload.mgmt_ip_mode,
-        mgmt_vlan_id=payload.mgmt_vlan_id,
         mgmt_ip_address=payload.mgmt_ip_address,
         mgmt_subnet=payload.mgmt_subnet,
         mgmt_gateway=payload.mgmt_gateway,

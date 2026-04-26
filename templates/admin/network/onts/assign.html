@@ -107,48 +107,6 @@
             </div>
         </div>
 
-        {# Network Configuration (VLAN Selection) #}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                <h2 class="font-semibold text-slate-900 dark:text-white">Network Configuration</h2>
-                <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Override OLT Config Pack defaults for this assignment</p>
-            </div>
-            <div class="p-6">
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                        <label for="internet_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
-                        <select name="internet_vlan_id" id="internet_vlan_id"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">Use OLT Config Pack default</option>
-                            {% for vlan in internet_vlans %}
-                            <option value="{{ vlan.id }}" {% if form and form.internet_vlan_id == vlan.id %}selected{% endif %}>
-                                VLAN {{ vlan.tag }} — {{ vlan.name }}
-                            </option>
-                            {% endfor %}
-                        </select>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">VLAN for subscriber internet traffic</p>
-                    </div>
-                    <div>
-                        <label for="mgmt_vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management VLAN</label>
-                        <select name="mgmt_vlan_id" id="mgmt_vlan_id"
-                            hx-get="/admin/network/onts/available-mgmt-ips"
-                            hx-target="#mgmt_ip_address"
-                            hx-trigger="change"
-                            hx-include="[name='mgmt_vlan_id']"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">Use OLT Config Pack default</option>
-                            {% for vlan in mgmt_vlans %}
-                            <option value="{{ vlan.id }}" {% if form and form.mgmt_vlan_id == vlan.id %}selected{% endif %}>
-                                VLAN {{ vlan.tag }} — {{ vlan.name }}
-                            </option>
-                            {% endfor %}
-                        </select>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">VLAN for ONT management (TR-069, IPHOST)</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         {# Service Configuration #}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"
              x-data="{ ipMode: '{{ form.ip_mode if form and form.ip_mode else 'dhcp' }}', mgmtIpMode: '{{ form.mgmt_ip_mode if form and form.mgmt_ip_mode else 'inactive' }}' }">

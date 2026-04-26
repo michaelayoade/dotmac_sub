@@ -47,13 +47,9 @@ from app.services.web_network_ont_actions.config_setters import (
 # Context builders
 from app.services.web_network_ont_actions.context_builders import (
     configure_form_context,
-    lan_config_context,
     olt_side_config_context,
     olt_status_context,
-    tr069_profile_config_context,
     unified_config_context,
-    wan_config_context,
-    wifi_config_context,
 )
 
 # Credentials
@@ -107,6 +103,7 @@ from app.services.web_network_ont_actions.snapshots import (
     capture_config_snapshot_list_context,
     config_snapshot_detail_context,
     delete_config_snapshot_list_context,
+    list_config_snapshots,
 )
 
 __all__ = [
@@ -132,6 +129,7 @@ __all__ = [
     "capture_config_snapshot_list_context",
     "config_snapshot_detail_context",
     "delete_config_snapshot_list_context",
+    "list_config_snapshots",
     # Diagnostics
     "fetch_iphost_config",
     "fetch_running_config",
@@ -163,13 +161,9 @@ __all__ = [
     "toggle_lan_port",
     # Context builders
     "configure_form_context",
-    "lan_config_context",
     "olt_side_config_context",
     "olt_status_context",
-    "tr069_profile_config_context",
     "unified_config_context",
-    "wan_config_context",
-    "wifi_config_context",
     # Inventory
     "firmware_upgrade",
     "return_to_inventory",

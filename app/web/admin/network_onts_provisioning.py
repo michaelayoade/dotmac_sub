@@ -235,15 +235,12 @@ def ont_preflight_check(
 def ont_save_provision_settings(
     request: Request,
     ont_id: str,
-    tr069_profile_id: str | None = Form(default=None),
     onu_mode: str | None = Form(default=None),
-    mgmt_vlan_id: str | None = Form(default=None),
     mgmt_ip_mode: str | None = Form(default=None),
     mgmt_ip_address: str | None = Form(default=None),
     mgmt_subnet: str | None = Form(default=None),
     mgmt_gateway: str | None = Form(default=None),
     wan_protocol: str | None = Form(default=None),
-    wan_vlan_id: str | None = Form(default=None),
     ip_pool_id: str | None = Form(default=None),
     static_ip_pool_id: str | None = Form(default=None),
     static_ip: str | None = Form(default=None),
@@ -268,15 +265,12 @@ def ont_save_provision_settings(
     result = web_onts_provisioning_service.save_provision_settings(
         db,
         ont_id=ont_id,
-        tr069_profile_id=tr069_profile_id,
         onu_mode=onu_mode,
-        mgmt_vlan_id=mgmt_vlan_id,
         mgmt_ip_mode=mgmt_ip_mode,
         mgmt_ip_address=mgmt_ip_address,
         mgmt_subnet=mgmt_subnet,
         mgmt_gateway=mgmt_gateway,
         wan_protocol=wan_protocol,
-        wan_vlan_id=wan_vlan_id,
         ip_pool_id=ip_pool_id,
         static_ip_pool_id=static_ip_pool_id,
         static_ip=static_ip,
@@ -386,7 +380,6 @@ def step_create_service_port(
 def step_configure_mgmt_ip(
     request: Request,
     ont_id: str,
-    vlan_id: int = Form(...),
     ip_mode: str = Form(default="dhcp"),
     ip_address: str | None = Form(default=None),
     subnet: str | None = Form(default=None),
@@ -400,7 +393,6 @@ def step_configure_mgmt_ip(
     result = steps.configure_management_ip(
         db,
         ont_id,
-        vlan_id=vlan_id,
         ip_mode=ip_mode,
         ip_address=ip_address,
         subnet=subnet,
@@ -411,7 +403,6 @@ def step_configure_mgmt_ip(
         ont_id,
         "configure_management_ip",
         {
-            "vlan_id": vlan_id,
             "ip_mode": ip_mode,
             "ip_address": ip_address,
             "subnet": subnet,
@@ -429,16 +420,15 @@ def step_configure_mgmt_ip(
 def step_activate_internet_config(
     request: Request,
     ont_id: str,
-    ip_index: int = Form(default=0),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Activate TCP stack on ONT management WAN."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = steps.activate_internet_config(db, ont_id, ip_index=ip_index)
+    result = steps.activate_internet_config(db, ont_id)
     _update_service_order_execution_context_for_ont(
-        db, ont_id, "activate_internet_config", {"ip_index": ip_index}
+        db, ont_id, "activate_internet_config", {}
     )
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -451,25 +441,18 @@ def step_activate_internet_config(
 def step_configure_wan_olt(
     request: Request,
     ont_id: str,
-    ip_index: int = Form(default=0),
-    profile_id: int = Form(default=0),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Set route+NAT mode on ONT management WAN via OLT SSH."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = steps.configure_wan_olt(
-        db,
-        ont_id,
-        ip_index=ip_index,
-        profile_id=profile_id,
-    )
+    result = steps.configure_wan_olt(db, ont_id)
     _update_service_order_execution_context_for_ont(
         db,
         ont_id,
         "configure_wan_olt",
-        {"ip_index": ip_index, "profile_id": profile_id},
+        {},
     )
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -482,7 +465,6 @@ def step_configure_wan_olt(
 def step_bind_tr069(
     request: Request,
     ont_id: str,
-    tr069_olt_profile_id: int = Form(...),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bind a TR-069 server profile to the ONT via OLT SSH."""
@@ -490,16 +472,12 @@ def step_bind_tr069(
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = steps.bind_tr069(
-        db,
-        ont_id,
-        tr069_olt_profile_id=tr069_olt_profile_id,
-    )
+    result = steps.bind_tr069(db, ont_id)
     _update_service_order_execution_context_for_ont(
         db,
         ont_id,
         "bind_tr069",
-        {"tr069_olt_profile_id": tr069_olt_profile_id},
+        {},
     )
     _record_ont_step_action(db, request, ont_id, result)
     return _step_response(result, request=request, ont_id=ont_id)
@@ -654,8 +632,6 @@ def step_deprovision(
 def provision_ont_direct(
     request: Request,
     ont_id: str,
-    internet_vlan_id: int | None = Form(default=None),
-    mgmt_vlan_id: int | None = Form(default=None),
     dry_run: bool = Form(default=False),
     async_execution: bool = Form(default=False),
     db: Session = Depends(get_db),
@@ -664,7 +640,6 @@ def provision_ont_direct(
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    del internet_vlan_id, mgmt_vlan_id
     from app.services.network.action_logging import actor_label
 
     initiated_by = actor_label(request)

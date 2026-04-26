@@ -126,7 +126,6 @@ class OntWanConfigUpdate(BaseModel):
 
 class OntMgmtIpUpdate(BaseModel):
     mgmt_ip_mode: str  # inactive, static_ip, dhcp
-    mgmt_vlan_id: str | None = None
     mgmt_ip_address: str | None = None
     mgmt_subnet: str | None = None
     mgmt_gateway: str | None = None

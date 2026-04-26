@@ -1,0 +1,150 @@
+{# Diagnostics Tab - Signal history charts and port statistics #}
+
+<div class="space-y-4">
+    {# ==================== SIGNAL HISTORY CHART ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Signal History</h2>
+            <div class="flex items-center gap-2" x-data="{ range: '24h' }">
+                <button @click="range = '24h'; $dispatch('refresh-chart', { range: '24h' })" :class="range === '24h' ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'" class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors">24h</button>
+                <button @click="range = '7d'; $dispatch('refresh-chart', { range: '7d' })" :class="range === '7d' ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'" class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors">7d</button>
+                <button @click="range = '30d'; $dispatch('refresh-chart', { range: '30d' })" :class="range === '30d' ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'" class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors">30d</button>
+            </div>
+        </div>
+
+        {# Chart container - lazy loaded #}
+        <div id="signal-chart-content" hx-get="/admin/network/onts/{{ ont.id }}/charts" hx-trigger="revealed" hx-swap="innerHTML" class="min-h-[300px]">
+            <div class="flex items-center justify-center py-12 text-sm text-slate-400">
+                <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Loading signal history...
+            </div>
+        </div>
+    </div>
+
+    {# ==================== CURRENT SIGNAL THRESHOLDS ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Signal Thresholds</h2>
+        <div class="grid gap-4 sm:grid-cols-2">
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                <div class="flex items-center gap-3">
+                    <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
+                    <div>
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Good</div>
+                        <div class="text-xs text-slate-500 dark:text-slate-400">&gt; {{ signal_info.warn_threshold if signal_info else '-25' }} dBm</div>
+                    </div>
+                </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                <div class="flex items-center gap-3">
+                    <div class="h-3 w-3 rounded-full bg-amber-500"></div>
+                    <div>
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Warning</div>
+                        <div class="text-xs text-slate-500 dark:text-slate-400">{{ signal_info.warn_threshold if signal_info else '-25' }} to {{ signal_info.crit_threshold if signal_info else '-28' }} dBm</div>
+                    </div>
+                </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                <div class="flex items-center gap-3">
+                    <div class="h-3 w-3 rounded-full bg-rose-500"></div>
+                    <div>
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">Critical</div>
+                        <div class="text-xs text-slate-500 dark:text-slate-400">&lt; {{ signal_info.crit_threshold if signal_info else '-28' }} dBm</div>
+                    </div>
+                </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                <div class="flex items-center gap-3">
+                    <div class="h-3 w-3 rounded-full bg-slate-400"></div>
+                    <div>
+                        <div class="text-sm font-medium text-slate-900 dark:text-white">No Signal</div>
+                        <div class="text-xs text-slate-500 dark:text-slate-400">Device offline or no data</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== PORT STATISTICS ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Ethernet Port Status</h2>
+            <button type="button"
+                    hx-get="/admin/network/onts/{{ ont.id }}/lan-ports-status"
+                    hx-target="#lan-ports-content"
+                    hx-swap="innerHTML"
+                    class="text-xs text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">
+                Refresh
+            </button>
+        </div>
+
+        <div id="lan-ports-content" hx-get="/admin/network/onts/{{ ont.id }}/lan-ports-status" hx-trigger="revealed" hx-swap="innerHTML">
+            <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {# Placeholder ports - will be replaced by HTMX #}
+                {% for i in range(1, 5) %}
+                <div class="flex flex-col items-center rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-200 dark:bg-slate-700">
+                        <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                    </div>
+                    <div class="mt-2 text-sm font-semibold text-slate-900 dark:text-white">ETH{{ i }}</div>
+                    <div class="mt-1 text-xs text-slate-400">Loading...</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    {# ==================== DIAGNOSTICS ACTIONS ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Diagnostic Tools</h2>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/refresh-status"
+                    hx-swap="none"
+                    class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 text-left transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700/50">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
+                    <svg class="h-5 w-5 text-cyan-600 dark:text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                </div>
+                <div>
+                    <div class="text-sm font-medium text-slate-900 dark:text-white">Refresh All Status</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Poll OLT and TR-069</div>
+                </div>
+            </button>
+
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/connection-request"
+                    hx-swap="none"
+                    class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 text-left transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700/50">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
+                    <svg class="h-5 w-5 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+                </div>
+                <div>
+                    <div class="text-sm font-medium text-slate-900 dark:text-white">Connection Request</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Wake up TR-069 session</div>
+                </div>
+            </button>
+
+            <button type="button"
+                    hx-get="/admin/network/onts/{{ ont.id }}/running-config"
+                    hx-target="#diagnostic-output"
+                    hx-swap="innerHTML"
+                    class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 text-left transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700/50">
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                    <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                </div>
+                <div>
+                    <div class="text-sm font-medium text-slate-900 dark:text-white">OLT Running Config</div>
+                    <div class="text-xs text-slate-500 dark:text-slate-400">Fetch current OLT state</div>
+                </div>
+            </button>
+
+        </div>
+
+        {# Diagnostic Output Area #}
+        <div id="diagnostic-output" class="mt-4 hidden rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+            {# Will be populated by HTMX #}
+        </div>
+    </div>
+</div>

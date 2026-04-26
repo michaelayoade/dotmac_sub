@@ -1,0 +1,65 @@
+{# Files Tab - Firmware and configuration file management #}
+
+<div class="space-y-4">
+    {# ==================== FIRMWARE MANAGEMENT ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Firmware</h2>
+        </div>
+
+        <div class="p-5">
+            <div class="grid gap-4 lg:grid-cols-2">
+                {# Current firmware #}
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <div class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Current Version</div>
+                            <div class="mt-1 text-lg font-semibold font-mono text-slate-900 dark:text-white">
+                                {{ ont.firmware_version or 'Unknown' }}
+                            </div>
+                            {% if ont.software_version %}
+                            <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">Software: {{ ont.software_version }}</div>
+                            {% endif %}
+                        </div>
+                        <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                            Active
+                        </span>
+                    </div>
+                </div>
+
+                {# Firmware upgrade form - lazy loaded #}
+                <div id="firmware-form-content" hx-get="/admin/network/onts/{{ ont.id }}/firmware-form" hx-trigger="revealed" hx-swap="innerHTML">
+                    <div class="flex items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 dark:border-slate-600 dark:bg-slate-900/30">
+                        <div class="text-center">
+                            <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                            <div class="mt-2 text-sm text-slate-500 dark:text-slate-400">Loading firmware options...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== CONFIG SNAPSHOTS ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Configuration Snapshots</h2>
+            <button type="button"
+                    hx-post="/admin/network/onts/{{ ont.id }}/config-snapshot"
+                    hx-swap="none"
+                    class="text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">
+                Create Snapshot
+            </button>
+        </div>
+
+        <div id="config-snapshots-content" class="p-5" hx-get="/admin/network/onts/{{ ont.id }}/config-snapshots" hx-trigger="revealed" hx-swap="innerHTML">
+            <div class="flex items-center justify-center py-6 text-sm text-slate-400">
+                <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Loading snapshots...
+            </div>
+        </div>
+    </div>
+</div>

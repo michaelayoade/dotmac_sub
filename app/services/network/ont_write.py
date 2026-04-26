@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
@@ -24,6 +24,7 @@ from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
 )
+from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.provisioning_events import (
     current_provisioning_correlation_key,
 )
@@ -165,8 +166,6 @@ class OntWriteService:
         ont_id: str,
         *,
         mgmt_ip_mode: str,
-        mgmt_vlan_id: str | None = None,
-        mgmt_vlan_tag: int | None = None,
         mgmt_priority: int | None = None,
         mgmt_ip_address: str | None = None,
         mgmt_subnet: str | None = None,
@@ -185,37 +184,12 @@ class OntWriteService:
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
-        # Resolve VLAN tag for the OLT command. Web/API callers commonly pass
-        # a DB VLAN UUID, while provisioning profiles carry the actual VLAN tag.
-        vlan_int = None
-        resolved_mgmt_vlan_id = None
-        if mgmt_vlan_id:
-            vlan_obj, vlan_err = _resolve_ont_scoped_vlan(
-                db,
-                vlan_id=mgmt_vlan_id,
-                olt_id=getattr(ctx.olt, "id", None),
-                field_label="Management",
-            )
-            if vlan_err:
-                return vlan_err
-            vlan_int = vlan_obj.tag
-            resolved_mgmt_vlan_id = str(vlan_obj.id)
-        elif mgmt_vlan_tag is not None:
-            from app.models.network import Vlan
-
-            vlan_int = int(mgmt_vlan_tag)
-            vlan_obj = db.scalars(
-                select(Vlan).where(
-                    Vlan.tag == vlan_int,
-                    Vlan.is_active.is_(True),
-                    Vlan.olt_device_id == ctx.olt.id,
-                )
-            ).first()
-            resolved_mgmt_vlan_id = getattr(vlan_obj, "id", None) if vlan_obj else None
-
+        config_pack = resolve_olt_config_pack(db, ctx.olt.id)
+        vlan_int = getattr(config_pack.management_vlan, "tag", None)
         if vlan_int is None:
             return ActionResult(
-                success=False, message="Management VLAN ID is required."
+                success=False,
+                message="Management VLAN is not configured in the OLT config pack.",
             )
 
         try:
@@ -238,29 +212,24 @@ class OntWriteService:
             logger.error("IPHOST config failed for ONT %s: %s", ont_id, exc)
             return ActionResult(success=False, message=f"SSH error: {exc}")
 
-        # Persist desired state
-        from app.models.network import MgmtIpMode
-
         try:
             parsed_mgmt_mode = MgmtIpMode(mgmt_ip_mode)
         except ValueError:
             parsed_mgmt_mode = None
 
-        # Store management IP config as overrides
-        upsert_ont_desired_config_value(
-            db,
-            ont=ont,
-            field_name="management.ip_mode",
-            value=getattr(parsed_mgmt_mode, "value", mgmt_ip_mode),
-            reason="ont_write.update_management_ip",
-        )
-        upsert_ont_desired_config_value(
-            db,
-            ont=ont,
-            field_name="management.ip_address",
-            value=mgmt_ip_address,
-            reason="ont_write.update_management_ip",
-        )
+        assignment = db.scalars(
+            select(OntAssignment).where(
+                OntAssignment.ont_unit_id == ont.id,
+                OntAssignment.active.is_(True),
+            )
+        ).first()
+        if assignment is None:
+            assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+            db.add(assignment)
+        assignment.mgmt_ip_mode = parsed_mgmt_mode
+        assignment.mgmt_ip_address = mgmt_ip_address
+        assignment.mgmt_subnet = mgmt_subnet
+        assignment.mgmt_gateway = mgmt_gateway
         _set_sync_meta(ont, "ssh")
         db.commit()
         db.refresh(ont)

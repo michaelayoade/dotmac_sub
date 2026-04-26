@@ -1,0 +1,55 @@
+{# Logs Tab - Device logs and event history #}
+
+<div class="space-y-4">
+    {# ==================== DEVICE LOGS ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Device Logs</h2>
+            <div class="flex items-center gap-2">
+                {# Severity filter #}
+                <select id="log-severity-filter" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <option value="all">All Levels</option>
+                    <option value="error">Errors</option>
+                    <option value="warning">Warnings</option>
+                    <option value="info">Info</option>
+                </select>
+
+                {# Refresh button #}
+                <button type="button"
+                        hx-get="/admin/network/onts/{{ ont.id }}/logs"
+                        hx-target="#device-logs-content"
+                        hx-swap="innerHTML"
+                        hx-indicator="#logs-refresh-spinner"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                    <svg id="logs-refresh-spinner" class="htmx-indicator h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span class="htmx-indicator-hide">Refresh</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="device-logs-content" class="p-5" hx-get="/admin/network/onts/{{ ont.id }}/logs" hx-trigger="revealed" hx-swap="innerHTML">
+            {# Initial loading state #}
+            <div class="flex items-center justify-center py-8 text-sm text-slate-400">
+                <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Loading device logs...
+            </div>
+        </div>
+    </div>
+
+    {# ==================== NETWORK OPERATIONS LOG ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Network Operations</h2>
+        </div>
+
+        <div class="p-5">
+            {% include "admin/network/_operations_history.html" %}
+        </div>
+    </div>
+</div>

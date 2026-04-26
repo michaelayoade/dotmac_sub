@@ -33,8 +33,8 @@ class OltDetailAdapter:
         from app.services import audit_helpers
         from app.services import web_network_core_devices as core_devices_service
         from app.services import web_network_operations as operations_service
+        from app.services.network import olt_operations as olt_operations_service
         from app.services.network import olt_tr069_admin as olt_tr069_admin_service
-        from app.services.olt_action_adapter import olt_action_adapter
 
         page_data = core_devices_service.olt_detail_page_data(db, olt_id)
         if not page_data:
@@ -58,7 +58,7 @@ class OltDetailAdapter:
         except Exception:
             logger.error("Failed to load audit activity for OLT %s", olt_id, exc_info=True)
             activities = []
-        available_firmware = olt_action_adapter.get_olt_firmware_images(db, olt_id)
+        available_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
 
         page_data.update(
             {
