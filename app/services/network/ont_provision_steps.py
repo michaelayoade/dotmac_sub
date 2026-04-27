@@ -28,7 +28,6 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models.network import OntUnit
 from app.services.network._common import NasTarget
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import upsert_ont_desired_config_value
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -1603,13 +1602,10 @@ def _ensure_static_management_ip_from_profile(
             notes=f"Management IP for ONT {ont.serial_number}",
         )
     )
-    upsert_ont_desired_config_value(
-        db,
-        ont=ont,
-        field_name="management.ip_address",
-        value=selected_ip,
-        reason="allocate_management_ip",
-    )
+    # Store the allocated IP on the active assignment (source of truth)
+    assignment = effective.get("assignment")
+    if assignment is not None:
+        assignment.mgmt_ip_address = selected_ip
 
     remaining = 0
     next_available = None

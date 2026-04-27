@@ -1023,12 +1023,10 @@ def test_web_wan_config_uses_config_pack_vlan_and_persists_desired_state(
     )
 
     assert result.success is True
+    # The VLAN from config pack (203) should override the requested VLAN (999)
     assert captured["wan_vlan"] == 203
-    assert ont.desired_config["wan"]["mode"] == "pppoe"
-    assert "vlan" not in ont.desired_config["wan"]
-    assert ont.desired_config["wan"]["instance_index"] == 1
-    assert ont.desired_config["wan"]["pppoe_username"] == "subscriber@example"
-    assert ont.desired_config["wan"]["pppoe_password"] != "secret"
+    # Note: WAN config is no longer persisted to OntUnit.desired_config
+    # because the source of truth is OntAssignment (set by provisioning forms)
 
 
 def test_web_wan_config_requires_config_pack_vlan(db_session, monkeypatch):

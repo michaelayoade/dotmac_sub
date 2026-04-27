@@ -9,12 +9,8 @@ from starlette.requests import Request
 
 from app.models.network import OntUnit
 from app.services.acs_client import create_acs_config_writer
-from app.services.credential_crypto import encrypt_credential
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
-from app.services.network.ont_desired_config import (
-    upsert_ont_desired_config_value,
-)
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
     _log_action_audit,
@@ -34,17 +30,6 @@ def set_wifi_ssid(
 ) -> ActionResult:
     """Set WiFi SSID and return result."""
     result = _acs_config_writer().set_wifi_ssid(db, ont_id, ssid)
-    if result.success:
-        ont = db.get(OntUnit, ont_id)
-        if ont:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wifi.ssid",
-                value=ssid,
-                reason="config_setters.set_wifi_ssid",
-            )
-            db.flush()
     _log_action_audit(
         db,
         request=request,
@@ -62,15 +47,6 @@ def set_wifi_password(
     result = _acs_config_writer().set_wifi_password(db, ont_id, password)
     if result.success:
         ont = db.get(OntUnit, ont_id)
-        if ont:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wifi.password",
-                value=encrypt_credential(password),
-                reason="config_setters.set_wifi_password",
-            )
-            db.flush()
         # Emit audit event for credential change
         from app.services.events import emit_event
         from app.services.events.types import EventType
@@ -120,49 +96,6 @@ def set_wifi_config(
     )
     if result.success:
         ont = db.get(OntUnit, ont_id)
-        if ont:
-            # Store WiFi config as overrides
-            if ssid is not None:
-                upsert_ont_desired_config_value(
-                    db,
-                    ont=ont,
-                    field_name="wifi.ssid",
-                    value=ssid,
-                    reason="config_setters.set_wifi_config",
-                )
-            if password is not None:
-                upsert_ont_desired_config_value(
-                    db,
-                    ont=ont,
-                    field_name="wifi.password",
-                    value=encrypt_credential(password),
-                    reason="config_setters.set_wifi_config",
-                )
-            if enabled is not None:
-                upsert_ont_desired_config_value(
-                    db,
-                    ont=ont,
-                    field_name="wifi.enabled",
-                    value=enabled,
-                    reason="config_setters.set_wifi_config",
-                )
-            if channel is not None:
-                upsert_ont_desired_config_value(
-                    db,
-                    ont=ont,
-                    field_name="wifi.channel",
-                    value=channel,
-                    reason="config_setters.set_wifi_config",
-                )
-            if security_mode is not None:
-                upsert_ont_desired_config_value(
-                    db,
-                    ont=ont,
-                    field_name="wifi.security_mode",
-                    value=security_mode,
-                    reason="config_setters.set_wifi_config",
-                )
-            db.flush()
         _persist_ont_plan_step(
             db,
             ont_id,
@@ -406,23 +339,6 @@ def set_pppoe_credentials(
 
     if result.success:
         ont = db.get(OntUnit, ont_id)
-        if ont:
-            # Store PPPoE credentials as overrides
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wan.pppoe_username",
-                value=username,
-                reason="config_setters.set_pppoe_credentials",
-            )
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wan.pppoe_password",
-                value=encrypt_credential(password),
-                reason="config_setters.set_pppoe_credentials",
-            )
-            db.flush()
         _persist_ont_plan_step(
             db,
             ont_id,
@@ -628,52 +544,6 @@ def set_wan_config(
     )
 
     if result.success:
-        if ont:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wan.mode",
-                value=wan_mode_normalized,
-                reason="config_setters.set_wan_config",
-            )
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wan.instance_index",
-                value=instance_index,
-                reason="config_setters.set_wan_config",
-            )
-        if ont and wan_mode_normalized == "pppoe" and pppoe_username and pppoe_password:
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wan.pppoe_username",
-                value=pppoe_username,
-                reason="config_setters.set_wan_config",
-            )
-            upsert_ont_desired_config_value(
-                db,
-                ont=ont,
-                field_name="wan.pppoe_password",
-                value=encrypt_credential(pppoe_password),
-                reason="config_setters.set_wan_config",
-            )
-        if ont and wan_mode_normalized == "static":
-            for field_name, value in {
-                "wan.ip_address": ip_address,
-                "wan.subnet_mask": subnet_mask,
-                "wan.gateway": gateway,
-                "wan.dns_servers": dns_servers,
-            }.items():
-                upsert_ont_desired_config_value(
-                    db,
-                    ont=ont,
-                    field_name=field_name,
-                    value=value,
-                    reason="config_setters.set_wan_config",
-                )
-        if ont:
-            db.flush()
         _persist_ont_plan_step(
             db,
             ont_id,
