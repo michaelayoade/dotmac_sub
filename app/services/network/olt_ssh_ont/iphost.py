@@ -167,6 +167,14 @@ def _configure_single_ont_in_session(
             f"mask {cfg.subnet} gateway {gateway} vlan {cfg.vlan_id}{priority_clause}"
         )
 
+    # Clear any existing IPHOST config first to ensure new settings are applied.
+    # Without this, if ONT already has IPHOST configured with different IP/VLAN,
+    # OLT returns "make configuration repeatedly" and leaves old config in place.
+    undo_cmd = f"undo ont ipconfig {port_num} {cfg.ont_id} ip-index 0"
+    channel.send(f"{undo_cmd}\n")
+    time.sleep(0.3)
+    core._read_until_prompt(channel, config_prompt, timeout_sec=5)
+
     # Send command with appropriate method for OLT model
     time.sleep(0.1)
     if is_ma5800:
