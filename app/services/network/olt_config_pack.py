@@ -531,3 +531,56 @@ def update_config_pack(
         else:
             pack[key] = value
     olt.config_pack = pack
+
+
+# Required config_pack keys for provisioning
+REQUIRED_CONFIG_PACK_KEYS = [
+    "line_profile_id",
+    "service_profile_id",
+    "internet_vlan_id",
+    "management_vlan_id",
+    "tr069_olt_profile_id",
+    "mgmt_gem_index",
+    "internet_gem_index",
+]
+
+
+class ConfigPackIncompleteError(ValueError):
+    """Raised when OLT config_pack is missing required fields."""
+
+    def __init__(self, olt_name: str, missing_fields: list[str]):
+        self.olt_name = olt_name
+        self.missing_fields = missing_fields
+        super().__init__(
+            f"OLT '{olt_name}' config_pack missing required fields: {', '.join(missing_fields)}"
+        )
+
+
+def validate_config_pack_required(
+    olt: OLTDevice,
+    *,
+    raise_on_error: bool = True,
+) -> list[str]:
+    """Validate that OLT config_pack has all required fields.
+
+    Args:
+        olt: OLTDevice instance
+        raise_on_error: If True, raise ConfigPackIncompleteError on missing fields
+
+    Returns:
+        List of missing field names (empty if valid)
+
+    Raises:
+        ConfigPackIncompleteError: If raise_on_error=True and fields are missing
+    """
+    pack = olt.config_pack or {}
+    missing = [key for key in REQUIRED_CONFIG_PACK_KEYS if not pack.get(key)]
+
+    # Also check tr069_acs_server_id which is a FK on OLT, not in config_pack
+    if olt.tr069_acs_server_id is None:
+        missing.append("tr069_acs_server_id")
+
+    if missing and raise_on_error:
+        raise ConfigPackIncompleteError(olt.name or str(olt.id), missing)
+
+    return missing

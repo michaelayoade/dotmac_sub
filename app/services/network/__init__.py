@@ -70,6 +70,16 @@ from app.services.network.olt import (
     ont_units,
     pon_ports,
 )
+from app.services.network.olt_config_pack import (
+    REQUIRED_CONFIG_PACK_KEYS,
+    ConfigPackIncompleteError,
+    OltConfigPack,
+    VlanConfig,
+    get_olt_config_pack_or_raise,
+    resolve_olt_config_pack,
+    validate_config_pack_required,
+    validate_olt_config_pack,
+)
 from app.services.network.ont_actions import (
     OntActions,
     ont_actions,
@@ -122,13 +132,6 @@ from app.services.network.splitters import (
 from app.services.network.zones import (
     NetworkZones,
     network_zones,
-)
-from app.services.network.olt_config_pack import (
-    OltConfigPack,
-    VlanConfig,
-    get_olt_config_pack_or_raise,
-    resolve_olt_config_pack,
-    validate_olt_config_pack,
 )
 
 __all__ = [
@@ -228,7 +231,10 @@ __all__ = [
     # OLT Config Pack
     "OltConfigPack",
     "VlanConfig",
+    "ConfigPackIncompleteError",
+    "REQUIRED_CONFIG_PACK_KEYS",
     "resolve_olt_config_pack",
     "get_olt_config_pack_or_raise",
     "validate_olt_config_pack",
+    "validate_config_pack_required",
 ]
