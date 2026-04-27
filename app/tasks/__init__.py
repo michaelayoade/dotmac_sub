@@ -42,14 +42,14 @@ from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_autofind import scan_olts_autofind
 from app.tasks.olt_config_backup import backup_all_olts
-from app.tasks.olt_polling import (
-    finalize_olt_polling,
-    poll_all_olt_signals,
-)
 from app.tasks.olt_health_retry import (
     retry_failed_olt_connections,
     retry_single_olt,
     trigger_immediate_retry,
+)
+from app.tasks.olt_polling import (
+    finalize_olt_polling,
+    poll_all_olt_signals,
 )
 from app.tasks.olt_queue import (
     process_deferred_olt_operations,
@@ -62,11 +62,6 @@ from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_o
 from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
-)
-from app.tasks.ont_verification import (
-    mark_pending_verification,
-    verify_ont_provisioning_state,
-    verify_single_ont,
 )
 from app.tasks.provisioning import (
     retry_pending_compensation_failures,
@@ -215,10 +210,6 @@ __all__ = [
     "sync_single_olt_to_zabbix",
     "sync_single_nas_to_zabbix",
     "remove_device_from_zabbix_task",
-    # ONT verification (Phase 2)
-    "verify_ont_provisioning_state",
-    "verify_single_ont",
-    "mark_pending_verification",
     # OLT queue processing (Phase 4)
     "process_deferred_olt_operations",
     "retry_failed_operations",

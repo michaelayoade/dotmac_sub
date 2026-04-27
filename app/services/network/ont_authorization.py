@@ -980,7 +980,7 @@ class OntAuthorizationService:
                     if not match_ok:
                         set_provisioning_status(
                             ctx.ont,
-                            OntProvisioningStatus.drift_detected,
+                            OntProvisioningStatus.failed,
                             strict=False,
                         )
                         db.flush()
@@ -998,7 +998,7 @@ class OntAuthorizationService:
             else:
                 set_provisioning_status(
                     ctx.ont,
-                    OntProvisioningStatus.drift_detected,
+                    OntProvisioningStatus.failed,
                     strict=False,
                 )
                 db.flush()
@@ -1075,7 +1075,7 @@ class OntAuthorizationService:
             else:
                 set_provisioning_status(
                     ctx.ont,
-                    OntProvisioningStatus.drift_detected,
+                    OntProvisioningStatus.failed,
                     strict=False,
                 )
                 db.flush()

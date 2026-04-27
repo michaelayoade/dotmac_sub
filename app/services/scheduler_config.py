@@ -1,7 +1,7 @@
 import logging
 import os
+from collections.abc import Iterable
 from datetime import timedelta
-from typing import Iterable
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
@@ -1272,29 +1272,6 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.splynx_sync.run_customer_accounts_details_sync",
                 "schedule": timedelta(hours=splynx_customer_sync_interval_hours),
             }
-
-        # ONT provisioning verification - periodic drift detection (Phase 2)
-        ont_verification_enabled = _effective_bool(
-            session,
-            SettingDomain.provisioning,
-            "ont_verification_enabled",
-            "ONT_VERIFICATION_ENABLED",
-            True,
-        )
-        ont_verification_interval = _resolve_int(
-            session,
-            SettingDomain.provisioning,
-            "ont_verification_interval_seconds",
-            300,  # 5 minutes
-        )
-        ont_verification_interval = max(ont_verification_interval, 60)  # Min: 1 minute
-        _sync_scheduled_task(
-            session,
-            name="ont_provisioning_verification",
-            task_name="app.tasks.ont_verification.verify_ont_provisioning_state",
-            enabled=ont_verification_enabled,
-            interval_seconds=ont_verification_interval,
-        )
 
         # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
         olt_queue_enabled = _effective_bool(

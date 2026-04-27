@@ -107,10 +107,6 @@ class EventType(enum.Enum):
     ont_wifi_password_set = "ont.wifi_password_set"
     ont_wifi_config_updated = "ont.wifi_config_updated"
 
-    # ONT provisioning drift detection (async verification)
-    ont_provisioning_drift_detected = "ont.provisioning_drift_detected"
-    ont_provisioning_verified = "ont.provisioning_verified"
-
     # ONT lifecycle events
     ont_decommissioned = "ont.decommissioned"
 
