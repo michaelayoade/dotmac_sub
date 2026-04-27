@@ -79,6 +79,8 @@ class WanServiceSpec:
     tag_transform: str = "translate"
     tcont_profile: str = ""  # T-CONT traffic profile name on OLT
     ip_protocol: str = "ipv4"  # ipv4, dual_stack
+    traffic_table_inbound: int | None = None  # OLT traffic-table index for QoS
+    traffic_table_outbound: int | None = None
 
 
 @dataclass
@@ -201,6 +203,8 @@ class HuaweiCommandGenerator:
                 vlan_id=ws.vlan_id,
                 user_vlan=ws.user_vlan,
                 tag_transform=ws.tag_transform,
+                traffic_table_inbound=ws.traffic_table_inbound,
+                traffic_table_outbound=ws.traffic_table_outbound,
             )
             commands.append(cmd)
 
@@ -404,6 +408,7 @@ def build_spec_from_profile(
     context: OntProvisioningContext,
     *,
     tr069_profile_id: int | None = None,
+    olt: Any | None = None,
 ) -> ProvisioningSpec:
     """Build a ProvisioningSpec from an OntProvisioningProfile model instance.
 
@@ -411,6 +416,7 @@ def build_spec_from_profile(
         profile: OntProvisioningProfile model instance.
         context: ONT provisioning context for template rendering.
         tr069_profile_id: OLT-level TR-069 server profile ID to bind.
+        olt: OLTDevice instance for traffic table indices (optional).
 
     Returns:
         ProvisioningSpec ready for command generation.
@@ -443,6 +449,18 @@ def build_spec_from_profile(
         raw_password_mode = getattr(ws, "pppoe_password_mode", None)
         password_mode = _enum_value(raw_password_mode)
 
+        # Resolve traffic table indices from OLT based on service type
+        traffic_in: int | None = None
+        traffic_out: int | None = None
+        if olt is not None:
+            svc_type = _enum_value(ws.service_type).lower()
+            if svc_type in ("internet", "data"):
+                traffic_in = getattr(olt, "internet_traffic_table_inbound", None)
+                traffic_out = getattr(olt, "internet_traffic_table_outbound", None)
+            elif svc_type == "management":
+                traffic_in = getattr(olt, "mgmt_traffic_table_inbound", None)
+                traffic_out = getattr(olt, "mgmt_traffic_table_outbound", None)
+
         wan_services.append(
             WanServiceSpec(
                 service_type=_enum_value(ws.service_type),
@@ -458,6 +476,8 @@ def build_spec_from_profile(
                 user_vlan=user_vlan,
                 tag_transform=tag_transform,
                 tcont_profile=ws.t_cont_profile or "",
+                traffic_table_inbound=traffic_in,
+                traffic_table_outbound=traffic_out,
             )
         )
 
@@ -529,6 +549,8 @@ def build_service_port_command(
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
     port_index: int | None = None,
+    traffic_table_inbound: int | None = None,
+    traffic_table_outbound: int | None = None,
 ) -> str:
     """Build a Huawei service-port command preserving modeled VLAN intent.
 
@@ -541,6 +563,8 @@ def build_service_port_command(
         tag_transform: VLAN tag transform mode (default: translate)
         port_index: Pre-allocated service-port index. If provided, creates
                     a service-port with explicit index. If None, OLT auto-assigns.
+        traffic_table_inbound: OLT traffic-table index for inbound QoS (optional)
+        traffic_table_outbound: OLT traffic-table index for outbound QoS (optional)
 
     Returns:
         Huawei CLI command string for service-port creation
@@ -549,13 +573,21 @@ def build_service_port_command(
     if resolved_user_vlan is None:
         resolved_user_vlan = vlan_id
 
+    # Build traffic-table clause if indices provided
+    traffic_clause = ""
+    if traffic_table_inbound is not None and traffic_table_outbound is not None:
+        traffic_clause = (
+            f" inbound traffic-table index {traffic_table_inbound}"
+            f" outbound traffic-table index {traffic_table_outbound}"
+        )
+
     if port_index is not None:
         # Use pre-allocated index from DB allocator (Phase 1)
         return (
             f"service-port {port_index} vlan {vlan_id} gpon {fsp} "
             f"ont {ont_id} gemport {gem_index} "
             f"multi-service user-vlan {resolved_user_vlan} "
-            f"tag-transform {tag_transform}"
+            f"tag-transform {tag_transform}{traffic_clause}"
         )
     else:
         # Legacy: auto-assign index
@@ -563,5 +595,5 @@ def build_service_port_command(
             f"service-port vlan {vlan_id} gpon {fsp} "
             f"ont {ont_id} gemport {gem_index} "
             f"multi-service user-vlan {resolved_user_vlan} "
-            f"tag-transform {tag_transform}"
+            f"tag-transform {tag_transform}{traffic_clause}"
         )

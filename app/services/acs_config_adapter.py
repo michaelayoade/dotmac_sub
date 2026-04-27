@@ -61,6 +61,7 @@ class GenieAcsConfigWriter:
             "set_wan_ipv6_config",
             "set_http_management",
             "delete_wan_instance",
+            "normalize_wan_structure",
         }
     )
 
@@ -969,6 +970,55 @@ class GenieAcsConfigWriter:
 
         return delete_wan_instance(
             db, ont_id, instance_index=instance_index, wan_type=wan_type
+        )
+
+    def queue_normalize_wan_structure(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        mgmt_vlan: int | None = None,
+        internet_vlan: int | None = None,
+        preserve_mgmt: bool = True,
+        **metadata: Any,
+    ) -> AcsConfigQueueResult:
+        return self.queue_config_action(
+            db,
+            "normalize_wan_structure",
+            ont_id,
+            kwargs={
+                "mgmt_vlan": mgmt_vlan,
+                "internet_vlan": internet_vlan,
+                "preserve_mgmt": preserve_mgmt,
+            },
+            **metadata,
+        )
+
+    def normalize_wan_structure(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        mgmt_vlan: int | None = None,
+        internet_vlan: int | None = None,
+        preserve_mgmt: bool = True,
+    ) -> ActionResult:
+        """Normalize WAN structure to standard layout.
+
+        Deletes non-standard WAN instances to establish a consistent WCD layout:
+        - WCD1 = Management (TR-069, static IP)
+        - WCD2 = Internet (PPPoE/DHCP)
+
+        This ensures TR-069 parameter paths are predictable across all ONTs.
+        """
+        from app.services.network.ont_action_wan import normalize_wan_structure
+
+        return normalize_wan_structure(
+            db,
+            ont_id,
+            mgmt_vlan=mgmt_vlan,
+            internet_vlan=internet_vlan,
+            preserve_mgmt=preserve_mgmt,
         )
 
 

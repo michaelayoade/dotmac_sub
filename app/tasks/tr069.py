@@ -1373,6 +1373,7 @@ def heal_online_silent_onts(
                         enqueue_result = enqueue_task(
                             "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
                             args=[str(ont.id), olt_id, fsp, ont_id_on_olt],
+                            queue="acs",  # Route to ACS queue for faster processing
                             correlation_id=f"heal_tr069:{ont.id}",
                             source="heal_online_silent_onts",
                         )

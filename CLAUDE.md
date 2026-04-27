@@ -584,7 +584,7 @@ make pre-commit-run     # Run all pre-commit hooks
 
 ## Design Context
 
-Source of truth: `.impeccable.md` at the repo root. Quick summary for non-design sessions:
+Source of truth: `DESIGN.md` at the repo root (machine-readable tokens + design rationale in Google Stitch format). Quick summary:
 
 - **Users**: NOC technicians first (diagnose / configure / monitor under time pressure). Secondary: admins, resellers, customers on their own portals.
 - **Personality**: *Precise, confident, quiet*. Trust through accuracy and speed, not through loud UI.
@@ -592,6 +592,7 @@ Source of truth: `.impeccable.md` at the repo root. Quick summary for non-design
 - **Tokens**: Outfit (display) + Plus Jakarta Sans (body). Primary teal/cyan `#06b6d4`, accent warm orange `#f97316`. Semantic colors are a contract: emerald=healthy, amber=warning, rose=critical, blue=network, violet=people, slate=neutral.
 - **Principles**: Status first (color + shape + position, never color alone). Density with breathing room (`py-2.5`, `text-sm` tables, clear section borders). Actions confirm themselves inline (HTMX, no full reloads). Dark mode is mandatory at author time. Typography carries hierarchy (`tabular-nums` for every number). A11y target is WCAG AA.
 - **New macros**: go in `templates/components/<group>/`. Dynamic color classes must be safelisted in `tailwind.config.js`.
+- **Validation**: Run `npx design-md lint` to check DESIGN.md structure and WCAG contrast ratios.
 
 ## OLT SSH Credentials
 

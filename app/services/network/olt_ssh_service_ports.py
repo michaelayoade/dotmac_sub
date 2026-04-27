@@ -162,6 +162,8 @@ def create_single_service_port(
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
     port_index: int | None = None,
+    traffic_table_inbound: int | None = None,
+    traffic_table_outbound: int | None = None,
 ) -> tuple[bool, str, int | None]:
     """Create a single service-port on an OLT.
 
@@ -174,6 +176,8 @@ def create_single_service_port(
         user_vlan: User VLAN (default: same as vlan_id).
         tag_transform: VLAN tag transform mode.
         port_index: Pre-allocated service-port index. If None, OLT auto-assigns.
+        traffic_table_inbound: OLT traffic-table index for inbound QoS (optional).
+        traffic_table_outbound: OLT traffic-table index for outbound QoS (optional).
 
     Returns:
         (success, message, assigned_index). assigned_index is the port_index used,
@@ -207,6 +211,8 @@ def create_single_service_port(
             user_vlan=user_vlan,
             tag_transform=tag_transform,
             port_index=port_index,
+            traffic_table_inbound=traffic_table_inbound,
+            traffic_table_outbound=traffic_table_outbound,
         )
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)

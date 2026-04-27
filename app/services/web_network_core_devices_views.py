@@ -2320,7 +2320,7 @@ def _ont_desired_config_summary(
         },
         {
             "label": "TR-069 profile",
-            "value": _display_config_value(getattr(ont, "tr069_olt_profile_id", None)),
+            "value": _display_config_value(values.get("tr069_olt_profile_id")),
             "value_class": "font-mono",
         },
         {

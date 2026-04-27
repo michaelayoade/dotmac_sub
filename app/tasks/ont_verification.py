@@ -117,7 +117,8 @@ def verify_ont_provisioning_state(
             results["drifted"] += olt_results["drifted"]
             results["failed"] += olt_results["failed"]
 
-        db.commit()
+            # Commit after each OLT batch to release locks sooner
+            db.commit()
 
         logger.info(
             "ONT verification complete: verified=%d, drifted=%d, failed=%d, skipped=%d",

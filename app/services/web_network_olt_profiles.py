@@ -17,8 +17,8 @@ from app.services.network.olt_command_gen import (
     OntProvisioningContext,
     build_spec_from_profile,
 )
-from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.olt_profile_adapter import olt_profile_adapter
 from app.services.web_network_service_ports import _resolve_ont_olt_context
 
@@ -184,7 +184,7 @@ def command_preview_context(
 
     # Build spec and generate commands
     spec = build_spec_from_profile(
-        profile, prov_context, tr069_profile_id=tr069_olt_profile_id
+        profile, prov_context, tr069_profile_id=tr069_olt_profile_id, olt=olt
     )
     command_sets = [
         OltCommandSet(
