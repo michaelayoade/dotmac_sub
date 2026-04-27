@@ -32,10 +32,6 @@ if TYPE_CHECKING:
     from app.models.network import OLTDevice
     from app.services.network.olt_batched_auth import BatchedAuthorizationSpec
     from app.services.network.olt_batched_mgmt import BatchedMgmtSpec
-    from app.services.network.ont_provisioning.state import (
-        DesiredOntState,
-        ProvisioningDelta,
-    )
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +86,6 @@ class ProtocolCapabilities:
     can_reboot_ont: bool = False
     can_factory_reset: bool = False
     can_execute_authorization_batch: bool = False
-    can_execute_provisioning_delta: bool = False
 
     # Extended configuration operations
     can_configure_internet_config: bool = False
@@ -233,16 +228,6 @@ class OltProtocolAdapter(Protocol):
         spec: BatchedAuthorizationSpec,
     ) -> OltOperationResult:
         """Authorize an ONT and apply related OLT config in one protocol session."""
-        ...
-
-    def execute_provisioning_delta(
-        self,
-        delta: ProvisioningDelta,
-        desired: DesiredOntState,
-        *,
-        dry_run: bool = False,
-    ) -> OltOperationResult:
-        """Execute a reconciled ONT provisioning delta with compensation tracking."""
         ...
 
     # ========== ONT Operations ==========
@@ -526,15 +511,6 @@ class BaseProtocolAdapter(ABC):
     ) -> OltOperationResult:
         return self._not_supported("execute_authorization_batch")
 
-    def execute_provisioning_delta(
-        self,
-        delta: ProvisioningDelta,
-        desired: DesiredOntState,
-        *,
-        dry_run: bool = False,
-    ) -> OltOperationResult:
-        return self._not_supported("execute_provisioning_delta")
-
     def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._not_supported("reboot_ont")
 
@@ -695,7 +671,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             can_reboot_ont=ssh_available,
             can_factory_reset=ssh_available,
             can_execute_authorization_batch=ssh_available,
-            can_execute_provisioning_delta=ssh_available,
             # Extended configuration operations
             can_configure_internet_config=ssh_available,
             can_configure_wan_config=ssh_available,
@@ -995,38 +970,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             return OltOperationResult(
                 success=False,
                 message=f"SSH batched authorization failed: {exc}",
-                protocol_used=OltProtocol.SSH,
-            )
-
-    def execute_provisioning_delta(
-        self,
-        delta: ProvisioningDelta,
-        desired: DesiredOntState,
-        *,
-        dry_run: bool = False,
-    ) -> OltOperationResult:
-        """Execute reconciled provisioning delta via the SSH batch engine."""
-        from app.services.network.ont_provisioning.executor import execute_delta
-
-        try:
-            result = execute_delta(self._olt, delta, desired, dry_run=dry_run)
-            return OltOperationResult(
-                success=result.success,
-                message=result.message,
-                data={
-                    "execution_result": result,
-                    "steps_completed": result.steps_completed,
-                    "steps_failed": result.steps_failed,
-                    "errors": result.errors,
-                    "compensation_log": result.compensation_log,
-                },
-                protocol_used=OltProtocol.SSH,
-            )
-        except Exception as exc:
-            logger.exception("SSH execute_provisioning_delta failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH provisioning delta execution failed: {exc}",
                 protocol_used=OltProtocol.SSH,
             )
 
@@ -1572,7 +1515,6 @@ class NetconfProtocolAdapter(BaseProtocolAdapter):
             can_reboot_ont=can_use,
             can_factory_reset=can_use,
             can_execute_authorization_batch=False,  # Not implemented via NETCONF
-            can_execute_provisioning_delta=False,  # Not implemented via NETCONF
             can_configure_internet_config=can_use,
             can_configure_wan_config=can_use,
             can_configure_pppoe=can_use,
@@ -2300,7 +2242,6 @@ class RestProtocolAdapter(BaseProtocolAdapter):
             can_reboot_ont=False,
             can_factory_reset=False,
             can_execute_authorization_batch=False,
-            can_execute_provisioning_delta=False,
             can_configure_internet_config=False,
             can_configure_wan_config=False,
             can_configure_pppoe=False,
@@ -2382,10 +2323,6 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
             can_execute_authorization_batch=(
                 nc_caps.can_execute_authorization_batch
                 or ssh_caps.can_execute_authorization_batch
-            ),
-            can_execute_provisioning_delta=(
-                nc_caps.can_execute_provisioning_delta
-                or ssh_caps.can_execute_provisioning_delta
             ),
             # Extended configuration operations
             can_configure_internet_config=(
@@ -2563,19 +2500,6 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
         spec: BatchedAuthorizationSpec,
     ) -> OltOperationResult:
         return self._ssh.execute_authorization_batch(spec)
-
-    def execute_provisioning_delta(
-        self,
-        delta: ProvisioningDelta,
-        desired: DesiredOntState,
-        *,
-        dry_run: bool = False,
-    ) -> OltOperationResult:
-        return self._ssh.execute_provisioning_delta(
-            delta,
-            desired,
-            dry_run=dry_run,
-        )
 
     def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._ssh.reboot_ont(fsp, ont_id)

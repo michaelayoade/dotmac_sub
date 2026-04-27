@@ -1,4 +1,4 @@
-"""ONT provisioning helpers with state reconciliation support.
+"""ONT provisioning helpers.
 
 This package provides modular ONT provisioning functionality:
 
@@ -7,17 +7,11 @@ This package provides modular ONT provisioning functionality:
 - credentials: PPPoE credential masking
 - result: StepResult dataclass for operation outcomes
 - orchestrator: Direct ONT provisioning from OLT defaults + desired config
-
-State Reconciliation (new):
-- state: Desired/actual state dataclasses and building functions
-- reconciler: Delta computation and validation
-- executor: Batched execution with best-effort compensation rollback
 - optical_budget: Optical power validation
 - vlan_validator: VLAN trunk verification
 
-Usage:
-    from app.services.network.ont_provisioning.reconciler import reconcile_ont_state
-    from app.services.network.ont_provisioning.executor import execute_delta
+Provisioning uses direct config application - the OLT adapter handles
+idempotency by treating "already exists" errors as success.
 """
 
 # Re-export commonly used items for convenience
@@ -26,11 +20,6 @@ from app.services.network.ont_provisioning.context import (
     resolve_olt_context,
 )
 from app.services.network.ont_provisioning.credentials import mask_credentials
-from app.services.network.ont_provisioning.executor import (
-    CompensationEntry,
-    ProvisioningExecutionResult,
-    execute_delta,
-)
 from app.services.network.ont_provisioning.optical_budget import (
     OpticalBudgetResult,
     check_optical_budget_for_provisioning,
@@ -41,27 +30,7 @@ from app.services.network.ont_provisioning.orchestrator import (
     provision_ont_from_desired_config,
 )
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
-from app.services.network.ont_provisioning.reconciler import (
-    compute_delta,
-    get_delta_summary,
-    reconcile_ont_state,
-    validate_delta,
-)
 from app.services.network.ont_provisioning.result import StepResult
-
-# State reconciliation exports
-from app.services.network.ont_provisioning.state import (
-    ActualManagementConfig,
-    ActualOntState,
-    ActualServicePort,
-    DesiredOntState,
-    DesiredServicePort,
-    ProvisioningAction,
-    ProvisioningDelta,
-    ServicePortDelta,
-    build_desired_state_from_config,
-    read_actual_state,
-)
 from app.services.network.ont_provisioning.vlan_validator import (
     VlanValidationResult,
     validate_management_vlan_trunked,
@@ -79,26 +48,6 @@ __all__ = [
     "mask_credentials",
     # Result
     "StepResult",
-    # State
-    "DesiredOntState",
-    "DesiredServicePort",
-    "ActualManagementConfig",
-    "ActualOntState",
-    "ActualServicePort",
-    "ProvisioningAction",
-    "ProvisioningDelta",
-    "ServicePortDelta",
-    "build_desired_state_from_config",
-    "read_actual_state",
-    # Reconciler
-    "compute_delta",
-    "validate_delta",
-    "reconcile_ont_state",
-    "get_delta_summary",
-    # Executor
-    "CompensationEntry",
-    "ProvisioningExecutionResult",
-    "execute_delta",
     # Optical budget
     "OpticalBudgetResult",
     "validate_optical_budget",

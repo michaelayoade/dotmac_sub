@@ -1,28 +1,24 @@
-"""ONT provisioning services — reconciliation-based provisioning.
+"""ONT provisioning services — direct config application.
 
 RECOMMENDED APPROACH:
     provision_with_reconciliation(db, ont_id)
 
-This function reads config from the source of truth (OntAssignment + OltConfigPack),
-computes the delta between desired and actual OLT state, and applies changes
-idempotently. This is the only entry point for OLT provisioning.
+This function reads config from the source of truth (OntAssignment + OltConfigPack)
+and applies it directly to the OLT. The OLT adapter handles idempotency by treating
+"already exists" errors as success.
 
-The reconciliation approach:
-1. Builds desired state from OntAssignment + OltConfigPack (via resolve_effective_ont_config)
-2. Reads actual state from the OLT (single SSH session)
-3. Computes delta (existing matching ports = NOOP = idempotent)
-4. Validates (optical budget, VLAN trunk, ip_index bounds)
-5. Executes with compensation log (rollback on failure)
+The direct approach:
+1. Reads effective config via resolve_effective_ont_config()
+2. Creates internet service port (adapter handles "already exists")
+3. Executes batched management config (service port, IPHOST, TR-069)
+4. No state reconciliation needed - adapter layer is idempotent
 
 Other functions in this module:
 - wait_tr069_bootstrap() — Poll for ACS registration after TR-069 binding
 - apply_saved_service_config() — Apply TR-069 service config after bootstrap
 - deprovision() — Remove service-ports and return ONT to inventory
 - rollback_service_ports() — Cleanup on provisioning failure
-- preview_reconciliation() — Dry-run to show what would change
-
-Individual step functions (create_service_port, configure_management_ip, etc.)
-have been removed. All provisioning now goes through the reconciliation path.
+- preview_provisioning() — Show what config would be applied
 """
 
 from __future__ import annotations
@@ -113,9 +109,10 @@ def _record_step(db: Session, ont: OntUnit, step_name: str, result: StepResult) 
 #   - configure_wan_olt() - Use provision_with_reconciliation() instead
 #   - bind_tr069() - Use provision_with_reconciliation() instead
 #
-# All OLT provisioning now goes through the reconciliation-based approach:
+# All OLT provisioning now uses direct config application:
 # provision_with_reconciliation() reads from OntAssignment + OltConfigPack
-# (source of truth), computes delta, and applies changes idempotently.
+# (source of truth) and applies config directly. The OLT adapter handles
+# idempotency by treating "already exists" errors as success.
 # ---------------------------------------------------------------------------
 
 
@@ -1034,9 +1031,8 @@ def _ensure_static_management_ip_from_profile(
         return True, "Management IP mode is not static."
     effective = resolve_effective_ont_config(db, ont)
     effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
-    effective_mgmt_ip = effective_values.get("mgmt_ip_address") or getattr(
-        ont, "mgmt_ip_address", None
-    )
+    # Source of truth is the effective config (OntAssignment + OltConfigPack)
+    effective_mgmt_ip = effective_values.get("mgmt_ip_address")
     if effective_mgmt_ip:
         return True, "Static management IP already assigned."
 
@@ -1134,7 +1130,7 @@ def _ensure_static_management_ip_from_profile(
 
 
 # ---------------------------------------------------------------------------
-# STATE RECONCILIATION-BASED PROVISIONING
+# DIRECT CONFIG-BASED PROVISIONING
 # ---------------------------------------------------------------------------
 
 
@@ -1145,236 +1141,163 @@ def provision_with_reconciliation(
     dry_run: bool = False,
     allow_low_optical_margin: bool = False,
 ) -> StepResult:
-    """Provision an ONT using state reconciliation.
+    """Provision an ONT by applying config directly. Adapter handles idempotency.
 
-    This is the recommended approach for ONT provisioning. It:
-    1. Builds desired state from OLT defaults plus OntUnit.desired_config
-    2. Reads actual state from the OLT (single SSH session)
-    3. Computes delta (existing matching ports = NOOP = idempotent)
-    4. Validates (optical budget, VLAN trunk, ip_index bounds)
-    5. Executes with compensation log (rollback on failure)
+    This simplified approach:
+    1. Reads effective config via resolve_effective_ont_config()
+    2. Creates internet service port (adapter treats "already exists" as success)
+    3. Executes batched management config (mgmt port, IPHOST, TR-069)
+
+    No state reconciliation needed - the OLT adapter layer is idempotent.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
-        dry_run: If True, compute delta but don't execute.
-        allow_low_optical_margin: If True, proceed even with low optical margin.
+        dry_run: If True, show what would be configured without executing.
+        allow_low_optical_margin: Ignored (kept for API compatibility).
 
     Returns:
         StepResult with provisioning outcome.
     """
+    from app.services.network.olt_batched_mgmt import (
+        create_batched_mgmt_spec_from_config_pack,
+    )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.ont_provisioning.reconciler import (
-        get_delta_summary,
-        reconcile_ont_state,
-    )
-    from app.services.network.ont_provisioning.state import (
-        build_desired_state_from_config,
-    )
 
     t0 = time.monotonic()
 
-    # Get context first for logging
+    # Get context
     ctx, err = resolve_olt_context(db, ont_id)
     if not ctx:
-        return StepResult("provision_reconciled", False, err)
+        return StepResult("provision", False, err)
+
+    # Resolve config from source of truth
+    effective = resolve_effective_ont_config(db, ctx.ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    config_pack = effective.get("config_pack")
+
+    if not config_pack:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult("provision", False, "OLT config pack not found", ms)
 
     logger.info(
-        "Starting reconciled provisioning for ONT %s serial=%s olt=%s fsp=%s",
+        "Starting provisioning for ONT %s serial=%s olt=%s fsp=%s",
         ont_id,
         ctx.ont.serial_number,
         ctx.olt.name,
         ctx.fsp,
     )
 
-    # Reconcile state
-    delta, err = reconcile_ont_state(
-        db,
-        ont_id,
-    )
-    if not delta:
-        ms = int((time.monotonic() - t0) * 1000)
-        return StepResult(
-            "provision_reconciled", False, f"Reconciliation failed: {err}", ms
-        )
-
-    # Check validations
-    if not delta.is_valid:
-        # If only optical budget failed and we're allowing low margin, override
-        if (
-            allow_low_optical_margin
-            and not delta.optical_budget_ok
-            and delta.mgmt_vlan_trunked
-            and delta.ip_index_valid
-        ):
-            logger.warning(
-                "Proceeding despite low optical margin for ONT %s: %s",
-                ctx.ont.serial_number,
-                delta.optical_budget_message,
-            )
-            delta.optical_budget_ok = True
-        else:
-            ms = int((time.monotonic() - t0) * 1000)
-            summary = get_delta_summary(delta)
-            return StepResult(
-                "provision_reconciled",
-                False,
-                f"Validation failed: {summary['validations']}",
-                ms,
-                data=summary,
-            )
-
-    # Check if there are any changes
-    if not delta.has_changes:
-        ms = int((time.monotonic() - t0) * 1000)
-        result = StepResult(
-            "provision_reconciled",
-            True,
-            "No changes needed - ONT already matches desired state",
-            ms,
-            data=get_delta_summary(delta),
-        )
-        _record_step(db, ctx.ont, "provision_reconciled", result)
-        return result
-
-    # Build desired state for execution
-    desired, err = build_desired_state_from_config(
-        db,
-        ont_id,
-    )
-    if not desired:
-        ms = int((time.monotonic() - t0) * 1000)
-        return StepResult(
-            "provision_reconciled", False, f"Failed to build desired state: {err}", ms
-        )
+    # Build preview data
+    wan_vlan = values.get("wan_vlan")
+    wan_gem = int(values.get("wan_gem_index") or 1)
+    mgmt_vlan = values.get("mgmt_vlan")
+    tr069_profile = values.get("tr069_olt_profile_id")
 
     if dry_run:
         ms = int((time.monotonic() - t0) * 1000)
-        summary = get_delta_summary(delta)
         return StepResult(
-            "provision_reconciled",
+            "provision",
             True,
-            f"Dry run: {summary['service_ports']['create']} port(s) to create",
+            "Dry run: showing config to apply",
             ms,
-            data={"dry_run": True, **summary},
+            data={
+                "dry_run": True,
+                "wan_vlan": wan_vlan,
+                "wan_gem_index": wan_gem,
+                "mgmt_vlan": mgmt_vlan,
+                "tr069_profile_id": tr069_profile,
+                "mgmt_ip_mode": values.get("mgmt_ip_mode"),
+            },
         )
 
-    # Execute the delta through the OLT adapter so batch writes stay protocol-owned.
     adapter = get_protocol_adapter(ctx.olt)
-    adapter_result = adapter.execute_provisioning_delta(delta, desired)
-    exec_result = adapter_result.data.get("execution_result")
-    if exec_result is None:
-        ms = int((time.monotonic() - t0) * 1000)
-        result = StepResult(
-            "provision_reconciled",
-            False,
-            adapter_result.message,
-            ms,
-            data={"protocol_used": adapter_result.protocol_used},
+    steps_completed: list[str] = []
+    created_port_indices: list[int] = []
+
+    # 1. Create internet service port (adapter returns success on "already exists")
+    if wan_vlan:
+        result = adapter.create_service_port(
+            ctx.fsp,
+            ctx.olt_ont_id,
+            gem_index=wan_gem,
+            vlan_id=int(wan_vlan),
         )
-        _record_step(db, ctx.ont, "provision_reconciled", result)
-        return result
+        if not result.success:
+            ms = int((time.monotonic() - t0) * 1000)
+            step_result = StepResult(
+                "provision",
+                False,
+                f"Internet service port failed: {result.message}",
+                ms,
+            )
+            _record_step(db, ctx.ont, "provision", step_result)
+            _send_failure_notification(ctx, ont_id, step_result)
+            return step_result
+        steps_completed.append(f"service_port_vlan_{wan_vlan}")
+        if result.data and result.data.get("service_port_index"):
+            created_port_indices.append(result.data["service_port_index"])
+
+    # 2. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
+    if mgmt_vlan:
+        mgmt_spec = create_batched_mgmt_spec_from_config_pack(
+            config_pack,
+            ctx.fsp,
+            ctx.olt_ont_id,
+            allocated_ip=values.get("mgmt_ip_address"),
+            subnet_mask=values.get("mgmt_subnet"),
+            gateway=values.get("mgmt_gateway"),
+        )
+        result = adapter.configure_management_batch(mgmt_spec)
+        if not result.success:
+            # Rollback created ports on failure
+            for port_idx in created_port_indices:
+                try:
+                    adapter.delete_service_port(port_idx)
+                except Exception:
+                    pass
+            ms = int((time.monotonic() - t0) * 1000)
+            step_result = StepResult(
+                "provision",
+                False,
+                f"Management config failed: {result.message}",
+                ms,
+                data={"rollback_performed": len(created_port_indices) > 0},
+            )
+            _record_step(db, ctx.ont, "provision", step_result)
+            _send_failure_notification(ctx, ont_id, step_result)
+            return step_result
+        steps_completed.extend(result.data.get("steps_completed", []))
 
     ms = int((time.monotonic() - t0) * 1000)
+    step_result = StepResult(
+        "provision",
+        True,
+        f"Provisioned: {len(steps_completed)} step(s)",
+        ms,
+        data={
+            "steps_completed": steps_completed,
+            "created_service_port_indices": created_port_indices,
+        },
+    )
+    _record_step(db, ctx.ont, "provision", step_result)
 
-    if exec_result.success:
-        logger.info(
-            "Reconciled provisioning complete for ONT %s: %d step(s)",
-            ctx.ont.serial_number,
-            len(exec_result.steps_completed),
-        )
-        result = StepResult(
-            "provision_reconciled",
-            True,
-            exec_result.message,
-            ms,
-            data={
-                "steps_completed": exec_result.steps_completed,
-                "created_service_port_indices": sorted(
-                    {
-                        int(entry.resource_id)
-                        for entry in exec_result.compensation_log
-                        if entry.step_name.startswith("create_service_port_")
-                        and entry.resource_id is not None
-                        and str(entry.resource_id).isdigit()
-                    }
-                ),
-                **get_delta_summary(delta),
-            },
-        )
-    else:
-        logger.error(
-            "Reconciled provisioning failed for ONT %s: %s",
-            ctx.ont.serial_number,
-            exec_result.message,
-        )
-
-        # Attempt rollback if there are compensation entries
-        rollback_results = []
-        if exec_result.compensation_log:
-            logger.info(
-                "Initiating rollback for ONT %s (%d compensation entries)",
-                ctx.ont.serial_number,
-                len(exec_result.compensation_log),
-            )
-            rollback_results = exec_result.rollback(
-                ctx.olt,
-                ont_unit_id=str(ctx.ont.id),
-                db=db,
-            )
-
-        result = StepResult(
-            "provision_reconciled",
-            False,
-            exec_result.message,
-            ms,
-            data={
-                "steps_completed": exec_result.steps_completed,
-                "steps_failed": exec_result.steps_failed,
-                "errors": exec_result.errors,
-                "rollback_performed": len(rollback_results) > 0,
-                "rollback_results": [
-                    {"step": r[0], "success": r[1], "message": r[2]}
-                    for r in rollback_results
-                ],
-            },
-        )
-
-    _record_step(db, ctx.ont, "provision_reconciled", result)
-
-    # Send operator notifications for provisioning events
+    # Send success notification
     try:
         olt_name = getattr(ctx.olt, "name", None) or "OLT"
-        if result.success:
-            broadcast_websocket(
-                event_type="ont_provisioning_success",
-                title="ONT Provisioning Successful",
-                message=f"ONT {ctx.ont.serial_number} provisioned on {olt_name} port {ctx.fsp}",
-                metadata={
-                    "ont_id": ont_id,
-                    "serial_number": ctx.ont.serial_number,
-                    "olt_name": olt_name,
-                    "fsp": ctx.fsp,
-                    "duration_ms": result.duration_ms,
-                    "steps_completed": len(exec_result.steps_completed),
-                },
-            )
-        else:
-            result_data = result.data or {}
-            notify.alert_operators(
-                title="ONT Provisioning Failed",
-                message=f"ONT {ctx.ont.serial_number} provisioning failed on {olt_name}: {result.message}",
-                severity="error",
-                metadata={
-                    "ont_id": ont_id,
-                    "serial_number": ctx.ont.serial_number,
-                    "olt_name": olt_name,
-                    "fsp": ctx.fsp,
-                    "steps_failed": result_data.get("steps_failed", []),
-                    "errors": result_data.get("errors", []),
-                    "rollback_performed": result_data.get("rollback_performed", False),
-                },
-            )
+        broadcast_websocket(
+            event_type="ont_provisioning_success",
+            title="ONT Provisioning Successful",
+            message=f"ONT {ctx.ont.serial_number} provisioned on {olt_name} port {ctx.fsp}",
+            metadata={
+                "ont_id": ont_id,
+                "serial_number": ctx.ont.serial_number,
+                "olt_name": olt_name,
+                "fsp": ctx.fsp,
+                "duration_ms": step_result.duration_ms,
+                "steps_completed": len(steps_completed),
+            },
+        )
     except Exception as notify_exc:
         logger.warning(
             "Failed to send provisioning notification for ONT %s: %s",
@@ -1382,57 +1305,92 @@ def provision_with_reconciliation(
             notify_exc,
         )
 
-    return result
+    return step_result
+
+
+def _send_failure_notification(ctx: OltContext, ont_id: str, result: StepResult) -> None:
+    """Send failure notification to operators."""
+    try:
+        olt_name = getattr(ctx.olt, "name", None) or "OLT"
+        notify.alert_operators(
+            title="ONT Provisioning Failed",
+            message=f"ONT {ctx.ont.serial_number} provisioning failed on {olt_name}: {result.message}",
+            severity="error",
+            metadata={
+                "ont_id": ont_id,
+                "serial_number": ctx.ont.serial_number,
+                "olt_name": olt_name,
+                "fsp": ctx.fsp,
+            },
+        )
+    except Exception as notify_exc:
+        logger.warning(
+            "Failed to send failure notification for ONT %s: %s",
+            ctx.ont.serial_number,
+            notify_exc,
+        )
 
 
 def preview_reconciliation(
     db: Session,
     ont_id: str,
 ) -> dict:
-    """Preview what reconciliation would do without executing.
+    """Preview what provisioning would configure (no OLT state reading).
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
 
     Returns:
-        Dictionary with delta summary and validation results.
+        Dictionary with config that would be applied.
     """
-    from app.services.network.ont_provisioning.reconciler import (
-        get_delta_summary,
-        reconcile_ont_state,
-    )
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return {"error": "ONT not found", "has_changes": False, "is_valid": False}
 
-    delta, err = reconcile_ont_state(
-        db,
-        ont_id,
-    )
-    if not delta:
+    ctx, err = resolve_olt_context(db, ont_id)
+    if not ctx:
         return {"error": err, "has_changes": False, "is_valid": False}
 
-    summary = get_delta_summary(delta)
-    summary["error"] = None
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    config_pack = effective.get("config_pack")
 
-    # Add detail about each service port action
-    port_details: list[dict] = []
-    for sp_delta in delta.service_port_deltas:
-        detail: dict = {
-            "action": sp_delta.action.value,
-            "message": sp_delta.message,
-        }
-        if sp_delta.desired:
-            detail["desired"] = {
-                "vlan_id": sp_delta.desired.vlan_id,
-                "gem_index": sp_delta.desired.gem_index,
-                "tag_transform": sp_delta.desired.tag_transform,
-            }
-        if sp_delta.actual:
-            detail["actual"] = {
-                "index": sp_delta.actual.index,
-                "vlan_id": sp_delta.actual.vlan_id,
-                "gem_index": sp_delta.actual.gem_index,
-            }
-        port_details.append(detail)
-    summary["service_port_details"] = port_details
+    if not config_pack:
+        return {"error": "OLT config pack not found", "has_changes": False, "is_valid": False}
 
-    return summary
+    wan_vlan = values.get("wan_vlan")
+    mgmt_vlan = values.get("mgmt_vlan")
+
+    # Build service port list
+    service_ports = []
+    if wan_vlan:
+        service_ports.append({
+            "purpose": "internet",
+            "vlan_id": int(wan_vlan),
+            "gem_index": int(values.get("wan_gem_index") or 1),
+        })
+    if mgmt_vlan:
+        service_ports.append({
+            "purpose": "management",
+            "vlan_id": int(mgmt_vlan),
+            "gem_index": int(values.get("mgmt_gem_index") or 2),
+        })
+
+    return {
+        "error": None,
+        "has_changes": len(service_ports) > 0,
+        "is_valid": True,
+        "service_ports": service_ports,
+        "management": {
+            "vlan": mgmt_vlan,
+            "ip_mode": values.get("mgmt_ip_mode"),
+            "ip_address": values.get("mgmt_ip_address"),
+        } if mgmt_vlan else None,
+        "tr069": {
+            "profile_id": values.get("tr069_olt_profile_id"),
+            "acs_server_id": values.get("tr069_acs_server_id"),
+        } if values.get("tr069_olt_profile_id") else None,
+        "internet_config_ip_index": values.get("internet_config_ip_index"),
+        "wan_config_profile_id": values.get("wan_config_profile_id"),
+    }

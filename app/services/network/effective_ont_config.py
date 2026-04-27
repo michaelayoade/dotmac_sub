@@ -12,7 +12,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit
-from app.services.network._util import first_present_enum as _first_present
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
 from app.services.network.ont_desired_config import desired_config
 
@@ -79,95 +78,64 @@ def _values_from_assignment(
             asn_mgmt_ip_mode = mgmt_ip_mode.value if hasattr(mgmt_ip_mode, "value") else str(mgmt_ip_mode)
         asn_mgmt_ip_address = getattr(assignment, "mgmt_ip_address", None)
 
+    # Get assignment values (None if no assignment)
+    asn_static_dns = getattr(assignment, "static_dns", None) if assignment else None
+    asn_mgmt_subnet = getattr(assignment, "mgmt_subnet", None) if assignment else None
+    asn_mgmt_gateway = getattr(assignment, "mgmt_gateway", None) if assignment else None
+    asn_lan_ip = getattr(assignment, "lan_ip", None) if assignment else None
+    asn_lan_subnet = getattr(assignment, "lan_subnet", None) if assignment else None
+    asn_lan_dhcp_enabled = getattr(assignment, "lan_dhcp_enabled", None) if assignment else None
+    asn_lan_dhcp_start = getattr(assignment, "lan_dhcp_start", None) if assignment else None
+    asn_lan_dhcp_end = getattr(assignment, "lan_dhcp_end", None) if assignment else None
+    asn_wifi_enabled = getattr(assignment, "wifi_enabled", None) if assignment else None
+    asn_wifi_channel = getattr(assignment, "wifi_channel", None) if assignment else None
+    asn_wifi_security_mode = getattr(assignment, "wifi_security_mode", None) if assignment else None
+
+    # wifi_enabled: explicit setting takes precedence, else True if SSID is set
+    wifi_enabled = asn_wifi_enabled if asn_wifi_enabled is not None else (True if asn_wifi_ssid else None)
+
     return {
         "config_method": None,
-        "onu_mode": _first_present(asn_wan_mode),
+        "onu_mode": asn_wan_mode,
         "ip_protocol": None,
-        "wan_mode": _first_present(asn_ip_mode),
-        "wan_vlan": _first_present(
-            getattr(config_pack.internet_vlan, "tag", None) if config_pack else None,
-        ),
-        "pppoe_username": _first_present(asn_pppoe_username),
-        "pppoe_password": _first_present(asn_pppoe_password),
-        "wan_static_ip": _first_present(
-            asn_static_ip,
-        ),
-        "wan_static_subnet": _first_present(
-            asn_static_subnet,
-        ),
-        "wan_static_gateway": _first_present(
-            asn_static_gateway,
-        ),
-        "wan_static_dns": _first_present(
-            getattr(assignment, "static_dns", None) if assignment is not None else None,
-        ),
+        "wan_mode": asn_ip_mode,
+        "wan_vlan": config_pack.internet_vlan.tag if config_pack and config_pack.internet_vlan else None,
+        "pppoe_username": asn_pppoe_username,
+        "pppoe_password": asn_pppoe_password,
+        "wan_static_ip": asn_static_ip,
+        "wan_static_subnet": asn_static_subnet,
+        "wan_static_gateway": asn_static_gateway,
+        "wan_static_dns": asn_static_dns,
         "wan_instance_index": 1,
         "wan_gem_index": config_pack.internet_gem_index if config_pack else None,
-        "mgmt_ip_mode": _first_present(asn_mgmt_ip_mode),
-        "mgmt_vlan": _first_present(
-            getattr(config_pack.management_vlan, "tag", None) if config_pack else None,
-        ),
-        "mgmt_ip_address": _first_present(
-            asn_mgmt_ip_address,
-        ),
-        "mgmt_subnet": _first_present(
-            getattr(assignment, "mgmt_subnet", None) if assignment is not None else None,
-        ),
-        "mgmt_gateway": _first_present(
-            getattr(assignment, "mgmt_gateway", None) if assignment is not None else None,
-        ),
-        "lan_ip": _first_present(
-            getattr(assignment, "lan_ip", None) if assignment is not None else None,
-        ),
-        "lan_subnet": _first_present(
-            getattr(assignment, "lan_subnet", None) if assignment is not None else None,
-        ),
-        "lan_dhcp_enabled": _first_present(
-            getattr(assignment, "lan_dhcp_enabled", None) if assignment is not None else None,
-        ),
-        "lan_dhcp_start": _first_present(
-            getattr(assignment, "lan_dhcp_start", None) if assignment is not None else None,
-        ),
-        "lan_dhcp_end": _first_present(
-            getattr(assignment, "lan_dhcp_end", None) if assignment is not None else None,
-        ),
-        "wifi_enabled": _first_present(
-            getattr(assignment, "wifi_enabled", None) if assignment is not None else None,
-            True if asn_wifi_ssid else None,
-        ),
-        "wifi_ssid": _first_present(asn_wifi_ssid),
-        "wifi_password": _first_present(asn_wifi_password),
-        "wifi_channel": _first_present(
-            getattr(assignment, "wifi_channel", None) if assignment is not None else None,
-        ),
-        "wifi_security_mode": _first_present(
-            getattr(assignment, "wifi_security_mode", None) if assignment is not None else None,
-        ),
-        "tr069_acs_server_id": (
-            config_pack.tr069_acs_server_id if config_pack else None
-        ),
-        "tr069_olt_profile_id": (
-            config_pack.tr069_olt_profile_id if config_pack else None
-        ),
+        "mgmt_ip_mode": asn_mgmt_ip_mode,
+        "mgmt_vlan": config_pack.management_vlan.tag if config_pack and config_pack.management_vlan else None,
+        "mgmt_ip_address": asn_mgmt_ip_address,
+        "mgmt_subnet": asn_mgmt_subnet,
+        "mgmt_gateway": asn_mgmt_gateway,
+        "lan_ip": asn_lan_ip,
+        "lan_subnet": asn_lan_subnet,
+        "lan_dhcp_enabled": asn_lan_dhcp_enabled,
+        "lan_dhcp_start": asn_lan_dhcp_start,
+        "lan_dhcp_end": asn_lan_dhcp_end,
+        "wifi_enabled": wifi_enabled,
+        "wifi_ssid": asn_wifi_ssid,
+        "wifi_password": asn_wifi_password,
+        "wifi_channel": asn_wifi_channel,
+        "wifi_security_mode": asn_wifi_security_mode,
+        "tr069_acs_server_id": config_pack.tr069_acs_server_id if config_pack else None,
+        "tr069_olt_profile_id": config_pack.tr069_olt_profile_id if config_pack else None,
         "cr_username": config_pack.cr_username if config_pack else None,
         "cr_password": config_pack.cr_password if config_pack else None,
-        "internet_config_ip_index": (
-            config_pack.internet_config_ip_index if config_pack else None
-        ),
-        "wan_config_profile_id": (
-            config_pack.wan_config_profile_id if config_pack else None
-        ),
+        "internet_config_ip_index": config_pack.internet_config_ip_index if config_pack else None,
+        "wan_config_profile_id": config_pack.wan_config_profile_id if config_pack else None,
         "pppoe_omci_vlan": None,
         # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i})
         "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else 2,
         "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else 1,
         "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
-        "authorization_line_profile_id": (
-            config_pack.line_profile_id if config_pack else None
-        ),
-        "authorization_service_profile_id": (
-            config_pack.service_profile_id if config_pack else None
-        ),
+        "authorization_line_profile_id": config_pack.line_profile_id if config_pack else None,
+        "authorization_service_profile_id": config_pack.service_profile_id if config_pack else None,
         "primary_wan_service": None,
     }
 
