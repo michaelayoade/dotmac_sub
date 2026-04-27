@@ -1923,7 +1923,7 @@ def ont_logs_tab(
 
 @router.get(
     "/onts/{ont_id}/refresh-status",
-    response_class=HTMLResponse,
+    response_class=JSONResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
 def ont_refresh_status_get(
