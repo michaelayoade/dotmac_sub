@@ -24,7 +24,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    MgmtIpMode,
     OLTDevice,
+    OntAssignment,
     OntAuthorizationStatus,
     OntProvisioningStatus,
     OntUnit,
@@ -183,18 +185,28 @@ def allocate_management_ip_for_ont(
 ) -> tuple[bool, str, str | None]:
     """Allocate a management IP from the OLT's management IP pool for the ONT.
 
+    The IP is stored on the ONT's active assignment (ont_assignments.mgmt_ip_address),
+    which is the source of truth read by resolve_effective_ont_config().
+
     Returns:
         Tuple of (success, message, allocated_ip).
     """
-    from app.models.network import IPv4Address, MgmtIpMode, OLTDevice
+    from app.models.network import IPv4Address
 
     ont = db.get(OntUnit, ont_unit_id)
     if ont is None:
         return False, "ONT not found.", None
 
-    # Check if ONT already has a management IP
-    if ont.mgmt_ip_address:
-        return True, f"ONT already has management IP {ont.mgmt_ip_address}.", ont.mgmt_ip_address
+    # Get or create the active assignment for this ONT
+    assignment = _get_or_create_active_assignment(db, ont)
+
+    # Check if assignment already has a management IP
+    if assignment.mgmt_ip_address:
+        return (
+            True,
+            f"ONT already has management IP {assignment.mgmt_ip_address}.",
+            assignment.mgmt_ip_address,
+        )
 
     olt = db.get(OLTDevice, olt_id)
     if olt is None:
@@ -230,17 +242,18 @@ def allocate_management_ip_for_ont(
             pool_id=pool_id,
             is_reserved=True,
             notes=note,
-            ont_unit_id=uuid.UUID(ont_unit_id),
         )
         db.add(record)
     else:
         record.is_reserved = True
         record.notes = note
-        record.ont_unit_id = uuid.UUID(ont_unit_id)
 
-    # Update ONT with allocated IP
+    # Update assignment with allocated IP (source of truth for effective config)
+    assignment.mgmt_ip_address = next_ip
+    assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+
+    # Also store in desired_config for backwards compatibility
     ont.mgmt_ip_address = next_ip
-    ont.mgmt_ip_mode = MgmtIpMode.static_ip
 
     db.flush()
     logger.info(
@@ -250,6 +263,16 @@ def allocate_management_ip_for_ont(
         ont.serial_number,
     )
     return True, f"Allocated management IP {next_ip}.", next_ip
+
+
+def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
+    """Get the active assignment for an ONT, creating one if none exists."""
+    for assignment in getattr(ont, "assignments", []) or []:
+        if getattr(assignment, "active", False):
+            return assignment
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db.add(assignment)
+    return assignment
 
 
 def get_autofind_candidate_by_serial(

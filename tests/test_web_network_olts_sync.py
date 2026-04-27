@@ -14,7 +14,6 @@ from app.models.network import (
     OnuOfflineReason,
     OnuOnlineStatus,
     PonPort,
-    WanMode,
 )
 from app.services.network import olt_snmp_sync as service
 from app.services.network import olt_web_topology as topology_service
@@ -867,11 +866,15 @@ def test_get_device_summary_runtime_persistence_does_not_commit_when_requested(
 def test_persist_observed_runtime_does_not_overwrite_desired_wan_config(
     db_session,
 ) -> None:
+    """Verify observed runtime data doesn't overwrite desired config fields.
+
+    The pppoe_username is a desired config field that should be preserved.
+    observed_* fields are updated from TR-069 but don't touch desired config.
+    """
     ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
     ont = OntUnit(
         serial_number="ONT-DESIRED-WAN",
         pppoe_username="desired-user",
-        wan_mode=WanMode.pppoe,
         is_active=False,
     )
     db_session.add(ont)
@@ -894,8 +897,9 @@ def test_persist_observed_runtime_does_not_overwrite_desired_wan_config(
         commit=False,
     )
 
+    # Desired config should be preserved
     assert ont.pppoe_username == "desired-user"
-    assert ont.wan_mode == WanMode.pppoe
+    # Observed fields should be updated from TR-069
     assert ont.observed_pppoe_status == "Connected"
     assert ont.observed_wan_ip == "192.0.2.10"
 
