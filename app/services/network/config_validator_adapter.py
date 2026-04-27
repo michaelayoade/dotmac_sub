@@ -1070,13 +1070,14 @@ class NetworkConfigValidator(BaseConfigValidator):
     ) -> None:
         """Check if OLT has default authorization profiles."""
         del db
-        if not getattr(olt, "default_line_profile_id", None):
+        pack = getattr(olt, "config_pack", None) or {}
+        if not pack.get("line_profile_id"):
             result.add_error(
                 "olt",
                 f"OLT '{olt.name}' has no default authorization line profile.",
                 code="NO_DEFAULT_LINE_PROFILE",
             )
-        if not getattr(olt, "default_service_profile_id", None):
+        if not pack.get("service_profile_id"):
             result.add_error(
                 "olt",
                 f"OLT '{olt.name}' has no default authorization service profile.",

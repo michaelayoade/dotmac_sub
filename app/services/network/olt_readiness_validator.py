@@ -144,33 +144,34 @@ def validate_olt_readiness(
     # 2. Validate OLT vendor/model
     _validate_olt_vendor_model(olt, report)
 
-    # 3. Validate OLT authorization defaults
+    # 3. Validate OLT authorization defaults (from config_pack JSON)
+    pack = getattr(olt, "config_pack", None) or {}
     vendor = str(getattr(olt, "vendor", "") or "").lower()
     if "huawei" in vendor:
-        if not getattr(olt, "default_line_profile_id", None):
+        if not pack.get("line_profile_id"):
             report.issues.append(
                 ValidationIssue(
                     category="authorization",
                     message="Missing default authorization line profile ID",
                     severity=IssueSeverity.blocking,
                     code="NO_DEFAULT_LINE_PROFILE",
-                    field="default_line_profile_id",
+                    field="line_profile_id",
                 )
             )
             report.is_ready = False
-        if not getattr(olt, "default_service_profile_id", None):
+        if not pack.get("service_profile_id"):
             report.issues.append(
                 ValidationIssue(
                     category="authorization",
                     message="Missing default authorization service profile ID",
                     severity=IssueSeverity.blocking,
                     code="NO_DEFAULT_SERVICE_PROFILE",
-                    field="default_service_profile_id",
+                    field="service_profile_id",
                 )
             )
             report.is_ready = False
 
-    if not getattr(olt, "management_vlan_id", None):
+    if not pack.get("management_vlan_id"):
         report.issues.append(
             ValidationIssue(
                 category="vlan",
@@ -179,7 +180,7 @@ def validate_olt_readiness(
                 code="NO_DEFAULT_MGMT_VLAN",
             )
         )
-    if not getattr(olt, "internet_vlan_id", None):
+    if not pack.get("internet_vlan_id"):
         report.issues.append(
             ValidationIssue(
                 category="vlan",
@@ -272,19 +273,6 @@ def _validate_olt_vendor_model(olt: object, report: OltReadinessReport) -> None:
                 field="model",
             )
         )
-
-        else:
-            available = getattr(pool, "available_count", None)
-            if available is not None and available <= 0:
-                result.issues.append(
-                    ValidationIssue(
-                        category="ip_pool",
-                        message=f"Management IP pool '{pool.name}' has no available addresses",
-                        severity=IssueSeverity.warning,
-                        code="POOL_EXHAUSTED",
-                        field="mgmt_ip_pool_id",
-                    )
-                )
 
 
 def _test_ssh_connectivity(olt: object) -> bool | None:

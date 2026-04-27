@@ -242,6 +242,13 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
     )
 
 
+def _uuid_to_str(value: object) -> str | None:
+    """Convert UUID to string for JSON storage."""
+    if value is None:
+        return None
+    return str(value)
+
+
 def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
     """Build update payload from parsed values."""
     ssh_password = values.get("ssh_password")
@@ -253,6 +260,37 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
     encrypted_cr_password = encrypt_credential(
         cr_password if isinstance(cr_password, str) else None
     )
+
+    # Build config_pack JSON from form values
+    config_pack: dict[str, object] = {
+        # Authorization profiles
+        "line_profile_id": values.get("default_line_profile_id"),
+        "service_profile_id": values.get("default_service_profile_id"),
+        # TR-069 OLT profile
+        "tr069_olt_profile_id": values.get("default_tr069_olt_profile_id"),
+        # VLANs (stored as UUID strings)
+        "internet_vlan_id": _uuid_to_str(values.get("internet_vlan_id")),
+        "management_vlan_id": _uuid_to_str(values.get("management_vlan_id")),
+        "tr069_vlan_id": _uuid_to_str(values.get("tr069_vlan_id")),
+        "voip_vlan_id": _uuid_to_str(values.get("voip_vlan_id")),
+        "iptv_vlan_id": _uuid_to_str(values.get("iptv_vlan_id")),
+        # Provisioning knobs
+        "internet_config_ip_index": values.get("default_internet_config_ip_index"),
+        "wan_config_profile_id": values.get("default_wan_config_profile_id"),
+        # Connection request credentials
+        "cr_username": values.get("default_cr_username"),
+        "cr_password": encrypted_cr_password,
+        # GEM indices
+        "internet_gem_index": values.get("default_internet_gem_index"),
+        "mgmt_gem_index": values.get("default_mgmt_gem_index"),
+        "voip_gem_index": values.get("default_voip_gem_index"),
+        "iptv_gem_index": values.get("default_iptv_gem_index"),
+        # WCD indices (default values if not set)
+        "pppoe_wcd_index": values.get("pppoe_wcd_index", 2),
+        "mgmt_wcd_index": values.get("mgmt_wcd_index", 1),
+        "voip_wcd_index": values.get("voip_wcd_index"),
+    }
+
     data: dict[str, object] = {
         "name": values.get("name"),
         "hostname": values.get("hostname"),
@@ -273,34 +311,10 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "tr069_acs_server_id": values.get("tr069_acs_server_id"),
         "notes": values.get("notes"),
         "is_active": values.get("is_active"),
-        # -------------------------------------------------------------------------
-        # Config Pack fields (ONT Provisioning Defaults)
-        # -------------------------------------------------------------------------
-        # Authorization profiles
-        "default_line_profile_id": values.get("default_line_profile_id"),
-        "default_service_profile_id": values.get("default_service_profile_id"),
-        # VLANs by purpose
-        "internet_vlan_id": values.get("internet_vlan_id"),
-        "management_vlan_id": values.get("management_vlan_id"),
-        "tr069_vlan_id": values.get("tr069_vlan_id"),
-        "voip_vlan_id": values.get("voip_vlan_id"),
-        "iptv_vlan_id": values.get("iptv_vlan_id"),
-        # GEM indices
-        "default_internet_gem_index": values.get("default_internet_gem_index"),
-        "default_mgmt_gem_index": values.get("default_mgmt_gem_index"),
-        "default_voip_gem_index": values.get("default_voip_gem_index"),
-        "default_iptv_gem_index": values.get("default_iptv_gem_index"),
-        # Provisioning knobs
-        "default_tr069_olt_profile_id": values.get("default_tr069_olt_profile_id"),
-        "default_internet_config_ip_index": values.get(
-            "default_internet_config_ip_index"
-        ),
-        "default_wan_config_profile_id": values.get("default_wan_config_profile_id"),
-        # Management IP pool
+        # Config Pack JSON (source of truth for ONT provisioning defaults)
+        "config_pack": config_pack,
+        # Management IP pool FK (not in config_pack)
         "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
-        # Connection request credentials
-        "default_cr_username": values.get("default_cr_username"),
-        "default_cr_password": encrypted_cr_password,
     }
     if "supported_pon_types" in values:
         data["supported_pon_types"] = values["supported_pon_types"]
@@ -402,6 +416,7 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         hostname=olt.hostname,
         name=olt.name,
     )
+    pack = getattr(olt, "config_pack", None) or {}
     return SimpleNamespace(
         id=olt.id,
         name=olt.name,
@@ -453,28 +468,24 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         snmp_auth_secret="",
         snmp_priv_protocol=getattr(linked, "snmp_priv_protocol", None),
         snmp_priv_secret="",
-        # Config Pack fields
-        default_line_profile_id=getattr(olt, "default_line_profile_id", None),
-        default_service_profile_id=getattr(olt, "default_service_profile_id", None),
-        internet_vlan_id=getattr(olt, "internet_vlan_id", None),
-        management_vlan_id=getattr(olt, "management_vlan_id", None),
-        tr069_vlan_id=getattr(olt, "tr069_vlan_id", None),
-        voip_vlan_id=getattr(olt, "voip_vlan_id", None),
-        iptv_vlan_id=getattr(olt, "iptv_vlan_id", None),
-        default_internet_gem_index=getattr(olt, "default_internet_gem_index", None),
-        default_mgmt_gem_index=getattr(olt, "default_mgmt_gem_index", None),
-        default_voip_gem_index=getattr(olt, "default_voip_gem_index", None),
-        default_iptv_gem_index=getattr(olt, "default_iptv_gem_index", None),
-        default_tr069_olt_profile_id=getattr(olt, "default_tr069_olt_profile_id", None),
-        default_internet_config_ip_index=getattr(
-            olt, "default_internet_config_ip_index", None
-        ),
-        default_wan_config_profile_id=getattr(
-            olt, "default_wan_config_profile_id", None
-        ),
+        # Config Pack fields (read from config_pack JSON)
+        default_line_profile_id=pack.get("line_profile_id"),
+        default_service_profile_id=pack.get("service_profile_id"),
+        internet_vlan_id=pack.get("internet_vlan_id"),
+        management_vlan_id=pack.get("management_vlan_id"),
+        tr069_vlan_id=pack.get("tr069_vlan_id"),
+        voip_vlan_id=pack.get("voip_vlan_id"),
+        iptv_vlan_id=pack.get("iptv_vlan_id"),
+        default_internet_gem_index=pack.get("internet_gem_index"),
+        default_mgmt_gem_index=pack.get("mgmt_gem_index"),
+        default_voip_gem_index=pack.get("voip_gem_index"),
+        default_iptv_gem_index=pack.get("iptv_gem_index"),
+        default_tr069_olt_profile_id=pack.get("tr069_olt_profile_id"),
+        default_internet_config_ip_index=pack.get("internet_config_ip_index"),
+        default_wan_config_profile_id=pack.get("wan_config_profile_id"),
         mgmt_ip_pool_id=getattr(olt, "mgmt_ip_pool_id", None),
-        default_cr_username=getattr(olt, "default_cr_username", None),
-        default_cr_password=getattr(olt, "default_cr_password", None),
+        default_cr_username=pack.get("cr_username"),
+        default_cr_password=pack.get("cr_password"),
     )
 
 

@@ -449,17 +449,18 @@ def build_spec_from_profile(
         raw_password_mode = getattr(ws, "pppoe_password_mode", None)
         password_mode = _enum_value(raw_password_mode)
 
-        # Resolve traffic table indices from OLT based on service type
+        # Resolve traffic table indices from OLT config_pack based on service type
         traffic_in: int | None = None
         traffic_out: int | None = None
         if olt is not None:
+            pack = getattr(olt, "config_pack", None) or {}
             svc_type = _enum_value(ws.service_type).lower()
             if svc_type in ("internet", "data"):
-                traffic_in = getattr(olt, "internet_traffic_table_inbound", None)
-                traffic_out = getattr(olt, "internet_traffic_table_outbound", None)
+                traffic_in = pack.get("internet_traffic_table_inbound")
+                traffic_out = pack.get("internet_traffic_table_outbound")
             elif svc_type == "management":
-                traffic_in = getattr(olt, "mgmt_traffic_table_inbound", None)
-                traffic_out = getattr(olt, "mgmt_traffic_table_outbound", None)
+                traffic_in = pack.get("mgmt_traffic_table_inbound")
+                traffic_out = pack.get("mgmt_traffic_table_outbound")
 
         wan_services.append(
             WanServiceSpec(

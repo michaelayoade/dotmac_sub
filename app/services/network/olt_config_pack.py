@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from app.models.network import Vlan
+    from app.models.network import OLTDevice, Vlan
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,12 @@ class OltConfigPack:
     # TR-069 connection request credentials
     cr_username: str | None = None
     cr_password: str | None = None
+
+    # Traffic table indices for service-port QoS binding
+    mgmt_traffic_table_inbound: int | None = None
+    mgmt_traffic_table_outbound: int | None = None
+    internet_traffic_table_inbound: int | None = None
+    internet_traffic_table_outbound: int | None = None
 
     # TR-069 WAN Connection Device indices (OLT-provisioning-specific)
     # Mapping: OLT ip-index N → TR-069 WANConnectionDevice.(N+1)
@@ -161,6 +167,10 @@ class OltConfigPack:
             "voip_gem_index": self.voip_gem_index,
             "iptv_gem_index": self.iptv_gem_index,
             "cr_username": self.cr_username,
+            "mgmt_traffic_table_inbound": self.mgmt_traffic_table_inbound,
+            "mgmt_traffic_table_outbound": self.mgmt_traffic_table_outbound,
+            "internet_traffic_table_inbound": self.internet_traffic_table_inbound,
+            "internet_traffic_table_outbound": self.internet_traffic_table_outbound,
             "pppoe_wcd_index": self.pppoe_wcd_index,
             "mgmt_wcd_index": self.mgmt_wcd_index,
             "voip_wcd_index": self.voip_wcd_index,
@@ -168,11 +178,24 @@ class OltConfigPack:
         }
 
 
+def _resolve_vlan(db: Session, vlan_id: str | None) -> VlanConfig:
+    """Resolve VLAN UUID to VlanConfig."""
+    if not vlan_id:
+        return VlanConfig()
+    from app.models.network import Vlan
+
+    vlan = db.get(Vlan, vlan_id)
+    return VlanConfig.from_vlan(vlan)
+
+
 def resolve_olt_config_pack(
     db: Session,
     olt_id: str | UUID,
 ) -> OltConfigPack | None:
-    """Build complete OLT config pack from OLT and related entities.
+    """Build complete OLT config pack from OLT config_pack JSON field.
+
+    Reads from the config_pack JSON column (source of truth) and resolves
+    VLAN UUIDs to VlanConfig objects.
 
     Args:
         db: Database session
@@ -187,36 +210,45 @@ def resolve_olt_config_pack(
     if olt is None:
         return None
 
+    pack = olt.config_pack or {}
+
     return OltConfigPack(
         olt_id=str(olt.id),
         olt_name=olt.name or "",
         # Authorization profiles
-        line_profile_id=olt.default_line_profile_id,
-        service_profile_id=olt.default_service_profile_id,
-        # TR-069 config
-        tr069_acs_server_id=str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None,
-        tr069_olt_profile_id=olt.default_tr069_olt_profile_id,
-        # VLANs (resolve relationships)
-        internet_vlan=VlanConfig.from_vlan(olt.internet_vlan),
-        management_vlan=VlanConfig.from_vlan(olt.management_vlan),
-        tr069_vlan=VlanConfig.from_vlan(olt.tr069_vlan),
-        voip_vlan=VlanConfig.from_vlan(olt.voip_vlan),
-        iptv_vlan=VlanConfig.from_vlan(olt.iptv_vlan),
+        line_profile_id=pack.get("line_profile_id"),
+        service_profile_id=pack.get("service_profile_id"),
+        # TR-069 config (ACS server ID is still a FK on OLT, not in JSON)
+        tr069_acs_server_id=(
+            str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
+        ),
+        tr069_olt_profile_id=pack.get("tr069_olt_profile_id"),
+        # VLANs (resolve UUID strings to VlanConfig)
+        internet_vlan=_resolve_vlan(db, pack.get("internet_vlan_id")),
+        management_vlan=_resolve_vlan(db, pack.get("management_vlan_id")),
+        tr069_vlan=_resolve_vlan(db, pack.get("tr069_vlan_id")),
+        voip_vlan=_resolve_vlan(db, pack.get("voip_vlan_id")),
+        iptv_vlan=_resolve_vlan(db, pack.get("iptv_vlan_id")),
         # Provisioning knobs
-        internet_config_ip_index=olt.default_internet_config_ip_index or 0,
-        wan_config_profile_id=olt.default_wan_config_profile_id or 0,
+        internet_config_ip_index=pack.get("internet_config_ip_index") or 0,
+        wan_config_profile_id=pack.get("wan_config_profile_id") or 0,
         # GEM indices
-        internet_gem_index=olt.default_internet_gem_index or 1,
-        mgmt_gem_index=olt.default_mgmt_gem_index or 2,
-        voip_gem_index=olt.default_voip_gem_index or 3,
-        iptv_gem_index=olt.default_iptv_gem_index or 4,
+        internet_gem_index=pack.get("internet_gem_index") or 1,
+        mgmt_gem_index=pack.get("mgmt_gem_index") or 2,
+        voip_gem_index=pack.get("voip_gem_index") or 3,
+        iptv_gem_index=pack.get("iptv_gem_index") or 4,
         # Connection request credentials
-        cr_username=olt.default_cr_username,
-        cr_password=olt.default_cr_password,
-        # TR-069 WCD indices (OLT-provisioning-specific)
-        pppoe_wcd_index=olt.pppoe_wcd_index or 2,
-        mgmt_wcd_index=olt.mgmt_wcd_index or 1,
-        voip_wcd_index=olt.voip_wcd_index,
+        cr_username=pack.get("cr_username"),
+        cr_password=pack.get("cr_password"),
+        # Traffic table indices
+        mgmt_traffic_table_inbound=pack.get("mgmt_traffic_table_inbound"),
+        mgmt_traffic_table_outbound=pack.get("mgmt_traffic_table_outbound"),
+        internet_traffic_table_inbound=pack.get("internet_traffic_table_inbound"),
+        internet_traffic_table_outbound=pack.get("internet_traffic_table_outbound"),
+        # TR-069 WCD indices
+        pppoe_wcd_index=pack.get("pppoe_wcd_index") or 2,
+        mgmt_wcd_index=pack.get("mgmt_wcd_index") or 1,
+        voip_wcd_index=pack.get("voip_wcd_index"),
     )
 
 
@@ -436,3 +468,66 @@ def get_validation_summary(validation: ConfigPackValidation) -> str:
         return f"Config pack is valid with {len(validation.warnings)} warning(s)"
 
     return f"Config pack has {len(validation.errors)} error(s) that must be fixed"
+
+
+# --------------------------------------------------------------------------
+# Config pack JSON helpers
+# --------------------------------------------------------------------------
+
+
+def get_config_pack_value(
+    olt: OLTDevice,
+    key: str,
+    default: object = None,
+) -> object:
+    """Read a value from OLT config_pack JSON.
+
+    Args:
+        olt: OLTDevice instance
+        key: Key to read from config_pack
+        default: Default value if key not present
+
+    Returns:
+        Value from config_pack or default
+    """
+    pack = olt.config_pack or {}
+    return pack.get(key, default)
+
+
+def set_config_pack_value(
+    olt: OLTDevice,
+    key: str,
+    value: object,
+) -> None:
+    """Set a value in OLT config_pack JSON.
+
+    Args:
+        olt: OLTDevice instance
+        key: Key to set in config_pack
+        value: Value to set (None removes the key)
+    """
+    pack = dict(olt.config_pack or {})
+    if value is None:
+        pack.pop(key, None)
+    else:
+        pack[key] = value
+    olt.config_pack = pack
+
+
+def update_config_pack(
+    olt: OLTDevice,
+    updates: dict,
+) -> None:
+    """Bulk update OLT config_pack JSON.
+
+    Args:
+        olt: OLTDevice instance
+        updates: Dictionary of key-value pairs to update
+    """
+    pack = dict(olt.config_pack or {})
+    for key, value in updates.items():
+        if value is None:
+            pack.pop(key, None)
+        else:
+            pack[key] = value
+    olt.config_pack = pack

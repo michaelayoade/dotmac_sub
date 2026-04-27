@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
@@ -781,132 +781,18 @@ class OLTDevice(Base):
     # OLT Config Pack: defaults inherited by all ONTs on this OLT
     # -------------------------------------------------------------------------
 
-    # Authorization profiles (OLT-local IDs used during ont-add)
-    default_line_profile_id: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="OLT-local ont-lineprofile profile-id for authorization",
-    )
-    default_service_profile_id: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="OLT-local ont-srvprofile profile-id for authorization",
+    # JSONB source of truth for config pack
+    config_pack: Mapped[dict | None] = mapped_column(
+        JSONB,
+        default=dict,
+        doc="OLT provisioning defaults. Source of truth for ONT config inheritance.",
     )
 
-    # TR-069 binding (OLT-local profile ID for tr069-server-profile bind)
-    default_tr069_olt_profile_id: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="OLT-local TR-069 server profile ID for ACS binding",
-    )
-
-    # VLAN assignments (purpose-based, inherited by ONTs)
-    internet_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        doc="Default internet/data VLAN for ONTs",
-    )
-    management_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        doc="Default management VLAN for ONT IPHOST",
-    )
-    tr069_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        doc="VLAN for TR-069/ACS traffic (often same as management)",
-    )
-    voip_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        doc="Default VoIP VLAN (optional)",
-    )
-    iptv_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("vlans.id", ondelete="SET NULL"),
-        doc="Default IPTV/multicast VLAN (optional)",
-    )
-
-    # OLT-side provisioning knobs
-    default_internet_config_ip_index: Mapped[int | None] = mapped_column(
-        Integer,
-        default=0,
-        doc="ip-index for ont internet-config command (activates TCP stack)",
-    )
-    default_wan_config_profile_id: Mapped[int | None] = mapped_column(
-        Integer,
-        default=0,
-        doc="profile-id for ont wan-config command (sets route+NAT mode)",
-    )
-
-    # TR-069 connection request credentials (inherited by ONTs)
-    default_cr_username: Mapped[str | None] = mapped_column(
-        String(120),
-        doc="Default connection request username for ACS on-demand management",
-    )
-    default_cr_password: Mapped[str | None] = mapped_column(
-        String(512),
-        doc="Default connection request password (encrypted at rest)",
-    )
-
-    # Management IP pool for auto-allocation during authorization
+    # Management IP pool for auto-allocation during authorization (FK, not in config_pack)
     mgmt_ip_pool_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("ip_pools.id", ondelete="SET NULL"),
         doc="IP pool for auto-allocating management IPs to ONTs",
-    )
-
-    # GEM port indices by purpose (GPON transport mapping)
-    default_internet_gem_index: Mapped[int | None] = mapped_column(
-        Integer,
-        default=1,
-        doc="GEM index for internet service ports (typically 1)",
-    )
-    default_mgmt_gem_index: Mapped[int | None] = mapped_column(
-        Integer,
-        default=2,
-        doc="GEM index for management/TR-069 service ports (typically 2)",
-    )
-    default_voip_gem_index: Mapped[int | None] = mapped_column(
-        Integer,
-        default=3,
-        doc="GEM index for VoIP service ports (typically 3)",
-    )
-    default_iptv_gem_index: Mapped[int | None] = mapped_column(
-        Integer,
-        default=4,
-        doc="GEM index for IPTV service ports (typically 4)",
-    )
-
-    # Traffic table indices for service-port QoS binding (OLT-specific)
-    mgmt_traffic_table_inbound: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="Inbound traffic-table index for VLAN 201 (management) service-ports",
-    )
-    mgmt_traffic_table_outbound: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="Outbound traffic-table index for VLAN 201 (management) service-ports",
-    )
-    internet_traffic_table_inbound: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="Inbound traffic-table index for VLAN 203 (PPPoE/internet) service-ports",
-    )
-    internet_traffic_table_outbound: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="Outbound traffic-table index for VLAN 203 (PPPoE/internet) service-ports",
-    )
-
-    # TR-069 WAN Connection Device indices (varies by OLT provisioning)
-    # WCD numbering determines which WANConnectionDevice.{i} to target for TR-069 config
-    # Mapping: OLT ip-index N → TR-069 WANConnectionDevice.(N+1)
-    pppoe_wcd_index: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="WANConnectionDevice index for PPPoE/internet WAN (TR-069 path component)",
-    )
-    mgmt_wcd_index: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="WANConnectionDevice index for management WAN (TR-069 path component)",
-    )
-    voip_wcd_index: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="WANConnectionDevice index for VoIP WAN (TR-069 path component)",
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -929,12 +815,7 @@ class OLTDevice(Base):
         "IpPool", back_populates="olt_device", foreign_keys="[IpPool.olt_device_id]"
     )
 
-    # Config Pack VLAN relationships
-    internet_vlan = relationship("Vlan", foreign_keys=[internet_vlan_id])
-    management_vlan = relationship("Vlan", foreign_keys=[management_vlan_id])
-    tr069_vlan = relationship("Vlan", foreign_keys=[tr069_vlan_id])
-    voip_vlan = relationship("Vlan", foreign_keys=[voip_vlan_id])
-    iptv_vlan = relationship("Vlan", foreign_keys=[iptv_vlan_id])
+    # Management IP pool relationship
     mgmt_ip_pool = relationship("IpPool", foreign_keys=[mgmt_ip_pool_id])
 
     @property

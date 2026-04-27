@@ -258,27 +258,28 @@ def resolve_authorization_profiles_from_db(
 ) -> tuple[bool, str, AuthorizationProfileResolution | None]:
     """Resolve OLT-local authorization profile IDs from OLT Config Pack.
 
-    The OLT Config Pack fields (default_line_profile_id, default_service_profile_id)
+    The OLT Config Pack JSON fields (line_profile_id, service_profile_id)
     are required for authorization. These must be configured on the OLT before
     any ONT authorization can proceed.
 
     Args:
         db: Database session (unused, kept for API compatibility)
-        olt: OLT device with config pack fields
+        olt: OLT device with config_pack JSON field
         profile: Deprecated, ignored. Use OLT config pack fields instead.
 
     Returns:
         Tuple of (success, message, AuthorizationProfileResolution or None)
     """
-    olt_line_profile = getattr(olt, "default_line_profile_id", None)
-    olt_service_profile = getattr(olt, "default_service_profile_id", None)
+    pack = getattr(olt, "config_pack", None) or {}
+    olt_line_profile = pack.get("line_profile_id")
+    olt_service_profile = pack.get("service_profile_id")
 
     if olt_line_profile is None or olt_service_profile is None:
         missing = []
         if olt_line_profile is None:
-            missing.append("default_line_profile_id")
+            missing.append("line_profile_id")
         if olt_service_profile is None:
-            missing.append("default_service_profile_id")
+            missing.append("service_profile_id")
         return (
             False,
             (

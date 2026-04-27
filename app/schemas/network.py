@@ -390,21 +390,10 @@ class OLTDeviceBase(BaseModel):
     status: str | None = "active"
     is_active: bool = True
 
-    # OLT Config Pack: defaults inherited by ONTs
-    default_line_profile_id: int | None = None
-    default_service_profile_id: int | None = None
-    default_tr069_olt_profile_id: int | None = None
-    internet_vlan_id: UUID | None = None
-    management_vlan_id: UUID | None = None
-    tr069_vlan_id: UUID | None = None
-    voip_vlan_id: UUID | None = None
-    iptv_vlan_id: UUID | None = None
-    default_internet_config_ip_index: int | None = Field(default=0)
-    default_wan_config_profile_id: int | None = Field(default=0)
-    default_cr_username: str | None = Field(default=None, max_length=120)
-    default_cr_password: str | None = Field(default=None, max_length=255)
+    # OLT Config Pack JSON (source of truth for ONT provisioning defaults)
+    config_pack: dict | None = None
 
-    # Management IP pool for auto-allocation
+    # Management IP pool for auto-allocation (FK, not in config_pack)
     mgmt_ip_pool_id: UUID | None = None
 
 
@@ -437,27 +426,10 @@ class OLTDeviceUpdate(BaseModel):
     status: str | None = None
     is_active: bool | None = None
 
-    # OLT Config Pack: defaults inherited by ONTs
-    default_line_profile_id: int | None = None
-    default_service_profile_id: int | None = None
-    default_tr069_olt_profile_id: int | None = None
-    internet_vlan_id: UUID | None = None
-    management_vlan_id: UUID | None = None
-    tr069_vlan_id: UUID | None = None
-    voip_vlan_id: UUID | None = None
-    iptv_vlan_id: UUID | None = None
-    default_internet_config_ip_index: int | None = None
-    default_wan_config_profile_id: int | None = None
-    default_cr_username: str | None = Field(default=None, max_length=120)
-    default_cr_password: str | None = Field(default=None, max_length=255)
+    # OLT Config Pack JSON (source of truth for ONT provisioning defaults)
+    config_pack: dict | None = None
 
-    # GEM port indices by purpose
-    default_internet_gem_index: int | None = None
-    default_mgmt_gem_index: int | None = None
-    default_voip_gem_index: int | None = None
-    default_iptv_gem_index: int | None = None
-
-    # Management IP pool for auto-allocation
+    # Management IP pool for auto-allocation (FK, not in config_pack)
     mgmt_ip_pool_id: UUID | None = None
 
 
