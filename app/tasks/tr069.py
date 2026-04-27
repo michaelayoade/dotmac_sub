@@ -22,9 +22,12 @@ from app.models.tr069 import (
     Tr069Session,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network.serial_utils import parse_ont_id_on_olt
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
+
+SessionLocal = db_session_adapter.create_session
 
 
 def _is_psycopg_autocommit_state_error(exc: ProgrammingError) -> bool:
@@ -43,7 +46,7 @@ def sync_all_acs_devices() -> dict[str, int]:
         Stats: {servers_synced, total_created, total_updated, errors}.
     """
     logger.info("Starting TR-069 ACS device sync")
-    db = db_session_adapter.create_session()
+    db = SessionLocal()
     try:
         servers = list(
             db.scalars(
@@ -144,7 +147,7 @@ def wait_for_ont_bootstrap(
     from app.services.network_operations import network_operations
 
     logger.info("Starting TR-069 bootstrap wait for ONT %s", ont_id)
-    db = db_session_adapter.create_session()
+    db = SessionLocal()
     try:
         if operation_id:
             network_operations.mark_running(db, operation_id)
@@ -289,7 +292,7 @@ def apply_acs_config(
     if not writer.supports_config_action(action):
         raise ValueError(f"Unsupported ACS configuration action: {action}")
 
-    db = db_session_adapter.create_session()
+    db = SessionLocal()
     try:
         result = writer.execute_config_action(
             db,
@@ -1355,8 +1358,8 @@ def heal_online_silent_onts(
                     fsp = f"{board}/{port}" if board and port else None
 
                     # Parse external_id to get ONT-ID on OLT (integer)
-                    ext_id_raw = (ont.external_id or "").strip() if ont.external_id else ""
-                    ont_id_on_olt = int(ext_id_raw) if ext_id_raw.isdigit() else None
+                    # Handles formats: "5", "huawei:123.5", "0/2/2.1" → 5, 5, 1
+                    ont_id_on_olt = parse_ont_id_on_olt(ont.external_id)
 
                     if not olt_id or not fsp or ont_id_on_olt is None:
                         logger.warning(
