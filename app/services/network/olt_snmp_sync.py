@@ -55,8 +55,7 @@ from app.services.network.ont_serials import (
     prefer_ont_candidate,
 )
 from app.services.network.ont_status import (
-    apply_status_snapshot,
-    resolve_ont_status_for_model,
+    apply_status_with_hysteresis,
 )
 from app.services.network.snmp_walk import run_simple_v2c_walk
 
@@ -628,14 +627,8 @@ def _sync_onts_from_olt_snmp_impl(
                 ont.serial_number = vendor_serial
         elif not getattr(ont, "vendor_serial_number", None):
             ont.vendor_serial_number = vendor_serial
-        ont.online_status = status
-        if status == OnuOnlineStatus.online:
-            ont.last_seen_at = now
-            ont.offline_reason = None
-        elif status == OnuOnlineStatus.offline:
-            ont.offline_reason = offline_reason
-        else:
-            ont.offline_reason = None
+        # Apply status with hysteresis to prevent flapping
+        apply_status_with_hysteresis(ont, status, offline_reason, now=now)
         ont.olt_rx_signal_dbm = olt_rx
         ont.onu_rx_signal_dbm = onu_rx
         ont.distance_meters = distance
@@ -648,13 +641,6 @@ def _sync_onts_from_olt_snmp_impl(
                 board=board,
                 port=port,
             )
-        apply_status_snapshot(
-            ont,
-            resolve_ont_status_for_model(
-                ont,
-                now=now,
-            ),
-        )
 
     try:
         db.flush()

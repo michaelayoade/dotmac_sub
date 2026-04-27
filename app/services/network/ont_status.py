@@ -9,10 +9,19 @@ from math import ceil
 
 from sqlalchemy.orm import Session
 
-from app.models.network import OntAcsStatus, OntStatusSource, OntUnit, OnuOnlineStatus
+from app.models.network import (
+    OntAcsStatus,
+    OntStatusSource,
+    OntUnit,
+    OnuOfflineReason,
+    OnuOnlineStatus,
+)
 
 DEFAULT_ACS_ONLINE_WINDOW_MINUTES = 15
 ACS_INFORM_GRACE_MINUTES = 5
+
+# Hysteresis: require this many consecutive offline polls before marking offline
+OFFLINE_POLL_THRESHOLD = 3
 
 
 @dataclass(frozen=True)
@@ -218,6 +227,44 @@ def apply_status_snapshot(ont: OntUnit, snapshot: OntStatusSnapshot) -> OntUnit:
     ont.effective_status_source = snapshot.effective_status_source
     ont.status_resolved_at = snapshot.status_resolved_at
     return ont
+
+
+def apply_status_with_hysteresis(
+    ont: OntUnit,
+    polled_status: OnuOnlineStatus,
+    offline_reason: OnuOfflineReason | None = None,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Apply polled status with hysteresis to prevent flapping.
+
+    OLT SNMP is the single source of truth. This function:
+    - Immediately recovers to online when online is observed
+    - Requires OFFLINE_POLL_THRESHOLD consecutive offline polls before marking offline
+    - Always updates online_status to reflect raw poll result
+    """
+    current = now or datetime.now(UTC)
+
+    if polled_status == OnuOnlineStatus.online:
+        # Immediate recovery
+        ont.online_status = OnuOnlineStatus.online
+        ont.effective_status = OnuOnlineStatus.online
+        ont.effective_status_source = OntStatusSource.olt
+        ont.consecutive_offline_polls = 0
+        ont.last_seen_at = current
+        ont.offline_reason = None
+    else:
+        # Offline or unknown - increment counter
+        ont.online_status = polled_status
+        ont.consecutive_offline_polls = (ont.consecutive_offline_polls or 0) + 1
+        ont.offline_reason = offline_reason
+
+        if ont.consecutive_offline_polls >= OFFLINE_POLL_THRESHOLD:
+            ont.effective_status = polled_status
+            ont.effective_status_source = OntStatusSource.olt
+        # else: keep previous effective_status (hysteresis)
+
+    ont.status_resolved_at = current
 
 
 def apply_resolved_status_for_model(

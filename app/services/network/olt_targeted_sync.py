@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
+from app.models.network import OntAssignment, OntUnit
 from app.services.network import olt_snmp_sync as bulk_sync
 from app.services.network.huawei_snmp import (
     is_huawei_vendor,
@@ -19,7 +19,7 @@ from app.services.network.olt_polling import reconcile_snmp_status_with_signal
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
-from app.services.network.ont_status import apply_resolved_status_for_model
+from app.services.network.ont_status import apply_status_with_hysteresis
 from app.services.network.snmp_walk import run_simple_v2c_walk
 
 
@@ -227,15 +227,12 @@ def sync_authorized_ont_from_olt_snmp(
         ont.external_id = external_id
         ont.board = "/".join(fsp.split("/")[:2])
         ont.port = fsp.split("/")[2]
-        ont.online_status = status
+        # Apply status with hysteresis to prevent flapping
+        apply_status_with_hysteresis(ont, status, offline_reason, now=now)
         ont.olt_rx_signal_dbm = olt_rx
         ont.onu_rx_signal_dbm = onu_rx
         ont.distance_meters = distance
         ont.signal_updated_at = now
-        ont.last_seen_at = now if status == OnuOnlineStatus.online else ont.last_seen_at
-        ont.offline_reason = (
-            None if status == OnuOnlineStatus.online else offline_reason
-        )
         ont.last_sync_source = "olt_snmp_targeted"
         ont.last_sync_at = now
         if ont.tr069_acs_server_id is None:
@@ -244,7 +241,6 @@ def sync_authorized_ont_from_olt_snmp(
             ont.tr069_acs_server_id = tr069_service.resolve_acs_server_for_ont(
                 db, ont=ont, olt_id=str(olt.id)
             )
-        apply_resolved_status_for_model(ont, now=now)
         assignment_alignment = align_ont_assignment_to_authoritative_fsp(
             db,
             ont=ont,
