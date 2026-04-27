@@ -1,18 +1,28 @@
-"""ONT provisioning services — independent, explicit-parameter operations.
+"""ONT provisioning services — reconciliation-based provisioning.
 
-Each step function performs a single provisioning action with explicit parameters.
-No function depends on a provisioning profile or a fixed sequence — the caller
-(operator UI, service order workflow, or Celery task) decides what to call
-and with what values.
+RECOMMENDED APPROACH:
+    provision_with_reconciliation(db, ont_id)
 
-Step functions:
-- Take ``db`` + ``ont_id`` + explicit action parameters
-- Resolve ONT → OLT context internally (no caller burden)
-- Return a ``StepResult`` with success/failure/duration
-- Record completion in ``OntUnit.provisioning_steps_completed`` JSON
+This function reads config from the source of truth (OntAssignment + OltConfigPack),
+computes the delta between desired and actual OLT state, and applies changes
+idempotently. This is the only entry point for OLT provisioning.
 
-Supporting utilities:
-- ``validate_prerequisites`` — preflight checklist before provisioning
+The reconciliation approach:
+1. Builds desired state from OntAssignment + OltConfigPack (via resolve_effective_ont_config)
+2. Reads actual state from the OLT (single SSH session)
+3. Computes delta (existing matching ports = NOOP = idempotent)
+4. Validates (optical budget, VLAN trunk, ip_index bounds)
+5. Executes with compensation log (rollback on failure)
+
+Other functions in this module:
+- wait_tr069_bootstrap() — Poll for ACS registration after TR-069 binding
+- apply_saved_service_config() — Apply TR-069 service config after bootstrap
+- deprovision() — Remove service-ports and return ONT to inventory
+- rollback_service_ports() — Cleanup on provisioning failure
+- preview_reconciliation() — Dry-run to show what would change
+
+Individual step functions (create_service_port, configure_management_ip, etc.)
+have been removed. All provisioning now goes through the reconciliation path.
 """
 
 from __future__ import annotations
@@ -94,439 +104,19 @@ def _record_step(db: Session, ont: OntUnit, step_name: str, result: StepResult) 
     )
 
 
-def _is_existing_service_port_conflict(message: str) -> bool:
-    """Return True when OLT rejected because the service-port exists."""
-    lowered = str(message or "").lower()
-    return (
-        "service virtual port has existed already" in lowered
-        or "already exists" in lowered
-        or "conflicted service virtual port index" in lowered
-    )
-
-
-def _is_unsupported_omci_command(message: str) -> bool:
-    """Return True when OLT rejects PPPoE OMCI as unsupported."""
-    lowered = str(message or "").lower()
-    return "unknown command" in lowered or "unrecognized" in lowered
-
-
 # ---------------------------------------------------------------------------
-# SERVICE: Create OLT service ports
+# NOTE: Individual step functions for manual wizard provisioning have been
+# removed. The following functions were deprecated:
+#   - create_service_port() - Use provision_with_reconciliation() instead
+#   - configure_management_ip() - Use provision_with_reconciliation() instead
+#   - activate_internet_config() - Use provision_with_reconciliation() instead
+#   - configure_wan_olt() - Use provision_with_reconciliation() instead
+#   - bind_tr069() - Use provision_with_reconciliation() instead
+#
+# All OLT provisioning now goes through the reconciliation-based approach:
+# provision_with_reconciliation() reads from OntAssignment + OltConfigPack
+# (source of truth), computes delta, and applies changes idempotently.
 # ---------------------------------------------------------------------------
-
-
-def create_service_port(
-    db: Session,
-    ont_id: str,
-    *,
-    vlan_id: int,
-    gem_index: int = 1,
-    user_vlan: int | str | None = None,
-    tag_transform: str = "translate",
-    idempotent: bool = True,
-) -> StepResult:
-    """Create a single L2 service-port VLAN/GEM binding on the OLT.
-
-    When idempotent=True (default), uses the reconciler to check if the
-    service-port already exists with matching configuration. If it does,
-    returns success without attempting to create (NOOP). This prevents
-    "already exists" errors on re-provisioning.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        vlan_id: VLAN to bind.
-        gem_index: GEM port index (default 1).
-        user_vlan: User-side VLAN (optional).
-        tag_transform: Tag transform mode (default "translate").
-        idempotent: If True, check for existing port before creating (default True).
-    """
-    from sqlalchemy import select as sa_select
-
-    from app.models.network import Vlan
-    from app.services.network.ont_write import ont_write
-
-    t0 = time.monotonic()
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return StepResult("create_service_port", False, err)
-
-    # Pre-check: VLAN must exist in the system for this OLT
-    vlan_exists = db.scalars(
-        sa_select(Vlan).where(
-            Vlan.tag == vlan_id,
-            Vlan.is_active.is_(True),
-            Vlan.olt_device_id == ctx.olt.id,
-        )
-    ).first()
-    if not vlan_exists:
-        ms = int((time.monotonic() - t0) * 1000)
-        result = StepResult(
-            "create_service_port",
-            False,
-            f"VLAN {vlan_id} not found for OLT {ctx.olt.name}. "
-            f"Create it first at /admin/network/vlans.",
-            ms,
-        )
-        _record_step(db, ctx.ont, "create_service_port", result)
-        return result
-
-    # Idempotency check: see if port already exists with matching config
-    if idempotent:
-        existing_check = _check_existing_service_port(
-            ctx.olt, ctx.fsp, ctx.olt_ont_id, vlan_id, gem_index, tag_transform
-        )
-        if existing_check.get("exists_and_matches"):
-            ms = int((time.monotonic() - t0) * 1000)
-            result = StepResult(
-                "create_service_port",
-                True,
-                f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent NOOP)",
-                ms,
-                data={
-                    "idempotent_noop": True,
-                    "existing_index": existing_check.get("index"),
-                },
-            )
-            _record_step(db, ctx.ont, "create_service_port", result)
-            return result
-
-    resolved_user_vlan = (
-        int(user_vlan)
-        if isinstance(user_vlan, str) and user_vlan.isdigit()
-        else user_vlan
-    )
-    if isinstance(resolved_user_vlan, str):
-        resolved_user_vlan = None
-    action_result = ont_write.update_service_port(
-        db,
-        ont_id,
-        vlan_id=vlan_id,
-        gem_index=gem_index,
-        user_vlan=resolved_user_vlan,
-        tag_transform=tag_transform,
-    )
-
-    # Handle "already exists" - verify config matches before treating as idempotent success
-    success = action_result.success
-    message = action_result.message
-    if not success and _is_existing_service_port_conflict(message):
-        # Verify the existing service-port has matching configuration
-        existing_check = _check_existing_service_port(
-            ctx.olt, ctx.fsp, ctx.olt_ont_id, vlan_id, gem_index, tag_transform
-        )
-        if existing_check.get("exists_and_matches"):
-            success = True
-            message = "Service-port already exists with matching config (verified)"
-        elif existing_check.get("index"):
-            # Port exists but config differs - this is NOT idempotent success
-            success = False
-            message = f"Service-port exists but config differs: {existing_check.get('message')}"
-            logger.warning(
-                "Service port config mismatch for ONT %s: %s",
-                ont_id,
-                message,
-                extra={
-                    "event": "service_port_config_mismatch",
-                    "ont_id": ont_id,
-                    "vlan_id": vlan_id,
-                    "gem_index": gem_index,
-                    "expected_tag_transform": tag_transform,
-                },
-            )
-        else:
-            # Could not verify but original error indicates exists, treat as idempotent
-            success = True
-            message = f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent success)"
-
-    ms = int((time.monotonic() - t0) * 1000)
-    result_data: dict[str, object] = {}
-    if isinstance(action_result.data, dict):
-        raw_index = action_result.data.get("service_port_index")
-        if isinstance(raw_index, int):
-            result_data["created_service_port_indices"] = [raw_index]
-    result = StepResult(
-        "create_service_port",
-        success,
-        message,
-        ms,
-        data=result_data or None,
-    )
-    _record_step(db, ctx.ont, "create_service_port", result)
-    return result
-
-
-def _check_existing_service_port(
-    olt,
-    fsp: str,
-    olt_ont_id: int,
-    vlan_id: int,
-    gem_index: int,
-    tag_transform: str,
-) -> dict:
-    """Check if a matching service-port already exists on the OLT.
-
-    Uses the reconciler's state reading to check for existing ports.
-
-    Returns:
-        Dict with 'exists_and_matches', 'index', and 'message' keys.
-    """
-    try:
-        from app.services.network.ont_provisioning.state import read_actual_state
-
-        actual, err = read_actual_state(olt, fsp, olt_ont_id)
-        if not actual:
-            return {"exists_and_matches": False, "message": err}
-
-        # Check for matching port
-        for port in actual.service_ports:
-            if port.vlan_id == vlan_id and port.gem_index == gem_index:
-                # Check tag_transform if available
-                if port.tag_transform and port.tag_transform != tag_transform:
-                    return {
-                        "exists_and_matches": False,
-                        "index": port.index,
-                        "message": f"Port exists but tag_transform differs: {port.tag_transform} vs {tag_transform}",
-                    }
-                return {
-                    "exists_and_matches": True,
-                    "index": port.index,
-                    "message": "Matching service-port found",
-                }
-
-        return {"exists_and_matches": False, "message": "No matching port found"}
-    except Exception as exc:
-        logger.debug("Idempotency check failed, proceeding with create: %s", exc)
-        return {"exists_and_matches": False, "message": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Configure management IP (IPHOST)
-# ---------------------------------------------------------------------------
-
-
-def configure_management_ip(
-    db: Session,
-    ont_id: str,
-    *,
-    ip_mode: str = "dhcp",
-    priority: int | None = None,
-    ip_address: str | None = None,
-    subnet: str | None = None,
-    gateway: str | None = None,
-) -> StepResult:
-    """Configure ONT management IP (IPHOST) via OLT SSH.
-
-    Delegates to ``ont_write.update_management_ip`` for SSH + DB persistence.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        ip_mode: "dhcp" or "static".
-        ip_address: Required if ip_mode is "static".
-        subnet: Required if ip_mode is "static".
-        gateway: Required if ip_mode is "static".
-    """
-    from app.services.network.ont_write import ont_write
-    from app.services.network.olt_config_pack import resolve_olt_config_pack
-
-    t0 = time.monotonic()
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return StepResult("configure_management_ip", False, err, critical=False)
-    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
-    vlan_id = (
-        config_pack.management_vlan.tag
-        if config_pack and config_pack.management_vlan
-        else None
-    )
-    if vlan_id is None:
-        return StepResult(
-            "configure_management_ip",
-            False,
-            "OLT config pack management VLAN is required.",
-            critical=False,
-        )
-    action_result = ont_write.update_management_ip(
-        db,
-        ont_id,
-        mgmt_ip_mode=ip_mode,
-        mgmt_vlan_tag=vlan_id,
-        mgmt_priority=priority,
-        mgmt_ip_address=ip_address,
-        mgmt_subnet=subnet,
-        mgmt_gateway=gateway,
-    )
-    ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult(
-        "configure_management_ip",
-        action_result.success,
-        action_result.message,
-        ms,
-        critical=False,
-    )
-    ont = db.get(OntUnit, ont_id)
-    if ont:
-        _record_step(db, ont, "configure_management_ip", result)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Activate internet-config (TCP stack)
-# ---------------------------------------------------------------------------
-
-
-def activate_internet_config(
-    db: Session,
-    ont_id: str,
-) -> StepResult:
-    """Activate TCP stack on ONT management WAN via internet-config.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-    """
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.olt_config_pack import resolve_olt_config_pack
-
-    t0 = time.monotonic()
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return StepResult("activate_internet_config", False, err, critical=False)
-    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
-    if config_pack is None:
-        return StepResult("activate_internet_config", False, "OLT config pack not found")
-    ip_index = config_pack.internet_config_ip_index
-
-    action_result = get_protocol_adapter(ctx.olt).configure_internet_config(
-        ctx.fsp,
-        ctx.olt_ont_id,
-        ip_index=ip_index,
-    )
-    ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult(
-        "activate_internet_config",
-        action_result.success,
-        action_result.message,
-        ms,
-        critical=False,
-    )
-    _record_step(db, ctx.ont, "activate_internet_config", result)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Configure WAN route+NAT mode (OLT-side)
-# ---------------------------------------------------------------------------
-
-
-def configure_wan_olt(
-    db: Session,
-    ont_id: str,
-) -> StepResult:
-    """Set route+NAT mode on ONT management WAN via OLT SSH wan-config.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-    """
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.olt_config_pack import resolve_olt_config_pack
-
-    t0 = time.monotonic()
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return StepResult("configure_wan_olt", False, err, critical=False)
-    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
-    if config_pack is None:
-        return StepResult("configure_wan_olt", False, "OLT config pack not found")
-    ip_index = config_pack.internet_config_ip_index
-    profile_id = config_pack.wan_config_profile_id
-    if not profile_id:
-        return StepResult(
-            "configure_wan_olt",
-            False,
-            "OLT config pack WAN config profile ID is required.",
-            critical=False,
-        )
-
-    action_result = get_protocol_adapter(ctx.olt).configure_wan_config(
-        ctx.fsp,
-        ctx.olt_ont_id,
-        ip_index=ip_index,
-        profile_id=profile_id,
-    )
-    ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult(
-        "configure_wan_olt",
-        action_result.success,
-        action_result.message,
-        ms,
-        critical=False,
-    )
-    _record_step(db, ctx.ont, "configure_wan_olt", result)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Bind TR-069 server profile
-# ---------------------------------------------------------------------------
-
-
-def bind_tr069(
-    db: Session,
-    ont_id: str,
-) -> StepResult:
-    """Bind a TR-069 server profile to the ONT via OLT SSH.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-    """
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.olt_config_pack import resolve_olt_config_pack
-
-    t0 = time.monotonic()
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return StepResult("bind_tr069", False, err)
-    config_pack = resolve_olt_config_pack(db, ctx.olt.id)
-    tr069_olt_profile_id = config_pack.tr069_olt_profile_id if config_pack else None
-    if tr069_olt_profile_id is None:
-        return StepResult(
-            "bind_tr069",
-            False,
-            "OLT config pack TR-069 profile ID is required.",
-        )
-
-    logger.info(
-        "Provisioning TR-069 bind starting: ont_id=%s serial=%s olt=%s fsp=%s olt_ont_id=%s profile_id=%s",
-        ctx.ont.id,
-        ctx.ont.serial_number,
-        ctx.olt.name,
-        ctx.fsp,
-        ctx.olt_ont_id,
-        tr069_olt_profile_id,
-    )
-    action_result = get_protocol_adapter(ctx.olt).bind_tr069_profile(
-        ctx.fsp,
-        ctx.olt_ont_id,
-        profile_id=tr069_olt_profile_id,
-    )
-    ok = action_result.success
-    msg = action_result.message
-    ms = int((time.monotonic() - t0) * 1000)
-    logger.info(
-        "Provisioning TR-069 bind finished: ont_id=%s serial=%s success=%s duration_ms=%s message=%s",
-        ctx.ont.id,
-        ctx.ont.serial_number,
-        ok,
-        ms,
-        msg,
-    )
-    result = StepResult("bind_tr069", ok, msg, ms)
-    _record_step(db, ctx.ont, "bind_tr069", result)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1169,99 +759,13 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
 
 
 # ---------------------------------------------------------------------------
-# SERVICE: Set TR-069 connection request credentials
+# NOTE: Additional deprecated step functions:
+#   - set_connection_request_credentials() - Applied via apply_saved_service_config()
+#   - push_pppoe_omci() - Applied via _provision_wan_service_instances()
+#
+# These are now called internally from apply_saved_service_config() which
+# reads config from the source of truth (OntAssignment + OltConfigPack).
 # ---------------------------------------------------------------------------
-
-
-def set_connection_request_credentials(
-    db: Session,
-    ont_id: str,
-    *,
-    username: str,
-    password: str,
-) -> StepResult:
-    """Set TR-069 connection request credentials on the ONT via ACS.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        username: Connection request username.
-        password: Connection request password.
-    """
-    t0 = time.monotonic()
-    cr_result = _acs_config_writer().set_connection_request_credentials(
-        db,
-        ont_id,
-        username,
-        password,
-    )
-    ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult(
-        "set_connection_request_credentials",
-        cr_result.success,
-        cr_result.message,
-        ms,
-        critical=False,
-        waiting=getattr(cr_result, "waiting", False),
-        data=getattr(cr_result, "data", None),
-    )
-    ont = db.get(OntUnit, ont_id)
-    if ont:
-        _record_step(db, ont, "set_connection_request_credentials", result)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SERVICE: Push PPPoE credentials via OMCI (OLT-side)
-# ---------------------------------------------------------------------------
-
-
-def push_pppoe_omci(
-    db: Session,
-    ont_id: str,
-    *,
-    vlan_id: int,
-    username: str,
-    password: str,
-    ip_index: int = 1,
-    priority: int = 0,
-) -> StepResult:
-    """Push PPPoE credentials to ONT via OMCI (OLT-side, not TR-069).
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        vlan_id: PPPoE VLAN ID.
-        username: PPPoE username.
-        password: PPPoE password.
-        ip_index: IP index (default 1).
-        priority: CoS priority (default 0).
-    """
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-
-    t0 = time.monotonic()
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return StepResult("push_pppoe_omci", False, err)
-
-    action_result = get_protocol_adapter(ctx.olt).configure_pppoe(
-        ctx.fsp,
-        ctx.olt_ont_id,
-        ip_index=ip_index,
-        vlan_id=vlan_id,
-        priority=priority,
-        username=username,
-        password=password,
-    )
-    ok = action_result.success
-    msg = action_result.message
-    ms = int((time.monotonic() - t0) * 1000)
-    unsupported = not ok and _is_unsupported_omci_command(msg)
-    if unsupported:
-        msg += " (unsupported)"
-    result = StepResult("push_pppoe_omci", ok, msg, ms)
-    _record_step(db, ctx.ont, "push_pppoe_omci", result)
-    return result
 
 
 # ---------------------------------------------------------------------------

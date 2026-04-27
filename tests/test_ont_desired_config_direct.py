@@ -84,18 +84,7 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
         base_url="http://config-pack-acs.example",
         is_active=True,
     )
-    olt = OLTDevice(
-        name="OLT Defaults",
-        default_line_profile_id=10,
-        default_service_profile_id=20,
-        tr069_acs_server_id=acs.id,
-        default_tr069_olt_profile_id=30,
-        default_internet_config_ip_index=0,
-        default_wan_config_profile_id=5,
-        default_internet_gem_index=1,
-        default_cr_username="pack-cr-user",
-        default_cr_password="pack-cr-pass",
-    )
+    olt = OLTDevice(name="OLT Defaults")
     db_session.add_all([region, acs, olt])
     db_session.flush()
     olt.tr069_acs_server_id = acs.id
@@ -116,8 +105,19 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     )
     db_session.add_all([internet_vlan, mgmt_vlan])
     db_session.flush()
-    olt.internet_vlan_id = internet_vlan.id
-    olt.management_vlan_id = mgmt_vlan.id
+    # Set config_pack JSON (source of truth for OLT config pack)
+    olt.config_pack = {
+        "line_profile_id": 10,
+        "service_profile_id": 20,
+        "tr069_olt_profile_id": 30,
+        "internet_config_ip_index": 0,
+        "wan_config_profile_id": 5,
+        "internet_gem_index": 1,
+        "cr_username": "pack-cr-user",
+        "cr_password": "pack-cr-pass",
+        "internet_vlan_id": str(internet_vlan.id),
+        "management_vlan_id": str(mgmt_vlan.id),
+    }
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-002",
@@ -335,12 +335,7 @@ def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
         base_url="http://saved-config-acs.example",
         is_active=True,
     )
-    olt = OLTDevice(
-        name="Saved Config OLT",
-        default_tr069_olt_profile_id=30,
-        default_cr_username="cr-user",
-        default_cr_password=encrypt_credential("cr-pass"),
-    )
+    olt = OLTDevice(name="Saved Config OLT")
     db_session.add_all([region, acs, olt])
     db_session.flush()
     olt.tr069_acs_server_id = acs.id
@@ -353,7 +348,13 @@ def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
     )
     db_session.add(internet_vlan)
     db_session.flush()
-    olt.internet_vlan_id = internet_vlan.id
+    # Set config_pack JSON (source of truth for OLT config pack)
+    olt.config_pack = {
+        "tr069_olt_profile_id": 30,
+        "cr_username": "cr-user",
+        "cr_password": encrypt_credential("cr-pass"),
+        "internet_vlan_id": str(internet_vlan.id),
+    }
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-004",
@@ -568,47 +569,9 @@ def test_save_provision_settings_does_not_persist_tr069_profile_override(
     assert "tr069" not in ont.desired_config
 
 
-def test_manual_step_bind_tr069_does_not_persist_profile_override(
-    db_session, monkeypatch
-):
-    from types import SimpleNamespace
-
-    from app.models.network import OntUnit
-    from app.services.network.ont_provisioning.result import StepResult
-    from app.web.admin import network_onts_provisioning
-
-    ont = OntUnit(serial_number="DESIRED-CFG-TR069-BIND", desired_config={})
-    db_session.add(ont)
-    db_session.flush()
-
-    monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.bind_tr069",
-        lambda *args, **kwargs: StepResult("bind_tr069", True, "bound"),
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "_update_service_order_execution_context_for_ont",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "_record_ont_step_action",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "can_manage_ont_from_request",
-        lambda *args, **kwargs: True,
-    )
-
-    response = network_onts_provisioning.step_bind_tr069(
-        SimpleNamespace(headers={}),
-        str(ont.id),
-        db=db_session,
-    )
-
-    assert response.status_code == 200
-    assert "tr069" not in ont.desired_config
+# NOTE: test_manual_step_bind_tr069_does_not_persist_profile_override was removed
+# because step_bind_tr069 was removed as part of consolidating to reconciliation-only
+# provisioning. TR-069 binding now happens via provision_with_reconciliation().
 
 
 def test_direct_provision_route_ignores_posted_tr069_profile_override(
@@ -986,7 +949,8 @@ def test_web_wan_config_uses_config_pack_vlan_and_persists_desired_state(
     )
     db_session.add(internet_vlan)
     db_session.flush()
-    olt.internet_vlan_id = internet_vlan.id
+    # Set config_pack JSON (source of truth for OLT config pack)
+    olt.config_pack = {"internet_vlan_id": str(internet_vlan.id)}
 
     ont = OntUnit(serial_number="DESIRED-CFG-WAN", olt_device_id=olt.id)
     db_session.add(ont)
