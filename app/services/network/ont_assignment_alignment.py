@@ -157,6 +157,9 @@ def sync_ont_topology_to_authoritative_fsp(
     if getattr(ont, "olt_device_id", None) is None:
         ont.olt_device_id = pon_port.olt_id
         updated = True
+    if getattr(ont, "pon_port_id", None) != pon_port.id:
+        ont.pon_port_id = pon_port.id
+        updated = True
     return OntTopologyAlignmentResult(
         pon_port=pon_port,
         updated=updated,

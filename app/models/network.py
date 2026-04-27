@@ -1203,6 +1203,9 @@ class OntUnit(Base):
     olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("olt_devices.id")
     )
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id", ondelete="SET NULL"), index=True
+    )
     pon_type: Mapped[PonType | None] = mapped_column(
         Enum(PonType, name="pontype", create_constraint=False),
     )
@@ -1324,6 +1327,7 @@ class OntUnit(Base):
     zone = relationship("NetworkZone", back_populates="ont_units")
     onu_type = relationship("OnuType", back_populates="ont_units")
     olt_device = relationship("OLTDevice")
+    pon_port = relationship("PonPort")
     user_vlan = relationship("Vlan", foreign_keys=[user_vlan_id])
     splitter = relationship("Splitter")
     splitter_port_rel = relationship("SplitterPort")
