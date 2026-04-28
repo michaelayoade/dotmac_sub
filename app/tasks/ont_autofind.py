@@ -1,4 +1,11 @@
-"""Celery tasks for periodic aggregated OLT autofind discovery."""
+"""Celery tasks for ONT autofind discovery.
+
+Primary autofind is now event-driven via syslog (app/syslog/) and
+webhook (app/api/autofind_webhook.py). The tasks here are used as:
+- autofind_single_olt: Called by syslog/webhook handlers per-OLT
+- discover_all_olt_autofind: Manual full scan (no longer scheduled)
+- poll_rediscovery_and_authorize: Async rediscovery after force-reauth
+"""
 
 from __future__ import annotations
 
@@ -11,6 +18,7 @@ from sqlalchemy import select
 from app.celery_app import celery_app
 from app.models.network import OLTDevice
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network.olt_read_cache import olt_cache
 from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
@@ -78,6 +86,9 @@ def autofind_single_olt(olt_id: str) -> dict[str, int | str]:
                     "error": "olt_not_found",
                 }
 
+            # Invalidate cache to ensure fresh data from OLT
+            olt_cache.invalidate(olt_id, "autofind")
+
             ok, message, stats = ont_autofind_service.sync_olt_autofind_candidates(
                 db, olt_id
             )
@@ -126,12 +137,15 @@ def autofind_single_olt(olt_id: str) -> dict[str, int | str]:
 
 @celery_app.task(name="app.tasks.ont_autofind.discover_all_olt_autofind")
 def discover_all_olt_autofind() -> dict[str, int]:
-    """Periodic task to scan all active OLTs for unconfigured ONTs.
+    """Manual task to scan all active OLTs for unconfigured ONTs.
+
+    NOTE: This task is no longer scheduled periodically. Autofind is now
+    event-driven via syslog (primary) or webhook (fallback). This task
+    remains available for manual scans via admin UI or CLI.
 
     Fans out to parallel autofind_single_olt tasks for each active OLT.
     Each subtask runs independently with its own per-OLT advisory lock,
-    preventing concurrent autofind on the same device even if this
-    orchestrator is triggered multiple times.
+    preventing concurrent autofind on the same device.
 
     Returns:
         Statistics dict with olts_dispatched count.

@@ -843,12 +843,11 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(ont_discovery_minutes * 60, 120),
         )
-        _sync_scheduled_task(
+        # Periodic SSH autofind polling has been replaced by syslog-based discovery.
+        # Retire any existing scheduled task to disable it.
+        _retire_scheduled_task(
             session,
-            name="olt_autofind_discovery",
-            task_name="app.tasks.ont_autofind.discover_all_olt_autofind",
-            enabled=True,
-            interval_seconds=max(ont_discovery_minutes * 60, 120),
+            "app.tasks.ont_autofind.discover_all_olt_autofind",
         )
 
         # OLT config backup (SSH-based running config retrieval)

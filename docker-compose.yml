@@ -722,6 +722,46 @@ services:
     - python
     - -m
     - app.poller
+
+  syslog-listener:
+    build: .
+    container_name: dotmac_sub_syslog_listener
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *default-logging
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      SYSLOG_ENABLED: ${SYSLOG_ENABLED:-true}
+      SYSLOG_LISTEN_HOST: '0.0.0.0'
+      SYSLOG_LISTEN_PORT: '514'
+      AUTOFIND_COOLDOWN_SECONDS: ${AUTOFIND_COOLDOWN_SECONDS:-30}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: dotmac-sub-dev-token
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports:
+    - 514:514/udp
+    volumes:
+    - ./app:/app/app
+    command:
+    - python
+    - -m
+    - app.syslog
+
   # Local SMTP sink disabled.
   # mailhog:
   #   image: mailhog/mailhog:latest

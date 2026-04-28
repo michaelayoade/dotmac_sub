@@ -39,6 +39,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.telemetry import setup_otel
 
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 _AUDIT_SETTINGS_CACHE: dict | None = None
 _AUDIT_SETTINGS_CACHE_AT: float | None = None
@@ -48,6 +49,8 @@ _DEFERRED_ROUTER_TASK = None
 
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
+    ("app.api.network_ont_ops", "router", "api", "user"),
+    ("app.api.network_olt_ops", "router", "api", "user"),
     ("app.web.auth", "router", "web", "none"),
 ]
 
@@ -76,8 +79,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.domains_provisioning", "router", "api", "user"),
     ("app.api.domains_monitoring", "router", "api", "user"),
     ("app.api.domains_network_access", "router", "api", "user"),
-    ("app.api.network_ont_ops", "router", "api", "user"),
-    ("app.api.network_olt_ops", "router", "api", "user"),
     ("app.api.network_catalog", "router", "api", "user"),
     ("app.api.domains_network_fiber", "router", "api", "user"),
     ("app.api.domains_usage", "router", "api", "user"),
@@ -105,6 +106,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.defaults", "router", "api", "user"),
     ("app.api.zabbix", "router", "api", "user"),
     ("app.api.zabbix_webhook", "router", "api", "none"),
+    ("app.api.autofind_webhook", "router", "api", "none"),
     ("app.api.wireguard", "public_router", "api", "none"),
     ("app.api.tr069_inform", "router", "api", "none"),
 ]
@@ -243,7 +245,7 @@ def _warn_on_scheduler_registry_drift() -> None:
 
 def _assert_required_schema() -> None:
     """Fail fast when required DB schema changes are missing."""
-    db = db_session_adapter.create_session()
+    db = SessionLocal()
     try:
         inspector = sqlalchemy_inspect(db.get_bind())
         if not inspector.has_table("ont_units"):
@@ -356,7 +358,7 @@ def _seed_startup_settings() -> None:
             "Failed to ensure storage bucket during startup",
             extra={"event": "storage_bucket_init_failed"},
         )
-    db = db_session_adapter.create_session()
+    db = SessionLocal()
     try:
         seed_auth_settings(db)
         seed_auth_policy_settings(db)
@@ -507,7 +509,7 @@ async def audit_middleware(request: Request, call_next):
     # Check cache first to avoid unnecessary session creation
     audit_settings = _get_cached_audit_settings()
     if audit_settings is None:
-        db = db_session_adapter.create_session()
+        db = SessionLocal()
         try:
             audit_settings = _load_audit_settings(db)
         finally:
@@ -525,7 +527,7 @@ async def audit_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception:
         if should_log:
-            db = db_session_adapter.create_session()
+            db = SessionLocal()
             try:
                 audit_service.audit_events.log_request(
                     db, request, Response(status_code=500)
@@ -534,7 +536,7 @@ async def audit_middleware(request: Request, call_next):
                 db.close()
         raise
     if should_log:
-        db = db_session_adapter.create_session()
+        db = SessionLocal()
         try:
             audit_service.audit_events.log_request(db, request, response)
         finally:
@@ -611,7 +613,7 @@ async def domain_routing_middleware(request: Request, call_next):
     # Check cache first to avoid unnecessary session creation
     routing = _get_cached_domain_routing()
     if routing is None:
-        db = db_session_adapter.create_session()
+        db = SessionLocal()
         try:
             routing = _load_domain_routing(db)
         except SQLAlchemyError:
