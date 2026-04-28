@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from ipaddress import IPv4Network, ip_address, ip_network
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, load_only
 
 from app.models.network import (
@@ -84,8 +85,8 @@ def _existing_ipv4_state(
     )
     if not address_values:
         return {}
-    rows = (
-        db.query(IPv4Address, IPAssignment)
+    stmt = (
+        select(IPv4Address, IPAssignment)
         .options(
             load_only(
                 IPv4Address.id,
@@ -99,9 +100,9 @@ def _existing_ipv4_state(
             IPAssignment,
             IPAssignment.ipv4_address_id == IPv4Address.id,
         )
-        .filter(IPv4Address.address.in_(address_values))
-        .all()
+        .where(IPv4Address.address.in_(address_values))
     )
+    rows = db.execute(stmt).all()
     return {str(address.address): (address, assignment) for address, assignment in rows}
 
 
@@ -322,18 +323,21 @@ def _reserve_static_ipv4_for_ont(
             )
 
     note = _reservation_note_for_ont(ont_id)
-    previous = (
-        db.query(IPv4Address)
-        .filter(IPv4Address.notes == note)
-        .filter(IPv4Address.address != selected)
-        .all()
+    previous = list(
+        db.scalars(
+            select(IPv4Address)
+            .where(IPv4Address.notes == note)
+            .where(IPv4Address.address != selected)
+        ).all()
     )
     for address in previous:
         if not getattr(address, "assignment", None):
             address.is_reserved = False
             address.notes = None
 
-    record = db.query(IPv4Address).filter(IPv4Address.address == selected).first()
+    record = db.scalars(
+        select(IPv4Address).where(IPv4Address.address == selected)
+    ).first()
     if record is None:
         record = IPv4Address(
             address=selected,
@@ -871,6 +875,9 @@ def save_provision_settings(
     )
 
 
+_MISSING_FORM_VALUE = object()
+
+
 def validate_provision_form_fields(
     *,
     onu_mode: str | None,
@@ -893,6 +900,8 @@ def validate_provision_form_fields(
     wifi_enabled: bool | None,
     wifi_ssid: str | None,
     wifi_password: str | None,
+    mgmt_vlan_id: object = _MISSING_FORM_VALUE,
+    wan_vlan_id: object = _MISSING_FORM_VALUE,
 ) -> list[str]:
     """Validate operator-selected provisioning inputs before allowing proceed."""
     issues: list[str] = []
@@ -902,6 +911,8 @@ def validate_provision_form_fields(
 
     if onu_mode_value not in {OnuMode.routing.value, OnuMode.bridging.value}:
         issues.append("Select ONU mode")
+    if mgmt_vlan_id is not _MISSING_FORM_VALUE and not mgmt_vlan_id:
+        issues.append("Select management VLAN")
     if mgmt_ip_mode_value not in {"dhcp", "static", "static_ip"}:
         issues.append("Select management IP method")
     if mgmt_ip_mode_value in {"static", "static_ip"}:
@@ -914,6 +925,12 @@ def validate_provision_form_fields(
             issues.append("Bridge ONU mode requires bridged WAN protocol")
     elif wan_protocol_value not in {"pppoe", "dhcp", "static"}:
         issues.append("Select internet deployment method")
+    if (
+        wan_vlan_id is not _MISSING_FORM_VALUE
+        and wan_protocol_value in {"pppoe", "dhcp", "static"}
+        and not wan_vlan_id
+    ):
+        issues.append("Select internet VLAN")
 
     if wan_protocol_value == "pppoe" and not pppoe_username:
         issues.append("Enter PPPoE username")

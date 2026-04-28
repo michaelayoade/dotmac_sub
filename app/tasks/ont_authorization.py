@@ -16,6 +16,70 @@ from app.services.task_idempotency import idempotent_task
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(name="app.tasks.ont_authorization.authorize_ont_from_olt_api")
+def authorize_ont_from_olt_api(
+    operation_id: str,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    force_reauthorize: bool = False,
+) -> dict[str, object]:
+    from app.services.network.ont_authorization import (
+        authorize_autofind_ont_and_provision_network_audited,
+    )
+    from app.services.network_operations import network_operations
+
+    db = db_session_adapter.create_session()
+    try:
+        network_operations.mark_running(db, operation_id)
+        result = authorize_autofind_ont_and_provision_network_audited(
+            db,
+            olt_id,
+            fsp,
+            serial_number,
+            force_reauthorize=force_reauthorize,
+            request=None,
+        )
+        payload = {
+            "status": result.status,
+            "ont_unit_id": result.ont_unit_id,
+            "ont_id_on_olt": result.ont_id_on_olt,
+            "completed_authorization": result.completed_authorization,
+            "follow_up_operation_id": result.follow_up_operation_id,
+            "pending_rediscovery": result.pending_rediscovery,
+            "rediscovery_task_id": result.rediscovery_task_id,
+            "steps": [
+                {
+                    "step": step.step,
+                    "success": step.success,
+                    "message": step.message,
+                    "duration_ms": step.duration_ms,
+                }
+                for step in result.steps
+            ],
+        }
+        if result.success:
+            network_operations.mark_succeeded(db, operation_id, output_payload=payload)
+        else:
+            network_operations.mark_failed(db, operation_id, result.message)
+        db.commit()
+        return {
+            "success": result.success,
+            "message": result.message,
+            "data": payload,
+        }
+    except Exception as exc:
+        db.rollback()
+        try:
+            network_operations.mark_failed(db, operation_id, str(exc))
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def can_auto_normalize_wan_after_authorization(db: Any, ont: OntUnit) -> bool:
     """Return True only for newly authorized autofind ONTs with no service history."""
     if getattr(ont, "provisioning_status", None) not in (
@@ -96,7 +160,7 @@ def ensure_tr069_acs_connectivity(
         effective_values = effective_config.get("values", {})
 
         # Step 1: Configure management IP on OLT (IPHOST) if allocated
-        mgmt_ip = effective_values.get("mgmt_ip_address") or ont.mgmt_ip_address
+        mgmt_ip = effective_values.get("mgmt_ip_address")
         mgmt_vlan = effective_values.get("mgmt_vlan") or getattr(olt, "management_vlan", None)
         mgmt_vlan_tag = getattr(mgmt_vlan, "tag", None) if mgmt_vlan else None
 

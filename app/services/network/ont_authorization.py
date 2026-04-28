@@ -131,7 +131,7 @@ def refresh_pool_availability(
     """Recompute next available IPv4 address and available count for a pool."""
     import ipaddress
 
-    from app.models.network import IpBlock, IpPool, IPv4Address
+    from app.models.network import IpBlock, IpPool, IPv4Address, OntAssignment
 
     pool = db.get(IpPool, pool_id)
     if pool is None:
@@ -144,12 +144,26 @@ def refresh_pool_availability(
             .where(IpBlock.is_active.is_(True))
         ).all()
     )
+
+    # Get IPs marked as used in ipv4_addresses table
     used = {
         str(address)
         for address in db.scalars(
             select(IPv4Address.address).where(IPv4Address.pool_id == pool.id)
         ).all()
     }
+
+    # Also get IPs assigned to ONTs (source of truth for management IPs)
+    # These may not be tracked in ipv4_addresses yet
+    assigned_ips = db.scalars(
+        select(OntAssignment.mgmt_ip_address).where(
+            OntAssignment.mgmt_ip_address.isnot(None)
+        )
+    ).all()
+    for ip in assigned_ips:
+        if ip:
+            used.add(str(ip))
+
     gateway = getattr(pool, "gateway", None)
     if gateway:
         used.add(str(gateway))
@@ -235,7 +249,9 @@ def allocate_management_ip_for_ont(
 
     # Create IPv4Address record to reserve the IP
     note = f"ont:{ont_unit_id}"
-    record = db.query(IPv4Address).filter(IPv4Address.address == next_ip).first()
+    record = db.scalars(
+        select(IPv4Address).where(IPv4Address.address == next_ip)
+    ).first()
     if record is None:
         record = IPv4Address(
             address=next_ip,
@@ -252,9 +268,6 @@ def allocate_management_ip_for_ont(
     assignment.mgmt_ip_address = next_ip
     assignment.mgmt_ip_mode = MgmtIpMode.static_ip
 
-    # Also store in desired_config for backwards compatibility
-    ont.mgmt_ip_address = next_ip
-
     db.flush()
     logger.info(
         "Allocated management IP %s from pool %s to ONT %s",
@@ -267,12 +280,9 @@ def allocate_management_ip_for_ont(
 
 def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
     """Get the active assignment for an ONT, creating one if none exists."""
-    for assignment in getattr(ont, "assignments", []) or []:
-        if getattr(assignment, "active", False):
-            return assignment
-    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
-    db.add(assignment)
-    return assignment
+    from app.services import web_network_ont_assignments as assignments_service
+
+    return assignments_service.get_or_create_active_assignment(db, ont)
 
 
 def get_autofind_candidate_by_serial(
@@ -695,6 +705,7 @@ def authorize_autofind_ont(
 
     profile_started = monotonic()
     authorization_preset = None
+    authorization_profiles: AuthorizationProfileResolution | None = None
     if preset_id:
         from app.models.network import AuthorizationPreset
 
@@ -742,7 +753,12 @@ def authorize_autofind_ont(
             )
             if duplicate.success:
                 raw_ont_id = (duplicate.details or {}).get("ont_id")
-                ont_id = int(raw_ont_id) if str(raw_ont_id).isdigit() else None
+                if isinstance(raw_ont_id, int):
+                    ont_id = raw_ont_id
+                elif isinstance(raw_ont_id, str) and raw_ont_id.isdigit():
+                    ont_id = int(raw_ont_id)
+                else:
+                    ont_id = None
                 add_step(
                     "Authorize ONT on OLT",
                     True,
@@ -849,7 +865,10 @@ def authorize_autofind_ont_and_provision_network_audited(
     preset_id: str | None = None,
     request: Request | None = None,
 ) -> AuthorizationWorkflowResult:
-    """Authorize ONT and log the action for audit trail."""
+    """Authorize ONT and log the action for audit trail.
+
+    Commits on success.
+    """
     from app.services.network.action_logging import log_network_action_result
 
     result = authorize_autofind_ont(
@@ -861,6 +880,11 @@ def authorize_autofind_ont_and_provision_network_audited(
         preset_id=preset_id,
         run_post_auth_sync=True,
     )
+
+    # Commit on success
+    if result.success:
+        db.commit()
+
     status = getattr(result, "status", "success" if result.success else "error")
     log_olt_audit_event(
         db,

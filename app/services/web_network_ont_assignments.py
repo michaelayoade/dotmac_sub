@@ -246,6 +246,34 @@ def has_active_assignment(db: Session, ont_id: str) -> bool:
     return any(a.active for a in assignments)
 
 
+def active_assignment_for_ont_id(db: Session, ont_id) -> Any | None:
+    from app.models.network import OntAssignment
+
+    return db.scalars(
+        select(OntAssignment)
+        .where(OntAssignment.ont_unit_id == ont_id)
+        .where(OntAssignment.active.is_(True))
+        .limit(1)
+    ).first()
+
+
+def get_or_create_active_assignment(db: Session, ont) -> Any:
+    """Get the active assignment for an ONT, creating one if none exists.
+
+    This is the canonical function for retrieving/creating an active assignment.
+    Use this when you need a mutable assignment record to update.
+    """
+    from app.models.network import OntAssignment
+
+    for assignment in getattr(ont, "assignments", []) or []:
+        if getattr(assignment, "active", False):
+            return assignment
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db.add(assignment)
+    db.flush()
+    return assignment
+
+
 def resolve_pon_port_id_for_assignment(
     db: Session, ont, values: dict[str, object]
 ) -> str | None:

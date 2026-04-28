@@ -6,13 +6,13 @@ import json
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
+from app.services import web_network_ont_assignments as web_network_ont_assignments_service
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_topology as web_network_ont_topology_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
@@ -126,23 +126,20 @@ def _action_result_response(
     ont_id: str,
     action: str,
 ) -> JSONResponse:
-    """Return a JSON response for legacy ActionResult handlers."""
+    """Return a JSON response from an ActionResult-like object.
+
+    Delegates to _action_json_response for consistent response format.
+    """
     success = bool(getattr(result, "success", False))
     message = str(getattr(result, "message", "Action failed"))
     waiting = bool(getattr(result, "waiting", False))
-    log_network_action_result(
-        request=request,
-        resource_type="ont",
-        resource_id=ont_id,
-        action=action,
+    return _action_json_response(
         success=success,
         message=message,
+        action=action,
+        request=request,
+        ont_id=ont_id,
         waiting=waiting,
-    )
-    return JSONResponse(
-        {"success": success, "message": message},
-        status_code=200 if success else 400,
-        headers=_toast_headers(message, "success" if success else "error"),
     )
 
 
@@ -237,103 +234,17 @@ def ont_reauthorize(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Quick re-authorize ONT on OLT (force mode)."""
-    from app.models.network import OntUnit
-    from app.services.network import olt_operations as olt_operations_service
-
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
 
-    ont = db.get(OntUnit, ont_id)
-    if not ont:
-        return _action_json_response(
-            success=False,
-            message="ONT not found",
-            action="Re-authorize ONT",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    if not ont.olt_device_id:
-        return _action_json_response(
-            success=False,
-            message="ONT not assigned to an OLT",
-            action="Re-authorize ONT",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    # Build FSP from board/port
-    fsp = f"{ont.board}/{ont.port}" if ont.board and ont.port else None
-    if not fsp:
-        return _action_json_response(
-            success=False,
-            message="ONT missing port assignment (FSP)",
-            action="Re-authorize ONT",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    # Call authorize with force=True
-    auth_ok, auth_msg, _ = olt_operations_service.authorize_ont(
-        db,
-        olt_id=str(ont.olt_device_id),
-        fsp=fsp,
-        serial_number=ont.serial_number or "",
-        force_reauthorize=True,
-        initiated_by=getattr(getattr(request.state, "user", None), "email", None),
+    result = web_network_ont_actions_service.execute_reauthorize(
+        db, ont_id, request=request
     )
-
-    if auth_ok:
-        db.commit()
-
     return _action_json_response(
-        success=auth_ok,
-        message=auth_msg,
+        success=result.success,
+        message=result.message,
         action="Re-authorize ONT",
-        request=request,
-        ont_id=ont_id,
-    )
-
-
-@router.post(
-    "/onts/{ont_id}/quick-apply-profile",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_quick_apply_profile(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
-    """Apply OLT's default profile to ONT without wizard."""
-    from app.models.network import OntUnit
-
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-
-    ont = db.get(OntUnit, ont_id)
-    if not ont:
-        return _action_json_response(
-            success=False,
-            message="ONT not found",
-            action="Quick Apply Profile",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    olt = ont.olt_device
-    if not olt:
-        return _action_json_response(
-            success=False,
-            message="ONT not assigned to an OLT",
-            action="Quick Apply Profile",
-            request=request,
-            ont_id=ont_id,
-        )
-
-    return _action_json_response(
-        success=False,
-        message="Quick apply profile is obsolete. Edit ONT desired config and run provisioning.",
-        action="Quick Apply Profile",
         request=request,
         ont_id=ont_id,
     )
@@ -741,19 +652,9 @@ def ont_set_voip_config(
     voip_enabled_raw = _form_str(form, "voip_enabled").strip()
     voip_enabled = voip_enabled_raw in {"true", "1", "yes", "on"}
 
-    from app.models.network import OntUnit
-    from app.services.adapters import AdapterResult
-    from app.services.common import coerce_uuid
-
-    ont = db.get(OntUnit, coerce_uuid(ont_id))
-    if not ont:
-        result = AdapterResult(ok=False, message="ONT not found")
-    else:
-        ont.voip_enabled = voip_enabled
-        db.flush()
-        status = "enabled" if voip_enabled else "disabled"
-        result = AdapterResult(ok=True, message=f"VoIP {status} on {ont.serial_number}")
-
+    result = web_network_ont_actions_service.set_voip_enabled(
+        db, ont_id, enabled=voip_enabled, request=request
+    )
     return _action_result_response(
         result=result,
         request=request,
@@ -797,125 +698,17 @@ def ont_running_config(
     Returns the service-port and ONT info from the OLT CLI.
     Falls back to cached data if OLT is unreachable.
     """
-    from datetime import UTC, datetime
-
-    from app.models.network import OntAssignment, OntUnit
-    from app.services.common import coerce_uuid
-    from app.services.network.olt_read_cache import olt_cache
-    from app.services.network.olt_ssh import run_cli_command
-    from app.services.network.serial_utils import parse_ont_id_on_olt
-
-    ont = db.get(OntUnit, coerce_uuid(ont_id))
-    if not ont:
-        return templates.TemplateResponse(
-            "admin/network/onts/_running_config_modal.html",
-            {
-                "request": request,
-                "ont": None,
-                "error": "ONT not found",
-                "config_text": "",
-                "from_cache": False,
-                "fetched_at": None,
-            },
-        )
-
-    active_assignment = db.scalars(
-        select(OntAssignment)
-        .where(OntAssignment.ont_unit_id == ont.id)
-        .where(OntAssignment.active.is_(True))
-        .limit(1)
-    ).first()
-
-    # Try to get the OLT from the ONT or active assignment.
-    olt = None
-    if ont.olt_device:
-        olt = ont.olt_device
-    elif active_assignment and active_assignment.pon_port:
-        olt = active_assignment.pon_port.olt
-
-    if not olt:
-        return templates.TemplateResponse(
-            "admin/network/onts/_running_config_modal.html",
-            {
-                "request": request,
-                "ont": ont,
-                "error": "No OLT associated with this ONT",
-                "config_text": "",
-                "from_cache": False,
-                "fetched_at": None,
-            },
-        )
-
-    # Build the ONT-specific command (Huawei style)
-    # Get F/S/P from the assignment
-    fsp = None
-    onu_id = None
-    if active_assignment and active_assignment.pon_port:
-        pon = active_assignment.pon_port
-        fsp = pon.name  # e.g., "0/1/0"
-        onu_id = parse_ont_id_on_olt(getattr(ont, "external_id", None))
-
-    # Cache key for this ONT's config
-    cache_key = f"ont_config:{ont_id}"
-    cached = olt_cache.get(str(olt.id), "cli", cache_key)
-    cached_at = None
-
-    config_lines = []
-    error_msg = None
-    from_cache = False
-
-    # Try to fetch service-port info for this ONT
-    if fsp and onu_id:
-        # Run display service-port filtered by ONT
-        cmd = f"display service-port port {fsp} ont {onu_id}"
-        ok, msg, output = run_cli_command(olt, cmd)
-        if ok and output.strip():
-            config_lines.append(f"# Service Ports ({cmd})")
-            config_lines.append(output.strip())
-            config_lines.append("")
-        elif not ok and cached:
-            from_cache = True
-            config_lines.append(cached)
-            error_msg = "OLT unreachable - showing cached config"
-        else:
-            error_msg = msg
-
-        # Also try to get ONT info
-        cmd2 = f"display ont info {fsp} {onu_id}"
-        ok2, msg2, output2 = run_cli_command(olt, cmd2)
-        if ok2 and output2.strip():
-            config_lines.append(f"# ONT Info ({cmd2})")
-            config_lines.append(output2.strip())
-    else:
-        # Fallback: try by serial number
-        cmd = f"display ont info by-sn {ont.serial_number}"
-        ok, msg, output = run_cli_command(olt, cmd)
-        if ok and output.strip():
-            config_lines.append(f"# ONT Info ({cmd})")
-            config_lines.append(output.strip())
-        elif not ok and cached:
-            from_cache = True
-            config_lines.append(cached)
-            error_msg = "OLT unreachable - showing cached config"
-        else:
-            error_msg = msg
-
-    config_text = "\n".join(config_lines)
-
-    # Cache successful results
-    if config_text and not from_cache and not error_msg:
-        olt_cache.set(str(olt.id), "cli", config_text, cache_key)
-
+    result = web_network_ont_actions_service.fetch_olt_running_config(db, ont_id)
     return templates.TemplateResponse(
         "admin/network/onts/_running_config_modal.html",
         {
             "request": request,
-            "ont": ont,
-            "olt": olt,
-            "error": error_msg,
-            "config_text": config_text,
-            "from_cache": from_cache,
-            "fetched_at": cached_at if from_cache else datetime.now(UTC),
+            "ont": result.ont,
+            "olt": result.olt,
+            "error": result.error,
+            "config_text": result.config_text,
+            "from_cache": result.from_cache,
+            "fetched_at": result.fetched_at,
         },
     )
 
@@ -1127,7 +920,7 @@ def ont_reconcile(
     request: Request,
     ont_id: str,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Run OLT/ACS reconciliation and return refreshed operational panel."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
@@ -1282,7 +1075,7 @@ def ont_capture_config_snapshot(
     request: Request,
     ont_id: str,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Capture a new config snapshot from TR-069 and return updated list."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
@@ -1347,7 +1140,7 @@ def ont_delete_config_snapshot(
     ont_id: str,
     snapshot_id: str,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
+) -> Response:
     """Delete a config snapshot and return updated list."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
@@ -1827,20 +1620,13 @@ def ont_decommission_execute(
         request=request,
     )
 
-    if result.success:
-        db.commit()
-        return JSONResponse(
-            result.to_dict(),
-            status_code=200,
-            headers=_toast_headers(result.message, "success"),
-        )
-    else:
-        db.rollback()
-        return JSONResponse(
-            result.to_dict(),
-            status_code=400,
-            headers=_toast_headers(result.message, "error"),
-        )
+    toast_type = "success" if result.success else "error"
+    status_code = 200 if result.success else 400
+    return JSONResponse(
+        result.to_dict(),
+        status_code=status_code,
+        headers=_toast_headers(result.message, toast_type),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1930,11 +1716,7 @@ def ont_refresh_status_get(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Refresh ONT status from OLT and TR-069 (GET for HTMX compatibility)."""
-    from app.services.network.ont_actions import OntActions
-
-    result = OntActions.refresh_status(db, ont_id)
-    if result.success:
-        db.commit()
+    result = web_network_ont_actions_service.execute_refresh(db, ont_id, request=request)
     return JSONResponse(
         {"success": result.success, "message": result.message},
         headers=_toast_headers(

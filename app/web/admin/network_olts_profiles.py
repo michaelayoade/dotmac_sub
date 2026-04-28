@@ -14,6 +14,7 @@ from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services.auth_dependencies import require_permission
+from app.web.request_parsing import parse_form_data_sync
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network.olt_inventory import get_olt_or_none
@@ -95,13 +96,13 @@ def olt_tr069_profile_create(
     "/olts/{olt_id}/tr069-profiles/rebind",
     dependencies=[Depends(require_permission("network:write"))],
 )
-async def olt_tr069_rebind(
+def olt_tr069_rebind(
     request: Request,
     olt_id: str,
     db: Session = Depends(get_db),
 ) -> Response:
     """Rebind selected ONTs to a TR-069 server profile."""
-    form = await request.form()
+    form = parse_form_data_sync(request)
     target_profile_raw = form.get("target_profile_id", "0")
     target_profile_value = (
         target_profile_raw if isinstance(target_profile_raw, str) else "0"

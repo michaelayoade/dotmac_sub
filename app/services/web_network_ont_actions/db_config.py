@@ -202,3 +202,29 @@ def update_ont_config(
         return ActionResult(success=push_success, message=message)
 
     return ActionResult(success=True, message="Configuration saved to database.")
+
+
+def set_voip_enabled(
+    db: Session,
+    ont_id: str,
+    *,
+    enabled: bool,
+    request: Request | None = None,
+) -> ActionResult:
+    """Set VoIP enabled status on ONT."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        return ActionResult(success=False, message="ONT not found")
+
+    ont.voip_enabled = enabled
+    db.commit()
+
+    status = "enabled" if enabled else "disabled"
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_voip_enabled",
+        ont_id=ont_id,
+        metadata={"voip_enabled": enabled},
+    )
+    return ActionResult(success=True, message=f"VoIP {status} on {ont.serial_number}")

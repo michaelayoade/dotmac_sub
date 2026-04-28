@@ -584,12 +584,9 @@ def core_device_interface_toggle_monitored(
     db: Session = Depends(get_db),
 ):
     """Toggle whether an interface is included in bandwidth monitoring."""
-    from app.models.network_monitoring import DeviceInterface
-
-    iface = db.get(DeviceInterface, interface_id)
-    if iface and str(iface.device_id) == device_id:
-        iface.monitored = monitored
-        db.commit()
+    web_network_core_devices_service.toggle_interface_monitored(
+        db, device_id=device_id, interface_id=interface_id, monitored=monitored
+    )
     return RedirectResponse(
         f"/admin/network/core-devices/{device_id}",
         status_code=303,

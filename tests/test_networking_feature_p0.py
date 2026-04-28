@@ -105,7 +105,9 @@ from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
 from app.services.credential_crypto import is_encrypted
+from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.cpe_tr069 import CpeTR069
 from app.services.network.ont_tr069 import OntTR069
@@ -3544,7 +3546,7 @@ def test_test_olt_connection_and_test_backup(db_session, monkeypatch, tmp_path: 
     db_session.commit()
 
     monkeypatch.setattr(
-        web_network_olts_service,
+        olt_operations_service,
         "fetch_running_config",
         lambda _olt: "sysName = OLT\nsysDescr = Device\n",
     )
@@ -3775,7 +3777,7 @@ def test_update_olt_keeps_existing_ssh_password_when_blank(db_session):
 
 def test_create_payload_encrypts_olt_ssh_password(monkeypatch):
     monkeypatch.setattr(
-        web_network_olts_service,
+        olt_web_forms_service,
         "encrypt_credential",
         lambda value: f"enc-test:{value}" if value else value,
     )

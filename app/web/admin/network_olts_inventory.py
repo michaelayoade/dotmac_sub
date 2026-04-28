@@ -10,17 +10,11 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.network import (
-    IpPool,
     OLTDevice,
-    OntAssignment,
-    OntUnit,
-    PonPort,
-    Vlan,
 )
 from app.services import network as network_service
 from app.services import web_admin as web_admin_service
@@ -39,7 +33,8 @@ from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import log_network_action_result
-from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.olt_inventory import active_olt_scan_targets, get_olt_or_none
+from app.services.network.olt_lifecycle import get_deletion_impact
 from app.services.network.ont_authorization import (
     authorize_autofind_ont_and_provision_network_audited,
 )
@@ -135,30 +130,11 @@ def _log_olt_action_result(
 
 
 def _olt_delete_impact(db: Session, olt: OLTDevice) -> dict[str, object]:
-    active_onts = (
-        db.scalar(
-            select(func.count(OntUnit.id))
-            .where(OntUnit.olt_device_id == olt.id)
-            .where(OntUnit.is_active.is_(True))
-        )
-        or 0
-    )
-    active_assignments = (
-        db.scalar(
-            select(func.count(OntAssignment.id))
-            .join(PonPort, OntAssignment.pon_port_id == PonPort.id)
-            .where(PonPort.olt_id == olt.id)
-            .where(OntAssignment.active.is_(True))
-        )
-        or 0
-    )
-    linked_vlans = (
-        db.scalar(select(func.count(Vlan.id)).where(Vlan.olt_device_id == olt.id)) or 0
-    )
-    linked_ip_pools = (
-        db.scalar(select(func.count(IpPool.id)).where(IpPool.olt_device_id == olt.id))
-        or 0
-    )
+    impact = get_deletion_impact(db, str(olt.id))
+    active_onts = impact.active_onts if impact else 0
+    active_assignments = impact.active_assignments if impact else 0
+    linked_vlans = impact.vlans_to_orphan if impact else 0
+    linked_ip_pools = impact.ip_pools_to_orphan if impact else 0
     blocking_reasons = []
     if active_onts:
         blocking_reasons.append(
@@ -1145,7 +1121,7 @@ def olt_autofind_scan(
             olt_id=olt_id,
             entries=entries,
         )
-        db.commit()
+        # sync_olt_autofind_entries commits internally
 
         # Auto-authorize if requested
         if auto_authorize and entries:
@@ -1170,8 +1146,7 @@ def olt_autofind_scan(
                         "message": auth_msg,
                         "ont_id": ont_unit_id,
                     })
-                    if auth_ok:
-                        db.commit()
+                    # authorize_autofind_ont_and_provision_network_audited commits on success
                 except Exception as exc:
                     auth_results.append({
                         "serial_number": entry.serial_number,
@@ -1270,10 +1245,7 @@ def unconfigured_onts_scan_now(
     is_htmx = request.headers.get("HX-Request") == "true"
 
     # Get OLT IDs to scan
-    query = select(OLTDevice.id, OLTDevice.name).where(OLTDevice.is_active.is_(True))
-    if olt_id:
-        query = query.where(OLTDevice.id == olt_id)
-    olts = db.execute(query.order_by(OLTDevice.name.asc())).all()
+    olts = active_olt_scan_targets(db, olt_id=olt_id)
 
     if not olts:
         message = "No active OLTs found to scan"
@@ -1310,6 +1282,7 @@ def unconfigured_onts_scan_now(
             },
             initiated_by=actor,
         )
+        # Commit required: Celery task needs operation visible before it runs
         db.commit()
     except Exception as exc:
         # Likely duplicate operation in progress

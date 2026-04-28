@@ -522,11 +522,12 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     if not server or not server.cwmp_url:
         return stats
 
-    onts = (
-        db.query(OntUnit)
-        .filter(OntUnit.olt_device_id == olt.id)
-        .filter(OntUnit.is_active.is_(True))
-        .all()
+    onts = list(
+        db.scalars(
+            select(OntUnit)
+            .where(OntUnit.olt_device_id == olt.id)
+            .where(OntUnit.is_active.is_(True))
+        ).all()
     )
     if not onts:
         return stats
@@ -626,11 +627,12 @@ def update_olt(
         sync_monitoring_device(db, olt, payload_values)
         new_acs_id = str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
         if old_acs_id != new_acs_id and new_acs_id:
-            onts = (
-                db.query(OntUnit)
-                .filter(OntUnit.olt_device_id == olt.id)
-                .filter(OntUnit.is_active.is_(True))
-                .all()
+            onts = list(
+                db.scalars(
+                    select(OntUnit)
+                    .where(OntUnit.olt_device_id == olt.id)
+                    .where(OntUnit.is_active.is_(True))
+                ).all()
             )
             for ont in onts:
                 tr069_service.sync_ont_acs_server(db, ont, olt.tr069_acs_server_id)

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
@@ -913,14 +914,15 @@ class OntTR069:
     ) -> None:
         from app.models.tr069 import Tr069CpeDevice, Tr069Session
 
-        sessions = (
-            db.query(Tr069Session)
-            .join(Tr069CpeDevice, Tr069Session.device_id == Tr069CpeDevice.id)
-            .filter(Tr069CpeDevice.ont_unit_id == ont.id)
-            .filter(Tr069CpeDevice.is_active.is_(True))
-            .order_by(Tr069Session.started_at.desc(), Tr069Session.created_at.desc())
-            .limit(limit)
-            .all()
+        sessions = list(
+            db.scalars(
+                select(Tr069Session)
+                .join(Tr069CpeDevice, Tr069Session.device_id == Tr069CpeDevice.id)
+                .where(Tr069CpeDevice.ont_unit_id == ont.id)
+                .where(Tr069CpeDevice.is_active.is_(True))
+                .order_by(Tr069Session.started_at.desc(), Tr069Session.created_at.desc())
+                .limit(limit)
+            ).all()
         )
         summary.recent_informs = sessions
 
@@ -949,14 +951,15 @@ class OntTR069:
     ) -> None:
         from app.models.tr069 import Tr069CpeDevice, Tr069Parameter
 
-        params = (
-            db.query(Tr069Parameter)
-            .join(Tr069CpeDevice, Tr069Parameter.device_id == Tr069CpeDevice.id)
-            .filter(Tr069CpeDevice.ont_unit_id == ont.id)
-            .filter(Tr069CpeDevice.is_active.is_(True))
-            .order_by(Tr069Parameter.updated_at.desc(), Tr069Parameter.name.asc())
-            .limit(limit)
-            .all()
+        params = list(
+            db.scalars(
+                select(Tr069Parameter)
+                .join(Tr069CpeDevice, Tr069Parameter.device_id == Tr069CpeDevice.id)
+                .where(Tr069CpeDevice.ont_unit_id == ont.id)
+                .where(Tr069CpeDevice.is_active.is_(True))
+                .order_by(Tr069Parameter.updated_at.desc(), Tr069Parameter.name.asc())
+                .limit(limit)
+            ).all()
         )
         grouped: dict[str, list[dict[str, Any]]] = {}
         for param in params:

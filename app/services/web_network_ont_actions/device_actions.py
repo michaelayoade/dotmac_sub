@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -86,6 +88,8 @@ def execute_refresh(
 ) -> ActionResult:
     """Execute status refresh and return result."""
     result = OntActions.refresh_status(db, ont_id)
+    if result.success:
+        db.commit()
     _log_action_audit(
         db,
         request=request,
@@ -230,4 +234,180 @@ def execute_connection_request(
         lambda: _acs_config_writer().send_connection_request(db, ont_id),
         correlation_key=f"ont_conn_req:{ont_id}",
         initiated_by=initiated_by,
+    )
+
+
+def execute_reauthorize(
+    db: Session,
+    ont_id: str,
+    *,
+    request: Request | None = None,
+) -> ActionResult:
+    """Re-authorize ONT on OLT with force mode.
+
+    Resolves ONT context and calls OLT authorization service.
+    Commits on success.
+    """
+    from app.models.network import OntUnit
+    from app.services.network import olt_operations as olt_operations_service
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return ActionResult(success=False, message="ONT not found")
+
+    if not ont.olt_device_id:
+        return ActionResult(success=False, message="ONT not assigned to an OLT")
+
+    # Build FSP from board/port
+    fsp = f"{ont.board}/{ont.port}" if ont.board and ont.port else None
+    if not fsp:
+        return ActionResult(success=False, message="ONT missing port assignment (FSP)")
+
+    # Call authorize with force=True
+    auth_ok, auth_msg, _ = olt_operations_service.authorize_ont(
+        db,
+        olt_id=str(ont.olt_device_id),
+        fsp=fsp,
+        serial_number=ont.serial_number or "",
+        force_reauthorize=True,
+        request=request,
+    )
+
+    if auth_ok:
+        db.commit()
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="reauthorize",
+        ont_id=ont_id,
+        metadata={"success": auth_ok, "message": auth_msg, "fsp": fsp},
+    )
+
+    return ActionResult(success=auth_ok, message=auth_msg)
+
+
+@dataclass
+class RunningConfigResult:
+    """Result of fetching ONT running config from OLT."""
+
+    ont: object | None
+    olt: object | None
+    config_text: str
+    error: str | None
+    from_cache: bool
+    fetched_at: datetime | None
+
+
+def fetch_olt_running_config(
+    db: Session,
+    ont_id: str,
+) -> RunningConfigResult:
+    """Fetch ONT-specific configuration from the OLT via SSH.
+
+    Returns the service-port and ONT info from the OLT CLI.
+    Falls back to cached data if OLT is unreachable.
+    """
+    from app.models.network import OntUnit
+    from app.services import web_network_ont_assignments as assignments_service
+    from app.services.common import coerce_uuid
+    from app.services.network.olt_read_cache import olt_cache
+    from app.services.network.olt_ssh import run_cli_command
+    from app.services.network.serial_utils import parse_ont_id_on_olt
+
+    ont = db.get(OntUnit, coerce_uuid(ont_id))
+    if not ont:
+        return RunningConfigResult(
+            ont=None,
+            olt=None,
+            config_text="",
+            error="ONT not found",
+            from_cache=False,
+            fetched_at=None,
+        )
+
+    active_assignment = assignments_service.active_assignment_for_ont_id(db, ont.id)
+
+    # Try to get the OLT from the ONT or active assignment
+    olt = None
+    if ont.olt_device:
+        olt = ont.olt_device
+    elif active_assignment and active_assignment.pon_port:
+        olt = active_assignment.pon_port.olt
+
+    if not olt:
+        return RunningConfigResult(
+            ont=ont,
+            olt=None,
+            config_text="",
+            error="No OLT associated with this ONT",
+            from_cache=False,
+            fetched_at=None,
+        )
+
+    # Build the ONT-specific command (Huawei style)
+    fsp = None
+    onu_id = None
+    if active_assignment and active_assignment.pon_port:
+        pon = active_assignment.pon_port
+        fsp = pon.name  # e.g., "0/1/0"
+        onu_id = parse_ont_id_on_olt(getattr(ont, "external_id", None))
+
+    # Cache key for this ONT's config
+    cache_key = f"ont_config:{ont_id}"
+    cached = olt_cache.get(str(olt.id), "cli", cache_key)
+
+    config_lines: list[str] = []
+    error_msg = None
+    from_cache = False
+
+    # Try to fetch service-port info for this ONT
+    if fsp and onu_id:
+        # Run display service-port filtered by ONT
+        cmd = f"display service-port port {fsp} ont {onu_id}"
+        ok, msg, output = run_cli_command(olt, cmd)
+        if ok and output.strip():
+            config_lines.append(f"# Service Ports ({cmd})")
+            config_lines.append(output.strip())
+            config_lines.append("")
+        elif not ok and cached:
+            from_cache = True
+            config_lines.append(cached)
+            error_msg = "OLT unreachable - showing cached config"
+        else:
+            error_msg = msg
+
+        # Also try to get ONT info
+        cmd2 = f"display ont info {fsp} {onu_id}"
+        ok2, _, output2 = run_cli_command(olt, cmd2)
+        if ok2 and output2.strip():
+            config_lines.append(f"# ONT Info ({cmd2})")
+            config_lines.append(output2.strip())
+    else:
+        # Fallback: try by serial number
+        cmd = f"display ont info by-sn {ont.serial_number}"
+        ok, msg, output = run_cli_command(olt, cmd)
+        if ok and output.strip():
+            config_lines.append(f"# ONT Info ({cmd})")
+            config_lines.append(output.strip())
+        elif not ok and cached:
+            from_cache = True
+            config_lines.append(cached)
+            error_msg = "OLT unreachable - showing cached config"
+        else:
+            error_msg = msg
+
+    config_text = "\n".join(config_lines)
+
+    # Cache successful results
+    if config_text and not from_cache and not error_msg:
+        olt_cache.set(str(olt.id), "cli", config_text, cache_key)
+
+    return RunningConfigResult(
+        ont=ont,
+        olt=olt,
+        config_text=config_text,
+        error=error_msg,
+        from_cache=from_cache,
+        fetched_at=datetime.now(UTC),
     )

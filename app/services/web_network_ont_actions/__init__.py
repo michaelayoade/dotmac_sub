@@ -60,17 +60,21 @@ from app.services.web_network_ont_actions.credentials import (
 
 # Database configuration
 from app.services.web_network_ont_actions.db_config import (
+    set_voip_enabled,
     update_ont_config,
 )
 
 # Device actions
 from app.services.web_network_ont_actions.device_actions import (
+    RunningConfigResult,
     execute_config_snapshot_refresh,
     execute_connection_request,
     execute_factory_reset,
     execute_omci_reboot,
+    execute_reauthorize,
     execute_reboot,
     execute_refresh,
+    fetch_olt_running_config,
 )
 
 # Diagnostics
@@ -137,12 +141,15 @@ __all__ = [
     "run_traceroute_diagnostic",
     "running_config_context",
     # Device actions
+    "RunningConfigResult",
     "execute_config_snapshot_refresh",
     "execute_connection_request",
     "execute_factory_reset",
     "execute_omci_reboot",
+    "execute_reauthorize",
     "execute_reboot",
     "execute_refresh",
+    "fetch_olt_running_config",
     # Configuration setters
     "bind_tr069_profile",
     "configure_management_ip",
@@ -174,5 +181,6 @@ __all__ = [
     "operational_health_context",
     "reconcile_operational_state",
     # Database config
+    "set_voip_enabled",
     "update_ont_config",
 ]

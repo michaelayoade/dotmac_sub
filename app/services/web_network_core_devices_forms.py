@@ -1156,6 +1156,21 @@ def delete_snmp_oid_for_device(
     return True, "SNMP OID deleted."
 
 
+def toggle_interface_monitored(
+    db: Session, *, device_id: str, interface_id: str, monitored: bool
+) -> tuple[bool, str]:
+    """Toggle whether an interface is included in bandwidth monitoring."""
+    device = get_device(db, device_id)
+    if not device:
+        return False, "Device not found."
+    item = db.get(DeviceInterface, interface_id)
+    if not item or str(item.device_id) != str(device.id):
+        return False, "Interface not found."
+    item.monitored = monitored
+    db.commit()
+    return True, "Interface monitoring updated."
+
+
 def run_snmp_walk_preview(
     db: Session, *, device_id: str, base_oid: str = ".1.3.6.1.2.1"
 ) -> tuple[list[str], str | None]:
