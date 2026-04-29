@@ -26,162 +26,97 @@ logger = logging.getLogger(__name__)
 # Both InternetGatewayDevice (TR-098) and Device (TR-181) roots are tried.
 _IGD = "InternetGatewayDevice"
 _DEV = "Device"
+_VP = "VirtualParameters"
+
+# Virtual parameter mappings: canonical names for data-model-agnostic access.
+# These are computed server-side by GenieACS and normalize TR-098/TR-181 differences.
+# Format: {group}.{label} -> VirtualParameters.{name}
+VIRTUAL_PARAM_MAP: dict[str, str] = {
+    # System parameters
+    "system.manufacturer": f"{_VP}.Manufacturer",
+    "system.model": f"{_VP}.Model",
+    "system.firmware": f"{_VP}.Firmware",
+    "system.hardware": f"{_VP}.Hardware",
+    "system.serial": f"{_VP}.Serial",
+    "system.uptime": f"{_VP}.Uptime",
+    "system.cpu_usage": f"{_VP}.CPU_Usage",
+    "system.memory_total": f"{_VP}.Memory_Total",
+    "system.memory_free": f"{_VP}.Memory_Free",
+    "system.mac_address": f"{_VP}.MAC_Address",
+    # WAN parameters
+    "wan.connection_type": f"{_VP}.WAN_Connection_Type",
+    "wan.wan_ip": f"{_VP}.WAN_IP",
+    "wan.gateway": f"{_VP}.WAN_Gateway",
+    "wan.status": f"{_VP}.WAN_Status",
+    "wan.vlan": f"{_VP}.WAN_VLAN",
+    "wan.username": f"{_VP}.PPPoE_Username",
+    "wan.uptime": f"{_VP}.WAN_Uptime",
+    "wan.dns_servers": f"{_VP}.DNS_Servers",
+    # LAN parameters
+    "lan.lan_ip": f"{_VP}.LAN_IP",
+    "lan.subnet_mask": f"{_VP}.LAN_Subnet",
+    "lan.dhcp_enabled": f"{_VP}.DHCP_Enabled",
+    "lan.dhcp_start": f"{_VP}.DHCP_Start",
+    "lan.dhcp_end": f"{_VP}.DHCP_End",
+    "lan.connected_hosts": f"{_VP}.Connected_Hosts",
+    # Wireless parameters
+    "wireless.enabled": f"{_VP}.WiFi_Enabled",
+    "wireless.ssid": f"{_VP}.WiFi_SSID",
+    "wireless.password": f"{_VP}.WiFi_Password",
+    "wireless.channel": f"{_VP}.WiFi_Channel",
+    "wireless.security_mode": f"{_VP}.WiFi_Security",
+    "wireless.standard": f"{_VP}.WiFi_Standard",
+    "wireless.connected_clients": f"{_VP}.WiFi_Clients",
+    # Management parameters
+    "management.ip": f"{_VP}.Mgmt_IP",
+    "management.ssh_enabled": f"{_VP}.SSH_Enabled",
+    "management.telnet_enabled": f"{_VP}.Telnet_Enabled",
+}
 
 PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
     "system": {
-        "Manufacturer": [
-            f"{_DEV}.DeviceInfo.Manufacturer",
-            f"{_IGD}.DeviceInfo.Manufacturer",
-        ],
-        "Model": [f"{_DEV}.DeviceInfo.ModelName", f"{_IGD}.DeviceInfo.ModelName"],
-        "Firmware": [
-            f"{_DEV}.DeviceInfo.SoftwareVersion",
-            f"{_IGD}.DeviceInfo.SoftwareVersion",
-        ],
-        "Hardware": [
-            f"{_DEV}.DeviceInfo.HardwareVersion",
-            f"{_IGD}.DeviceInfo.HardwareVersion",
-        ],
-        "Serial": [
-            f"{_DEV}.DeviceInfo.SerialNumber",
-            f"{_IGD}.DeviceInfo.SerialNumber",
-        ],
-        "Uptime": [f"{_DEV}.DeviceInfo.UpTime", f"{_IGD}.DeviceInfo.UpTime"],
-        "CPU Usage": [f"{_DEV}.DeviceInfo.ProcessStatus.CPUUsage"],
-        "Memory Total": [
-            f"{_DEV}.DeviceInfo.MemoryStatus.Total",
-            f"{_IGD}.DeviceInfo.MemoryStatus.Total",
-        ],
-        "Memory Free": [
-            f"{_DEV}.DeviceInfo.MemoryStatus.Free",
-            f"{_IGD}.DeviceInfo.MemoryStatus.Free",
-        ],
-        "MAC Address": [
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.MACAddress",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress",
-            f"{_DEV}.Ethernet.Interface.1.MACAddress",
-            f"{_IGD}.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress",
-        ],
+        "Manufacturer": [f"{_VP}.Manufacturer"],
+        "Model": [f"{_VP}.Model"],
+        "Firmware": [f"{_VP}.Firmware"],
+        "Hardware": [f"{_VP}.Hardware"],
+        "Serial": [f"{_VP}.Serial"],
+        "Uptime": [f"{_VP}.Uptime"],
+        "CPU Usage": [f"{_VP}.CPU_Usage"],
+        "Memory Total": [f"{_VP}.Memory_Total"],
+        "Memory Free": [f"{_VP}.Memory_Free"],
+        "MAC Address": [f"{_VP}.MAC_Address"],
     },
     "wan": {
-        "Connection Type": [
-            # Wildcard paths to match any WAN index
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.ConnectionType",
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.ConnectionType",
-            # Legacy fixed paths for backwards compatibility
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType",
-            f"{_DEV}.PPP.Interface.1.ConnectionStatus",
-        ],
-        "WAN IP": [
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.ExternalIPAddress",
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.ExternalIPAddress",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress",
-            f"{_DEV}.IP.Interface.1.IPv4Address.1.IPAddress",
-            f"{_DEV}.DHCPv4.Client.1.IPAddress",
-        ],
-        "Username": [
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Username",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
-            f"{_DEV}.PPP.Interface.1.Username",
-        ],
-        "Status": [
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.ConnectionStatus",
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.ConnectionStatus",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus",
-            f"{_DEV}.IP.Interface.1.Status",
-        ],
-        "Uptime": [
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Uptime",
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.Uptime",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Uptime",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.Uptime",
-        ],
-        "DNS Servers": [
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.DNSServers",
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.DNSServers",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DNSServers",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DNSServers",
-            f"{_DEV}.DNS.Client.Server.1.DNSServer",
-        ],
-        "Gateway": [
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.DefaultGateway",
-            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.DefaultGateway",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DefaultGateway",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DefaultGateway",
-            f"{_DEV}.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
-        ],
+        "Connection Type": [f"{_VP}.WAN_Connection_Type"],
+        "WAN IP": [f"{_VP}.WAN_IP"],
+        "Username": [f"{_VP}.PPPoE_Username"],
+        "Status": [f"{_VP}.WAN_Status"],
+        "VLAN": [f"{_VP}.WAN_VLAN"],
+        "Uptime": [f"{_VP}.WAN_Uptime"],
+        "DNS Servers": [f"{_VP}.DNS_Servers"],
+        "Gateway": [f"{_VP}.WAN_Gateway"],
     },
     "lan": {
-        "LAN IP": [
-            f"{_IGD}.LANDevice.*.LANHostConfigManagement.IPInterface.*.IPInterfaceIPAddress",
-            f"{_IGD}.LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceIPAddress",
-            f"{_DEV}.IP.Interface.2.IPv4Address.1.IPAddress",
-        ],
-        "Subnet Mask": [
-            f"{_IGD}.LANDevice.*.LANHostConfigManagement.IPInterface.*.IPInterfaceSubnetMask",
-            f"{_IGD}.LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceSubnetMask",
-            f"{_DEV}.IP.Interface.2.IPv4Address.1.SubnetMask",
-        ],
-        "DHCP Enabled": [
-            f"{_IGD}.LANDevice.*.LANHostConfigManagement.DHCPServerEnable",
-            f"{_IGD}.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
-            f"{_DEV}.DHCPv4.Server.Enable",
-        ],
-        "DHCP Start": [
-            f"{_IGD}.LANDevice.*.LANHostConfigManagement.MinAddress",
-            f"{_IGD}.LANDevice.1.LANHostConfigManagement.MinAddress",
-            f"{_DEV}.DHCPv4.Server.Pool.1.MinAddress",
-        ],
-        "DHCP End": [
-            f"{_IGD}.LANDevice.*.LANHostConfigManagement.MaxAddress",
-            f"{_IGD}.LANDevice.1.LANHostConfigManagement.MaxAddress",
-            f"{_DEV}.DHCPv4.Server.Pool.1.MaxAddress",
-        ],
-        "Connected Hosts": [
-            f"{_IGD}.LANDevice.*.Hosts.HostNumberOfEntries",
-            f"{_IGD}.LANDevice.1.Hosts.HostNumberOfEntries",
-            f"{_DEV}.Hosts.HostNumberOfEntries",
-        ],
+        "LAN IP": [f"{_VP}.LAN_IP"],
+        "Subnet Mask": [f"{_VP}.LAN_Subnet"],
+        "DHCP Enabled": [f"{_VP}.DHCP_Enabled"],
+        "DHCP Start": [f"{_VP}.DHCP_Start"],
+        "DHCP End": [f"{_VP}.DHCP_End"],
+        "Connected Hosts": [f"{_VP}.Connected_Hosts"],
     },
     "wireless": {
-        "Enabled": [
-            f"{_IGD}.LANDevice.*.WLANConfiguration.*.Enable",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.Enable",
-            f"{_DEV}.WiFi.SSID.1.Enable",
-        ],
-        "SSID": [
-            f"{_IGD}.LANDevice.*.WLANConfiguration.*.SSID",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.SSID",
-            f"{_DEV}.WiFi.SSID.1.SSID",
-        ],
-        "Channel": [
-            f"{_IGD}.LANDevice.*.WLANConfiguration.*.Channel",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.Channel",
-            f"{_DEV}.WiFi.Radio.1.Channel",
-        ],
-        "Standard": [
-            f"{_IGD}.LANDevice.*.WLANConfiguration.*.Standard",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.Standard",
-            f"{_DEV}.WiFi.Radio.1.OperatingStandards",
-        ],
-        "Security Mode": [
-            f"{_IGD}.LANDevice.*.WLANConfiguration.*.BeaconType",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.BeaconType",
-            f"{_DEV}.WiFi.AccessPoint.1.Security.ModeEnabled",
-        ],
-        "Connected Clients": [
-            f"{_IGD}.LANDevice.*.WLANConfiguration.*.TotalAssociations",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.TotalAssociations",
-            f"{_DEV}.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries",
-        ],
-        "Password": [
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey",
-            f"{_IGD}.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
-            f"{_DEV}.WiFi.AccessPoint.1.Security.KeyPassphrase",
-        ],
+        "Enabled": [f"{_VP}.WiFi_Enabled"],
+        "SSID": [f"{_VP}.WiFi_SSID"],
+        "Channel": [f"{_VP}.WiFi_Channel"],
+        "Standard": [f"{_VP}.WiFi_Standard"],
+        "Security Mode": [f"{_VP}.WiFi_Security"],
+        "Connected Clients": [f"{_VP}.WiFi_Clients"],
+        "Password": [f"{_VP}.WiFi_Password"],
+    },
+    "management": {
+        "Management IP": [f"{_VP}.Mgmt_IP"],
+        "SSH Enabled": [f"{_VP}.SSH_Enabled"],
+        "Telnet Enabled": [f"{_VP}.Telnet_Enabled"],
     },
 }
 
@@ -219,6 +154,7 @@ class TR069Summary:
     wan: dict[str, Any] = field(default_factory=dict)
     lan: dict[str, Any] = field(default_factory=dict)
     wireless: dict[str, Any] = field(default_factory=dict)
+    management: dict[str, Any] = field(default_factory=dict)
     ethernet_ports: list[dict[str, Any]] = field(default_factory=list)
     lan_hosts: list[dict[str, Any]] = field(default_factory=list)
     available: bool = False
@@ -741,6 +677,11 @@ def _apply_display_model(summary: TR069Summary) -> None:
             "title": "Wireless",
             "fields": _section_fields(summary.wireless),
         },
+        {
+            "key": "management",
+            "title": "Remote Access",
+            "fields": _section_fields(summary.management),
+        },
     ]
 
 
@@ -828,6 +769,9 @@ class OntTR069:
         )
         summary.wireless = _extract_group(
             client, device, "wireless", db=db, vendor=ont_vendor, model=ont_model
+        )
+        summary.management = _extract_group(
+            client, device, "management", db=db, vendor=ont_vendor, model=ont_model
         )
 
         # Ethernet ports
@@ -1015,6 +959,7 @@ class OntTR069:
             "wan": summary.wan,
             "lan": summary.lan,
             "wireless": summary.wireless,
+            "management": summary.management,
             "ethernet_ports": summary.ethernet_ports,
             "lan_hosts": summary.lan_hosts,
             "fetched_at": fetched_at.isoformat(),
@@ -1043,6 +988,7 @@ class OntTR069:
             wan=_normalize_summary_group(snapshot.get("wan")),
             lan=_normalize_summary_group(snapshot.get("lan")),
             wireless=_normalize_summary_group(snapshot.get("wireless")),
+            management=_normalize_summary_group(snapshot.get("management")),
             ethernet_ports=_normalize_ethernet_ports(
                 list(snapshot.get("ethernet_ports") or [])
             ),
@@ -1172,6 +1118,20 @@ class OntTR069:
 
         if mac_address:
             ont.mac_address = mac_address
+        system = summary.system or {}
+        hardware_version = str(system.get("Hardware") or "").strip()
+        software_version = str(system.get("Firmware") or "").strip()
+        model = str(system.get("Model") or "").strip()
+        manufacturer = str(system.get("Manufacturer") or "").strip()
+        if hardware_version:
+            ont.hardware_version = hardware_version
+        if software_version:
+            ont.software_version = software_version
+            ont.firmware_version = software_version
+        if model:
+            ont.model = model
+        if manufacturer:
+            ont.vendor = manufacturer
         if wan_ip:
             ont.observed_wan_ip = wan_ip
         if pppoe_status:
@@ -1186,6 +1146,36 @@ class OntTR069:
         ont.observed_runtime_updated_at = observed_at
         ont.tr069_last_snapshot = OntTR069._snapshot_payload(summary)
         ont.tr069_last_snapshot_at = observed_at
+        from app.models.tr069 import Tr069CpeDevice
+        from app.services.network.ont_status import (
+            apply_status_snapshot,
+            resolve_acs_online_window_minutes_for_model,
+            resolve_ont_status_snapshot,
+        )
+
+        linked_tr069 = db.scalars(
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.ont_unit_id == ont.id)
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .order_by(Tr069CpeDevice.last_inform_at.desc().nullslast())
+            .limit(1)
+        ).first()
+        if linked_tr069:
+            if not model and getattr(linked_tr069, "product_class", None):
+                ont.model = str(linked_tr069.product_class)
+            if getattr(linked_tr069, "serial_number", None):
+                ont.vendor_serial_number = str(linked_tr069.serial_number)[:120]
+            apply_status_snapshot(
+                ont,
+                resolve_ont_status_snapshot(
+                    olt_status=getattr(ont, "online_status", None),
+                    acs_last_inform_at=linked_tr069.last_inform_at,
+                    managed=True,
+                    online_window_minutes=resolve_acs_online_window_minutes_for_model(
+                        ont
+                    ),
+                ),
+            )
 
         db.add(ont)
         if commit:
