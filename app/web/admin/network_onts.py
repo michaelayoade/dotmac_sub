@@ -166,7 +166,9 @@ def ont_detail_preview(
         {
             **page_data,
             **_ont_form_dependencies(db, page_data["ont"]),
-            **web_network_ont_actions_service.unified_config_context(db, ont_id),
+            **web_network_ont_actions_service.unified_config_context(
+                db, ont_id, detail_payload=page_data
+            ),
             "activities": activities,
             "operations": operations,
             "ont_active_tab": active_tab,
@@ -584,6 +586,9 @@ def ont_configure_submit(
     ip_protocol: str = Form(default=""),
     pppoe_username: str = Form(default=""),
     pppoe_password: str = Form(default=""),
+    mgmt_ip_mode: str = Form(default=""),
+    mgmt_ip_address: str = Form(default=""),
+    mgmt_remote_access: bool = Form(default=False),
     lan_gateway_ip: str = Form(default=""),
     lan_subnet_mask: str = Form(default=""),
     lan_dhcp_enabled: bool = Form(default=False),
@@ -595,9 +600,15 @@ def ont_configure_submit(
     wifi_security_mode: str = Form(default=""),
     wifi_password: str = Form(default=""),
     push_to_device: bool = Form(default=False),
+    push_scope: str = Form(default="management"),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Handle ONT configure form submission."""
+    push_scope_value = (push_scope or "management").strip().lower()
+    push_wan = push_scope_value in {"all", "wan"}
+    push_lan = push_scope_value in {"all", "lan"}
+    push_mgmt = push_scope_value in {"all", "management", "mgmt"}
+    push_wifi = push_scope_value in {"all", "wifi"}
     result = web_network_ont_actions_service.update_ont_config(
         db,
         ont_id,
@@ -605,6 +616,9 @@ def ont_configure_submit(
         ip_protocol=ip_protocol or None,
         pppoe_username=pppoe_username or None,
         pppoe_password=pppoe_password or None,
+        mgmt_ip_mode=mgmt_ip_mode or None,
+        mgmt_ip_address=mgmt_ip_address,
+        mgmt_remote_access=mgmt_remote_access,
         lan_gateway_ip=lan_gateway_ip or None,
         lan_subnet_mask=lan_subnet_mask or None,
         lan_dhcp_enabled=lan_dhcp_enabled,
@@ -616,6 +630,10 @@ def ont_configure_submit(
         wifi_security_mode=wifi_security_mode or None,
         wifi_password=wifi_password or None,
         push_to_device=push_to_device,
+        push_wan=push_wan,
+        push_lan=push_lan,
+        push_mgmt=push_mgmt,
+        push_wifi=push_wifi,
         request=request,
     )
 

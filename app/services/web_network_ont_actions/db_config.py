@@ -14,6 +14,7 @@ from app.services.web_network_ont_actions._common import (
 )
 from app.services.web_network_ont_actions.config_setters import (
     set_lan_config,
+    set_mgmt_remote_access,
     set_wifi_config,
 )
 
@@ -51,6 +52,10 @@ def update_ont_config(
     wifi_password: str | None = None,
     voip_enabled: bool | None = None,
     push_to_device: bool = False,
+    push_wan: bool = True,
+    push_lan: bool = True,
+    push_mgmt: bool = True,
+    push_wifi: bool = True,
     request: Request | None = None,
 ) -> ActionResult:
     """Update ONT configuration fields in the database, optionally push to device."""
@@ -59,8 +64,16 @@ def update_ont_config(
     if not ont:
         return ActionResult(success=False, message="ONT not found")
 
-    # Update direct ONT runtime fields that still live on the ONT model.
-    if mgmt_remote_access is not None:
+    # Management reachability is controlled by the management IP mode. Keeping a
+    # second "remote access" switch in sync is error-prone because an unchecked
+    # form checkbox can otherwise clear IPHOST while static management intent is
+    # still present.
+    mgmt_access_enabled: bool | None = None
+    if mgmt_ip_mode is not None:
+        mgmt_access_enabled = mgmt_ip_mode in {"dhcp", "static_ip"}
+        ont.mgmt_remote_access = mgmt_access_enabled
+    elif mgmt_remote_access is not None:
+        mgmt_access_enabled = mgmt_remote_access
         ont.mgmt_remote_access = mgmt_remote_access
     if lan_gateway_ip is not None:
         ont.lan_gateway_ip = lan_gateway_ip.strip() or None
@@ -128,7 +141,7 @@ def update_ont_config(
     push_success = True
 
     if push_to_device:
-        wan_push_requested = any(
+        wan_push_requested = push_wan and any(
             value is not None
             for value in (
                 wan_mode,
@@ -139,13 +152,12 @@ def update_ont_config(
             )
         )
         if wan_push_requested:
+            # WAN config is saved to DB; TR-069 push requires provisioning flow
             push_messages.append(
-                "WAN: direct WAN/PPPoE pushes are disabled; provision the active "
-                "WAN service instance instead."
+                "WAN: saved to database. Use Advanced Actions to push to device."
             )
-            push_success = False
 
-        if any([lan_gateway_ip, lan_subnet_mask, lan_dhcp_enabled is not None]):
+        if push_lan and any([lan_gateway_ip, lan_subnet_mask, lan_dhcp_enabled is not None]):
             result = set_lan_config(
                 db,
                 ont_id,
@@ -160,7 +172,18 @@ def update_ont_config(
             if not result.success:
                 push_success = False
 
-        if any([wifi_ssid, wifi_password, wifi_security_mode, wifi_channel]):
+        if push_mgmt and mgmt_ip_mode is not None:
+            result = set_mgmt_remote_access(
+                db,
+                ont_id,
+                enabled=bool(mgmt_access_enabled),
+                request=request,
+            )
+            push_messages.append(f"Management: {result.message}")
+            if not result.success:
+                push_success = False
+
+        if push_wifi and any([wifi_ssid, wifi_password, wifi_security_mode, wifi_channel]):
             channel_int: int | None = None
             if wifi_channel:
                 try:

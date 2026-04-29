@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OntAssignment
 from app.models.tr069 import Tr069CpeDevice
@@ -223,13 +224,18 @@ def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
     return {}
 
 
-def _load_ont_detail_config_state(db: Session, ont_id: str) -> dict[str, object]:
-    from app.services import web_network_core_devices_views as core_devices_views
-
+def _load_ont_detail_config_state(
+    db: Session,
+    ont_id: str,
+    detail_payload: dict[str, object] | None = None,
+) -> dict[str, object]:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     linked_tr069 = _resolve_linked_tr069_device(db, ont)
     observed_state = _load_unified_observed_state(db, ont)
-    detail_payload = core_devices_views.ont_detail_page_data(db, ont_id)
+    if detail_payload is None:
+        from app.services import web_network_core_devices_views as core_devices_views
+
+        detail_payload = core_devices_views.ont_detail_page_data(db, ont_id)
     detail_payload = detail_payload if isinstance(detail_payload, dict) else {}
     subscriber_info = detail_payload.get("subscriber_info", {})
     if not isinstance(subscriber_info, dict) or not subscriber_info:
@@ -483,9 +489,13 @@ def _operator_summary_context(
     }
 
 
-def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
+def unified_config_context(
+    db: Session,
+    ont_id: str,
+    detail_payload: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Build context for the unified ONT configuration partial from DB state."""
-    shared = _load_ont_detail_config_state(db, ont_id)
+    shared = _load_ont_detail_config_state(db, ont_id, detail_payload=detail_payload)
     ont = shared["ont"]
     linked_tr069 = shared["linked_tr069"]
     observed_state = shared["observed_state"]
@@ -581,6 +591,7 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "current_profile": current_profile_name,
         "current_profile_id": getattr(current_profile, "profile_id", None),
         "current_tr069_profile": current_profile_name,
+        "tr069_periodic_inform_interval": settings.tr069_periodic_inform_interval,
         "service_ports_context": service_ports_context,
         "olt_status": olt_status,
     }
@@ -627,28 +638,116 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
-    """Build context for the ONT service configure form."""
+    """Build context for the ONT service configure form.
+
+    Merges observed (running) config with desired config, preferring observed values
+    so techs see actual device state and can edit from there.
+    """
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
 
     effective = resolve_effective_ont_config(db, ont)
     values = effective["values"]
+    config_pack = effective.get("config_pack")
+
+    # Helper to prefer observed (from ont model) over desired (from effective config)
+    def _prefer_observed(observed_val: object, desired_key: str) -> object:
+        if observed_val not in (None, ""):
+            return observed_val
+        return values.get(desired_key)
+
+    # WAN: prefer observed from ont model
+    wan_mode = _prefer_observed(
+        getattr(ont, "observed_lan_mode", None),  # TODO: observed_wan_mode when available
+        "wan_mode",
+    )
+
+    # LAN: prefer values stored directly on ont model (these ARE the running config)
+    lan_gateway = _prefer_observed(getattr(ont, "lan_gateway_ip", None), "lan_ip")
+    lan_subnet = _prefer_observed(getattr(ont, "lan_subnet_mask", None), "lan_subnet")
+    lan_dhcp_enabled = getattr(ont, "lan_dhcp_enabled", None)
+    if lan_dhcp_enabled is None:
+        lan_dhcp_enabled = values.get("lan_dhcp_enabled")
+    lan_dhcp_start = _prefer_observed(getattr(ont, "lan_dhcp_start", None), "lan_dhcp_start")
+    lan_dhcp_end = _prefer_observed(getattr(ont, "lan_dhcp_end", None), "lan_dhcp_end")
+
+    # WiFi: prefer values from ont model
+    wifi_ssid = _prefer_observed(getattr(ont, "wifi_ssid", None), "wifi_ssid")
+    wifi_enabled = getattr(ont, "wifi_enabled", None)
+    if wifi_enabled is None:
+        wifi_enabled = values.get("wifi_enabled")
+    wifi_channel = _prefer_observed(getattr(ont, "wifi_channel", None), "wifi_channel")
+    wifi_security = _prefer_observed(
+        getattr(ont, "wifi_security_mode", None), "wifi_security_mode"
+    )
+
+    # Management IP: prefer from ont model
+    mgmt_mode = _prefer_observed(
+        _enum_value(getattr(ont, "mgmt_ip_mode", None)),
+        "mgmt_ip_mode",
+    )
+    mgmt_ip = _prefer_observed(getattr(ont, "mgmt_ip_address", None), "mgmt_ip_address")
+    mgmt_mode_value = _enum_value(mgmt_mode) or ""
+    mgmt_remote_access = bool(getattr(ont, "mgmt_remote_access", False))
+    if mgmt_mode_value in {"dhcp", "static_ip"}:
+        mgmt_remote_access = True
+
+    # Extract VLAN info from config pack
+    wan_vlan = values.get("wan_vlan")
+    mgmt_vlan = values.get("mgmt_vlan")
+
+    # TR-069 profile info
+    tr069_profile_id = values.get("tr069_olt_profile_id")
+    tr069_profile_name = None
+    if config_pack:
+        tr069_profile_name = getattr(config_pack, "tr069_profile_name", None)
+
+    # Linked TR-069 device status
+    linked_tr069 = _resolve_linked_tr069_device(db, ont)
+    has_tr069 = bool(
+        linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
+    )
+    acs_last_inform = getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
+
+    # Config pack name for display
+    config_pack_name = None
+    if config_pack:
+        config_pack_name = getattr(config_pack, "name", None)
 
     context = {
         "ont": ont,
         "ont_id": ont_id,
-        "wan_mode": values.get("wan_mode"),
+        # WAN
+        "wan_mode": wan_mode or values.get("wan_mode"),
         "ip_protocol": values.get("ip_protocol"),
         "pppoe_username": str(values.get("pppoe_username") or ""),
-        "lan_gateway_ip": str(values.get("lan_ip") or ""),
-        "lan_subnet_mask": str(values.get("lan_subnet") or ""),
-        "lan_dhcp_enabled": values.get("lan_dhcp_enabled"),
-        "lan_dhcp_start": str(values.get("lan_dhcp_start") or ""),
-        "lan_dhcp_end": str(values.get("lan_dhcp_end") or ""),
-        "wifi_enabled": values.get("wifi_enabled"),
-        "wifi_ssid": str(values.get("wifi_ssid") or ""),
-        "wifi_channel": str(values.get("wifi_channel") or ""),
-        "wifi_security_mode": str(values.get("wifi_security_mode") or ""),
+        "wan_vlan": str(wan_vlan or ""),
+        # Management
+        "mgmt_ip_mode": mgmt_mode_value,
+        "mgmt_ip_address": str(mgmt_ip or ""),
+        "mgmt_remote_access": mgmt_remote_access,
+        "mgmt_vlan": str(mgmt_vlan or ""),
+        # LAN (prefer observed/stored values)
+        "lan_gateway_ip": str(lan_gateway or ""),
+        "lan_subnet_mask": str(lan_subnet or ""),
+        "lan_dhcp_enabled": lan_dhcp_enabled,
+        "lan_dhcp_start": str(lan_dhcp_start or ""),
+        "lan_dhcp_end": str(lan_dhcp_end or ""),
+        # WiFi (prefer observed/stored values)
+        "wifi_enabled": wifi_enabled,
+        "wifi_ssid": str(wifi_ssid or ""),
+        "wifi_channel": str(wifi_channel or ""),
+        "wifi_security_mode": str(wifi_security or ""),
+        # Network plane info (read-only, from OLT config pack)
+        "config_pack_name": config_pack_name,
+        "tr069_profile_id": tr069_profile_id,
+        "tr069_profile_name": tr069_profile_name,
+        "has_tr069": has_tr069,
+        "acs_last_inform": acs_last_inform,
     }
+    mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
+    context["mgmt_ip_pool"] = mgmt_ip_pool_ctx.get("mgmt_ip_pool")
+    context["available_mgmt_ips"] = mgmt_ip_pool_ctx.get("available_mgmt_ips", [])
+    context["mgmt_ip_choice_message"] = mgmt_ip_pool_ctx.get("mgmt_ip_choice_message")
     return context
 
 def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:
