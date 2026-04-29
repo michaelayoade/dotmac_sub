@@ -1,30 +1,21 @@
-"""OLT Protocol Adapter pattern for SSH/NETCONF/REST abstraction.
+"""OLT Protocol Adapter for SSH-based OLT operations.
 
-Provides a clean abstraction for OLT write operations, allowing different
-communication protocols (SSH, NETCONF, REST API) to be used interchangeably.
-
-The adapter automatically selects the best available protocol based on:
-1. OLT configuration (netconf_enabled, api_enabled)
-2. OLT capabilities (GPON YANG support)
-3. Operation support (not all operations available on all protocols)
+Provides a clean interface for OLT write operations via SSH CLI.
+NETCONF is used as an optimization for ONT authorization when available,
+with automatic fallback to SSH.
 
 Usage:
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     adapter = get_protocol_adapter(olt)
     result = adapter.authorize_ont(fsp="0/1/0", serial="HWTC12345678", ...)
-
-    # Or with explicit protocol selection
-    adapter = get_protocol_adapter(olt, protocol="ssh")
 """
 
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING
 
 from app.services.adapters.base import AdapterResult
 
@@ -41,15 +32,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-class OltProtocol(str, Enum):
-    """Available OLT communication protocols."""
-
-    SSH = "ssh"
-    NETCONF = "netconf"
-    REST = "rest"
-    AUTO = "auto"  # Automatic selection
-
-
 @dataclass
 class OltOperationResult(AdapterResult):
     """Result of an OLT write operation."""
@@ -57,77 +39,38 @@ class OltOperationResult(AdapterResult):
     # For authorize_ont: the assigned ONT ID
     ont_id: int | None = None
 
-    # Protocol that was used
-    protocol_used: OltProtocol | None = None
-
-    # If fallback occurred, the reason
+    # If NETCONF fallback occurred, the reason
     fallback_reason: str | None = None
 
     # For create_service_port: the assigned service-port index
     service_port_index: int | None = None
 
 
-@dataclass
-class ProtocolCapabilities:
-    """Capabilities of a protocol for a specific OLT."""
-
-    protocol: OltProtocol
-    available: bool
-    reason: str = ""
-
-    # Specific operation support
-    can_authorize: bool = False
-    can_deauthorize: bool = False
-    can_update_ont_profiles: bool = False
-    can_find_ont_by_serial: bool = False
-    can_configure_iphost: bool = False
-    can_bind_tr069: bool = False
-    can_create_service_port: bool = False
-    can_reboot_ont: bool = False
-    can_factory_reset: bool = False
-    can_execute_authorization_batch: bool = False
-
-    # Extended configuration operations
-    can_configure_internet_config: bool = False
-    can_configure_wan_config: bool = False
-    can_configure_pppoe: bool = False
-    can_configure_port_native_vlan: bool = False
-    can_clear_configs: bool = False
-
-    # Read operations
-    can_get_service_ports: bool = False
-    can_get_autofind_onts: bool = False
-    can_get_profiles: bool = False
-    can_create_tr069_profile: bool = False
-    can_diagnose_service_ports: bool = False
-    can_fetch_running_config: bool = False
-
-
 # ============================================================================
-# Protocol Definition
+# Protocol Adapter
 # ============================================================================
 
 
-@runtime_checkable
-class OltProtocolAdapter(Protocol):
-    """Protocol for OLT write operations.
+class OltProtocolAdapter:
+    """SSH-based protocol adapter for OLT operations.
 
-    Implementations provide operations via specific protocols (SSH, NETCONF, etc.).
+    Uses SSH CLI for all operations. For authorize_ont(), tries NETCONF first
+    when enabled on the OLT, with automatic fallback to SSH.
     """
 
-    @property
-    def protocol(self) -> OltProtocol:
-        """The protocol this adapter uses."""
-        ...
+    def __init__(self, olt: OLTDevice):
+        self._olt = olt
 
     @property
     def olt(self) -> OLTDevice:
-        """The OLT device this adapter operates on."""
-        ...
+        return self._olt
 
-    def get_capabilities(self) -> ProtocolCapabilities:
-        """Get capabilities of this protocol for the OLT."""
-        ...
+    def _not_supported(self, operation: str) -> OltOperationResult:
+        """Return a 'not supported' result for an operation."""
+        return OltOperationResult(
+            success=False,
+            message=f"{operation} not supported",
+        )
 
     # ========== ONT Lifecycle ==========
 
@@ -140,580 +83,93 @@ class OltProtocolAdapter(Protocol):
         service_profile_id: int | None = None,
         description: str = "",
     ) -> OltOperationResult:
-        """Authorize an ONT on the OLT.
+        """Authorize ONT on the OLT.
 
-        Args:
-            fsp: Frame/Slot/Port (e.g., "0/1/0")
-            serial_number: ONT serial number
-            line_profile_id: Line profile ID
-            service_profile_id: Service profile ID
-            description: Optional description
-
-        Returns:
-            OltOperationResult with ont_id if successful
+        Tries NETCONF first when enabled (faster, no CLI parsing),
+        falls back to SSH if NETCONF fails.
         """
-        ...
+        # Try NETCONF if enabled
+        if self._olt.netconf_enabled and line_profile_id and service_profile_id:
+            result = self._try_netconf_authorize(
+                fsp,
+                serial_number,
+                line_profile_id=line_profile_id,
+                service_profile_id=service_profile_id,
+            )
+            if result.success:
+                return result
+            # NETCONF failed, fall back to SSH
+            fallback_reason = result.message
 
-    def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Remove/deauthorize an ONT from the OLT."""
-        ...
+        else:
+            fallback_reason = None
 
-    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
-        """Find an existing ONT registration by serial number."""
-        ...
+        # Use SSH
+        result = self._ssh_authorize(
+            fsp,
+            serial_number,
+            line_profile_id=line_profile_id,
+            service_profile_id=service_profile_id,
+        )
+        if fallback_reason:
+            result.fallback_reason = f"NETCONF failed: {fallback_reason}"
+        return result
 
-    def update_ont_profiles(
+    def _try_netconf_authorize(
         self,
         fsp: str,
-        ont_id: int,
+        serial_number: str,
         *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
+        line_profile_id: int,
+        service_profile_id: int,
     ) -> OltOperationResult:
-        """Update an existing ONT's line and/or service profile."""
-        ...
-
-    # ========== ONT Configuration ==========
-
-    def configure_iphost(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        mode: str = "dhcp",
-        vlan: int,
-        priority: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-    ) -> OltOperationResult:
-        """Configure ONT management IP (IPHOST)."""
-        ...
-
-    def bind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        profile_id: int,
-    ) -> OltOperationResult:
-        """Bind TR-069 server profile to ONT."""
-        ...
-
-    # ========== Service Ports ==========
-
-    def create_service_port(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        gem_index: int,
-        vlan_id: int,
-        user_vlan: int | str | None = None,
-        tag_transform: str = "translate",
-        port_index: int | None = None,
-    ) -> OltOperationResult:
-        """Create a service port for the ONT."""
-        ...
-
-    def delete_service_port(self, port_index: int) -> OltOperationResult:
-        """Delete a service port by index."""
-        ...
-
-    # ========== Batched Write Operations ==========
-
-    def execute_authorization_batch(
-        self,
-        spec: BatchedAuthorizationSpec,
-    ) -> OltOperationResult:
-        """Authorize an ONT and apply related OLT config in one protocol session."""
-        ...
-
-    # ========== ONT Operations ==========
-
-    def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Reboot an ONT via OMCI."""
-        ...
-
-    def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Factory reset an ONT via OMCI."""
-        ...
-
-    # ========== Extended Configuration Operations ==========
-
-    def configure_management_batch(
-        self,
-        spec: BatchedMgmtSpec,
-    ) -> OltOperationResult:
-        """Execute batched management configuration in one session.
-
-        Combines service-port creation, IPHOST config, internet-config,
-        wan-config, and TR-069 binding into a single SSH session for
-        improved performance (~5x faster than individual calls).
-        """
-        ...
-
-    def configure_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Activate TCP stack on ONT management WAN via internet-config."""
-        ...
-
-    def configure_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        profile_id: int = 0,
-    ) -> OltOperationResult:
-        """Set route+NAT mode on ONT management WAN via wan-config."""
-        ...
-
-    def configure_pppoe(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int,
-        vlan_id: int,
-        username: str,
-        password: str,
-    ) -> OltOperationResult:
-        """Configure PPPoE WAN via OMCI (OLT-side, not TR-069)."""
-        ...
-
-    def configure_port_native_vlan(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        eth_port: int,
-        vlan_id: int,
-        priority: int = 0,
-    ) -> OltOperationResult:
-        """Set native VLAN on ONT Ethernet port for bridging mode."""
-        ...
-
-    # ========== Cleanup Operations ==========
-
-    def clear_iphost_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Clear ONT IP configuration for a given IP index."""
-        ...
-
-    def clear_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Clear ONT internet-config state."""
-        ...
-
-    def clear_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Clear ONT wan-config state."""
-        ...
-
-    def unbind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-    ) -> OltOperationResult:
-        """Remove TR-069 server profile binding from ONT."""
-        ...
-
-    # ========== Read Operations ==========
-
-    def get_service_ports(
-        self,
-        fsp: str,
-    ) -> OltOperationResult:
-        """Get all service-ports on a PON port.
-
-        Returns:
-            OltOperationResult with data["service_ports"] containing list of entries.
-        """
-        ...
-
-    def get_service_ports_for_ont(
-        self,
-        fsp: str,
-        ont_id: int,
-    ) -> OltOperationResult:
-        """Get service-ports for a specific ONT.
-
-        Returns:
-            OltOperationResult with data["service_ports"] containing list of entries.
-        """
-        ...
-
-    def get_autofind_onts(self) -> OltOperationResult:
-        """Get unregistered ONTs from autofind table.
-
-        Returns:
-            OltOperationResult with data["autofind_entries"] containing list of entries.
-        """
-        ...
-
-    def get_line_profiles(self) -> OltOperationResult:
-        """Get line profiles from the OLT."""
-        ...
-
-    def get_service_profiles(self) -> OltOperationResult:
-        """Get service profiles from the OLT."""
-        ...
-
-    def get_tr069_profiles(self) -> OltOperationResult:
-        """Get TR-069 server profiles from the OLT."""
-        ...
-
-    def create_tr069_profile(
-        self,
-        *,
-        profile_name: str,
-        acs_url: str,
-        username: str,
-        password: str,
-        inform_interval: int,
-    ) -> OltOperationResult:
-        """Create a TR-069 server profile on the OLT."""
-        ...
-
-    def diagnose_service_ports(
-        self,
-        fsp: str,
-        ont_id: int,
-    ) -> OltOperationResult:
-        """Run diagnostics to troubleshoot service port state issues.
-
-        Returns:
-            OltOperationResult with data["diagnostics"] containing diagnostic info.
-        """
-        ...
-
-    def fetch_running_config(self) -> OltOperationResult:
-        """Fetch the full OLT running configuration.
-
-        Returns:
-            OltOperationResult with data["config_text"] containing the config text.
-        """
-        ...
-
-
-# ============================================================================
-# Base Implementation
-# ============================================================================
-
-
-class BaseProtocolAdapter(ABC):
-    """Base class with common functionality for protocol adapters."""
-
-    def __init__(self, olt: OLTDevice):
-        self._olt = olt
-
-    @property
-    @abstractmethod
-    def protocol(self) -> OltProtocol:
-        """The protocol this adapter uses."""
-        ...
-
-    @property
-    def olt(self) -> OLTDevice:
-        return self._olt
-
-    def _not_supported(self, operation: str) -> OltOperationResult:
-        """Return a 'not supported' result for an operation."""
-        return OltOperationResult(
-            success=False,
-            message=f"{operation} not supported via {self.protocol.value}",
-            protocol_used=self.protocol,
+        """Try to authorize ONT via NETCONF."""
+        from app.services.network.olt_netconf_ont import (
+            authorize_ont as nc_authorize,
+        )
+        from app.services.network.olt_netconf_ont import (
+            can_authorize_via_netconf,
         )
 
-    # Default implementations that return 'not supported'
+        # Check if NETCONF is available with GPON support
+        can_use, reason = can_authorize_via_netconf(self._olt)
+        if not can_use:
+            return OltOperationResult(success=False, message=reason)
 
-    def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._not_supported("deauthorize_ont")
-
-    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
-        return self._not_supported("find_ont_by_serial")
-
-    def update_ont_profiles(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
-    ) -> OltOperationResult:
-        return self._not_supported("update_ont_profiles")
-
-    def configure_iphost(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        mode: str = "dhcp",
-        vlan: int,
-        priority: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-    ) -> OltOperationResult:
-        return self._not_supported("configure_iphost")
-
-    def bind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        profile_id: int,
-    ) -> OltOperationResult:
-        return self._not_supported("bind_tr069_profile")
-
-    def create_service_port(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        gem_index: int,
-        vlan_id: int,
-        user_vlan: int | str | None = None,
-        tag_transform: str = "translate",
-        port_index: int | None = None,
-    ) -> OltOperationResult:
-        return self._not_supported("create_service_port")
-
-    def delete_service_port(self, port_index: int) -> OltOperationResult:
-        return self._not_supported("delete_service_port")
-
-    def execute_authorization_batch(
-        self,
-        spec: BatchedAuthorizationSpec,
-    ) -> OltOperationResult:
-        return self._not_supported("execute_authorization_batch")
-
-    def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._not_supported("reboot_ont")
-
-    def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._not_supported("factory_reset_ont")
-
-    # Extended configuration operations
-
-    def configure_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._not_supported("configure_internet_config")
-
-    def configure_management_batch(
-        self,
-        spec: BatchedMgmtSpec,
-    ) -> OltOperationResult:
-        return self._not_supported("configure_management_batch")
-
-    def configure_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        profile_id: int = 0,
-    ) -> OltOperationResult:
-        return self._not_supported("configure_wan_config")
-
-    def configure_pppoe(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int,
-        vlan_id: int,
-        username: str,
-        password: str,
-    ) -> OltOperationResult:
-        return self._not_supported("configure_pppoe")
-
-    def configure_port_native_vlan(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        eth_port: int,
-        vlan_id: int,
-        priority: int = 0,
-    ) -> OltOperationResult:
-        return self._not_supported("configure_port_native_vlan")
-
-    # Cleanup operations
-
-    def clear_iphost_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._not_supported("clear_iphost_config")
-
-    def clear_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._not_supported("clear_internet_config")
-
-    def clear_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._not_supported("clear_wan_config")
-
-    def unbind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-    ) -> OltOperationResult:
-        return self._not_supported("unbind_tr069_profile")
-
-    # Read operations
-
-    def get_service_ports(self, fsp: str) -> OltOperationResult:
-        return self._not_supported("get_service_ports")
-
-    def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._not_supported("get_service_ports_for_ont")
-
-    def get_autofind_onts(self) -> OltOperationResult:
-        return self._not_supported("get_autofind_onts")
-
-    def get_line_profiles(self) -> OltOperationResult:
-        return self._not_supported("get_line_profiles")
-
-    def get_service_profiles(self) -> OltOperationResult:
-        return self._not_supported("get_service_profiles")
-
-    def get_tr069_profiles(self) -> OltOperationResult:
-        return self._not_supported("get_tr069_profiles")
-
-    def create_tr069_profile(
-        self,
-        *,
-        profile_name: str,
-        acs_url: str,
-        username: str,
-        password: str,
-        inform_interval: int,
-    ) -> OltOperationResult:
-        return self._not_supported("create_tr069_profile")
-
-    def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._not_supported("diagnose_service_ports")
-
-
-# ============================================================================
-# SSH Protocol Adapter
-# ============================================================================
-
-
-class SshProtocolAdapter(BaseProtocolAdapter):
-    """SSH/CLI protocol adapter for OLT operations."""
-
-    @property
-    def protocol(self) -> OltProtocol:
-        return OltProtocol.SSH
-
-    def get_capabilities(self) -> ProtocolCapabilities:
-        """SSH supports all operations for Huawei OLTs."""
-        from app.services.network.olt_vendor_adapters import get_olt_adapter
-
-        adapter = get_olt_adapter(self._olt)
-        ssh_available = adapter.supports_ssh()
-
-        return ProtocolCapabilities(
-            protocol=OltProtocol.SSH,
-            available=ssh_available,
-            reason="" if ssh_available else f"{adapter.vendor_name} SSH not implemented",
-            can_authorize=ssh_available,
-            can_deauthorize=ssh_available,
-            can_update_ont_profiles=ssh_available,
-            can_find_ont_by_serial=ssh_available,
-            can_configure_iphost=ssh_available,
-            can_bind_tr069=ssh_available,
-            can_create_service_port=ssh_available,
-            can_reboot_ont=ssh_available,
-            can_factory_reset=ssh_available,
-            can_execute_authorization_batch=ssh_available,
-            # Extended configuration operations
-            can_configure_internet_config=ssh_available,
-            can_configure_wan_config=ssh_available,
-            can_configure_pppoe=ssh_available,
-            can_configure_port_native_vlan=ssh_available,
-            can_clear_configs=ssh_available,
-            # Read operations
-            can_get_service_ports=ssh_available,
-            can_get_autofind_onts=ssh_available,
-            can_get_profiles=ssh_available,
-            can_create_tr069_profile=ssh_available,
-            can_diagnose_service_ports=ssh_available,
-            can_fetch_running_config=ssh_available,
+        logger.info(
+            "Attempting ONT authorization via NETCONF: olt=%s fsp=%s serial=%s",
+            self._olt.name,
+            fsp,
+            serial_number,
         )
-
-    def fetch_running_config(self) -> OltOperationResult:
-        """Fetch full running config via SSH CLI."""
-        from app.services.network.olt_ssh import fetch_running_config_ssh
 
         try:
-            ok, message, config_text = fetch_running_config_ssh(self._olt)
+            ok, message, ont_id = nc_authorize(
+                self._olt,
+                fsp,
+                serial_number,
+                line_profile_id=line_profile_id,
+                service_profile_id=service_profile_id,
+            )
             return OltOperationResult(
                 success=ok,
                 message=message,
-                data={"config_text": config_text} if config_text else {},
-                protocol_used=OltProtocol.SSH,
+                ont_id=ont_id,
             )
         except Exception as exc:
-            logger.exception("SSH fetch_running_config failed")
+            logger.warning("NETCONF authorize_ont failed: %s", exc)
             return OltOperationResult(
                 success=False,
-                message=f"SSH running-config fetch failed: {exc}",
-                protocol_used=OltProtocol.SSH,
+                message=f"NETCONF authorization failed: {exc}",
             )
 
-    def authorize_ont(
+    def _ssh_authorize(
         self,
         fsp: str,
         serial_number: str,
         *,
         line_profile_id: int | None = None,
         service_profile_id: int | None = None,
-        description: str = "",
     ) -> OltOperationResult:
         """Authorize ONT via SSH CLI."""
         from app.services.network.olt_ssh_ont import authorize_ont as ssh_authorize
@@ -730,14 +186,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 ont_id=ont_id,
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH authorize_ont failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH authorization failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
@@ -746,17 +200,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = deauthorize_ont(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH deauthorize_ont failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH deauthorization failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
@@ -769,14 +218,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"registration": entry} if entry is not None else {},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH find_ont_by_serial failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH ONT lookup failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def update_ont_profiles(
@@ -798,18 +245,15 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 line_profile_id=line_profile_id,
                 service_profile_id=service_profile_id,
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH update_ont_profiles failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH ONT profile update failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
+
+    # ========== ONT Configuration ==========
 
     def configure_iphost(
         self,
@@ -828,7 +272,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         from app.services.network.olt_ssh_ont.iphost import configure_ont_iphost
 
         try:
-            # Map adapter params to underlying SSH function params
             ok, message = configure_ont_iphost(
                 self._olt,
                 fsp,
@@ -840,17 +283,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 subnet=subnet_mask,
                 gateway=gateway,
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             return OltOperationResult.from_exception(
                 exc,
                 operation="SSH IPHOST configuration",
                 logger_=logger,
-                protocol_used=OltProtocol.SSH,
             )
 
     def bind_tr069_profile(
@@ -867,18 +305,15 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             ok, message = bind_tr069_server_profile(
                 self._olt, fsp, ont_id, profile_id=profile_id
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH bind_tr069_profile failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH TR-069 binding failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
+
+    # ========== Service Ports ==========
 
     def create_service_port(
         self,
@@ -911,7 +346,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"port_index": created_index} if created_index else {},
-                protocol_used=OltProtocol.SSH,
                 service_port_index=created_index,
             )
         except Exception as exc:
@@ -919,7 +353,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 exc,
                 operation="SSH service port creation",
                 logger_=logger,
-                protocol_used=OltProtocol.SSH,
             )
 
     def delete_service_port(self, port_index: int) -> OltOperationResult:
@@ -930,18 +363,15 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = ssh_delete(self._olt, port_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             return OltOperationResult.from_exception(
                 exc,
                 operation="SSH service port deletion",
                 logger_=logger,
-                protocol_used=OltProtocol.SSH,
             )
+
+    # ========== Batched Operations ==========
 
     def execute_authorization_batch(
         self,
@@ -963,15 +393,42 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                     "steps_failed": result.steps_failed,
                     "raw_output": result.raw_output,
                 },
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH execute_authorization_batch failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH batched authorization failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
+
+    def configure_management_batch(
+        self,
+        spec: BatchedMgmtSpec,
+    ) -> OltOperationResult:
+        """Execute batched management configuration in one SSH session."""
+        from app.services.network.olt_batched_mgmt import (
+            execute_batched_management_setup,
+        )
+
+        try:
+            result = execute_batched_management_setup(self._olt, spec)
+            return OltOperationResult(
+                success=result.success,
+                message=result.message,
+                data={
+                    "steps_completed": result.steps_completed,
+                    "steps_failed": result.steps_failed,
+                    "details": result.details,
+                },
+            )
+        except Exception as exc:
+            logger.exception("SSH configure_management_batch failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH batched management configuration failed: {exc}",
+            )
+
+    # ========== ONT Operations ==========
 
     def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         """Reboot ONT via SSH/OMCI."""
@@ -979,17 +436,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = reboot_ont_omci(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH reboot_ont failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH ONT reboot failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
@@ -998,20 +450,15 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = factory_reset_ont_omci(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH factory_reset_ont failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH ONT factory reset failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
-    # ========== Extended Configuration Operations ==========
+    # ========== Extended Configuration ==========
 
     def configure_internet_config(
         self,
@@ -1029,51 +476,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             ok, message = configure_ont_internet_config(
                 self._olt, fsp, ont_id, ip_index=ip_index
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH configure_internet_config failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH internet-config failed: {exc}",
-                protocol_used=OltProtocol.SSH,
-            )
-
-    def configure_management_batch(
-        self,
-        spec: BatchedMgmtSpec,
-    ) -> OltOperationResult:
-        """Execute batched management configuration in one SSH session.
-
-        Combines service-port creation, IPHOST config, internet-config,
-        wan-config, and TR-069 binding into a single SSH session for
-        improved performance (~5x faster than individual calls).
-        """
-        from app.services.network.olt_batched_mgmt import (
-            execute_batched_management_setup,
-        )
-
-        try:
-            result = execute_batched_management_setup(self._olt, spec)
-            return OltOperationResult(
-                success=result.success,
-                message=result.message,
-                data={
-                    "steps_completed": result.steps_completed,
-                    "steps_failed": result.steps_failed,
-                    "details": result.details,
-                },
-                protocol_used=OltProtocol.SSH,
-            )
-        except Exception as exc:
-            logger.exception("SSH configure_management_batch failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH batched management configuration failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def configure_wan_config(
@@ -1093,17 +501,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             ok, message = configure_ont_wan_config(
                 self._olt, fsp, ont_id, ip_index=ip_index, profile_id=profile_id
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH configure_wan_config failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH wan-config failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def configure_pppoe(
@@ -1131,17 +534,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 username=username,
                 password=password,
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH configure_pppoe failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH PPPoE configuration failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def configure_port_native_vlan(
@@ -1167,17 +565,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 vlan_id=vlan_id,
                 priority=priority,
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH configure_port_native_vlan failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH port native VLAN configuration failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     # ========== Cleanup Operations ==========
@@ -1194,17 +587,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = clear_ont_ipconfig(self._olt, fsp, ont_id, ip_index=ip_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH clear_iphost_config failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH clear iphost config failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def clear_internet_config(
@@ -1223,17 +611,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             ok, message = clear_ont_internet_config(
                 self._olt, fsp, ont_id, ip_index=ip_index
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH clear_internet_config failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH clear internet config failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def clear_wan_config(
@@ -1250,17 +633,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = ssh_clear(self._olt, fsp, ont_id, ip_index=ip_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH clear_wan_config failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH clear WAN config failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def unbind_tr069_profile(
@@ -1273,17 +651,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
 
         try:
             ok, message = unbind_tr069_server_profile(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH unbind_tr069_profile failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH unbind TR-069 profile failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     # ========== Read Operations ==========
@@ -1298,7 +671,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"service_ports": entries},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             return OltOperationResult.from_exception(
@@ -1306,7 +678,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 operation="SSH get service ports",
                 logger_=logger,
                 data={"service_ports": []},
-                protocol_used=OltProtocol.SSH,
             )
 
     def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
@@ -1319,7 +690,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"service_ports": entries},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             return OltOperationResult.from_exception(
@@ -1327,7 +697,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 operation="SSH get service ports for ONT",
                 logger_=logger,
                 data={"service_ports": []},
-                protocol_used=OltProtocol.SSH,
             )
 
     def get_autofind_onts(self) -> OltOperationResult:
@@ -1340,7 +709,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"autofind_entries": entries},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH get_autofind_onts failed")
@@ -1348,7 +716,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=False,
                 message=f"SSH get autofind ONTs failed: {exc}",
                 data={"autofind_entries": []},
-                protocol_used=OltProtocol.SSH,
             )
 
     def get_line_profiles(self) -> OltOperationResult:
@@ -1361,7 +728,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"profiles": entries},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH get_line_profiles failed")
@@ -1369,7 +735,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=False,
                 message=f"SSH get line profiles failed: {exc}",
                 data={"profiles": []},
-                protocol_used=OltProtocol.SSH,
             )
 
     def get_service_profiles(self) -> OltOperationResult:
@@ -1382,7 +747,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"profiles": entries},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH get_service_profiles failed")
@@ -1390,7 +754,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=False,
                 message=f"SSH get service profiles failed: {exc}",
                 data={"profiles": []},
-                protocol_used=OltProtocol.SSH,
             )
 
     def get_tr069_profiles(self) -> OltOperationResult:
@@ -1403,7 +766,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"profiles": entries},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH get_tr069_profiles failed")
@@ -1411,7 +773,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=False,
                 message=f"SSH get TR-069 profiles failed: {exc}",
                 data={"profiles": []},
-                protocol_used=OltProtocol.SSH,
             )
 
     def create_tr069_profile(
@@ -1435,17 +796,12 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 password=password,
                 inform_interval=inform_interval,
             )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.SSH,
-            )
+            return OltOperationResult(success=ok, message=message)
         except Exception as exc:
             logger.exception("SSH create_tr069_profile failed")
             return OltOperationResult(
                 success=False,
                 message=f"SSH create TR-069 profile failed: {exc}",
-                protocol_used=OltProtocol.SSH,
             )
 
     def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
@@ -1460,7 +816,6 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=ok,
                 message=message,
                 data={"diagnostics": diagnostics},
-                protocol_used=OltProtocol.SSH,
             )
         except Exception as exc:
             logger.exception("SSH diagnose_service_ports failed")
@@ -1468,1175 +823,25 @@ class SshProtocolAdapter(BaseProtocolAdapter):
                 success=False,
                 message=f"SSH diagnose service ports failed: {exc}",
                 data={"diagnostics": None},
-                protocol_used=OltProtocol.SSH,
-            )
-
-
-# ============================================================================
-# NETCONF Protocol Adapter
-# ============================================================================
-
-
-class NetconfProtocolAdapter(BaseProtocolAdapter):
-    """NETCONF protocol adapter for OLT operations.
-
-    Provides full NETCONF support for Huawei OLTs with GPON YANG capabilities.
-    """
-
-    @property
-    def protocol(self) -> OltProtocol:
-        return OltProtocol.NETCONF
-
-    def get_capabilities(self) -> ProtocolCapabilities:
-        """Check NETCONF capabilities for the OLT."""
-        if not self._olt.netconf_enabled:
-            return ProtocolCapabilities(
-                protocol=OltProtocol.NETCONF,
-                available=False,
-                reason="NETCONF not enabled on OLT",
-            )
-
-        from app.services.network.olt_netconf_ont import can_authorize_via_netconf
-
-        can_use, reason = can_authorize_via_netconf(self._olt)
-
-        # All operations are available when NETCONF + GPON is available
-        return ProtocolCapabilities(
-            protocol=OltProtocol.NETCONF,
-            available=can_use,
-            reason=reason,
-            can_authorize=can_use,
-            can_deauthorize=can_use,
-            can_update_ont_profiles=can_use,
-            can_find_ont_by_serial=can_use,
-            can_configure_iphost=can_use,
-            can_bind_tr069=can_use,
-            can_create_service_port=can_use,
-            can_reboot_ont=can_use,
-            can_factory_reset=can_use,
-            can_execute_authorization_batch=False,  # Not implemented via NETCONF
-            can_configure_internet_config=can_use,
-            can_configure_wan_config=can_use,
-            can_configure_pppoe=can_use,
-            can_configure_port_native_vlan=can_use,
-            can_clear_configs=can_use,
-            can_get_service_ports=can_use,
-            can_get_autofind_onts=can_use,
-            can_get_profiles=can_use,
-            can_create_tr069_profile=False,  # Use SSH for profile creation
-            can_diagnose_service_ports=False,  # Diagnostic commands via SSH
-            can_fetch_running_config=can_use,
-        )
-
-    def authorize_ont(
-        self,
-        fsp: str,
-        serial_number: str,
-        *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
-        description: str = "",
-    ) -> OltOperationResult:
-        """Authorize ONT via NETCONF."""
-        from app.services.network.olt_netconf_ont import authorize_ont as nc_authorize
-
-        if line_profile_id is None or service_profile_id is None:
-            return OltOperationResult(
-                success=False,
-                message="NETCONF authorization requires line_profile_id and service_profile_id",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-        try:
-            ok, message, ont_id = nc_authorize(
-                self._olt,
-                fsp,
-                serial_number,
-                line_profile_id=line_profile_id,
-                service_profile_id=service_profile_id,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                ont_id=ont_id,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF authorize_ont failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF authorization failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Deauthorize ONT via NETCONF."""
-        from app.services.network.olt_netconf_ont import deauthorize_ont as nc_deauth
-
-        try:
-            ok, message = nc_deauth(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF deauthorize_ont failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF deauthorization failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
-        """Find ONT by serial number via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            find_ont_by_serial as nc_find,
-        )
-
-        try:
-            ok, message, ont_info = nc_find(self._olt, serial_number)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"ont_info": ont_info} if ont_info else {},
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF find_ont_by_serial failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF find failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def update_ont_profiles(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
-    ) -> OltOperationResult:
-        """Update ONT profiles via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            update_ont_profiles as nc_update,
-        )
-
-        try:
-            ok, message = nc_update(
-                self._olt,
-                fsp,
-                ont_id,
-                line_profile_id=line_profile_id,
-                service_profile_id=service_profile_id,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF update_ont_profiles failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF profile update failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def configure_iphost(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        mode: str = "dhcp",
-        vlan: int,
-        priority: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-    ) -> OltOperationResult:
-        """Configure ONT IPHOST via NETCONF."""
-        from app.services.network.olt_netconf_ont import configure_ont_iphost
-
-        try:
-            ok, message = configure_ont_iphost(
-                self._olt,
-                fsp,
-                ont_id,
-                vlan_id=vlan,
-                ip_mode=mode,
-                priority=priority,
-                ip_address=ip_address,
-                subnet=subnet_mask,
-                gateway=gateway,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF configure_iphost failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF IPHOST config failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def bind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        profile_id: int,
-    ) -> OltOperationResult:
-        """Bind TR-069 profile via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            bind_tr069_profile as nc_bind,
-        )
-
-        try:
-            ok, message = nc_bind(self._olt, fsp, ont_id, profile_id=profile_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF bind_tr069_profile failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF TR-069 bind failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def unbind_tr069_profile(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Unbind TR-069 profile via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            unbind_tr069_profile as nc_unbind,
-        )
-
-        try:
-            ok, message = nc_unbind(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF unbind_tr069_profile failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF TR-069 unbind failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def create_service_port(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        gem_index: int,
-        vlan_id: int,
-        user_vlan: int | str | None = None,
-        tag_transform: str = "translate",
-        port_index: int | None = None,
-    ) -> OltOperationResult:
-        """Create service port via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            create_service_port as nc_create,
-        )
-
-        try:
-            ok, message, assigned_port = nc_create(
-                self._olt,
-                fsp,
-                ont_id,
-                gem_index=gem_index,
-                vlan_id=vlan_id,
-                user_vlan=user_vlan,
-                tag_transform=tag_transform,
-                port_index=port_index,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"port_index": assigned_port} if assigned_port else {},
-                protocol_used=OltProtocol.NETCONF,
-                service_port_index=assigned_port,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF create_service_port failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF service port creation failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def delete_service_port(self, port_index: int) -> OltOperationResult:
-        """Delete service port via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            delete_service_port as nc_delete,
-        )
-
-        try:
-            ok, message = nc_delete(self._olt, port_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF delete_service_port failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF service port deletion failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Reboot ONT via NETCONF."""
-        from app.services.network.olt_netconf_ont import reboot_ont as nc_reboot
-
-        try:
-            ok, message = nc_reboot(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF reboot_ont failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF reboot failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        """Factory reset ONT via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            factory_reset_ont as nc_reset,
-        )
-
-        try:
-            ok, message = nc_reset(self._olt, fsp, ont_id)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF factory_reset_ont failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF factory reset failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    # Extended configuration operations
-
-    def configure_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Configure internet-config via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            configure_internet_config as nc_config,
-        )
-
-        try:
-            ok, message = nc_config(self._olt, fsp, ont_id, ip_index=ip_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF configure_internet_config failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF internet config failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def configure_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        profile_id: int = 0,
-    ) -> OltOperationResult:
-        """Configure WAN config via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            configure_wan_config as nc_config,
-        )
-
-        try:
-            ok, message = nc_config(
-                self._olt, fsp, ont_id, ip_index=ip_index, profile_id=profile_id
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF configure_wan_config failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF WAN config failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def configure_pppoe(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int,
-        vlan_id: int,
-        username: str,
-        password: str,
-    ) -> OltOperationResult:
-        """Configure PPPoE via NETCONF."""
-        from app.services.network.olt_netconf_ont import configure_pppoe as nc_config
-
-        try:
-            ok, message = nc_config(
-                self._olt,
-                fsp,
-                ont_id,
-                ip_index=ip_index,
-                vlan_id=vlan_id,
-                username=username,
-                password=password,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF configure_pppoe failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF PPPoE config failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def configure_port_native_vlan(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        eth_port: int,
-        vlan_id: int,
-        priority: int = 0,
-    ) -> OltOperationResult:
-        """Configure port native VLAN via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            configure_port_native_vlan as nc_config,
-        )
-
-        try:
-            ok, message = nc_config(
-                self._olt,
-                fsp,
-                ont_id,
-                eth_port=eth_port,
-                vlan_id=vlan_id,
-                priority=priority,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF configure_port_native_vlan failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF port native VLAN config failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    # Clear operations
-
-    def clear_iphost_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Clear IPHOST config via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            clear_iphost_config as nc_clear,
-        )
-
-        try:
-            ok, message = nc_clear(self._olt, fsp, ont_id, ip_index=ip_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF clear_iphost_config failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF IPHOST clear failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def clear_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Clear internet-config via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            clear_internet_config as nc_clear,
-        )
-
-        try:
-            ok, message = nc_clear(self._olt, fsp, ont_id, ip_index=ip_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF clear_internet_config failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF internet config clear failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def clear_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        """Clear WAN config via NETCONF."""
-        from app.services.network.olt_netconf_ont import clear_wan_config as nc_clear
-
-        try:
-            ok, message = nc_clear(self._olt, fsp, ont_id, ip_index=ip_index)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF clear_wan_config failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF WAN config clear failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    # Read operations
-
-    def get_service_ports(self, fsp: str) -> OltOperationResult:
-        """Get service ports via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            get_service_ports as nc_get,
-        )
-
-        try:
-            ok, message, ports = nc_get(self._olt, fsp)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"service_ports": ports},
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF get_service_ports failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF get service ports failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def get_autofind_onts(self) -> OltOperationResult:
-        """Get autofind ONTs via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            get_autofind_onts as nc_get,
-        )
-
-        try:
-            ok, message, onts = nc_get(self._olt)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"autofind_onts": onts},
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF get_autofind_onts failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF get autofind ONTs failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def get_line_profiles(self) -> OltOperationResult:
-        """Get line profiles via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            get_line_profiles as nc_get,
-        )
-
-        try:
-            ok, message, profiles = nc_get(self._olt)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"profiles": profiles},
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF get_line_profiles failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF get line profiles failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def get_service_profiles(self) -> OltOperationResult:
-        """Get service profiles via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            get_service_profiles as nc_get,
-        )
-
-        try:
-            ok, message, profiles = nc_get(self._olt)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"profiles": profiles},
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF get_service_profiles failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF get service profiles failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
-            )
-
-    def get_tr069_profiles(self) -> OltOperationResult:
-        """Get TR-069 profiles via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            get_tr069_profiles as nc_get,
-        )
-
-        try:
-            ok, message, profiles = nc_get(self._olt)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"profiles": profiles},
-                protocol_used=OltProtocol.NETCONF,
-            )
-        except Exception as exc:
-            logger.exception("NETCONF get_tr069_profiles failed")
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF get TR-069 profiles failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
             )
 
     def fetch_running_config(self) -> OltOperationResult:
-        """Fetch running config via NETCONF."""
-        from app.services.network import olt_netconf
+        """Fetch full running config via SSH CLI."""
+        from app.services.network.olt_ssh import fetch_running_config_ssh
 
         try:
-            ok, message, config_text = olt_netconf.get_running_config(self._olt)
+            ok, message, config_text = fetch_running_config_ssh(self._olt)
             return OltOperationResult(
                 success=ok,
                 message=message,
-                data={"config_text": config_text},
-                protocol_used=OltProtocol.NETCONF,
+                data={"config_text": config_text} if config_text else {},
             )
         except Exception as exc:
-            logger.exception("NETCONF fetch_running_config failed")
+            logger.exception("SSH fetch_running_config failed")
             return OltOperationResult(
                 success=False,
-                message=f"NETCONF fetch config failed: {exc}",
-                protocol_used=OltProtocol.NETCONF,
+                message=f"SSH running-config fetch failed: {exc}",
             )
-
-
-# ============================================================================
-# REST Protocol Adapter
-# ============================================================================
-
-
-class RestProtocolAdapter(BaseProtocolAdapter):
-    """REST API protocol adapter for OLT operations.
-
-    This is a skeletal implementation that returns "not supported" for all
-    operations. It serves as a foundation for vendor-specific REST API
-    implementations.
-
-    REST APIs vary significantly between vendors, so the actual implementation
-    would need to be customized for each vendor's API specification.
-    """
-
-    @property
-    def protocol(self) -> OltProtocol:
-        return OltProtocol.REST
-
-    def get_capabilities(self) -> ProtocolCapabilities:
-        """Check REST API capabilities for the OLT.
-
-        Returns:
-            ProtocolCapabilities with all operations marked as False
-            (skeletal implementation).
-        """
-        # Check if REST is enabled and configured
-        if not getattr(self._olt, "api_enabled", False):
-            return ProtocolCapabilities(
-                protocol=OltProtocol.REST,
-                available=False,
-                reason="REST API not enabled on OLT",
-            )
-
-        # Check for URL configuration
-        api_url = getattr(self._olt, "api_url", None)
-        mgmt_ip = getattr(self._olt, "mgmt_ip", None)
-        if not api_url and not mgmt_ip:
-            return ProtocolCapabilities(
-                protocol=OltProtocol.REST,
-                available=False,
-                reason="No api_url or mgmt_ip configured for REST API",
-            )
-
-        # REST is available but no operations implemented yet
-        return ProtocolCapabilities(
-            protocol=OltProtocol.REST,
-            available=True,
-            reason="REST API available (skeletal implementation)",
-            # All operations are False - placeholder for vendor-specific implementations
-            can_authorize=False,
-            can_deauthorize=False,
-            can_update_ont_profiles=False,
-            can_find_ont_by_serial=False,
-            can_configure_iphost=False,
-            can_bind_tr069=False,
-            can_create_service_port=False,
-            can_reboot_ont=False,
-            can_factory_reset=False,
-            can_execute_authorization_batch=False,
-            can_configure_internet_config=False,
-            can_configure_wan_config=False,
-            can_configure_pppoe=False,
-            can_configure_port_native_vlan=False,
-            can_clear_configs=False,
-            can_get_service_ports=False,
-            can_get_autofind_onts=False,
-            can_get_profiles=False,
-            can_create_tr069_profile=False,
-            can_diagnose_service_ports=False,
-            can_fetch_running_config=False,
-        )
-
-    def authorize_ont(
-        self,
-        fsp: str,
-        serial_number: str,
-        *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
-        description: str = "",
-    ) -> OltOperationResult:
-        """Authorize ONT via REST API (not implemented)."""
-        return self._not_supported("authorize_ont")
-
-    def fetch_running_config(self) -> OltOperationResult:
-        """Fetch running config via REST API (not implemented)."""
-        return self._not_supported("fetch_running_config")
-
-
-# ============================================================================
-# Composite Adapter with Fallback
-# ============================================================================
-
-
-class CompositeProtocolAdapter(BaseProtocolAdapter):
-    """Adapter that tries protocols in order with automatic fallback.
-
-    Attempts NETCONF first (if enabled), falls back to SSH.
-    """
-
-    def __init__(
-        self,
-        olt: OLTDevice,
-        *,
-        prefer_netconf: bool = True,
-    ):
-        super().__init__(olt)
-        self._prefer_netconf = prefer_netconf
-        self._netconf = NetconfProtocolAdapter(olt)
-        self._ssh = SshProtocolAdapter(olt)
-
-    @property
-    def protocol(self) -> OltProtocol:
-        return OltProtocol.AUTO
-
-    def get_capabilities(self) -> ProtocolCapabilities:
-        """Composite capabilities from all protocols."""
-        nc_caps = self._netconf.get_capabilities()
-        ssh_caps = self._ssh.get_capabilities()
-
-        return ProtocolCapabilities(
-            protocol=OltProtocol.AUTO,
-            available=nc_caps.available or ssh_caps.available,
-            reason="",
-            can_authorize=nc_caps.can_authorize or ssh_caps.can_authorize,
-            can_deauthorize=nc_caps.can_deauthorize or ssh_caps.can_deauthorize,
-            can_update_ont_profiles=(
-                nc_caps.can_update_ont_profiles or ssh_caps.can_update_ont_profiles
-            ),
-            can_find_ont_by_serial=(
-                nc_caps.can_find_ont_by_serial or ssh_caps.can_find_ont_by_serial
-            ),
-            can_configure_iphost=nc_caps.can_configure_iphost or ssh_caps.can_configure_iphost,
-            can_bind_tr069=nc_caps.can_bind_tr069 or ssh_caps.can_bind_tr069,
-            can_create_service_port=nc_caps.can_create_service_port or ssh_caps.can_create_service_port,
-            can_reboot_ont=nc_caps.can_reboot_ont or ssh_caps.can_reboot_ont,
-            can_factory_reset=nc_caps.can_factory_reset or ssh_caps.can_factory_reset,
-            can_execute_authorization_batch=(
-                nc_caps.can_execute_authorization_batch
-                or ssh_caps.can_execute_authorization_batch
-            ),
-            # Extended configuration operations
-            can_configure_internet_config=(
-                nc_caps.can_configure_internet_config or ssh_caps.can_configure_internet_config
-            ),
-            can_configure_wan_config=(
-                nc_caps.can_configure_wan_config or ssh_caps.can_configure_wan_config
-            ),
-            can_configure_pppoe=nc_caps.can_configure_pppoe or ssh_caps.can_configure_pppoe,
-            can_configure_port_native_vlan=(
-                nc_caps.can_configure_port_native_vlan or ssh_caps.can_configure_port_native_vlan
-            ),
-            can_clear_configs=nc_caps.can_clear_configs or ssh_caps.can_clear_configs,
-            # Read operations
-            can_get_service_ports=(
-                nc_caps.can_get_service_ports or ssh_caps.can_get_service_ports
-            ),
-            can_get_autofind_onts=(
-                nc_caps.can_get_autofind_onts or ssh_caps.can_get_autofind_onts
-            ),
-            can_get_profiles=nc_caps.can_get_profiles or ssh_caps.can_get_profiles,
-            can_create_tr069_profile=(
-                nc_caps.can_create_tr069_profile or ssh_caps.can_create_tr069_profile
-            ),
-            can_diagnose_service_ports=(
-                nc_caps.can_diagnose_service_ports or ssh_caps.can_diagnose_service_ports
-            ),
-            can_fetch_running_config=(
-                nc_caps.can_fetch_running_config or ssh_caps.can_fetch_running_config
-            ),
-        )
-
-    def fetch_running_config(self) -> OltOperationResult:
-        return self._ssh.fetch_running_config()
-
-    def authorize_ont(
-        self,
-        fsp: str,
-        serial_number: str,
-        *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
-        description: str = "",
-    ) -> OltOperationResult:
-        """Authorize ONT, trying NETCONF first if enabled."""
-        # Try NETCONF if preferred and available
-        if self._prefer_netconf and self._olt.netconf_enabled:
-            nc_caps = self._netconf.get_capabilities()
-            if nc_caps.can_authorize:
-                logger.info(
-                    "Attempting ONT authorization via NETCONF: olt=%s fsp=%s serial=%s",
-                    self._olt.name,
-                    fsp,
-                    serial_number,
-                )
-                result = self._netconf.authorize_ont(
-                    fsp,
-                    serial_number,
-                    line_profile_id=line_profile_id,
-                    service_profile_id=service_profile_id,
-                    description=description,
-                )
-                if result.success:
-                    return result
-
-                # NETCONF failed, fall back to SSH
-                logger.info(
-                    "NETCONF authorization failed, falling back to SSH: %s",
-                    result.message,
-                )
-                fallback_reason = result.message
-
-                ssh_result = self._ssh.authorize_ont(
-                    fsp,
-                    serial_number,
-                    line_profile_id=line_profile_id,
-                    service_profile_id=service_profile_id,
-                    description=description,
-                )
-                ssh_result.fallback_reason = f"NETCONF failed: {fallback_reason}"
-                return ssh_result
-
-        # Use SSH directly
-        return self._ssh.authorize_ont(
-            fsp,
-            serial_number,
-            line_profile_id=line_profile_id,
-            service_profile_id=service_profile_id,
-            description=description,
-        )
-
-    # For other operations, delegate to SSH (NETCONF doesn't support them yet)
-
-    def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._ssh.deauthorize_ont(fsp, ont_id)
-
-    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult:
-        return self._ssh.find_ont_by_serial(serial_number)
-
-    def update_ont_profiles(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
-    ) -> OltOperationResult:
-        return self._ssh.update_ont_profiles(
-            fsp,
-            ont_id,
-            line_profile_id=line_profile_id,
-            service_profile_id=service_profile_id,
-        )
-
-    def configure_iphost(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        mode: str = "dhcp",
-        vlan: int,
-        priority: int | None = None,
-        ip_address: str | None = None,
-        subnet_mask: str | None = None,
-        gateway: str | None = None,
-    ) -> OltOperationResult:
-        return self._ssh.configure_iphost(
-            fsp,
-            ont_id,
-            ip_index=ip_index,
-            mode=mode,
-            vlan=vlan,
-            priority=priority,
-            ip_address=ip_address,
-            subnet_mask=subnet_mask,
-            gateway=gateway,
-        )
-
-    def bind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        profile_id: int,
-    ) -> OltOperationResult:
-        return self._ssh.bind_tr069_profile(fsp, ont_id, profile_id=profile_id)
-
-    def create_service_port(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        gem_index: int,
-        vlan_id: int,
-        user_vlan: int | str | None = None,
-        tag_transform: str = "translate",
-        port_index: int | None = None,
-    ) -> OltOperationResult:
-        return self._ssh.create_service_port(
-            fsp,
-            ont_id,
-            gem_index=gem_index,
-            vlan_id=vlan_id,
-            user_vlan=user_vlan,
-            tag_transform=tag_transform,
-            port_index=port_index,
-        )
-
-    def delete_service_port(self, port_index: int) -> OltOperationResult:
-        return self._ssh.delete_service_port(port_index)
-
-    def execute_authorization_batch(
-        self,
-        spec: BatchedAuthorizationSpec,
-    ) -> OltOperationResult:
-        return self._ssh.execute_authorization_batch(spec)
-
-    def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._ssh.reboot_ont(fsp, ont_id)
-
-    def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._ssh.factory_reset_ont(fsp, ont_id)
-
-    # Extended configuration operations - delegate to SSH
-
-    def configure_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._ssh.configure_internet_config(fsp, ont_id, ip_index=ip_index)
-
-    def configure_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-        profile_id: int = 0,
-    ) -> OltOperationResult:
-        return self._ssh.configure_wan_config(
-            fsp, ont_id, ip_index=ip_index, profile_id=profile_id
-        )
-
-    def configure_pppoe(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int,
-        vlan_id: int,
-        username: str,
-        password: str,
-    ) -> OltOperationResult:
-        return self._ssh.configure_pppoe(
-            fsp,
-            ont_id,
-            ip_index=ip_index,
-            vlan_id=vlan_id,
-            username=username,
-            password=password,
-        )
-
-    def configure_port_native_vlan(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        eth_port: int,
-        vlan_id: int,
-        priority: int = 0,
-    ) -> OltOperationResult:
-        return self._ssh.configure_port_native_vlan(
-            fsp, ont_id, eth_port=eth_port, vlan_id=vlan_id, priority=priority
-        )
-
-    # Cleanup operations - delegate to SSH
-
-    def clear_iphost_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._ssh.clear_iphost_config(fsp, ont_id, ip_index=ip_index)
-
-    def clear_internet_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._ssh.clear_internet_config(fsp, ont_id, ip_index=ip_index)
-
-    def clear_wan_config(
-        self,
-        fsp: str,
-        ont_id: int,
-        *,
-        ip_index: int = 0,
-    ) -> OltOperationResult:
-        return self._ssh.clear_wan_config(fsp, ont_id, ip_index=ip_index)
-
-    def unbind_tr069_profile(
-        self,
-        fsp: str,
-        ont_id: int,
-    ) -> OltOperationResult:
-        return self._ssh.unbind_tr069_profile(fsp, ont_id)
-
-    # Read operations - delegate to SSH
-
-    def get_service_ports(self, fsp: str) -> OltOperationResult:
-        return self._ssh.get_service_ports(fsp)
-
-    def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._ssh.get_service_ports_for_ont(fsp, ont_id)
-
-    def get_autofind_onts(self) -> OltOperationResult:
-        return self._ssh.get_autofind_onts()
-
-    def get_line_profiles(self) -> OltOperationResult:
-        return self._ssh.get_line_profiles()
-
-    def get_service_profiles(self) -> OltOperationResult:
-        return self._ssh.get_service_profiles()
-
-    def get_tr069_profiles(self) -> OltOperationResult:
-        return self._ssh.get_tr069_profiles()
-
-    def create_tr069_profile(
-        self,
-        *,
-        profile_name: str,
-        acs_url: str,
-        username: str,
-        password: str,
-        inform_interval: int,
-    ) -> OltOperationResult:
-        return self._ssh.create_tr069_profile(
-            profile_name=profile_name,
-            acs_url=acs_url,
-            username=username,
-            password=password,
-            inform_interval=inform_interval,
-        )
-
-    def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
-        return self._ssh.diagnose_service_ports(fsp, ont_id)
 
 
 # ============================================================================
@@ -2644,55 +849,13 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
 # ============================================================================
 
 
-def get_protocol_adapter(
-    olt: OLTDevice,
-    *,
-    protocol: OltProtocol | str = OltProtocol.AUTO,
-) -> OltProtocolAdapter:
-    """Get the appropriate protocol adapter for an OLT.
+def get_protocol_adapter(olt: OLTDevice) -> OltProtocolAdapter:
+    """Get the protocol adapter for an OLT.
 
     Args:
         olt: OLT device instance
-        protocol: Specific protocol to use, or AUTO for automatic selection
 
     Returns:
-        OltProtocolAdapter implementation
-
-    Examples:
-        # Automatic selection (NETCONF if available, else SSH)
-        adapter = get_protocol_adapter(olt)
-
-        # Force SSH
-        adapter = get_protocol_adapter(olt, protocol="ssh")
-
-        # Force NETCONF
-        adapter = get_protocol_adapter(olt, protocol="netconf")
+        OltProtocolAdapter instance
     """
-    if isinstance(protocol, str):
-        protocol = OltProtocol(protocol.lower())
-
-    if protocol == OltProtocol.SSH:
-        return SshProtocolAdapter(olt)
-    elif protocol == OltProtocol.NETCONF:
-        return NetconfProtocolAdapter(olt)
-    elif protocol == OltProtocol.REST:
-        return RestProtocolAdapter(olt)
-    elif protocol == OltProtocol.AUTO:
-        return CompositeProtocolAdapter(olt, prefer_netconf=True)
-    else:
-        raise ValueError(f"Unknown protocol: {protocol}")
-
-
-def get_ssh_adapter(olt: OLTDevice) -> SshProtocolAdapter:
-    """Get SSH adapter directly (convenience function)."""
-    return SshProtocolAdapter(olt)
-
-
-def get_netconf_adapter(olt: OLTDevice) -> NetconfProtocolAdapter:
-    """Get NETCONF adapter directly (convenience function)."""
-    return NetconfProtocolAdapter(olt)
-
-
-def get_rest_adapter(olt: OLTDevice) -> RestProtocolAdapter:
-    """Get REST adapter directly (convenience function)."""
-    return RestProtocolAdapter(olt)
+    return OltProtocolAdapter(olt)

@@ -80,6 +80,38 @@ def olt_backup_base_dir() -> Path:
     return _FALLBACK_OLT_BACKUP_DIR
 
 
+def authorize_ont(
+    db: Session,
+    olt_id: str,
+    *,
+    fsp: str,
+    serial_number: str,
+    force_reauthorize: bool = False,
+    preset_id: str | None = None,
+    request: Request | None = None,
+) -> tuple[bool, str, str | None]:
+    """Legacy OLT authorization entry point.
+
+    The audited workflow lives in ``ont_authorization``; this wrapper preserves
+    the historical ``olt_operations.authorize_ont`` patch/import boundary.
+    """
+    from app.services.network.ont_authorization import (
+        authorize_autofind_ont_and_provision_network_audited,
+    )
+
+    result = authorize_autofind_ont_and_provision_network_audited(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+        force_reauthorize=force_reauthorize,
+        preset_id=preset_id,
+        request=request,
+    )
+    ont_unit_id = str(result.ont_unit_id) if result.ont_unit_id else None
+    return result.success, result.message, ont_unit_id
+
+
 def resolve_backup_file(file_path: str) -> Path:
     base = olt_backup_base_dir().resolve()
     candidate = (base / file_path).resolve()
@@ -224,12 +256,9 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
         return None
 
     try:
-        from app.services.network.olt_protocol_adapters import (
-            OltProtocol,
-            get_protocol_adapter,
-        )
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-        result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+        result = get_protocol_adapter(olt).fetch_running_config()
         config_text = result.data.get("config_text") if result.success else None
         if isinstance(config_text, str) and config_text.strip():
             return config_text
@@ -640,12 +669,9 @@ def fetch_running_config_ssh_preview(
     if not olt:
         return False, "OLT not found", ""
 
-    from app.services.network.olt_protocol_adapters import (
-        OltProtocol,
-        get_protocol_adapter,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-    result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+    result = get_protocol_adapter(olt).fetch_running_config()
     ok = result.success
     message = result.message
     raw_config_text = result.data.get("config_text") if ok else ""
@@ -844,12 +870,9 @@ def backup_running_config_ssh(
     if not olt:
         return None, "OLT not found"
 
-    from app.services.network.olt_protocol_adapters import (
-        OltProtocol,
-        get_protocol_adapter,
-    )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-    result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+    result = get_protocol_adapter(olt).fetch_running_config()
     raw_config_text = result.data.get("config_text") if result.success else ""
     config_text = raw_config_text if isinstance(raw_config_text, str) else ""
     if not result.success or not config_text:

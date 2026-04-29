@@ -82,12 +82,9 @@ def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
     Returns the config text or None if SSH is unavailable.
     """
     try:
-        from app.services.network.olt_protocol_adapters import (
-            OltProtocol,
-            get_protocol_adapter,
-        )
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-        result = get_protocol_adapter(olt, protocol=OltProtocol.SSH).fetch_running_config()
+        result = get_protocol_adapter(olt).fetch_running_config()
         raw_config_text = result.data.get("config_text") if result.success else ""
         config_text = raw_config_text if isinstance(raw_config_text, str) else ""
         if result.success and config_text:

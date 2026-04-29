@@ -79,7 +79,7 @@ def test_adapter_result_base_supports_domain_results() -> None:
 
 
 def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
-    from app.services.network.olt_protocol_adapters import SshProtocolAdapter
+    from app.services.network.olt_protocol_adapters import OltProtocolAdapter
 
     def timeout(*_args, **_kwargs):
         raise TimeoutError("OLT SSH timed out")
@@ -89,7 +89,7 @@ def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
         timeout,
     )
 
-    adapter = SshProtocolAdapter(SimpleNamespace(name="OLT 1"))
+    adapter = OltProtocolAdapter(SimpleNamespace(name="OLT 1"))
     result = adapter.configure_iphost(
         "0/1/3",
         5,
