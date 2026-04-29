@@ -603,6 +603,33 @@ def unified_config_context(
             initial_iphost_form=observed_state["initial_form"],
         )
     )
+
+    # Add VLAN dropdown options from OLT
+    from app.services.web_network_onts import get_vlans_for_ont
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+    olt_vlans = get_vlans_for_ont(db, ont)
+    available_vlans = []
+    for vlan in olt_vlans:
+        if vlan.tag is None:
+            continue
+        purpose = vlan.purpose.value if vlan.purpose else "other"
+        available_vlans.append({
+            "id": str(vlan.id),
+            "tag": vlan.tag,
+            "name": vlan.name or f"VLAN {vlan.tag}",
+            "purpose": purpose,
+        })
+    available_vlans.sort(key=lambda v: (v["purpose"] != "internet", v["purpose"] != "management", v["tag"] or 0))
+    context["available_vlans"] = available_vlans
+
+    # Add effective VLAN IDs for form selection
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    context["wan_vlan"] = values.get("wan_vlan")
+    context["wan_vlan_id"] = values.get("wan_vlan_id") or ""
+    context["mgmt_vlan"] = values.get("mgmt_vlan")
+    context["mgmt_vlan_id"] = values.get("mgmt_vlan_id") or ""
+
     # Add management IP pool context for the dropdown
     mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
     context["mgmt_ip_pool"] = mgmt_ip_pool_ctx.get("mgmt_ip_pool")
