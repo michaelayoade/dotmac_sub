@@ -226,7 +226,25 @@ def apply_status_snapshot(ont: OntUnit, snapshot: OntStatusSnapshot) -> OntUnit:
     ont.effective_status = snapshot.effective_status
     ont.effective_status_source = snapshot.effective_status_source
     ont.status_resolved_at = snapshot.status_resolved_at
+    effective_last_seen = resolve_effective_last_seen_at(
+        ont, acs_last_inform_at=snapshot.acs_last_inform_at
+    )
+    if effective_last_seen is not None:
+        ont.last_seen_at = effective_last_seen
     return ont
+
+
+def reset_status_for_inventory(ont: OntUnit) -> None:
+    """Clear persisted status observations for an ONT returned to inventory."""
+    ont.acs_status = OntAcsStatus.unknown
+    ont.acs_last_inform_at = None
+    ont.effective_status = OnuOnlineStatus.unknown
+    ont.effective_status_source = OntStatusSource.derived
+    ont.status_resolved_at = None
+    ont.online_status = OnuOnlineStatus.unknown
+    ont.last_seen_at = None
+    ont.offline_reason = None
+    ont.consecutive_offline_polls = 0
 
 
 def apply_status_with_hysteresis(

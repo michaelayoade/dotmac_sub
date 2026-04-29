@@ -301,130 +301,53 @@ _WAN_OBJECT_CONTAINERS: dict[str, dict[str, str]] = {
     TR069_ROOT_IGD: _TR098_WAN_OBJECT_CONTAINERS,
 }
 
-# Object field suffixes (appended after instance number)
-ETHERNET_PORT_FIELDS = ("Enable", "Status", "MaxBitRate", "DuplexMode", "MACAddress")
-LAN_HOST_FIELDS = ("HostName", "IPAddress", "MACAddress", "InterfaceType", "Active")
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatibility mapping: old PARAM_GROUPS labels → canonical names
-# Used during transition to let ont_tr069.py's display code migrate gradually.
-# ---------------------------------------------------------------------------
-
-LABEL_TO_CANONICAL: dict[str, str] = {
-    "system.Manufacturer": "system.manufacturer",
-    "system.Model": "system.model_name",
-    "system.Firmware": "system.software_version",
-    "system.Hardware": "system.hardware_version",
-    "system.Serial": "system.serial_number",
-    "system.Uptime": "system.uptime",
-    "system.CPU Usage": "system.cpu_usage",
-    "system.Memory Total": "system.memory_total",
-    "system.Memory Free": "system.memory_free",
-    "system.MAC Address": "system.mac_address",
-    "wan.Connection Type": "wan.connection_type",
-    "wan.WAN IP": "wan.ip_address",
-    "wan.Username": "wan.pppoe_username",
-    "wan.Status": "wan.status",
-    "wan.Uptime": "wan.uptime",
-    "wan.DNS Servers": "wan.dns_servers",
-    "wan.Gateway": "wan.gateway",
-    "lan.LAN IP": "lan.ip_address",
-    "lan.Subnet Mask": "lan.subnet_mask",
-    "lan.DHCP Enabled": "lan.dhcp_enabled",
-    "lan.DHCP Start": "lan.dhcp_min_address",
-    "lan.DHCP End": "lan.dhcp_max_address",
-    "lan.Connected Hosts": "lan.host_count",
-    "wireless.Enabled": "wifi.enabled",
-    "wireless.SSID": "wifi.ssid",
-    "wireless.Channel": "wifi.channel",
-    "wireless.Standard": "wifi.standard",
-    "wireless.Security Mode": "wifi.security_mode",
-    "wireless.Connected Clients": "wifi.client_count",
-    "wireless.Password": "wifi.psk",
-}
-
-
-# ---------------------------------------------------------------------------
-# Display group definitions — maps section + label to canonical names
-# Used by ont_tr069.py / cpe_tr069.py for the TR-069 tab display.
-# ---------------------------------------------------------------------------
-
-DISPLAY_GROUPS: dict[str, dict[str, str]] = {
+# GenieACS virtual parameter paths used for display/config snapshots. TR-098 vs
+# TR-181 normalization is handled by the virtual parameter scripts in GenieACS.
+VIRTUAL_PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
     "system": {
-        "Manufacturer": "system.manufacturer",
-        "Model": "system.model_name",
-        "Firmware": "system.software_version",
-        "Hardware": "system.hardware_version",
-        "Serial": "system.serial_number",
-        "Uptime": "system.uptime",
-        "CPU Usage": "system.cpu_usage",
-        "Memory Total": "system.memory_total",
-        "Memory Free": "system.memory_free",
-        "MAC Address": "system.mac_address",
+        "Manufacturer": ["VirtualParameters.Manufacturer"],
+        "Model": ["VirtualParameters.Model"],
+        "Firmware": ["VirtualParameters.Firmware"],
+        "Hardware": ["VirtualParameters.Hardware"],
+        "Serial": ["VirtualParameters.Serial"],
+        "Uptime": ["VirtualParameters.Uptime"],
+        "CPU Usage": ["VirtualParameters.CPU_Usage"],
+        "Memory Total": ["VirtualParameters.Memory_Total"],
+        "Memory Free": ["VirtualParameters.Memory_Free"],
+        "MAC Address": ["VirtualParameters.MAC_Address"],
     },
     "wan": {
-        "Connection Type": "wan.connection_type",
-        "WAN IP": "wan.ip_address",
-        "Username": "wan.pppoe_username",
-        "Status": "wan.status",
-        "Uptime": "wan.uptime",
-        "DNS Servers": "wan.dns_servers",
-        "Gateway": "wan.gateway",
+        "Connection Type": ["VirtualParameters.WAN_Connection_Type"],
+        "WAN IP": ["VirtualParameters.WAN_IP"],
+        "Username": ["VirtualParameters.PPPoE_Username"],
+        "Status": ["VirtualParameters.WAN_Status"],
+        "VLAN": ["VirtualParameters.WAN_VLAN"],
+        "Uptime": ["VirtualParameters.WAN_Uptime"],
+        "DNS Servers": ["VirtualParameters.DNS_Servers"],
+        "Gateway": ["VirtualParameters.WAN_Gateway"],
     },
     "lan": {
-        "LAN IP": "lan.ip_address",
-        "Subnet Mask": "lan.subnet_mask",
-        "DHCP Enabled": "lan.dhcp_enabled",
-        "DHCP Start": "lan.dhcp_min_address",
-        "DHCP End": "lan.dhcp_max_address",
-        "Connected Hosts": "lan.host_count",
+        "LAN IP": ["VirtualParameters.LAN_IP"],
+        "Subnet Mask": ["VirtualParameters.LAN_Subnet"],
+        "DHCP Enabled": ["VirtualParameters.DHCP_Enabled"],
+        "DHCP Start": ["VirtualParameters.DHCP_Start"],
+        "DHCP End": ["VirtualParameters.DHCP_End"],
+        "Connected Hosts": ["VirtualParameters.Connected_Hosts"],
     },
     "wireless": {
-        "Enabled": "wifi.enabled",
-        "SSID": "wifi.ssid",
-        "Channel": "wifi.channel",
-        "Standard": "wifi.standard",
-        "Security Mode": "wifi.security_mode",
-        "Connected Clients": "wifi.client_count",
-        "Password": "wifi.psk",
+        "Enabled": ["VirtualParameters.WiFi_Enabled"],
+        "SSID": ["VirtualParameters.WiFi_SSID"],
+        "Channel": ["VirtualParameters.WiFi_Channel"],
+        "Standard": ["VirtualParameters.WiFi_Standard"],
+        "Security Mode": ["VirtualParameters.WiFi_Security"],
+        "Connected Clients": ["VirtualParameters.WiFi_Clients"],
+        "Password": ["VirtualParameters.WiFi_Password"],
     },
-}
-
-
-# ---------------------------------------------------------------------------
-# Running config parameter groups — used by ont_action_device.py
-# ---------------------------------------------------------------------------
-
-RUNNING_CONFIG_GROUPS: dict[str, list[str]] = {
-    "device_info": [
-        "system.manufacturer",
-        "system.model_name",
-        "system.serial_number",
-        "system.software_version",
-        "system.hardware_version",
-        "system.uptime",
-        "system.memory_total",
-        "system.memory_free",
-    ],
-    "wan": [
-        "wan.ip_address",
-        "wan.subnet_mask",
-        "wan.status",
-        "wan.dhcp_ip",
-    ],
-    "optical": [
-        "optical.signal_level",
-        "optical.lower_threshold",
-        "optical.upper_threshold",
-        "optical.transmit_level",
-    ],
-    "wifi": [
-        "wifi.ssid",
-        "wifi.enabled",
-        "wifi.channel",
-        "wifi.standard",
-    ],
+    "management": {
+        "Management IP": ["VirtualParameters.Mgmt_IP"],
+        "SSH Enabled": ["VirtualParameters.SSH_Enabled"],
+        "Telnet Enabled": ["VirtualParameters.Telnet_Enabled"],
+    },
 }
 
 

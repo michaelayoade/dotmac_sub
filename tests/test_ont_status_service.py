@@ -70,6 +70,24 @@ def test_apply_status_snapshot_updates_ont_fields() -> None:
     assert ont.effective_status == OnuOnlineStatus.online
     assert ont.effective_status_source == OntStatusSource.acs
     assert ont.status_resolved_at == now
+    assert ont.last_seen_at == now
+
+
+def test_apply_status_snapshot_keeps_newer_last_seen_at() -> None:
+    now = datetime.now(UTC)
+    newer_seen = now + timedelta(minutes=5)
+    ont = OntUnit(serial_number="ONT-STATUS-NEWER", last_seen_at=newer_seen)
+    snapshot = resolve_ont_status_snapshot(
+        olt_status=OnuOnlineStatus.unknown,
+        acs_last_inform_at=now,
+        managed=True,
+        now=now,
+    )
+
+    apply_status_snapshot(ont, snapshot)
+
+    assert ont.acs_last_inform_at == now
+    assert ont.last_seen_at == newer_seen
 
 
 def test_apply_resolved_status_for_model_persists_effective_snapshot() -> None:

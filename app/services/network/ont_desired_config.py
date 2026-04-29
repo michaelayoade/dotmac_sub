@@ -64,6 +64,11 @@ def desired_config(ont: OntUnit) -> dict[str, Any]:
     return {}
 
 
+def clear_desired_config(ont: OntUnit) -> None:
+    """Clear all per-ONT desired configuration intent."""
+    ont.desired_config = {}
+
+
 def resolve_field_path(field_name: str) -> tuple[str, ...]:
     """Map old flat/override field names to desired_config paths."""
     if field_name in _LEGACY_FIELD_PATHS:

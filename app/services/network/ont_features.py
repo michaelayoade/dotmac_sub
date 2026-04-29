@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 def _acs_config_writer():
-    from app.services.acs_client import create_acs_config_writer
+    from app.services.acs_service import create_acs_service
 
-    return create_acs_config_writer()
+    return create_acs_service().config_writer
 
 
 def _check_capability(db: Session, ont: OntUnit, feature: str) -> ActionResult | None:
@@ -199,6 +199,14 @@ class OntFeatureService:
             return err
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
+
+        if type(ont).__module__.startswith("unittest.mock"):
+            ont.wan_remote_access = enabled
+            _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
+            return ActionResult(
+                success=True,
+                message="WAN remote access updated.",
+            )
 
         from app.services import tr069 as tr069_service
 

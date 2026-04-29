@@ -27,7 +27,7 @@ from app.models.tr069 import Tr069AcsServer
 from app.services.scheduler_config import find_unregistered_scheduled_tasks
 from app.services.secrets import list_secret_paths, read_secret_fields
 from app.services.settings_spec import resolve_value
-from app.services.tr069 import get_acs_enforcement_status, get_runtime_collection_status
+from app.services.tr069 import get_acs_enforcement_status
 
 REQUIRED_OPENBAO_PATHS = [
     "auth",
@@ -194,8 +194,7 @@ def check_acs_runtime() -> CheckResult:
         all_ok = True
         for server in servers:
             enforcement = get_acs_enforcement_status(db, str(server.id))
-            runtime = get_runtime_collection_status(db, str(server.id))
-            server_ok = bool(enforcement.get("exists")) and bool(runtime.get("exists"))
+            server_ok = bool(enforcement.get("exists"))
             all_ok = all_ok and server_ok
             server_results.append(
                 {
@@ -205,7 +204,6 @@ def check_acs_runtime() -> CheckResult:
                     "cwmp_url": server.cwmp_url,
                     "periodic_inform_interval": server.periodic_inform_interval,
                     "acs_enforcement": enforcement,
-                    "runtime_collection": runtime,
                     "ok": server_ok,
                 }
             )
@@ -216,9 +214,9 @@ def check_acs_runtime() -> CheckResult:
     if not servers:
         summary = "no active ACS servers configured"
     elif ok:
-        summary = "ACS runtime artifacts present for all active servers"
+        summary = "ACS enforcement artifacts present for all active servers"
     else:
-        summary = "ACS runtime artifacts missing or incomplete"
+        summary = "ACS enforcement artifacts missing or incomplete"
     return CheckResult(
         "acs_runtime",
         ok,

@@ -1088,8 +1088,8 @@ def create_firmware_download_job(
 
 
 def queue_bulk_action(
-    db: Session | list[str],
-    device_ids: list[str] | str,
+    db: Session,
+    device_ids: list[str],
     action: str | None = None,
     params: dict | None = None,
     request: Request | None = None,
@@ -1105,34 +1105,19 @@ def queue_bulk_action(
         Celery task ID
     """
     if action is None:
-        legacy_device_ids = db
-        legacy_action = device_ids
-        if not isinstance(legacy_device_ids, list) or not isinstance(
-            legacy_action, str
-        ):
-            raise ValueError("Invalid bulk action arguments")
-        device_ids = legacy_device_ids
-        action = legacy_action
-        registered_ids = [str(device_id) for device_id in device_ids]
-    else:
-        if not isinstance(device_ids, list):
-            raise ValueError("No devices selected for bulk action")
-        if not isinstance(db, Session):
-            raise ValueError("Database session is required")
-        registered_ids = [
-            str(row.id)
-            for row in db.query(Tr069CpeDevice)
-            .filter(
-                Tr069CpeDevice.id.in_(
-                    [coerce_uuid(device_id) for device_id in device_ids]
-                )
-            )
-            .filter(Tr069CpeDevice.genieacs_device_id.isnot(None))
-            .all()
-        ]
-
+        raise ValueError("No action selected")
     if not device_ids:
         raise ValueError("No devices selected for bulk action")
+
+    registered_ids = [
+        str(row.id)
+        for row in db.query(Tr069CpeDevice)
+        .filter(
+            Tr069CpeDevice.id.in_([coerce_uuid(device_id) for device_id in device_ids])
+        )
+        .filter(Tr069CpeDevice.genieacs_device_id.isnot(None))
+        .all()
+    ]
 
     valid_actions = {"refresh", "reboot", "factory_reset", "config_push", "firmware"}
     if action not in valid_actions:
@@ -1161,19 +1146,18 @@ def queue_bulk_action(
         },
     )
     task_id = str(task.task_id or "")
-    if isinstance(db, Session):
-        log_tr069_audit_event(
-            db,
-            request=request,
-            action="bulk_action",
-            entity_type="tr069_devices",
-            entity_id=task_id,
-            metadata={
-                "action": action,
-                "device_count": len(device_ids),
-                "task_id": task_id,
-            },
-        )
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="bulk_action",
+        entity_type="tr069_devices",
+        entity_id=task_id,
+        metadata={
+            "action": action,
+            "device_count": len(device_ids),
+            "task_id": task_id,
+        },
+    )
     return task_id
 
 
@@ -1335,24 +1319,6 @@ def remove_acs_enforcement_preset(
             "preset_id": result.get("preset_id"),
             "provision_id": result.get("provision_id"),
             "removed": result.get("removed"),
-        },
-    )
-    return result
-
-
-def push_runtime_collection_preset(
-    db: Session, acs_id: str, *, request: Request | None = None
-) -> dict[str, object]:
-    result = tr069_service.push_runtime_collection_preset(db, acs_id)
-    log_tr069_audit_event(
-        db,
-        request=request,
-        action="create_runtime_preset",
-        entity_type="tr069_acs_server",
-        entity_id=acs_id,
-        metadata={
-            "preset_id": result.get("preset_id"),
-            "provision_id": result.get("provision_id"),
         },
     )
     return result

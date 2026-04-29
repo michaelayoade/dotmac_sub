@@ -365,7 +365,15 @@ def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
             set_connection_request_credentials=lambda *args, **kwargs: SimpleNamespace(
                 success=True,
                 message="credentials pushed",
-            )
+            ),
+            set_lan_config=lambda *args, **kwargs: SimpleNamespace(
+                success=True,
+                message="lan pushed",
+            ),
+            set_wifi_config=lambda *args, **kwargs: SimpleNamespace(
+                success=True,
+                message="wifi pushed",
+            ),
         ),
     )
 
@@ -737,10 +745,13 @@ def test_web_wan_config_uses_config_pack_vlan_and_persists_desired_state(
     # because the source of truth is OntAssignment (set by provisioning forms)
 
 
-def test_web_wan_config_requires_config_pack_vlan(db_session, monkeypatch):
+def test_web_wan_config_uses_requested_vlan_when_config_pack_missing(
+    db_session, monkeypatch
+):
     from types import SimpleNamespace
 
     from app.models.network import OLTDevice, OntUnit
+    from app.services.network.ont_action_common import ActionResult
     from app.services.web_network_ont_actions.config_setters import set_wan_config
 
     olt = OLTDevice(name="WAN Config Missing VLAN OLT")
@@ -750,12 +761,15 @@ def test_web_wan_config_requires_config_pack_vlan(db_session, monkeypatch):
     db_session.add(ont)
     db_session.flush()
 
-    def fail_set_wan_config(*args, **kwargs):
-        raise AssertionError("WAN config should not apply without config pack VLAN")
+    captured = {}
+
+    def fake_set_wan_config(*args, **kwargs):
+        captured.update(kwargs)
+        return ActionResult(success=True, message="WAN config applied")
 
     monkeypatch.setattr(
         "app.services.network.ont_action_wan.set_wan_config",
-        fail_set_wan_config,
+        fake_set_wan_config,
     )
     monkeypatch.setattr(
         "app.services.web_network_ont_actions.config_setters._log_action_audit",
@@ -772,19 +786,394 @@ def test_web_wan_config_requires_config_pack_vlan(db_session, monkeypatch):
         request=SimpleNamespace(),
     )
 
-    assert result.success is False
-    assert result.message == (
-        "OLT internet VLAN is required before applying WAN config."
-    )
+    assert result.success is True
+    assert captured["wan_vlan"] == 999
 
 
 def test_ont_config_form_has_single_operator_path():
     from pathlib import Path
 
     source = Path("templates/admin/network/onts/_configure_form.html").read_text()
+    panel = Path(
+        "templates/admin/network/onts/_apply_device_config_panel.html"
+    ).read_text()
 
     assert "Create PPPoE WAN Service" not in source
     assert "Push PPPoE Credentials" not in source
     assert "push-pppoe-omci" not in source
     assert "wan/pppoe-credentials" not in source
     assert "vlans or []" not in source
+    assert 'name="push_to_device" value="true"' in source
+    assert "Push LAN and WiFi changes to device" in source
+    assert "Apply Device Config" in panel
+    assert "/wan/config" in panel
+    assert "/wan/probe" in panel
+    assert "/wan/ensure-instance" in panel
+    assert "/wan/normalize" in panel
+    assert "/lan-config" in panel
+    assert "/wifi-config" in panel
+    assert "/wan-remote-access" in panel
+    assert "/mgmt-remote-access" in panel
+    assert "/web-credentials" in panel
+    assert "/http-management" in panel
+    assert "/connection-request-credentials" in panel
+    assert "Apply LAN Port" in panel
+    assert "DHCP server disabled" in panel
+    assert "WiFi disabled" in panel
+
+
+def test_onu_mode_remote_access_change_pushes_to_device(db_session, monkeypatch):
+    from starlette.datastructures import FormData
+
+    from app.models.network import OntUnit
+    from app.services.network.ont_action_common import ActionResult
+    from app.services.network.ont_features import OntFeatureService
+    from app.services.network.ont_web_forms import update_onu_mode_from_form
+
+    ont = OntUnit(serial_number="REMOTE-ACCESS-001", wan_remote_access=False)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_web_forms.network_service.ont_units.get_including_inactive",
+        lambda db, entity_id: ont,
+    )
+    calls = []
+
+    def _fake_toggle(db, ont_id, *, enabled):
+        calls.append((ont_id, enabled))
+        return ActionResult(success=True, message="WAN SSH access enabled.")
+
+    monkeypatch.setattr(OntFeatureService, "toggle_wan_remote_access", _fake_toggle)
+
+    result = update_onu_mode_from_form(
+        db_session,
+        str(ont.id),
+        FormData(
+            {
+                "onu_mode": "routing",
+                "wan_mode": "dhcp",
+                "wan_remote_access": "true",
+            }
+        ),
+    )
+
+    assert result.error is None
+    assert ont.wan_remote_access is True
+    assert calls == [(str(ont.id), True)]
+
+
+def test_onu_mode_remote_access_push_failure_returns_error(db_session, monkeypatch):
+    from starlette.datastructures import FormData
+
+    from app.models.network import OntUnit
+    from app.services.network.ont_action_common import ActionResult
+    from app.services.network.ont_features import OntFeatureService
+    from app.services.network.ont_web_forms import update_onu_mode_from_form
+
+    ont = OntUnit(serial_number="REMOTE-ACCESS-002", wan_remote_access=False)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_web_forms.network_service.ont_units.get_including_inactive",
+        lambda db, entity_id: ont,
+    )
+    monkeypatch.setattr(
+        OntFeatureService,
+        "toggle_wan_remote_access",
+        lambda db, ont_id, *, enabled: ActionResult(
+            success=False,
+            message="ONT has no ACS server configured. Cannot push remote access config.",
+        ),
+    )
+
+    result = update_onu_mode_from_form(
+        db_session,
+        str(ont.id),
+        FormData(
+            {
+                "onu_mode": "routing",
+                "wan_mode": "dhcp",
+                "wan_remote_access": "true",
+            }
+        ),
+    )
+
+    assert result.error == (
+        "ONT has no ACS server configured. Cannot push remote access config."
+    )
+
+
+def test_mgmt_remote_access_applies_iphost_without_global_remote_access(
+    db_session, monkeypatch
+):
+    from app.models.network import MgmtIpMode, OntAssignment, OntUnit
+    from app.services.web_network_ont_actions.config_setters import (
+        set_mgmt_remote_access,
+    )
+
+    ont = OntUnit(serial_number="MGMT-REMOTE-001", mgmt_remote_access=False)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(
+        ont_unit_id=ont.id,
+        active=True,
+        mgmt_ip_mode=MgmtIpMode.dhcp,
+    )
+    db_session.add(assignment)
+    db_session.flush()
+
+    iphost_calls = []
+
+    def _fake_configure(db, ont_id, ip_mode="dhcp", **kwargs):
+        iphost_calls.append((ont_id, ip_mode, kwargs))
+        return True, "IPHOST configured"
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters.configure_management_ip",
+        _fake_configure,
+    )
+
+    result = set_mgmt_remote_access(db_session, str(ont.id), enabled=True)
+
+    assert result.success is True
+    assert iphost_calls == [
+        (
+            str(ont.id),
+            "dhcp",
+            {"ip_address": None, "subnet": None, "gateway": None},
+        )
+    ]
+    assert ont.mgmt_remote_access is True
+
+
+def test_wan_config_uses_submitted_vlan_when_config_pack_missing(
+    db_session, monkeypatch
+):
+    from app.models.network import OntUnit
+    from app.services.network.ont_action_common import ActionResult
+    from app.services.web_network_ont_actions.config_setters import set_wan_config
+
+    ont = OntUnit(serial_number="WAN-VLAN-FALLBACK-001")
+    db_session.add(ont)
+    db_session.flush()
+
+    calls = []
+
+    def _fake_set_wan_config(db, ont_id, **kwargs):
+        calls.append(kwargs)
+        return ActionResult(success=True, message="WAN configured")
+
+    monkeypatch.setattr(
+        "app.services.network.ont_action_wan.set_wan_config",
+        _fake_set_wan_config,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._persist_ont_plan_step",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._log_action_audit",
+        lambda *args, **kwargs: None,
+    )
+
+    result = set_wan_config(
+        db_session,
+        str(ont.id),
+        wan_mode="dhcp",
+        wan_vlan=321,
+    )
+
+    assert result.success is True
+    assert calls[0]["wan_vlan"] == 321
+
+
+def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unset(
+    db_session, monkeypatch
+):
+    """DHCP server enable is pushed defensively even when desired_config has no
+    lan_* values. Some ONT firmware ships with DHCP off, leaving customers with
+    WiFi but no LAN IPs."""
+    from types import SimpleNamespace
+
+    from app.models.catalog import RegionZone
+    from app.models.network import OLTDevice, OntAssignment, OntUnit, Vlan, VlanPurpose
+    from app.models.tr069 import Tr069AcsServer
+    from app.services.credential_crypto import encrypt_credential
+    from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    region = RegionZone(name="LAN Default Region", code="lan-default-region")
+    acs = Tr069AcsServer(
+        name="LAN Default ACS",
+        base_url="http://lan-default-acs.example",
+        is_active=True,
+    )
+    olt = OLTDevice(name="LAN Default OLT")
+    db_session.add_all([region, acs, olt])
+    db_session.flush()
+    olt.tr069_acs_server_id = acs.id
+    internet_vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        name="Internet",
+        tag=100,
+        purpose=VlanPurpose.internet,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "tr069_olt_profile_id": 30,
+        "cr_username": "cr-user",
+        "cr_password": encrypt_credential("cr-pass"),
+        "internet_vlan_id": str(internet_vlan.id),
+    }
+
+    ont = OntUnit(serial_number="LAN-DEFAULT-DHCP", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            active=True,
+            pppoe_username="cust",
+            pppoe_password="secret",
+        )
+    )
+    db_session.flush()
+
+    lan_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.get_pppoe_provisioning_method",
+        lambda db: "tr069",
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_action_network.probe_wan_capabilities",
+        lambda db, ont_id: SimpleNamespace(success=True, message="probed"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_action_wan.set_pppoe_credentials",
+        lambda db, ont_id, **kwargs: SimpleNamespace(
+            success=True, message="pppoe ok", waiting=False
+        ),
+    )
+
+    def fake_set_lan_config(db, ont_id, **kwargs):
+        lan_calls.append(kwargs)
+        return SimpleNamespace(success=True, message="lan ok")
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps._acs_config_writer",
+        lambda: SimpleNamespace(
+            set_connection_request_credentials=lambda *a, **kw: SimpleNamespace(
+                success=True, message="cr ok"
+            ),
+            set_lan_config=fake_set_lan_config,
+            set_wifi_config=lambda *a, **kw: SimpleNamespace(
+                success=True, message="wifi ok"
+            ),
+        ),
+    )
+
+    result = apply_saved_service_config(db_session, str(ont.id))
+
+    assert result.success is True, result.message
+    assert len(lan_calls) == 1
+    assert lan_calls[0]["dhcp_enabled"] is True
+
+
+def test_apply_saved_service_config_respects_explicit_dhcp_disable(
+    db_session, monkeypatch
+):
+    """If lan_dhcp_enabled is explicitly False on the assignment, the operator
+    opt-out is respected and False is pushed."""
+    from types import SimpleNamespace
+
+    from app.models.catalog import RegionZone
+    from app.models.network import OLTDevice, OntAssignment, OntUnit, Vlan, VlanPurpose
+    from app.models.tr069 import Tr069AcsServer
+    from app.services.credential_crypto import encrypt_credential
+    from app.services.network.ont_provision_steps import apply_saved_service_config
+
+    region = RegionZone(name="DHCP Off Region", code="dhcp-off-region")
+    acs = Tr069AcsServer(
+        name="DHCP Off ACS",
+        base_url="http://dhcp-off-acs.example",
+        is_active=True,
+    )
+    olt = OLTDevice(name="DHCP Off OLT")
+    db_session.add_all([region, acs, olt])
+    db_session.flush()
+    olt.tr069_acs_server_id = acs.id
+    internet_vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        name="Internet",
+        tag=100,
+        purpose=VlanPurpose.internet,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "tr069_olt_profile_id": 30,
+        "cr_username": "cr-user",
+        "cr_password": encrypt_credential("cr-pass"),
+        "internet_vlan_id": str(internet_vlan.id),
+    }
+
+    ont = OntUnit(serial_number="DHCP-OFF-EXPLICIT", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            active=True,
+            pppoe_username="cust",
+            pppoe_password="secret",
+            lan_dhcp_enabled=False,
+        )
+    )
+    db_session.flush()
+
+    lan_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.get_pppoe_provisioning_method",
+        lambda db: "tr069",
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_action_network.probe_wan_capabilities",
+        lambda db, ont_id: SimpleNamespace(success=True, message="probed"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_action_wan.set_pppoe_credentials",
+        lambda db, ont_id, **kwargs: SimpleNamespace(
+            success=True, message="pppoe ok", waiting=False
+        ),
+    )
+
+    def fake_set_lan_config(db, ont_id, **kwargs):
+        lan_calls.append(kwargs)
+        return SimpleNamespace(success=True, message="lan ok")
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps._acs_config_writer",
+        lambda: SimpleNamespace(
+            set_connection_request_credentials=lambda *a, **kw: SimpleNamespace(
+                success=True, message="cr ok"
+            ),
+            set_lan_config=fake_set_lan_config,
+            set_wifi_config=lambda *a, **kw: SimpleNamespace(
+                success=True, message="wifi ok"
+            ),
+        ),
+    )
+
+    result = apply_saved_service_config(db_session, str(ont.id))
+
+    assert result.success is True, result.message
+    assert len(lan_calls) == 1
+    assert lan_calls[0]["dhcp_enabled"] is False

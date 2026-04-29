@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OntUnit
-from app.services.acs_client import create_acs_config_writer
+from app.services.acs_service import create_acs_service
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
 from app.services.web_network_ont_actions._common import (
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _acs_config_writer():
-    return create_acs_config_writer()
+    return create_acs_service().config_writer
 
 
 def set_wifi_ssid(
@@ -509,7 +509,9 @@ def set_wan_config(
             config_pack_wan_vlan = config_pack.internet_vlan.tag
 
     wan_mode_normalized = wan_mode.strip().lower()
-    resolved_wan_vlan = config_pack_wan_vlan
+    resolved_wan_vlan = (
+        config_pack_wan_vlan if config_pack_wan_vlan is not None else wan_vlan
+    )
     if wan_mode_normalized in {"pppoe", "dhcp", "static"} and resolved_wan_vlan is None:
         result = ActionResult(
             success=False,
@@ -688,6 +690,163 @@ def set_http_management(
             "enabled": enabled,
             "port": port,
         },
+    )
+    return result
+
+
+def set_connection_request_credentials(
+    db: Session,
+    ont_id: str,
+    *,
+    username: str,
+    password: str,
+    periodic_inform_interval: int,
+    request: Request | None = None,
+) -> ActionResult:
+    """Set ACS connection-request credentials via TR-069."""
+    from app.services.network.ont_actions import OntActions
+
+    result = OntActions.set_connection_request_credentials(
+        db,
+        ont_id,
+        username,
+        password,
+        periodic_inform_interval=periodic_inform_interval,
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_connection_request_credentials",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "username": username,
+            "periodic_inform_interval": periodic_inform_interval,
+        },
+    )
+    return result
+
+
+def set_web_credentials(
+    db: Session,
+    ont_id: str,
+    *,
+    username: str,
+    password: str,
+    request: Request | None = None,
+) -> ActionResult:
+    """Set ONT local web credentials via TR-069."""
+    from app.services.network.ont_features import OntFeatureService
+
+    result = OntFeatureService.update_web_credentials(
+        db, ont_id, username=username, password=password
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_web_credentials",
+        ont_id=ont_id,
+        metadata={"success": result.success, "username": username},
+    )
+    return result
+
+
+def set_wan_remote_access(
+    db: Session,
+    ont_id: str,
+    *,
+    enabled: bool,
+    request: Request | None = None,
+) -> ActionResult:
+    """Enable or disable WAN-side remote access via TR-069."""
+    from app.services.network.ont_features import OntFeatureService
+
+    result = OntFeatureService.toggle_wan_remote_access(db, ont_id, enabled=enabled)
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wan_remote_access",
+        ont_id=ont_id,
+        metadata={"success": result.success, "enabled": enabled},
+    )
+    return result
+
+
+def set_mgmt_remote_access(
+    db: Session,
+    ont_id: str,
+    *,
+    enabled: bool,
+    request: Request | None = None,
+) -> ActionResult:
+    """Enable or disable management-side remote access.
+
+    The management path is OLT-owned. Enabling applies the active assignment's
+    management IPHOST intent to the OLT; disabling clears the IPHOST config.
+    WAN SSH/HTTP service toggles are handled by the WAN remote-access and HTTP
+    management actions so this action does not mutate global CPE access flags.
+    """
+    ont = db.get(OntUnit, ont_id)
+    if ont is None:
+        return ActionResult(success=False, message="ONT not found.")
+
+    assignment = next(
+        (
+            item
+            for item in getattr(ont, "assignments", []) or []
+            if getattr(item, "active", False)
+        ),
+        None,
+    )
+    mode_value = getattr(assignment, "mgmt_ip_mode", None) if assignment else None
+    mode = getattr(mode_value, "value", mode_value) or "inactive"
+    if not enabled:
+        mode = "inactive"
+
+    if enabled:
+        ok, msg = configure_management_ip(
+            db,
+            ont_id,
+            str(mode),
+            ip_address=getattr(assignment, "mgmt_ip_address", None)
+            if assignment
+            else None,
+            subnet=getattr(assignment, "mgmt_subnet", None) if assignment else None,
+            gateway=getattr(assignment, "mgmt_gateway", None) if assignment else None,
+        )
+        result = ActionResult(success=ok, message=msg)
+    else:
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+        from app.services.web_network_service_ports import _resolve_ont_olt_context
+
+        _ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+        if not olt or not fsp or olt_ont_id is None:
+            result = ActionResult(
+                success=False,
+                message="Cannot resolve OLT context for this ONT",
+            )
+        else:
+            clear_result = get_protocol_adapter(olt).clear_iphost_config(
+                fsp,
+                olt_ont_id,
+            )
+            result = ActionResult(
+                success=clear_result.success,
+                message=clear_result.message,
+                data=getattr(clear_result, "data", None),
+            )
+
+    if result.success:
+        ont.mgmt_remote_access = enabled
+        db.add(ont)
+        db.commit()
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_mgmt_remote_access",
+        ont_id=ont_id,
+        metadata={"success": result.success, "enabled": enabled, "mode": str(mode)},
     )
     return result
 

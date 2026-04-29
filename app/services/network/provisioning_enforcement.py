@@ -44,9 +44,9 @@ def _effective_field(db: Session, ont: OntUnit, key: str) -> object | None:
 
 
 def _acs_config_writer():
-    from app.services.acs_client import create_acs_config_writer
+    from app.services.acs_service import create_acs_service
 
-    return create_acs_config_writer()
+    return create_acs_service().config_writer
 
 
 @dataclass

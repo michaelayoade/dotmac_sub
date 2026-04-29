@@ -1,8 +1,8 @@
 """TR-069 parameter aggregation for CPE device detail display.
 
 Fetches and structures TR-069 parameters from GenieACS into sections
-for display on the CPE detail page's TR-069 tab.  Reuses PARAM_GROUPS
-and helpers from ont_tr069 but omits optical and PPPoE-specific sections.
+for display on the CPE detail page's TR-069 tab. Device model normalization
+is handled by GenieACS virtual parameters.
 """
 
 from __future__ import annotations
@@ -103,8 +103,6 @@ class CpeTR069:
             logger.error("TR-069 fetch failed for CPE %s: %s", cpe.serial_number, e)
             return CpeTR069Summary(error=f"Failed to fetch TR-069 data: {e}")
 
-        cpe_vendor = getattr(cpe, "vendor", None)
-        cpe_model = getattr(cpe, "model", None)
         linked = (
             db.query(Tr069CpeDevice)
             .filter(Tr069CpeDevice.cpe_device_id == cpe.id)
@@ -116,18 +114,10 @@ class CpeTR069:
         )
 
         summary = CpeTR069Summary(available=True, cpe_id=str(cpe.id))
-        summary.system = _extract_group(
-            client, device, "system", db=db, vendor=cpe_vendor, model=cpe_model
-        )
-        summary.wan = _extract_group(
-            client, device, "wan", db=db, vendor=cpe_vendor, model=cpe_model
-        )
-        summary.lan = _extract_group(
-            client, device, "lan", db=db, vendor=cpe_vendor, model=cpe_model
-        )
-        summary.wireless = _extract_group(
-            client, device, "wireless", db=db, vendor=cpe_vendor, model=cpe_model
-        )
+        summary.system = _extract_group(client, device, "system")
+        summary.wan = _extract_group(client, device, "wan")
+        summary.lan = _extract_group(client, device, "lan")
+        summary.wireless = _extract_group(client, device, "wireless")
 
         # Ethernet ports
         for base_path in [_ETH_PORT_PATHS_IGD, _ETH_PORT_PATHS_DEV]:

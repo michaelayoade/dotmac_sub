@@ -739,9 +739,9 @@ def _sync_onts_from_olt_snmp_impl(
     tr069_runtime_errors = 0
     if olt.tr069_acs_server_id:
         try:
-            from app.services.acs_client import create_acs_state_reader
+            from app.services.acs_service import create_acs_service
 
-            acs_state_reader = create_acs_state_reader()
+            acs = create_acs_service()
             onts_for_olt = list(
                 db.scalars(
                     select(OntUnit)
@@ -751,7 +751,7 @@ def _sync_onts_from_olt_snmp_impl(
             )
             for ont in onts_for_olt:
                 try:
-                    summary = acs_state_reader.get_device_summary(
+                    summary = acs.get_device_summary(
                         db,
                         str(ont.id),
                         persist_observed_runtime=False,

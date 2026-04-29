@@ -72,9 +72,9 @@ _TR069_TASK_READY_POLL_INTERVAL_SEC = (
 )
 
 def _acs_config_writer():
-    from app.services.acs_client import create_acs_config_writer
+    from app.services.acs_service import create_acs_service
 
-    return create_acs_config_writer()
+    return create_acs_service().config_writer
 
 
 # ---------------------------------------------------------------------------
@@ -662,8 +662,13 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         "dhcp_start": effective_values.get("lan_dhcp_start"),
         "dhcp_end": effective_values.get("lan_dhcp_end"),
     }
-    if any(value not in (None, "", []) for value in lan_values.values()):
+    # On customer turn-ups, push DHCP server enable defensively unless the operator
+    # explicitly disabled it. Some ONT firmware ships with DHCP off, leaving the
+    # customer with WiFi associated but no LAN IPs handed out.
+    if effective_values.get("wan_mode"):
         dhcp_enabled_value = lan_values.get("dhcp_enabled")
+        if not isinstance(dhcp_enabled_value, bool):
+            dhcp_enabled_value = True
         _append(
             "configure_lan_tr069",
             acs_config_adapter.set_lan_config(
@@ -671,9 +676,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
                 ont_id,
                 lan_ip=str(lan_values.get("lan_ip") or "") or None,
                 lan_subnet=str(lan_values.get("lan_subnet") or "") or None,
-                dhcp_enabled=dhcp_enabled_value
-                if isinstance(dhcp_enabled_value, bool)
-                else None,
+                dhcp_enabled=dhcp_enabled_value,
                 dhcp_start=str(lan_values.get("dhcp_start") or "") or None,
                 dhcp_end=str(lan_values.get("dhcp_end") or "") or None,
             ),

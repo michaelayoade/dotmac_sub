@@ -108,7 +108,7 @@ def _health_base_query() -> Any:
         select(
             OntUnit.id.label("ont_id"),
             OntAssignment.subscriber_id.label("subscriber_id"),
-            OntUnit.pppoe_username.label("ont_pppoe_username"),
+            OntAssignment.pppoe_username.label("ont_pppoe_username"),
             OntUnit.observed_wan_ip.label("observed_wan_ip"),
             Tr069CpeDevice.id.label("tr069_device_id"),
         )

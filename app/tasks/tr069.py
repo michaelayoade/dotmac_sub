@@ -7,6 +7,7 @@ device health monitoring, and session/job retention cleanup.
 from __future__ import annotations
 
 import logging
+import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -196,9 +197,11 @@ def wait_for_ont_bootstrap(
                 )
                 from app.services.queue_adapter import enqueue_task
 
-                # Exponential backoff: 30s -> 60s -> 120s -> 240s
+                # Exponential backoff: 30s -> 60s -> 120s -> 240s with ±10% jitter
                 retry_delays = [30, 60, 120, 240]
-                countdown = retry_delays[min(service_retry_count, len(retry_delays) - 1)]
+                base_countdown = retry_delays[min(service_retry_count, len(retry_delays) - 1)]
+                jitter = random.uniform(-0.1, 0.1) * base_countdown
+                countdown = int(base_countdown + jitter)
 
                 logger.info(
                     "Scheduling TR-069 bootstrap retry %d for ONT %s in %ds",
@@ -286,15 +289,15 @@ def apply_acs_config(
     kwargs: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Execute a queued ACS configuration action through the ACS adapter."""
-    from app.services.acs_client import create_acs_config_writer
+    from app.services.acs_service import create_acs_service
 
-    writer = create_acs_config_writer()
-    if not writer.supports_config_action(action):
+    acs = create_acs_service()
+    if not acs.config_writer.supports_config_action(action):
         raise ValueError(f"Unsupported ACS configuration action: {action}")
 
     db = SessionLocal()
     try:
-        result = writer.execute_config_action(
+        result = acs.execute_config_action(
             db,
             action,
             ont_id,
@@ -375,8 +378,10 @@ def execute_pending_jobs() -> dict[str, int]:
                 logger.error("Failed to execute job %s: %s", job.id, e)
                 failed += 1
 
-        # 2. Retry failed jobs with exponential backoff
-        backoff_minutes = [1, 5, 15]
+        # 2. Retry failed jobs with exponential backoff + jitter
+        # Base backoff: 1min, 5min, 15min, capped at 60min
+        # Jitter: ±10% to prevent thundering herd when many devices reconnect
+        backoff_minutes = [1, 5, 15, 30, 60]
         failed_jobs = list(
             db.scalars(
                 select(Tr069Job)
@@ -390,7 +395,10 @@ def execute_pending_jobs() -> dict[str, int]:
         )
         for job in failed_jobs:
             backoff_idx = min(job.retry_count, len(backoff_minutes) - 1)
-            backoff = timedelta(minutes=backoff_minutes[backoff_idx])
+            base_backoff_seconds = backoff_minutes[backoff_idx] * 60
+            # Add ±10% jitter to prevent synchronized retries
+            jitter = random.uniform(-0.1, 0.1) * base_backoff_seconds
+            backoff = timedelta(seconds=base_backoff_seconds + jitter)
             if job.completed_at and (now - job.completed_at) < backoff:
                 skipped += 1
                 continue
@@ -1164,6 +1172,7 @@ def scrape_genieacs_metrics() -> dict[str, Any]:
 def heal_online_silent_onts(
     batch_size: int = 20,
     stale_minutes: int = 15,
+    failed_cooldown_minutes: int = 60,
 ) -> dict[str, int]:
     """Auto-heal ONTs that are online on OLT but silent in ACS.
 
@@ -1176,11 +1185,14 @@ def heal_online_silent_onts(
     - If informed before but stale: send connection request to trigger inform
 
     Before processing, clears stale "running" task executions for bootstrap
-    tasks to prevent stuck tasks from blocking new attempts.
+    tasks to prevent stuck tasks from blocking new attempts. Recent failed
+    bootstrap attempts are cooled down because online-but-silent ONTs commonly
+    point to an upstream management VLAN, ACS URL/profile, or routing issue.
 
     Args:
         batch_size: Maximum ONTs to process per run.
         stale_minutes: Consider ACS inform stale after this many minutes.
+        failed_cooldown_minutes: Skip ONTs with a recent failed bootstrap.
 
     Returns:
         Stats: {processed, bootstrapped, reconnected, skipped, errors}.
@@ -1252,45 +1264,84 @@ def heal_online_silent_onts(
                 "skipped": 0,
                 "errors": 0,
                 "stale_cleared": stale_cleared,
+                "cooled_down": 0,
+                "prerequisite_blocked": 0,
             }
 
-        # Build set of ONT IDs with recent bootstrap attempts (cooldown: 10 minutes)
-        # to avoid retrying too frequently
+        # Build recent bootstrap state by ONT ID. Running attempts should not be
+        # duplicated, and failed attempts need a cooldown so a fleet-wide ACS path
+        # issue does not keep generating immediate OLT/ACS work.
         cooldown_cutoff = now - timedelta(minutes=10)
-        ont_ids_str = [str(ont.id) for ont in onts]
+        failed_cooldown_cutoff = now - timedelta(minutes=failed_cooldown_minutes)
         recent_attempts_stmt = (
-            select(TaskExecution.idempotency_key)
-            .where(TaskExecution.task_name == "app.tasks.ont_authorization.ensure_tr069_acs_connectivity")
-            .where(TaskExecution.created_at > cooldown_cutoff)
+            select(TaskExecution.idempotency_key, TaskExecution.status)
+            .where(
+                TaskExecution.task_name
+                == "app.tasks.ont_authorization.ensure_tr069_acs_connectivity"
+            )
+            .where(
+                (TaskExecution.created_at > cooldown_cutoff)
+                | (
+                    (TaskExecution.status == TaskExecutionStatus.failed)
+                    & (TaskExecution.created_at > failed_cooldown_cutoff)
+                )
+            )
+            .where(
+                TaskExecution.status.in_(
+                    [TaskExecutionStatus.running, TaskExecutionStatus.failed]
+                )
+            )
         )
-        recent_keys = set(db.scalars(recent_attempts_stmt).all())
-        # Extract ONT IDs from keys like "app.tasks...:tr069_connect:<ont_id>"
-        recently_attempted_ont_ids = {
-            key.split(":")[-1] for key in recent_keys if "tr069_connect:" in key
-        }
+        recent_attempts = list(db.execute(recent_attempts_stmt).all())
+        running_bootstrap_ont_ids: set[str] = set()
+        failed_bootstrap_ont_ids: set[str] = set()
+        for key, status in recent_attempts:
+            marker = ":tr069_connect:"
+            if marker not in key:
+                continue
+            suffix = key.split(marker, 1)[1]
+            ont_id_from_key = suffix.split(":attempt:", 1)[0]
+            if status == TaskExecutionStatus.running:
+                running_bootstrap_ont_ids.add(ont_id_from_key)
+            elif status == TaskExecutionStatus.failed:
+                failed_bootstrap_ont_ids.add(ont_id_from_key)
 
         processed = 0
         bootstrapped = 0
         reconnected = 0
         skipped = 0
         errors = 0
+        cooled_down = 0
+        prerequisite_blocked = 0
 
         for ont in onts:
             processed += 1
             try:
-                # Check cooldown - skip if recently attempted
-                if str(ont.id) in recently_attempted_ont_ids:
+                # Check running bootstrap - skip only while another bootstrap is active.
+                if str(ont.id) in running_bootstrap_ont_ids:
                     logger.debug(
-                        "Online-silent heal: ONT %s has recent bootstrap attempt, skipping (cooldown)",
+                        "Online-silent heal: ONT %s has a running bootstrap, skipping",
                         ont.serial_number,
                     )
                     skipped += 1
                     continue
+                if str(ont.id) in failed_bootstrap_ont_ids:
+                    logger.debug(
+                        "Online-silent heal: ONT %s has a recent failed bootstrap, cooling down",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    cooled_down += 1
+                    continue
 
-                # Check if ONT has TR-069 profile configured
+                # Check if OLT-side prerequisites are configured before creating
+                # more bootstrap work. Missing prerequisites require operator or
+                # OLT fixes, not repeated queue retries.
                 effective_config = resolve_effective_ont_config(db, ont)
                 effective_values = effective_config.get("values", {})
                 tr069_profile_id = effective_values.get("tr069_olt_profile_id")
+                acs_server_id = effective_values.get("tr069_acs_server_id")
+                mgmt_vlan = effective_values.get("mgmt_vlan")
 
                 if not tr069_profile_id:
                     logger.debug(
@@ -1298,6 +1349,23 @@ def heal_online_silent_onts(
                         ont.serial_number,
                     )
                     skipped += 1
+                    prerequisite_blocked += 1
+                    continue
+                if not acs_server_id:
+                    logger.debug(
+                        "Online-silent heal: ONT %s has no ACS server, skipping",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    prerequisite_blocked += 1
+                    continue
+                if mgmt_vlan is None:
+                    logger.debug(
+                        "Online-silent heal: ONT %s has no management VLAN, skipping",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    prerequisite_blocked += 1
                     continue
 
                 # Check if ONT has a linked TR-069 device with genieacs_device_id
@@ -1319,10 +1387,11 @@ def heal_online_silent_onts(
                         ont.acs_last_inform_at,
                     )
                     try:
-                        from app.services.acs_client import create_acs_config_writer
+                        from app.services.acs_service import create_acs_service
 
-                        writer = create_acs_config_writer()
-                        result = writer.send_connection_request(db, str(ont.id))
+                        result = create_acs_service().send_connection_request(
+                            db, str(ont.id)
+                        )
                         if result.success:
                             reconnected += 1
                             logger.info(
@@ -1406,13 +1475,15 @@ def heal_online_silent_onts(
                 errors += 1
 
         logger.info(
-            "Online-silent ONT healing complete: processed=%d bootstrapped=%d reconnected=%d skipped=%d errors=%d stale_cleared=%d",
+            "Online-silent ONT healing complete: processed=%d bootstrapped=%d reconnected=%d skipped=%d errors=%d stale_cleared=%d cooled_down=%d prerequisite_blocked=%d",
             processed,
             bootstrapped,
             reconnected,
             skipped,
             errors,
             stale_cleared,
+            cooled_down,
+            prerequisite_blocked,
         )
         return {
             "processed": processed,
@@ -1421,9 +1492,162 @@ def heal_online_silent_onts(
             "skipped": skipped,
             "errors": errors,
             "stale_cleared": stale_cleared,
+            "cooled_down": cooled_down,
+            "prerequisite_blocked": prerequisite_blocked,
         }
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.tr069.setup_genieacs")
+def setup_genieacs(
+    base_url: str | None = None,
+    provisions: bool = True,
+    virtual_params: bool = True,
+    presets: bool = True,
+    config: bool = True,
+) -> dict[str, Any]:
+    """Deploy provisions, virtual parameters, presets, and config to GenieACS.
+
+    This task can be run manually or scheduled to ensure GenieACS is properly
+    configured after deployment or restart.
+
+    Args:
+        base_url: GenieACS NBI URL. Defaults to GENIEACS_NBI_URL env var.
+        provisions: Whether to deploy provision scripts.
+        virtual_params: Whether to deploy virtual parameter scripts.
+        presets: Whether to deploy preset configurations.
+        config: Whether to deploy config entries.
+
+    Returns:
+        Dict with deployment results per category.
+    """
+    import os
+    from pathlib import Path
+
+    import httpx
+
+    genieacs_base_url = base_url or os.getenv(
+        "GENIEACS_NBI_URL", "http://genieacs:7557"
+    )
+    assert genieacs_base_url is not None
+    project_root = Path(__file__).parent.parent.parent
+    provisions_dir = project_root / "docker" / "genieacs" / "provisions"
+    virtual_params_dir = project_root / "docker" / "genieacs" / "virtual-parameters"
+
+    results: dict[str, Any] = {}
+    logger.info("Starting GenieACS setup deployment to %s", genieacs_base_url)
+
+    try:
+        with httpx.Client(base_url=genieacs_base_url, timeout=30.0) as client:
+            # Verify connection
+            try:
+                client.get("/provisions/")
+            except httpx.RequestError as e:
+                logger.error("Cannot connect to GenieACS: %s", e)
+                return {"error": f"Connection failed: {e}"}
+
+            # Deploy provisions
+            if provisions and provisions_dir.exists():
+                results["provisions"] = {}
+                for script_path in provisions_dir.glob("*.js"):
+                    name = script_path.stem
+                    try:
+                        client.put(f"/provisions/{name}", content=script_path.read_text())
+                        results["provisions"][name] = "deployed"
+                        logger.info("Deployed provision: %s", name)
+                    except Exception as e:
+                        results["provisions"][name] = f"error: {e}"
+                        logger.error("Failed to deploy provision %s: %s", name, e)
+
+            # Deploy virtual parameters
+            if virtual_params and virtual_params_dir.exists():
+                results["virtualParameters"] = {}
+                for script_path in virtual_params_dir.glob("*.js"):
+                    name = script_path.stem
+                    try:
+                        client.put(
+                            f"/virtualParameters/{name}", content=script_path.read_text()
+                        )
+                        results["virtualParameters"][name] = "deployed"
+                        logger.info("Deployed virtual parameter: %s", name)
+                    except Exception as e:
+                        results["virtualParameters"][name] = f"error: {e}"
+                        logger.error("Failed to deploy virtual parameter %s: %s", name, e)
+
+            # Deploy presets
+            if presets:
+                results["presets"] = {}
+                preset_definitions = {
+                    "dotmac-bootstrap": {
+                        "provision": "bootstrap",
+                        "events": {"0 BOOTSTRAP": True},
+                        "weight": 0,
+                        "precondition": "",
+                    },
+                    "dotmac-periodic": {
+                        "provision": "periodic",
+                        "events": {"2 PERIODIC": True},
+                        "weight": 0,
+                        "precondition": "",
+                    },
+                }
+                for preset_name, preset_config in preset_definitions.items():
+                    preset_data = {
+                        "_id": preset_name,
+                        "weight": preset_config["weight"],
+                        "precondition": preset_config["precondition"],
+                        "events": preset_config["events"],
+                        "configurations": [
+                            {
+                                "type": "provision",
+                                "name": preset_config["provision"],
+                                "args": [],
+                            }
+                        ],
+                    }
+                    try:
+                        client.put(f"/presets/{preset_name}", json=preset_data)
+                        results["presets"][preset_name] = "deployed"
+                        logger.info("Deployed preset: %s", preset_name)
+                    except Exception as e:
+                        results["presets"][preset_name] = f"error: {e}"
+                        logger.error("Failed to deploy preset %s: %s", preset_name, e)
+
+            # Deploy config
+            if config:
+                results["config"] = {}
+                config_entries = {
+                    "cwmp.auth": 'EXT("auth", "authenticateCpe", username, password, DeviceID.ID, DeviceID.SerialNumber)',
+                }
+                for key, value in config_entries.items():
+                    try:
+                        client.put(f"/config/{key}", json={"_id": key, "value": value})
+                        results["config"][key] = "deployed"
+                        logger.info("Deployed config: %s", key)
+                    except Exception as e:
+                        results["config"][key] = f"error: {e}"
+                        logger.error("Failed to deploy config %s: %s", key, e)
+
+    except Exception as e:
+        logger.exception("GenieACS setup failed")
+        return {"error": str(e)}
+
+    # Count results
+    total_deployed = sum(
+        sum(1 for v in cat.values() if v == "deployed")
+        for cat in results.values()
+        if isinstance(cat, dict)
+    )
+    total_errors = sum(
+        sum(1 for v in cat.values() if isinstance(v, str) and v.startswith("error"))
+        for cat in results.values()
+        if isinstance(cat, dict)
+    )
+
+    logger.info("GenieACS setup complete: %d deployed, %d errors", total_deployed, total_errors)
+    results["summary"] = {"deployed": total_deployed, "errors": total_errors}
+    return results

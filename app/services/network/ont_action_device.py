@@ -15,7 +15,7 @@ from app.services.network.ont_action_common import (
     get_ont_strict_or_error,
     persist_data_model_root,
 )
-from app.services.network.ont_tr069 import PARAM_GROUPS, _extract_first
+from app.services.network.tr069_paths import VIRTUAL_PARAM_GROUPS
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,23 @@ _RUNTIME_REFRESH_PARAMS = {
         "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.4.Status",
     ],
 }
+
+
+def _unwrap_parameter_value(value: object) -> object:
+    if isinstance(value, dict):
+        if "_value" in value:
+            return value.get("_value")
+        if value and all(str(key).startswith("_") for key in value):
+            return None
+    return value
+
+
+def _extract_first(client: object, device: dict[str, object], paths: list[str]) -> object:
+    for path in paths:
+        value = _unwrap_parameter_value(client.extract_parameter_value(device, path))
+        if value is not None:
+            return value
+    return None
 
 
 def reboot(db: Session, ont_id: str) -> ActionResult:
@@ -218,7 +235,7 @@ def get_running_config(db: Session, ont_id: str) -> ActionResult:
     def _extract_group(group_name: str) -> dict[str, object]:
         return {
             label: _extract_first(client, device, paths)
-            for label, paths in PARAM_GROUPS.get(group_name, {}).items()
+            for label, paths in VIRTUAL_PARAM_GROUPS.get(group_name, {}).items()
         }
 
     def _extract_custom_group(params: dict[str, list[str]]) -> dict[str, object]:

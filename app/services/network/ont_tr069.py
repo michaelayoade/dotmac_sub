@@ -19,106 +19,9 @@ from app.services.acs_client import AcsClient
 from app.services.genieacs import GenieACSError
 from app.services.network._common import normalize_mac_address
 from app.services.network._resolve import resolve_genieacs
+from app.services.network.tr069_paths import VIRTUAL_PARAM_GROUPS
 
 logger = logging.getLogger(__name__)
-
-# TR-069 parameter path mappings.
-# Both InternetGatewayDevice (TR-098) and Device (TR-181) roots are tried.
-_IGD = "InternetGatewayDevice"
-_DEV = "Device"
-_VP = "VirtualParameters"
-
-# Virtual parameter mappings: canonical names for data-model-agnostic access.
-# These are computed server-side by GenieACS and normalize TR-098/TR-181 differences.
-# Format: {group}.{label} -> VirtualParameters.{name}
-VIRTUAL_PARAM_MAP: dict[str, str] = {
-    # System parameters
-    "system.manufacturer": f"{_VP}.Manufacturer",
-    "system.model": f"{_VP}.Model",
-    "system.firmware": f"{_VP}.Firmware",
-    "system.hardware": f"{_VP}.Hardware",
-    "system.serial": f"{_VP}.Serial",
-    "system.uptime": f"{_VP}.Uptime",
-    "system.cpu_usage": f"{_VP}.CPU_Usage",
-    "system.memory_total": f"{_VP}.Memory_Total",
-    "system.memory_free": f"{_VP}.Memory_Free",
-    "system.mac_address": f"{_VP}.MAC_Address",
-    # WAN parameters
-    "wan.connection_type": f"{_VP}.WAN_Connection_Type",
-    "wan.wan_ip": f"{_VP}.WAN_IP",
-    "wan.gateway": f"{_VP}.WAN_Gateway",
-    "wan.status": f"{_VP}.WAN_Status",
-    "wan.vlan": f"{_VP}.WAN_VLAN",
-    "wan.username": f"{_VP}.PPPoE_Username",
-    "wan.uptime": f"{_VP}.WAN_Uptime",
-    "wan.dns_servers": f"{_VP}.DNS_Servers",
-    # LAN parameters
-    "lan.lan_ip": f"{_VP}.LAN_IP",
-    "lan.subnet_mask": f"{_VP}.LAN_Subnet",
-    "lan.dhcp_enabled": f"{_VP}.DHCP_Enabled",
-    "lan.dhcp_start": f"{_VP}.DHCP_Start",
-    "lan.dhcp_end": f"{_VP}.DHCP_End",
-    "lan.connected_hosts": f"{_VP}.Connected_Hosts",
-    # Wireless parameters
-    "wireless.enabled": f"{_VP}.WiFi_Enabled",
-    "wireless.ssid": f"{_VP}.WiFi_SSID",
-    "wireless.password": f"{_VP}.WiFi_Password",
-    "wireless.channel": f"{_VP}.WiFi_Channel",
-    "wireless.security_mode": f"{_VP}.WiFi_Security",
-    "wireless.standard": f"{_VP}.WiFi_Standard",
-    "wireless.connected_clients": f"{_VP}.WiFi_Clients",
-    # Management parameters
-    "management.ip": f"{_VP}.Mgmt_IP",
-    "management.ssh_enabled": f"{_VP}.SSH_Enabled",
-    "management.telnet_enabled": f"{_VP}.Telnet_Enabled",
-}
-
-PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
-    "system": {
-        "Manufacturer": [f"{_VP}.Manufacturer"],
-        "Model": [f"{_VP}.Model"],
-        "Firmware": [f"{_VP}.Firmware"],
-        "Hardware": [f"{_VP}.Hardware"],
-        "Serial": [f"{_VP}.Serial"],
-        "Uptime": [f"{_VP}.Uptime"],
-        "CPU Usage": [f"{_VP}.CPU_Usage"],
-        "Memory Total": [f"{_VP}.Memory_Total"],
-        "Memory Free": [f"{_VP}.Memory_Free"],
-        "MAC Address": [f"{_VP}.MAC_Address"],
-    },
-    "wan": {
-        "Connection Type": [f"{_VP}.WAN_Connection_Type"],
-        "WAN IP": [f"{_VP}.WAN_IP"],
-        "Username": [f"{_VP}.PPPoE_Username"],
-        "Status": [f"{_VP}.WAN_Status"],
-        "VLAN": [f"{_VP}.WAN_VLAN"],
-        "Uptime": [f"{_VP}.WAN_Uptime"],
-        "DNS Servers": [f"{_VP}.DNS_Servers"],
-        "Gateway": [f"{_VP}.WAN_Gateway"],
-    },
-    "lan": {
-        "LAN IP": [f"{_VP}.LAN_IP"],
-        "Subnet Mask": [f"{_VP}.LAN_Subnet"],
-        "DHCP Enabled": [f"{_VP}.DHCP_Enabled"],
-        "DHCP Start": [f"{_VP}.DHCP_Start"],
-        "DHCP End": [f"{_VP}.DHCP_End"],
-        "Connected Hosts": [f"{_VP}.Connected_Hosts"],
-    },
-    "wireless": {
-        "Enabled": [f"{_VP}.WiFi_Enabled"],
-        "SSID": [f"{_VP}.WiFi_SSID"],
-        "Channel": [f"{_VP}.WiFi_Channel"],
-        "Standard": [f"{_VP}.WiFi_Standard"],
-        "Security Mode": [f"{_VP}.WiFi_Security"],
-        "Connected Clients": [f"{_VP}.WiFi_Clients"],
-        "Password": [f"{_VP}.WiFi_Password"],
-    },
-    "management": {
-        "Management IP": [f"{_VP}.Mgmt_IP"],
-        "SSH Enabled": [f"{_VP}.SSH_Enabled"],
-        "Telnet Enabled": [f"{_VP}.Telnet_Enabled"],
-    },
-}
 
 # Ethernet port object paths (we enumerate ports 1-4)
 _ETH_PORT_PATHS_IGD = (
@@ -166,106 +69,14 @@ class TR069Summary:
     error: str | None = None
 
 
-def _resolve_param_paths_from_capability(
-    db: Session | None,
-    vendor: str | None,
-    model: str | None,
-    canonical_name: str,
-) -> list[str] | None:
-    """Resolve parameter paths from VendorModelCapability registry.
-
-    Returns device-specific TR-069 paths if a matching capability exists,
-    or None to fall back to hardcoded paths.
-    """
-    if not db or not vendor or not model:
-        return None
-    try:
-        from app.services.network.vendor_capabilities import (
-            tr069_parameter_maps,
-            vendor_capabilities,
-        )
-
-        capability = vendor_capabilities.resolve_capability(
-            db,
-            vendor=vendor,
-            model=model,
-        )
-        if not capability:
-            return None
-        path = tr069_parameter_maps.resolve_path(
-            db,
-            capability_id=str(capability.id),
-            canonical_name=canonical_name,
-        )
-        if path:
-            return [path]
-    except Exception:
-        logger.debug(
-            "Failed to resolve vendor-specific TR-069 path for %s/%s",
-            vendor,
-            model,
-            exc_info=True,
-        )
-    return None
-
-
-def _extract_wildcard_value(
-    device: dict[str, Any],
-    path_pattern: str,
-) -> Any:
-    """Search for a parameter value at any index in the device document.
-
-    Supports paths like 'WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Status'
-    where '*' matches any numeric index (1, 2, 3, etc.).
-
-    Returns the first value found at any matching path.
-    """
-
-    parts = path_pattern.split(".")
-
-    def search(current: Any, remaining_parts: list[str]) -> Any:
-        if not remaining_parts:
-            # Reached end of path - extract value
-            return _unwrap_tr069_value(current)
-
-        if not isinstance(current, dict):
-            return None
-
-        part = remaining_parts[0]
-        rest = remaining_parts[1:]
-
-        if part == "*":
-            # Wildcard - try all numeric keys
-            for key in sorted(current.keys()):
-                if key.isdigit():
-                    result = search(current[key], rest)
-                    if result is not None:
-                        return result
-            return None
-        else:
-            # Exact match
-            if part in current:
-                return search(current[part], rest)
-            return None
-
-    return search(device, parts)
-
-
 def _extract_first(
     client: AcsClient,
     device: dict[str, Any],
     param_paths: list[str],
 ) -> Any:
-    """Try multiple parameter paths, return first non-None value.
-
-    Supports wildcard paths with '*' for any numeric index.
-    """
+    """Try multiple concrete parameter paths, return first non-None value."""
     for path in param_paths:
-        if "*" in path:
-            # Use wildcard search
-            val = _extract_wildcard_value(device, path)
-        else:
-            val = client.extract_parameter_value(device, path)
+        val = client.extract_parameter_value(device, path)
         val = _unwrap_tr069_value(val)
         if val is not None:
             return val
@@ -276,180 +87,13 @@ def _extract_group(
     client: AcsClient,
     device: dict[str, Any],
     group_name: str,
-    *,
-    db: Session | None = None,
-    vendor: str | None = None,
-    model: str | None = None,
 ) -> dict[str, Any]:
-    """Extract all parameters in a named group.
-
-    If db/vendor/model are provided, attempts to resolve paths from the
-    VendorModelCapability registry first, falling back to hardcoded PARAM_GROUPS.
-    """
-    group = PARAM_GROUPS.get(group_name, {})
+    """Extract all parameters in a named group from GenieACS virtual params."""
+    group = VIRTUAL_PARAM_GROUPS.get(group_name, {})
     result: dict[str, Any] = {}
     for label, paths in group.items():
-        # Try vendor-specific paths from parameter map
-        canonical = f"{group_name}.{label.lower().replace(' ', '_')}"
-        custom_paths = _resolve_param_paths_from_capability(
-            db, vendor, model, canonical
-        )
-        effective_paths = custom_paths if custom_paths else paths
-        result[label] = _extract_first(client, device, effective_paths)
+        result[label] = _extract_first(client, device, paths)
     return result
-
-
-def _is_management_wan_service(item: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(item.get(key) or "")
-        for key in ("Name", "X_HW_SERVICELIST", "ServiceList", "ConnectionType")
-    ).lower()
-    return "tr069" in text or "management" in text or "mgmt" in text
-
-
-def _extract_numbered_objects(parent: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(parent, dict):
-        return []
-    rows: list[dict[str, Any]] = []
-    for key in sorted(
-        (k for k in parent if str(k).isdigit()), key=lambda item: int(str(item))
-    ):
-        value = parent.get(key)
-        if isinstance(value, dict):
-            row = dict(value)
-            row["_instance"] = key
-            rows.append(row)
-    return rows
-
-
-def _extract_connection_row(
-    obj: dict[str, Any], *, kind: str, wcd_index: str
-) -> dict[str, Any]:
-    row = {
-        "kind": kind,
-        "wcd_index": wcd_index,
-        "instance": str(obj.get("_instance") or "1"),
-    }
-    for param_name in (
-        "Name",
-        "ConnectionType",
-        "ConnectionStatus",
-        "ExternalIPAddress",
-        "Username",
-        "Uptime",
-        "DNSServers",
-        "DefaultGateway",
-        "X_HW_SERVICELIST",
-        "X_HW_VLAN",
-    ):
-        row[param_name] = _unwrap_tr069_value(obj.get(param_name))
-    return row
-
-
-def _extract_igd_wan_group(device: dict[str, Any]) -> dict[str, Any] | None:
-    wcd_parent = (
-        device.get("InternetGatewayDevice", {})
-        .get("WANDevice", {})
-        .get("1", {})
-        .get("WANConnectionDevice")
-    )
-    connections: list[dict[str, Any]] = []
-    for wcd in _extract_numbered_objects(wcd_parent):
-        wcd_index = str(wcd.get("_instance") or "")
-        for ppp in _extract_numbered_objects(wcd.get("WANPPPConnection")):
-            connections.append(
-                _extract_connection_row(ppp, kind="ppp", wcd_index=wcd_index)
-            )
-        for ip_conn in _extract_numbered_objects(wcd.get("WANIPConnection")):
-            connections.append(
-                _extract_connection_row(ip_conn, kind="ip", wcd_index=wcd_index)
-            )
-
-    ppp_connections = [item for item in connections if item.get("kind") == "ppp"]
-    if ppp_connections:
-        selected = next(
-            (
-                item
-                for item in ppp_connections
-                if item.get("ConnectionStatus")
-                or item.get("Username")
-                or item.get("ExternalIPAddress")
-            ),
-            ppp_connections[0],
-        )
-        return {
-            "Connection Type": selected.get("ConnectionType") or "PPPoE",
-            "WAN IP": selected.get("ExternalIPAddress"),
-            "Username": selected.get("Username"),
-            "Status": selected.get("ConnectionStatus"),
-            "Uptime": selected.get("Uptime"),
-            "DNS Servers": selected.get("DNSServers"),
-            "Gateway": selected.get("DefaultGateway"),
-            "WAN Instance": f"{selected.get('wcd_index')}.{selected.get('instance')}",
-            "WAN Service": selected.get("Name") or selected.get("X_HW_SERVICELIST"),
-        }
-
-    routed_ip_connections = [
-        item
-        for item in connections
-        if item.get("kind") == "ip" and not _is_management_wan_service(item)
-    ]
-    if routed_ip_connections:
-        selected = next(
-            (
-                item
-                for item in routed_ip_connections
-                if item.get("ConnectionStatus") or item.get("ExternalIPAddress")
-            ),
-            routed_ip_connections[0],
-        )
-        return {
-            "Connection Type": selected.get("ConnectionType") or "IP",
-            "WAN IP": selected.get("ExternalIPAddress"),
-            "Username": None,
-            "Status": selected.get("ConnectionStatus"),
-            "Uptime": selected.get("Uptime"),
-            "DNS Servers": selected.get("DNSServers"),
-            "Gateway": selected.get("DefaultGateway"),
-            "WAN Instance": f"{selected.get('wcd_index')}.{selected.get('instance')}",
-            "WAN Service": selected.get("Name") or selected.get("X_HW_SERVICELIST"),
-        }
-
-    management_connections = [
-        item
-        for item in connections
-        if item.get("kind") == "ip" and _is_management_wan_service(item)
-    ]
-    if management_connections:
-        selected = management_connections[0]
-        return {
-            "Connection Type": "Management",
-            "WAN IP": None,
-            "Username": None,
-            "Status": None,
-            "Uptime": None,
-            "DNS Servers": None,
-            "Gateway": None,
-            "Management WAN IP": selected.get("ExternalIPAddress"),
-            "Management WAN Status": selected.get("ConnectionStatus"),
-            "WAN Instance": f"{selected.get('wcd_index')}.{selected.get('instance')}",
-            "WAN Service": selected.get("Name") or selected.get("X_HW_SERVICELIST"),
-        }
-    return None
-
-
-def _extract_wan_group(
-    client: AcsClient,
-    device: dict[str, Any],
-    *,
-    db: Session | None = None,
-    vendor: str | None = None,
-    model: str | None = None,
-) -> dict[str, Any]:
-    igd_wan = _extract_igd_wan_group(device)
-    if igd_wan is not None:
-        return igd_wan
-    return _extract_group(client, device, "wan", db=db, vendor=vendor, model=model)
 
 
 def _extract_object_instances(
@@ -748,9 +392,6 @@ class OntTR069:
                 return stored_summary
             return TR069Summary(error=f"Failed to fetch TR-069 data: {e}")
 
-        ont_vendor = getattr(ont, "vendor", None)
-        ont_model = getattr(ont, "model", None)
-
         summary = TR069Summary(
             available=True,
             ont_id=str(ont.id),
@@ -758,21 +399,11 @@ class OntTR069:
             fetched_at=datetime.now(UTC),
             raw_device=device,
         )
-        summary.system = _extract_group(
-            client, device, "system", db=db, vendor=ont_vendor, model=ont_model
-        )
-        summary.wan = _extract_wan_group(
-            client, device, db=db, vendor=ont_vendor, model=ont_model
-        )
-        summary.lan = _extract_group(
-            client, device, "lan", db=db, vendor=ont_vendor, model=ont_model
-        )
-        summary.wireless = _extract_group(
-            client, device, "wireless", db=db, vendor=ont_vendor, model=ont_model
-        )
-        summary.management = _extract_group(
-            client, device, "management", db=db, vendor=ont_vendor, model=ont_model
-        )
+        summary.system = _extract_group(client, device, "system")
+        summary.wan = _extract_group(client, device, "wan")
+        summary.lan = _extract_group(client, device, "lan")
+        summary.wireless = _extract_group(client, device, "wireless")
+        summary.management = _extract_group(client, device, "management")
 
         # Ethernet ports
         for base_path in [_ETH_PORT_PATHS_IGD, _ETH_PORT_PATHS_DEV]:

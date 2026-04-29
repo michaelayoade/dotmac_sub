@@ -58,6 +58,19 @@ def test_acs_adapter_factories_return_genieacs_implementations() -> None:
     assert isinstance(create_acs_event_ingestor(), GenieAcsEventIngestor)
 
 
+def test_acs_service_facade_exposes_genieacs_ports() -> None:
+    from app.services.acs_config_adapter import GenieAcsConfigWriter
+    from app.services.acs_event_adapter import GenieAcsEventIngestor
+    from app.services.acs_service import create_acs_service
+    from app.services.acs_state_adapter import GenieAcsStateReader
+
+    acs = create_acs_service()
+
+    assert isinstance(acs.config_writer, GenieAcsConfigWriter)
+    assert isinstance(acs.state_reader, GenieAcsStateReader)
+    assert isinstance(acs.event_ingestor, GenieAcsEventIngestor)
+
+
 def test_acs_event_ingestor_delegates_inform(monkeypatch) -> None:
     from app.services import tr069 as tr069_service
     from app.services.acs_event_adapter import GenieAcsEventIngestor
@@ -91,7 +104,7 @@ def test_tr069_inform_route_uses_event_ingestor_factory(monkeypatch) -> None:
 
     calls = {}
 
-    class FakeIngestor:
+    class FakeAcsService:
         def receive_inform(self, db, **kwargs):
             calls["db"] = db
             calls["kwargs"] = kwargs
@@ -109,8 +122,8 @@ def test_tr069_inform_route_uses_event_ingestor_factory(monkeypatch) -> None:
 
     monkeypatch.setattr(
         tr069_inform,
-        "create_acs_event_ingestor",
-        lambda: FakeIngestor(),
+        "create_acs_service",
+        lambda: FakeAcsService(),
     )
 
     payload = tr069_inform.InformPayload(
@@ -483,7 +496,7 @@ def test_acs_config_adapter_rejects_unknown_queue_action() -> None:
 
 
 def test_apply_acs_config_task_executes_adapter_method(monkeypatch) -> None:
-    from app.services import acs_client
+    from app.services import acs_service
     from app.services.network.ont_action_common import ActionResult
     from app.tasks import tr069
 
@@ -531,7 +544,11 @@ def test_apply_acs_config_task_executes_adapter_method(monkeypatch) -> None:
         return session
 
     monkeypatch.setattr(tr069, "SessionLocal", fake_session_local)
-    monkeypatch.setattr(acs_client, "create_acs_config_writer", lambda: FakeWriter())
+    monkeypatch.setattr(
+        acs_service,
+        "create_acs_config_writer",
+        lambda kind=None: FakeWriter(),
+    )
 
     result = tr069.apply_acs_config.run(
         "set_wifi_ssid",
@@ -577,8 +594,14 @@ def test_web_ont_config_writer_is_resolved_per_call(monkeypatch) -> None:
             return ActionResult(success=False, message=self.label)
 
     writers = iter([FakeWriter("first"), FakeWriter("second")])
+
+    class FakeAcsService:
+        @property
+        def config_writer(self):
+            return next(writers)
+
     monkeypatch.setattr(
-        config_setters, "create_acs_config_writer", lambda: next(writers)
+        config_setters, "create_acs_service", lambda: FakeAcsService()
     )
 
     config_setters.set_wifi_ssid(object(), "ont-1", "SSID-1")

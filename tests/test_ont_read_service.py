@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+from app.models.network import OntUnit, OnuOnlineStatus
 from app.services.network.ont_read import OntReadFacade, _classify_signal
 
 
@@ -76,3 +78,24 @@ class TestGetCapabilities:
             assert caps["wifi"] is True
             assert caps["catv"] is False
             assert caps["vlan_tagging"] is True
+
+
+class TestGetEnriched:
+    def test_get_enriched_returns_effective_last_seen_at(self, db_session) -> None:
+        now = datetime.now(UTC)
+        ont = OntUnit(
+            serial_number="ONT-READ-LAST-SEEN",
+            is_active=True,
+            online_status=OnuOnlineStatus.unknown,
+            last_seen_at=now - timedelta(days=1),
+            acs_last_inform_at=now,
+        )
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        result = OntReadFacade.get_enriched(db_session, str(ont.id))
+
+        expected = ont.acs_last_inform_at.replace(tzinfo=UTC)
+        assert result["acs_last_inform_at"] == expected
+        assert result["last_seen_at"] == expected

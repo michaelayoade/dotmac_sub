@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
 from app.services.adapters import adapter_registry
+
+if TYPE_CHECKING:
+    from app.services.network.ont_tr069 import TR069Summary
 
 _UNSET_DISPLAY = "Not observed"
 
@@ -111,10 +114,9 @@ class AcsServiceIntentAdapter:
     def load_observed_intent_for_ont(
         self, db: Session, *, ont_id: str
     ) -> dict[str, object]:
-        from app.services.acs_client import create_acs_state_reader
+        from app.services.acs_service import create_acs_service
 
-        reader = create_acs_state_reader()
-        summary = reader.get_device_summary(
+        summary = create_acs_service().get_device_summary(
             db,
             ont_id,
             persist_observed_runtime=True,
@@ -437,11 +439,13 @@ class AcsServiceIntentAdapter:
             normalized_hosts.append(mapped)
         return normalized_hosts
 
-    def refresh_observed_summary_for_ont(self, db: Session, *, ont_id: str) -> object:
+    def refresh_observed_summary_for_ont(
+        self, db: Session, *, ont_id: str
+    ) -> "TR069Summary":
         """Refresh/persist ACS observed runtime through the adapter boundary."""
-        from app.services.acs_client import create_acs_state_reader
+        from app.services.acs_service import create_acs_service
 
-        return create_acs_state_reader().get_device_summary(
+        return create_acs_service().get_device_summary(
             db,
             ont_id,
             persist_observed_runtime=True,

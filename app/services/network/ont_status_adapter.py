@@ -297,7 +297,7 @@ class Tr069StatusProvider:
         """Get status from ACS/TR-069."""
         from app.services.network.ont_status import (
             resolve_acs_online_window_minutes_for_model,
-            resolve_acs_status,
+            resolve_ont_status_snapshot,
         )
 
         now = datetime.now(UTC)
@@ -305,31 +305,24 @@ class Tr069StatusProvider:
         # Get ACS status from cached data
         acs_last_inform = getattr(ont, "acs_last_inform_at", None)
         window_minutes = resolve_acs_online_window_minutes_for_model(ont)
-        acs_status = resolve_acs_status(
+        snapshot = resolve_ont_status_snapshot(
+            olt_status=None,
             acs_last_inform_at=acs_last_inform,
             managed=True,
             now=now,
             online_window_minutes=window_minutes,
         )
 
-        # Map ACS status to online status
-        if acs_status == OntAcsStatus.online:
-            effective_status = OnuOnlineStatus.online
-        elif acs_status == OntAcsStatus.stale:
-            effective_status = OnuOnlineStatus.offline
-        else:
-            effective_status = OnuOnlineStatus.unknown
-
         optical = None
         if include_optical:
             optical = self.get_optical_metrics(db, ont)
 
         return OntStatusResult(
-            online_status=effective_status,
-            acs_status=acs_status,
-            status_source=OntStatusSource.acs,
-            acs_last_inform_at=acs_last_inform,
-            resolved_at=now,
+            online_status=snapshot.effective_status,
+            acs_status=snapshot.acs_status,
+            status_source=snapshot.effective_status_source,
+            acs_last_inform_at=snapshot.acs_last_inform_at,
+            resolved_at=snapshot.status_resolved_at,
             optical_metrics=optical,
         )
 

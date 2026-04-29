@@ -14,7 +14,7 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
-from app.services.acs_client import create_acs_config_writer
+from app.services.acs_service import create_acs_service
 from app.services.acs_service_intent_adapter import acs_service_intent_adapter
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _acs_config_writer():
-    return create_acs_config_writer()
+    return create_acs_service().config_writer
 
 
 def execute_reboot(

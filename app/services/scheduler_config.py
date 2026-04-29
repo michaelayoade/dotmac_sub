@@ -1081,13 +1081,16 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_runtime_interval,
         )
 
-        # TR-069 online-silent ONT healing - auto-connects ONTs online on OLT but silent in ACS
+        # TR-069 online-silent ONT healing is opt-in. A large silent fleet
+        # usually indicates an upstream OLT/management VLAN/ACS routing issue,
+        # so enabling this by default can amplify queue load while masking the
+        # real provisioning problem.
         tr069_heal_enabled = _effective_bool(
             session,
             SettingDomain.network,
             "tr069_heal_online_silent_enabled",
             "TR069_HEAL_ONLINE_SILENT_ENABLED",
-            True,
+            False,
         )
         tr069_heal_interval = _resolve_int(
             session,

@@ -7,9 +7,6 @@ import pytest
 from app.services.network.tr069_paths import (
     _TR098_PATHS,
     _TR181_PATHS,
-    DISPLAY_GROUPS,
-    LABEL_TO_CANONICAL,
-    RUNNING_CONFIG_GROUPS,
     TR069_ROOT_DEVICE,
     TR069_ROOT_IGD,
     Tr069PathError,
@@ -248,53 +245,6 @@ class TestHasCanonicalAndList:
         names = tr069_path_resolver.list_canonical_names()
         # Union should include both Device-only and IGD-only names
         assert "system.manufacturer" in names
-
-
-class TestDisplayGroupCoverage:
-    """Ensure display groups map to valid canonical names."""
-
-    @pytest.mark.parametrize("root", [TR069_ROOT_DEVICE, TR069_ROOT_IGD])
-    def test_all_display_group_canonicals_are_resolvable(self, root: str) -> None:
-        for section, labels in DISPLAY_GROUPS.items():
-            for label, canonical in labels.items():
-                try:
-                    path = tr069_path_resolver.resolve(root, canonical)
-                    assert path, f"Empty path for {section}.{label} ({canonical})"
-                except Tr069PathError:
-                    pytest.fail(
-                        f"DISPLAY_GROUPS['{section}']['{label}'] = '{canonical}' "
-                        f"is not resolvable for root '{root}'"
-                    )
-
-
-class TestRunningConfigGroupCoverage:
-    """Ensure running config groups map to valid canonical names."""
-
-    @pytest.mark.parametrize("root", [TR069_ROOT_DEVICE, TR069_ROOT_IGD])
-    def test_all_running_config_canonicals_are_resolvable(self, root: str) -> None:
-        for section, canonicals in RUNNING_CONFIG_GROUPS.items():
-            for canonical in canonicals:
-                try:
-                    path = tr069_path_resolver.resolve(root, canonical)
-                    assert path, f"Empty path for {section}/{canonical}"
-                except Tr069PathError:
-                    pytest.fail(
-                        f"RUNNING_CONFIG_GROUPS['{section}'] canonical "
-                        f"'{canonical}' is not resolvable for root '{root}'"
-                    )
-
-
-class TestLabelToCanonicalCoverage:
-    """Ensure backward-compat mapping covers all DISPLAY_GROUPS entries."""
-
-    def test_all_display_groups_have_label_mapping(self) -> None:
-        for section, labels in DISPLAY_GROUPS.items():
-            for label, canonical in labels.items():
-                key = f"{section}.{label}"
-                assert key in LABEL_TO_CANONICAL, (
-                    f"Missing LABEL_TO_CANONICAL entry for '{key}'"
-                )
-                assert LABEL_TO_CANONICAL[key] == canonical
 
 
 class TestPathConsistency:

@@ -8,8 +8,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
+from jinja2 import Environment, FileSystemLoader
 
 from app.models.tr069 import (
     Tr069AcsServer,
@@ -201,6 +203,45 @@ class TestInformWebhook:
         assert len(parts) == 3
         assert parts[2] == "SERIAL123"
 
+    def test_receive_inform_updates_linked_ont_last_seen_at(self, db_session) -> None:
+        from app.models.network import OntAcsStatus, OntUnit
+        from app.services import tr069 as tr069_service
+
+        server = Tr069AcsServer(
+            name="Linked Inform ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        ont = OntUnit(serial_number="INFORM-LINKED-001", is_active=True)
+        db_session.add_all([server, ont])
+        db_session.flush()
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="00D09E-TestProduct-INFORM-LINKED-001",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+
+        result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw=device.genieacs_device_id,
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert result["status"] == "ok"
+        db_session.refresh(ont)
+        db_session.refresh(device)
+        assert device.last_inform_at is not None
+        assert ont.acs_status == OntAcsStatus.online
+        assert ont.acs_last_inform_at == device.last_inform_at
+        assert ont.last_seen_at == device.last_inform_at
+
 
 # ---------------------------------------------------------------------------
 # 4. Auto-link ONTs during sync
@@ -234,6 +275,7 @@ class TestAutoLinkOnts:
         assert ont.tr069_acs_server_id is None
 
         # Mock GenieACS to return a device with matching serial
+        last_inform_at = datetime.now(UTC)
         mock_device = {
             "_id": "00D09E-TestProduct-AUTOLINK-001",
             "_deviceId": {
@@ -241,7 +283,7 @@ class TestAutoLinkOnts:
                 "_ProductClass": "TestProduct",
                 "_SerialNumber": "AUTOLINK-001",
             },
-            "_lastInform": datetime.now(UTC).isoformat(),
+            "_lastInform": last_inform_at.isoformat(),
         }
         with patch("app.services.tr069.create_acs_client") as MockClient:
             instance = MockClient.return_value
@@ -258,9 +300,13 @@ class TestAutoLinkOnts:
         assert result["created"] == 1
         assert result["auto_linked"] == 1
 
-        # Verify ONT now has ACS server linked
+        # Auto-link records observed ACS state on the CPE row; an ONT FK remains
+        # an explicit override, not inherited sync state.
         db_session.refresh(ont)
-        assert ont.tr069_acs_server_id == server.id
+        assert ont.tr069_acs_server_id is None
+        expected_last_inform = last_inform_at.replace(tzinfo=None)
+        assert ont.acs_last_inform_at == expected_last_inform
+        assert ont.last_seen_at == expected_last_inform
         linked = (
             db_session.query(Tr069CpeDevice)
             .filter_by(serial_number="AUTOLINK-001")
@@ -268,6 +314,232 @@ class TestAutoLinkOnts:
         )
         assert linked is not None
         assert linked.ont_unit_id == ont.id
+        assert linked.acs_server_id == server.id
+
+    def test_olt_ont_acs_sync_and_inform_updates_table_last_seen_e2e(
+        self, db_session
+    ) -> None:
+        from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
+        from app.services import network as network_service
+        from app.services import tr069 as tr069_service
+        from app.services.network.acs_resolution import resolve_acs_for_ont
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="E2E ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        olt = OLTDevice(
+            name="E2E OLT",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        ont = OntUnit(
+            serial_number="E2E-OLT-ONT-ACS-001",
+            olt_device=olt,
+            is_active=True,
+            online_status=OnuOnlineStatus.unknown,
+        )
+        db_session.add_all([olt, ont])
+        db_session.commit()
+
+        sync_last_inform = datetime.now(UTC) - timedelta(minutes=2)
+        mock_device = {
+            "_id": "00D09E-TestProduct-E2E-OLT-ONT-ACS-001",
+            "_deviceId": {
+                "_OUI": "00D09E",
+                "_ProductClass": "TestProduct",
+                "_SerialNumber": "E2E-OLT-ONT-ACS-001",
+            },
+            "_lastInform": sync_last_inform.isoformat(),
+        }
+        with patch("app.services.tr069.create_acs_client") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = [mock_device]
+            instance.parse_device_id.return_value = (
+                "00D09E",
+                "TestProduct",
+                "E2E-OLT-ONT-ACS-001",
+            )
+            instance.extract_parameter_value.return_value = None
+
+            sync_result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        assert sync_result["created"] == 1
+        db_session.refresh(ont)
+        assert ont.tr069_acs_server_id is None
+        assert resolve_acs_for_ont(db_session, ont).server_id == str(server.id)
+        assert ont.acs_last_inform_at is not None
+        assert ont.last_seen_at == ont.acs_last_inform_at
+
+        device = (
+            db_session.query(Tr069CpeDevice)
+            .filter_by(serial_number="E2E-OLT-ONT-ACS-001")
+            .one()
+        )
+        inform_result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw=device.genieacs_device_id,
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert inform_result["status"] == "ok"
+        db_session.refresh(ont)
+        db_session.refresh(device)
+        assert ont.last_seen_at == device.last_inform_at
+
+        rows, total = network_service.ont_units.list_advanced(
+            db_session,
+            search="E2E-OLT-ONT-ACS-001",
+            limit=10,
+            offset=0,
+        )
+
+        assert total == 1
+        assert rows[0].id == ont.id
+        assert rows[0].last_seen_at == device.last_inform_at
+
+    def test_ont_list_page_data_uses_latest_linked_cpe_inform_for_last_seen(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.web_network_core_devices_views import onts_list_page_data
+
+        stale_last_seen = datetime.now(UTC) - timedelta(hours=2)
+        latest_inform = datetime.now(UTC) - timedelta(minutes=5)
+        server = Tr069AcsServer(
+            name="Latest Inform Table ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        ont = OntUnit(
+            serial_number="TABLE-LATEST-INFORM-001",
+            is_active=True,
+            last_seen_at=stale_last_seen,
+            acs_last_inform_at=stale_last_seen,
+        )
+        db_session.add_all([server, ont])
+        db_session.flush()
+        db_session.add(
+            Tr069CpeDevice(
+                acs_server_id=server.id,
+                ont_unit_id=ont.id,
+                serial_number=ont.serial_number,
+                genieacs_device_id="00D09E-TestProduct-TABLE-LATEST-INFORM-001",
+                last_inform_at=latest_inform,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        page_data = onts_list_page_data(
+            db_session,
+            authorization="all",
+            search=ont.serial_number,
+        )
+
+        signal_data = page_data["signal_data"][str(ont.id)]
+        expected_latest_inform = latest_inform.replace(tzinfo=None)
+        assert signal_data["acs_last_inform_at"] == expected_latest_inform
+        assert signal_data["last_seen_at"] == expected_latest_inform.replace(
+            tzinfo=UTC
+        )
+
+    def test_ont_index_template_renders_acs_last_seen_column(self) -> None:
+        ont_id = uuid4()
+        stale_last_seen = datetime(2026, 4, 28, 8, 10, tzinfo=UTC)
+        latest_acs_inform = datetime(2026, 4, 28, 8, 55, tzinfo=UTC)
+        ont = SimpleNamespace(
+            id=ont_id,
+            serial_number="UI-ACS-LAST-SEEN-001",
+            last_seen_at=stale_last_seen,
+            olt_rx_signal_dbm=None,
+            is_active=True,
+            authorization_status=None,
+        )
+        page = SimpleNamespace(page=1, pages=1, total=1, total_pages=1, per_page=50)
+        context = {
+            "request": SimpleNamespace(
+                url=SimpleNamespace(path="/admin/network/onts"),
+                query_params={},
+                state=SimpleNamespace(csrf_token="test"),
+            ),
+            "active_page": "onts",
+            "active_menu": "network",
+            "current_user": None,
+            "sidebar_stats": {},
+            "filters": SimpleNamespace(
+                view="list",
+                olt_id=None,
+                pon_port_id=None,
+                pon_hint=None,
+                zone_id=None,
+                online_status=None,
+                authorization="authorized",
+                signal_quality=None,
+                vendor=None,
+                search="",
+                order_by="serial_number",
+                order_dir="asc",
+            ),
+            "message": None,
+            "status": None,
+            "status_filter": "",
+            "stats": SimpleNamespace(
+                total_onts=1,
+                online_count=1,
+                offline_count=0,
+                low_signal_count=0,
+                total_cpes=1,
+                unconfigured_count=0,
+            ),
+            "olts": [],
+            "zones": [],
+            "vendors": [],
+            "onts": [ont],
+            "signal_data": {
+                str(ont_id): {
+                    "status_display": "Online",
+                    "status_class": "ok",
+                    "last_seen_at": latest_acs_inform,
+                }
+            },
+            "assignment_info": {str(ont_id): {}},
+            "serial_display_by_ont_id": {str(ont_id): ont.serial_number},
+            "hex_serial_by_ont_id": {},
+            "pagination": page,
+            "diagnostics_pagination": page,
+            "diagnostics_onts": [],
+            "diagnostics_signal_data": {},
+            "diagnostics_assignment_info": {},
+            "unconfigured_entries": [],
+            "unconfigured_selected_view": "",
+            "unconfigured_selected_resolution": "",
+            "unconfigured_stats": SimpleNamespace(total=0, last_seen_at=None),
+            "unconfigured_olts": [],
+            "firmware_images": [],
+            "authorization_result": None,
+        }
+
+        html = Environment(loader=FileSystemLoader("templates")).get_template(
+            "admin/network/onts/index.html"
+        ).render(context)
+
+        assert "UI-ACS-LAST-SEEN-001" in html
+        assert "Apr 28, 08:55" in html
+        assert "2026-04-28 08:55:00" in html
+        assert "Apr 28, 08:10" not in html
 
     def test_sync_auto_links_ont_by_normalized_serial(self, db_session) -> None:
         from app.models.network import OntUnit
@@ -315,7 +587,7 @@ class TestAutoLinkOnts:
         assert result["created"] == 1
         assert result["auto_linked"] == 1
         db_session.refresh(ont)
-        assert ont.tr069_acs_server_id == server.id
+        assert ont.tr069_acs_server_id is None
         linked = (
             db_session.query(Tr069CpeDevice)
             .filter_by(serial_number="HWTC7D4733C3")
@@ -323,8 +595,9 @@ class TestAutoLinkOnts:
         )
         assert linked is not None
         assert linked.ont_unit_id == ont.id
+        assert linked.acs_server_id == server.id
 
-    def test_sync_reactivates_offline_local_ont_tr069_row(self, db_session) -> None:
+    def test_sync_keeps_offline_local_ont_tr069_row_inactive(self, db_session) -> None:
         from app.models.network import OntUnit
         from app.services.tr069 import CpeDevices, acs_servers
 
@@ -364,15 +637,18 @@ class TestAutoLinkOnts:
 
         db_session.refresh(device)
         db_session.refresh(ont)
-        assert result["local_reactivated"] == 1
-        assert device.is_active is True
+        assert result["local_reactivated"] == 0
+        assert device.is_active is False
         assert device.ont_unit_id == ont.id
         assert ont.tr069_acs_server_id == server.id
 
-    def test_sync_creates_local_tr069_row_for_olt_assigned_offline_ont(
+    def test_sync_does_not_create_local_tr069_row_for_olt_assigned_offline_ont(
         self, db_session
     ) -> None:
+        from sqlalchemy import select
+
         from app.models.network import OLTDevice, OntUnit
+        from app.services.network.acs_resolution import resolve_acs_for_ont
         from app.services.tr069 import CpeDevices, acs_servers
 
         server = acs_servers.create(
@@ -408,16 +684,17 @@ class TestAutoLinkOnts:
 
             result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
 
-        linked = (
-            db_session.query(Tr069CpeDevice)
-            .filter_by(serial_number="OFFLINE-OLT-ACS-001", is_active=True)
-            .one()
-        )
+        linked = db_session.scalars(
+            select(Tr069CpeDevice).where(
+                Tr069CpeDevice.serial_number == "OFFLINE-OLT-ACS-001",
+                Tr069CpeDevice.is_active.is_(True),
+            )
+        ).one_or_none()
         db_session.refresh(ont)
-        assert result["local_created"] == 1
-        assert linked.ont_unit_id == ont.id
-        assert linked.genieacs_device_id is None
-        assert ont.tr069_acs_server_id == server.id
+        assert result["local_created"] == 0
+        assert linked is None
+        assert ont.tr069_acs_server_id is None
+        assert resolve_acs_for_ont(db_session, ont).server_id == str(server.id)
 
     def test_sync_retires_expected_placeholder_when_real_acs_device_arrives(
         self, db_session
@@ -622,56 +899,19 @@ class TestTr069DashboardUi:
 
 
 # ---------------------------------------------------------------------------
-# 5. Parameter map resolution
+# 5. Summary parameter mappings
 # ---------------------------------------------------------------------------
 
 
-class TestParameterMapResolution:
-    def test_resolve_returns_none_without_db(self) -> None:
-        from app.services.network.ont_tr069 import _resolve_param_paths_from_capability
+class TestSummaryParameterMappings:
+    def test_summary_groups_read_only_genieacs_virtual_parameters(self) -> None:
+        from app.services.network.tr069_paths import VIRTUAL_PARAM_GROUPS
 
-        result = _resolve_param_paths_from_capability(
-            None, "Huawei", "HG8245H", "system.manufacturer"
-        )
-        assert result is None
-
-    def test_resolve_returns_none_without_vendor(self) -> None:
-        from app.services.network.ont_tr069 import _resolve_param_paths_from_capability
-
-        result = _resolve_param_paths_from_capability(
-            MagicMock(), None, None, "system.manufacturer"
-        )
-        assert result is None
-
-    def test_resolve_uses_vendor_capability_parameter_map(self, db_session) -> None:
-        from app.models.network import Tr069ParameterMap, VendorModelCapability
-        from app.services.network.ont_tr069 import _resolve_param_paths_from_capability
-
-        capability = VendorModelCapability(
-            vendor="Huawei",
-            model="HG8245H",
-            is_active=True,
-        )
-        db_session.add(capability)
-        db_session.flush()
-        db_session.add(
-            Tr069ParameterMap(
-                capability_id=capability.id,
-                canonical_name="wan.pppoe.username",
-                tr069_path="InternetGatewayDevice.WANDevice.2.Username",
-                writable=True,
-            )
-        )
-        db_session.commit()
-
-        result = _resolve_param_paths_from_capability(
-            db_session,
-            "Huawei",
-            "HG8245H",
-            "wan.pppoe.username",
-        )
-
-        assert result == ["InternetGatewayDevice.WANDevice.2.Username"]
+        assert VIRTUAL_PARAM_GROUPS
+        for group in VIRTUAL_PARAM_GROUPS.values():
+            for paths in group.values():
+                assert paths
+                assert all(path.startswith("VirtualParameters.") for path in paths)
 
 
 # ---------------------------------------------------------------------------

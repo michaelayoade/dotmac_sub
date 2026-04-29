@@ -10,6 +10,7 @@ Tests the complete flow of returning an ONT to inventory:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -124,6 +125,8 @@ class TestResetOntServiceState:
         assert sample_ont.observed_wan_ip is None
         assert sample_ont.observed_pppoe_status is None
         assert sample_ont.observed_lan_mode is None
+        assert sample_ont.tr069_last_snapshot == {}
+        assert sample_ont.olt_observed_snapshot == {}
 
     def test_clears_online_status(self, db_session, sample_ont):
         """Test that online status is reset to unknown."""
@@ -213,6 +216,8 @@ class TestReturnOntToInventory:
         assert result.success is True
         db_session.refresh(sample_assignment)
         assert sample_assignment.active is False
+        assert sample_assignment.released_at is not None
+        assert sample_assignment.release_reason == "returned_to_inventory"
 
     def test_success_keeps_ont_active(self, db_session, sample_ont, sample_olt, sample_assignment):
         """Test that ONT remains active for reuse (not decommissioned)."""
@@ -306,6 +311,83 @@ class TestReturnOntToInventory:
         assert result.data["serial_number"] == "HWTC12345678"
         assert result.data["autofind_refreshed"] is True
         assert result.data["autofind_rediscovered"] is True
+
+    def test_autofind_refresh_failure_is_nonfatal(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """Return remains successful when post-return autofind refresh fails."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
+                side_effect=RuntimeError("autofind unavailable"),
+            ),
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is True
+        assert "autofind refresh failed" in result.message.lower()
+        db_session.refresh(sample_ont)
+        db_session.refresh(sample_assignment)
+        assert sample_ont.olt_device_id is None
+        assert sample_assignment.active is False
+
+    def test_db_update_failure_rolls_back_local_state(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """After OLT cleanup, DB failures return a controlled error and rollback."""
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.network.ont_inventory.ensure_cpe_for_ont",
+                side_effect=RuntimeError("inventory subscriber missing"),
+            ),
+            patch(
+                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
+            ) as mock_autofind,
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is False
+        assert "db inventory update failed" in result.message.lower()
+        mock_autofind.assert_not_called()
+        db_session.refresh(sample_ont)
+        db_session.refresh(sample_assignment)
+        assert sample_ont.olt_device_id == sample_olt.id
+        assert sample_ont.board == "0/1"
+        assert sample_ont.port == "2"
+        assert sample_ont.external_id == "0/1/2:5"
+        assert sample_assignment.active is True
+        assert sample_assignment.released_at is None
+        assert sample_assignment.release_reason is None
 
     def test_failure_olt_cleanup_stops_return(
         self, db_session, sample_ont, sample_olt, sample_assignment
@@ -427,7 +509,7 @@ class TestReturnToInventoryWebAction:
 
     def test_success_emits_events(self, db_session, sample_ont, sample_olt, sample_assignment):
         """Test that success emits deauthorization and service port events."""
-        from app.services.web_network_ont_actions.inventory import return_to_inventory
+        from app.services.network.ont_inventory import return_ont_to_inventory
 
         mock_service_port = SimpleNamespace(index=100)
         mock_adapter = MagicMock()
@@ -451,14 +533,14 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_adapter,
             ),
             patch(
-                "app.services.web_network_ont_actions.inventory.emit_event"
+                "app.services.network.ont_inventory.emit_event"
             ) as mock_emit,
             patch(
                 "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
                 return_value={"ok": True, "rediscovered": False},
             ),
         ):
-            result = return_to_inventory(db_session, str(sample_ont.id))
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
         assert result.success is True
         # Check events were emitted
@@ -467,7 +549,7 @@ class TestReturnToInventoryWebAction:
     def test_clears_tr069_binding(self, db_session, sample_ont, sample_olt, sample_assignment):
         """Test that TR-069 device binding is cleared."""
         from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
-        from app.services.web_network_ont_actions.inventory import return_to_inventory
+        from app.services.network.ont_inventory import return_ont_to_inventory
 
         # Create ACS server first (required FK)
         acs_server = Tr069AcsServer(
@@ -503,14 +585,14 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_adapter,
             ),
             patch(
-                "app.services.web_network_ont_actions.inventory.emit_event"
+                "app.services.network.ont_inventory.emit_event"
             ),
             patch(
                 "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
                 return_value={"ok": True, "rediscovered": False},
             ),
         ):
-            result = return_to_inventory(db_session, str(sample_ont.id))
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
         assert result.success is True
         db_session.refresh(tr069_device)
@@ -520,7 +602,7 @@ class TestReturnToInventoryWebAction:
         self, db_session, sample_ont, sample_olt, sample_assignment
     ):
         """Test that service port DB allocations are released."""
-        from app.services.web_network_ont_actions.inventory import return_to_inventory
+        from app.services.network.ont_inventory import return_ont_to_inventory
 
         mock_adapter = MagicMock()
         mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
@@ -539,7 +621,7 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_adapter,
             ),
             patch(
-                "app.services.web_network_ont_actions.inventory.emit_event"
+                "app.services.network.ont_inventory.emit_event"
             ),
             patch(
                 "app.services.network.service_port_allocator.release_all_for_ont",
@@ -550,7 +632,7 @@ class TestReturnToInventoryWebAction:
                 return_value={"ok": True, "rediscovered": False},
             ),
         ):
-            result = return_to_inventory(db_session, str(sample_ont.id))
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
         assert result.success is True
         mock_release.assert_called_once_with(db_session, str(sample_ont.id))
@@ -592,7 +674,7 @@ class TestReturnToInventoryForWeb:
                 return_value=mock_adapter,
             ),
             patch(
-                "app.services.web_network_ont_actions.inventory.emit_event"
+                "app.services.network.ont_inventory.emit_event"
             ),
             patch(
                 "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
@@ -677,12 +759,18 @@ class TestCleanupOltStateForReturn:
         )
         mock_adapter.deauthorize_ont.return_value = ActionResult(
             success=False,
-            message="ONT not found on OLT",
+            message="Permission denied",
         )
 
-        with patch(
-            "app.services.network.olt_protocol_adapters.get_protocol_adapter",
-            return_value=mock_adapter,
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.network.service_port_allocator.release_all_for_ont",
+                return_value=1,
+            ) as mock_release,
         ):
             success, completed, errors = _cleanup_olt_state_for_return(
                 db_session, str(sample_ont.id)
@@ -690,6 +778,45 @@ class TestCleanupOltStateForReturn:
 
         assert success is False
         assert any("deauthorize" in e.lower() for e in errors)
+        mock_release.assert_not_called()
+
+    def test_success_when_ont_already_absent_on_olt(
+        self, db_session, sample_ont, sample_olt
+    ):
+        """Return cleanup is idempotent when the OLT has already removed the ONT."""
+        from app.services.web_network_ont_actions.inventory import (
+            _cleanup_olt_state_for_return,
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=False,
+            message="OLT rejected: Failure: The ONT does not exist",
+        )
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.network.service_port_allocator.release_all_for_ont",
+                return_value=1,
+            ),
+        ):
+            success, completed, errors = _cleanup_olt_state_for_return(
+                db_session, str(sample_ont.id)
+            )
+
+        assert success is True
+        assert errors == []
+        assert any("already absent" in c.lower() for c in completed)
+        assert any("allocation" in c.lower() for c in completed)
 
     def test_tracks_completed_steps(self, db_session, sample_ont, sample_olt):
         """Test that completed steps are tracked."""
@@ -770,3 +897,13 @@ class TestOntWithoutOltBinding:
         assert ont.desired_config == {}
         assert ont.provisioning_status == OntProvisioningStatus.unprovisioned
         assert assignment.active is False
+
+
+def test_return_to_inventory_htmx_buttons_send_csrf_header():
+    """Single-ONT HTMX return actions must pass CSRF middleware before service code runs."""
+    hero_template = Path("templates/admin/network/onts/_hero_header.html").read_text()
+    health_template = Path("templates/admin/network/onts/_operational_health.html").read_text()
+
+    for template in (hero_template, health_template):
+        assert "/return-to-inventory" in template
+        assert '"X-CSRF-Token": "{{ request.state.csrf_token }}"' in template

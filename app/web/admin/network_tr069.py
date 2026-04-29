@@ -262,11 +262,13 @@ def tr069_clear_acs_tasks(
             acs_server_id=acs_server_id,
             request=request,
         )
-        deleted = int(result.get("deleted") or 0)
+        deleted_raw = result.get("deleted")
+        deleted = deleted_raw if isinstance(deleted_raw, int) else 0
         errors = result.get("errors") or []
+        errors_count = len(errors) if isinstance(errors, list) else 0
         if errors:
             message = quote_plus(
-                f"Deleted {deleted} pending task(s); {len(errors)} task(s) failed"
+                f"Deleted {deleted} pending task(s); {errors_count} task(s) failed"
             )
             status = "error"
         else:
@@ -350,50 +352,6 @@ def tr069_remove_enforcement_preset(
             db, acs_id, request=request
         )
         message = quote_plus("ACS enforcement preset removed")
-        return RedirectResponse(
-            f"/admin/network/tr069?acs_server_id={acs_id}&status=success&message={message}",
-            status_code=303,
-        )
-    except Exception as exc:
-        message = quote_plus(str(exc))
-        return RedirectResponse(
-            f"/admin/network/tr069?acs_server_id={acs_id}&status=error&message={message}",
-            status_code=303,
-        )
-
-
-# -----------------------------------------------------------------------------
-# Runtime Data Collection Preset
-# -----------------------------------------------------------------------------
-
-
-@router.get("/tr069/acs/{acs_id}/runtime-status")
-def tr069_acs_runtime_status(acs_id: str, db: Session = Depends(get_db)) -> dict:
-    """Get runtime collection preset status (JSON response for HTMX)."""
-    from app.services.tr069 import get_runtime_collection_status
-
-    try:
-        return get_runtime_collection_status(db, acs_id)
-    except Exception as exc:
-        return {"exists": False, "error": str(exc)}
-
-
-@router.post("/tr069/acs/{acs_id}/runtime-preset")
-def tr069_push_runtime_preset(
-    acs_id: str, request: Request, db: Session = Depends(get_db)
-) -> RedirectResponse:
-    """Push runtime data collection preset to GenieACS.
-
-    This creates a provision and preset that collects operational parameters
-    (WiFi clients, WAN status, PPPoE status, LAN mode) on device inform.
-    """
-    try:
-        result = web_network_tr069_service.push_runtime_collection_preset(
-            db, acs_id, request=request
-        )
-        message = quote_plus(
-            f"Runtime collection preset created: {result.get('preset_id')}"
-        )
         return RedirectResponse(
             f"/admin/network/tr069?acs_server_id={acs_id}&status=success&message={message}",
             status_code=303,

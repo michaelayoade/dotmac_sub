@@ -1,19 +1,21 @@
-"""GenieACS inform webhook receiver.
+"""GenieACS webhook receivers.
 
-Receives callbacks from GenieACS when CPE devices send Inform messages.
-Updates last_inform_at and optionally creates session records.
+Receives callbacks from GenieACS:
+- Inform webhook: CPE device inform messages
+- Auth webhook: Credential lookups for CPE/CR authentication
 """
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services.acs_client import create_acs_event_ingestor
+from app.services.acs_service import create_acs_service
+from app.services import tr069_auth
 
-router = APIRouter(prefix="/tr069", tags=["tr069-inform"])
+router = APIRouter(prefix="/tr069", tags=["tr069-webhooks"])
 
 
 class InformPayload(BaseModel):
@@ -41,8 +43,8 @@ def receive_inform(
     GenieACS can be configured to POST to this endpoint on device inform.
     The payload contains device identity and event information.
     """
-    ingestor = create_acs_event_ingestor()
-    return ingestor.receive_inform(
+    acs = create_acs_service()
+    return acs.receive_inform(
         db,
         serial_number=payload.serial_number,
         device_id_raw=payload.device_id,
@@ -61,3 +63,22 @@ def receive_inform(
         product_class=payload.product_class,
         acs_server_id=payload.acs_server_id,
     )
+
+
+@router.get("/auth")
+def get_device_credentials(
+    serial_number: str = Query(..., description="Device serial number"),
+    type: Literal["connection_request", "cpe_auth"] = Query(
+        ..., description="Credential type: connection_request or cpe_auth"
+    ),
+    db: Session = Depends(get_db),
+) -> dict[str, str | None]:
+    """Get credentials for a device.
+
+    Called by GenieACS auth extension to fetch per-device credentials.
+    Returns username/password for the specified credential type.
+
+    - connection_request: Credentials ACS uses to authenticate to CPE
+    - cpe_auth: Credentials CPE uses to authenticate to ACS
+    """
+    return tr069_auth.get_device_credentials(db, serial_number, type)

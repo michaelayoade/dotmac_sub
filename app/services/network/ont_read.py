@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.ont_action_common import get_ont_strict_or_error
-from app.services.network.ont_status import resolve_ont_status_for_model
+from app.services.network.ont_status import (
+    resolve_effective_last_seen_at,
+    resolve_ont_status_for_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,9 @@ class OntReadFacade:
             "effective_status": effective_status,
             "effective_status_source": status_snapshot.effective_status_source.value,
             "acs_last_inform_at": status_snapshot.acs_last_inform_at,
+            "last_seen_at": resolve_effective_last_seen_at(
+                ont, acs_last_inform_at=status_snapshot.acs_last_inform_at
+            ),
             "name": ont.name,
             # Signal
             "olt_rx_signal_dbm": ont.olt_rx_signal_dbm,
@@ -128,10 +134,9 @@ class OntReadFacade:
         # Live TR-069 query (optional, slower)
         if live_query:
             try:
-                from app.services.acs_client import create_acs_state_reader
+                from app.services.acs_service import create_acs_service
 
-                reader = create_acs_state_reader()
-                summary = reader.get_device_summary(
+                summary = create_acs_service().get_device_summary(
                     db, ont_id, persist_observed_runtime=True
                 )
                 if summary and summary.available:
@@ -187,9 +192,9 @@ class OntReadFacade:
     @staticmethod
     def get_tr069_summary(db: Session, ont_id: str) -> dict[str, Any]:
         """Read the ACS/TR-069 summary through the ACS state adapter."""
-        from app.services.acs_client import create_acs_state_reader
+        from app.services.acs_service import create_acs_service
 
-        summary = create_acs_state_reader().get_device_summary(db, ont_id)
+        summary = create_acs_service().get_device_summary(db, ont_id)
         if not summary or not summary.available:
             return {"available": False, "error": summary.error if summary else None}
         return asdict(summary)
@@ -197,16 +202,16 @@ class OntReadFacade:
     @staticmethod
     def get_lan_hosts(db: Session, ont_id: str) -> list[dict[str, Any]]:
         """Read LAN hosts through the ACS state adapter."""
-        from app.services.acs_client import create_acs_state_reader
+        from app.services.acs_service import create_acs_service
 
-        return create_acs_state_reader().get_lan_hosts(db, ont_id)
+        return create_acs_service().get_lan_hosts(db, ont_id)
 
     @staticmethod
     def get_ethernet_ports(db: Session, ont_id: str) -> list[dict[str, Any]]:
         """Read Ethernet ports through the ACS state adapter."""
-        from app.services.acs_client import create_acs_state_reader
+        from app.services.acs_service import create_acs_service
 
-        return create_acs_state_reader().get_ethernet_ports(db, ont_id)
+        return create_acs_service().get_ethernet_ports(db, ont_id)
 
     @staticmethod
     def get_vlan_chain_status(db: Session, ont_id: str) -> dict[str, Any]:
