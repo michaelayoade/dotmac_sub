@@ -17,10 +17,8 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.config import settings
-from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.models.tr069 import Tr069AcsServer
-from app.services import settings_spec
 from app.services.credential_crypto import decrypt_credential
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_inventory import get_olt_or_none
@@ -39,63 +37,18 @@ def resolve_acs_server_for_ont(
     *,
     olt: OLTDevice | None = None,
 ) -> Tr069AcsServer | None:
-    """Resolve which ACS server an ONT should use.
+    """Resolve the desired ACS server for an ONT."""
+    from app.services.network.acs_resolution import resolve_acs_for_ont
 
-    Priority order (first match wins):
-    1. ONT-specific override (ont.tr069_acs_server_id)
-    2. OLT default (olt.tr069_acs_server_id)
-    3. System default ACS (from domain settings)
-    4. Single active ACS server (if only one exists)
-
-    This function documents the dual FK priority: ONT override > OLT default.
-    Use this whenever you need to determine which ACS server applies to an ONT.
-
-    Args:
-        db: Database session
-        ont: ONT unit to resolve ACS for
-        olt: Optional OLT device (will be looked up from ont.olt_device_id if not provided)
-
-    Returns:
-        The ACS server to use, or None if no valid server can be resolved.
-    """
-    # Priority 1: ONT-specific override
-    ont_acs_id = getattr(ont, "tr069_acs_server_id", None)
-    if ont_acs_id:
-        server = db.get(Tr069AcsServer, str(ont_acs_id))
-        if server and server.is_active and server.base_url:
-            logger.debug(
-                "Resolved ACS for ONT %s: using ONT-specific override %s",
-                getattr(ont, "id", "?"),
-                server.name,
-            )
-            return server
-
-    # Priority 2: OLT default
-    if olt is None:
-        olt_device_id = getattr(ont, "olt_device_id", None)
-        if olt_device_id:
-            olt = db.get(OLTDevice, str(olt_device_id))
-
-    if olt is not None:
-        server = resolve_operational_acs_server(db, olt=olt)
-        if server:
-            logger.debug(
-                "Resolved ACS for ONT %s: using OLT %s default %s",
-                getattr(ont, "id", "?"),
-                olt.name,
-                server.name,
-            )
-            return server
-
-    # Priority 3 & 4: System default (handled by resolve_operational_acs_server with no OLT)
-    server = resolve_operational_acs_server(db)
-    if server:
+    resolution = resolve_acs_for_ont(db, ont, olt=olt, allow_single_active=True)
+    if resolution.server is not None:
         logger.debug(
-            "Resolved ACS for ONT %s: using system default %s",
+            "Resolved ACS for ONT %s via %s: %s",
             getattr(ont, "id", "?"),
-            server.name,
+            resolution.source,
+            resolution.server.name,
         )
-    return server
+    return resolution.server
 
 
 def resolve_operational_acs_server(
@@ -104,38 +57,9 @@ def resolve_operational_acs_server(
     olt: OLTDevice | None = None,
 ) -> Tr069AcsServer | None:
     """Resolve the single ACS operators should use on OLT/ONT pages."""
-    if olt is not None and getattr(olt, "tr069_acs_server", None) is not None:
-        server = olt.tr069_acs_server
-        if server and server.is_active and server.base_url:
-            return server
+    from app.services.network.acs_resolution import resolve_operational_acs
 
-    if olt is not None and olt.tr069_acs_server_id:
-        server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
-        if server and server.is_active and server.base_url:
-            return server
-
-    default_server_id = settings_spec.resolve_value(
-        db, SettingDomain.tr069, "default_acs_server_id"
-    )
-    if default_server_id:
-        server = db.get(Tr069AcsServer, str(default_server_id))
-        if server and server.is_active and server.base_url:
-            return server
-
-    active_servers = list(
-        db.scalars(
-            select(Tr069AcsServer)
-            .where(Tr069AcsServer.is_active.is_(True))
-            .order_by(Tr069AcsServer.name)
-        ).all()
-    )
-    if len(active_servers) == 1:
-        return active_servers[0]
-    if active_servers:
-        logger.warning(
-            "Multiple active ACS servers are configured without an OLT link or default ACS setting; refusing ambiguous fallback."
-        )
-    return None
+    return resolve_operational_acs(db, olt=olt, allow_single_active=True).server
 
 
 def apply_default_acs_server(

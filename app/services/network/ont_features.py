@@ -200,8 +200,10 @@ class OntFeatureService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
+        from app.services import tr069 as tr069_service
+
         # Require ACS connectivity
-        if not getattr(ont, "tr069_acs_server_id", None):
+        if not tr069_service.resolve_acs_server_for_ont(db, ont=ont):
             return ActionResult(
                 success=False,
                 message="ONT has no ACS server configured. Cannot push remote access config.",
@@ -296,8 +298,10 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
+        from app.services import tr069 as tr069_service
+
         # Require ACS connectivity
-        if not getattr(ont, "tr069_acs_server_id", None):
+        if not tr069_service.resolve_acs_server_for_ont(db, ont=ont):
             return ActionResult(
                 success=False,
                 message="ONT has no ACS server configured. Cannot push web credentials.",

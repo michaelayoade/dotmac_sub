@@ -342,9 +342,10 @@ class OLTDevices(CRUDManager[OLTDevice]):
 
     @staticmethod
     def propagate_acs_to_onts(db: Session, olt_id: str) -> dict[str, int]:
-        """Propagate OLT's ACS server to all its unbound ONTs.
+        """Align active TR-069 device rows to the OLT ACS server.
 
-        Returns stats dict with updated, already_bound, total counts.
+        ONTs inherit the OLT ACS by resolution; this does not write inherited
+        values back onto ``OntUnit.tr069_acs_server_id``.
         """
         olt = db.get(OLTDevice, olt_id)
         if not olt:
@@ -363,15 +364,26 @@ class OLTDevices(CRUDManager[OLTDevice]):
         total = len(onts)
         updated = 0
         already_bound = 0
+        skipped = 0
+        from app.services import tr069 as tr069_service
+
         for ont in onts:
             if getattr(ont, "tr069_acs_server_id", None) == acs_id:
                 already_bound += 1
             else:
-                ont.tr069_acs_server_id = acs_id
-                updated += 1
+                changed = tr069_service.sync_ont_acs_server(db, ont, acs_id)
+                if changed:
+                    updated += changed
+                else:
+                    skipped += 1
         if updated:
             db.commit()
-        return {"updated": updated, "already_bound": already_bound, "total": total}
+        return {
+            "updated": updated,
+            "already_bound": already_bound,
+            "skipped": skipped,
+            "total": total,
+        }
 
     @staticmethod
     def backfill_pon_ports(db: Session, olt_id: str) -> dict[str, int]:

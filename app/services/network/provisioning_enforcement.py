@@ -17,6 +17,7 @@ that have an ``AccessCredential``-backed store should wire up
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -28,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.network import OLTDevice, OntUnit
+from app.models.tr069 import Tr069CpeDevice
 from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.provisioning_settings import get_stale_runtime_hours
@@ -121,25 +123,35 @@ class ProvisioningEnforcement:
             effective_pppoe_username = values.get("pppoe_username")
             effective_wifi_ssid = values.get("wifi_ssid")
             effective_mgmt_ip = values.get("mgmt_ip_address")
+            effective_acs_server_id = values.get("tr069_acs_server_id")
+            has_observed_tr069_link = False
+            if effective_acs_server_id is not None:
+                has_observed_tr069_link = (
+                    db.query(Tr069CpeDevice.id)
+                    .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+                    .filter(Tr069CpeDevice.is_active.is_(True))
+                    .filter(Tr069CpeDevice.acs_server_id == effective_acs_server_id)
+                    .filter(Tr069CpeDevice.genieacs_device_id.isnot(None))
+                    .first()
+                    is not None
+                )
 
             if (
                 effective_pppoe_username not in (None, "")
-                and getattr(ont, "tr069_acs_server_id", None) is None
-                and getattr(getattr(ont, "olt_device", None), "tr069_acs_server_id", None)
-                is not None
+                and effective_acs_server_id is not None
+                and not has_observed_tr069_link
             ):
                 gaps["no_acs_binding"].append(str(ont.id))
 
             if (
                 effective_pppoe_username not in (None, "")
-                and getattr(getattr(ont, "olt_device", None), "tr069_acs_server_id", None)
-                is None
+                and effective_acs_server_id is None
             ):
                 gaps["no_acs_on_olt"].append(str(ont.id))
 
             if (
                 effective_pppoe_username not in (None, "")
-                and getattr(ont, "tr069_acs_server_id", None) is not None
+                and effective_acs_server_id is not None
                 and getattr(ont, "observed_wan_ip", None) is None
                 and getattr(ont, "effective_status", None) == OnuOnlineStatus.online
             ):
@@ -147,7 +159,7 @@ class ProvisioningEnforcement:
 
             if (
                 effective_wifi_ssid not in (None, "")
-                and getattr(ont, "tr069_acs_server_id", None) is not None
+                and effective_acs_server_id is not None
                 and getattr(ont, "effective_status", None) == OnuOnlineStatus.online
             ):
                 gaps["wifi_pending_sync"].append(str(ont.id))
@@ -186,9 +198,10 @@ class ProvisioningEnforcement:
         db: Session,
         ont_ids: list[str],
     ) -> dict[str, int]:
-        """Propagate OLT's ACS server to specified ONTs.
+        """Align linked TR-069 rows to the resolved ACS for specified ONTs.
 
-        Only updates ONTs whose OLT actually has an ACS server configured.
+        ONTs inherit ACS from their OLT/default unless they have an explicit
+        override, so this no longer writes inherited ACS IDs onto OntUnit.
 
         Note:
             This method uses flush() to stage changes. Caller is responsible
@@ -207,8 +220,13 @@ class ProvisioningEnforcement:
             if not acs_server_id:
                 skipped += 1
                 continue
-            ont.tr069_acs_server_id = acs_server_id
-            updated += 1
+            changed = tr069_service.sync_ont_acs_server(
+                db, ont, uuid.UUID(str(acs_server_id))
+            )
+            if changed:
+                updated += changed
+            else:
+                skipped += 1
 
         if updated:
             db.flush()

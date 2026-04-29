@@ -406,8 +406,6 @@ def create_or_find_ont_for_authorized_serial(
                 existing.last_seen_at = datetime.now(UTC)
                 existing.last_sync_source = "olt_authorization"
                 existing.last_sync_at = datetime.now(UTC)
-            if existing.tr069_acs_server_id is None and olt is not None:
-                existing.tr069_acs_server_id = olt.tr069_acs_server_id
             apply_resolved_status_for_model(existing)
             db.flush()
             return str(existing.id), f"Using existing ONT record {existing.serial_number}."
@@ -460,7 +458,6 @@ def create_or_find_ont_for_authorized_serial(
         last_seen_at=datetime.now(UTC) if observed_online_status else None,
         last_sync_source="olt_authorization" if observed_online_status else None,
         last_sync_at=datetime.now(UTC) if observed_online_status else None,
-        tr069_acs_server_id=_resolve_acs_for_new_ont(db, olt_id),
         pon_type="gpon",
         name=display_serial,
         desired_config={},

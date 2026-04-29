@@ -206,6 +206,10 @@ def resolve_genieacs_with_reason(
     if not getattr(ont, "serial_number", None):
         return None, "ONT serial number is missing."
 
+    from app.services.network.acs_resolution import resolve_acs_for_ont
+
+    acs_resolution = resolve_acs_for_ont(db, ont)
+
     # 1) Primary: Linked TR-069 device with genieacs_device_id
     linked_stmt = (
         select(Tr069CpeDevice)
@@ -217,49 +221,33 @@ def resolve_genieacs_with_reason(
     if linked and linked.acs_server_id and linked.genieacs_device_id:
         server = _resolve_server_by_id(db, str(linked.acs_server_id))
         if server:
-            client = create_acs_client(server.base_url)
-            return (
-                client,
-                linked.genieacs_device_id,
-            ), "resolved_via_linked_tr069_device"
+            desired_server = acs_resolution.server
+            if desired_server is None or linked.acs_server_id == desired_server.id:
+                client = create_acs_client(server.base_url)
+                return (
+                    client,
+                    linked.genieacs_device_id,
+                ), "resolved_via_linked_tr069_device"
+            logger.info(
+                "Ignoring stale linked TR-069 device for ONT %s: linked ACS %s, desired ACS %s",
+                ont.id,
+                linked.acs_server_id,
+                desired_server.id,
+            )
     if linked and linked.acs_server_id:
         logger.debug(
             "Linked TR-069 placeholder for ONT %s has no GenieACS device id yet",
             ont.id,
         )
 
-    # 2) Discovery: Search GenieACS for device by serial
-    # Try OLT's ACS server first, then default server
-    ont_server = None
-    if ont.tr069_acs_server_id:
-        ont_server = _resolve_server_by_id(db, str(ont.tr069_acs_server_id))
-    olt_server = None
-    olt = None
-    if ont.olt_device_id:
-        olt = db.get(OLTDevice, str(ont.olt_device_id))
-    if not olt:
-        olt = _resolve_olt_via_assignment(db, ont)
-    if olt and olt.tr069_acs_server_id:
-        olt_server = _resolve_server_by_id(db, str(olt.tr069_acs_server_id))
-
-    # Also check default ACS server
-    default_server_id = settings_spec.resolve_value(
-        db,
-        SettingDomain.tr069,
-        "default_acs_server_id",
-    )
-    default_server = (
-        _resolve_server_by_id(db, str(default_server_id)) if default_server_id else None
-    )
-
-    # Try servers in priority order
     servers_to_try = []
-    if ont_server:
-        servers_to_try.append((ont_server, "resolved_via_ont_acs"))
-    if olt_server:
-        servers_to_try.append((olt_server, "resolved_via_olt_acs"))
-    if default_server and default_server not in {ont_server, olt_server}:
-        servers_to_try.append((default_server, "resolved_via_default_acs"))
+    if acs_resolution.server is not None:
+        reason = {
+            "ont_override": "resolved_via_ont_acs",
+            "olt_default": "resolved_via_olt_acs",
+            "system_default": "resolved_via_default_acs",
+        }.get(acs_resolution.source, f"resolved_via_{acs_resolution.source}")
+        servers_to_try.append((acs_resolution.server, reason))
 
     serial = str(getattr(ont, "serial_number", "") or "").strip()
     for server, reason in servers_to_try:

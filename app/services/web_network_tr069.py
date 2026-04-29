@@ -888,6 +888,11 @@ def create_ont_from_tr069_device(
         .first()
     )
     if existing:
+        if (
+            not getattr(existing, "olt_device_id", None)
+            and not getattr(existing, "tr069_acs_server_id", None)
+        ):
+            existing.tr069_acs_server_id = device.acs_server_id
         tr069_service.link_tr069_device_to_ont(
             db,
             device,
@@ -922,6 +927,7 @@ def create_ont_from_tr069_device(
         notes=f"Imported from TR-069 device {device.id}",
     )
     ont = network_service.ont_units.create(db=db, payload=payload)
+    ont.tr069_acs_server_id = device.acs_server_id
     tr069_service.link_tr069_device_to_ont(
         db,
         device,

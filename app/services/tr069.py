@@ -7,7 +7,7 @@ from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.network import CPEDevice
+from app.models.network import CPEDevice, OntUnit
 from app.models.tr069 import (
     Tr069AcsServer,
     Tr069CpeDevice,
@@ -56,45 +56,18 @@ logger = logging.getLogger(__name__)
 def resolve_acs_server_for_ont(
     db: Session,
     *,
-    ont: object | None = None,
+    ont: OntUnit | None = None,
     olt_id: str | None = None,
 ) -> str | None:
-    """Resolve the ACS server ID for an ONT using config pack.
+    """Resolve the desired ACS server ID for an ONT or OLT context."""
+    from app.services.network.acs_resolution import (
+        resolve_acs_for_ont,
+        resolve_operational_acs,
+    )
 
-    Uses OLT config pack as the source of truth for ACS server.
-    Priority:
-    1. ONT's desired_config.tr069.acs_server_id (if ont provided)
-    2. OLT config pack's tr069_acs_server_id
-
-    Args:
-        ont: OntUnit instance (optional, used for desired_config lookup)
-        olt_id: OLT ID to resolve config pack from (used if ont not provided
-                or ont.olt_device_id is None)
-
-    Returns the UUID string of the ACS server, or None if none available.
-    """
-    from app.services.network.olt_config_pack import resolve_olt_config_pack
-
-    # If ont provided, use resolve_effective_ont_config
     if ont is not None:
-        effective = resolve_effective_ont_config(db, ont)
-        acs_server_id = effective.get("tr069_acs_server_id")
-        if acs_server_id:
-            return str(acs_server_id)
-
-    # Fall back to config pack from olt_id
-    resolved_olt_id = olt_id
-    if resolved_olt_id is None and ont is not None:
-        resolved_olt_id = getattr(ont, "olt_device_id", None)
-        if resolved_olt_id:
-            resolved_olt_id = str(resolved_olt_id)
-
-    if resolved_olt_id:
-        config_pack = resolve_olt_config_pack(db, resolved_olt_id)
-        if config_pack and config_pack.tr069_acs_server_id:
-            return config_pack.tr069_acs_server_id
-
-    return None
+        return resolve_acs_for_ont(db, ont, olt_id=olt_id).server_id
+    return resolve_operational_acs(db, olt_id=olt_id).server_id
 
 
 def _job_extra(
@@ -528,21 +501,22 @@ def sync_ont_acs_server(
     db: Session,
     ont,  # type: ignore[no-untyped-def]
     acs_server_id,  # type: ignore[no-untyped-def]
-) -> None:
-    """Keep an ONT and its linked TR-069 rows aligned to one ACS server."""
-    if getattr(ont, "tr069_acs_server_id", None) != acs_server_id:
-        ont.tr069_acs_server_id = acs_server_id
+) -> int:
+    """Keep linked TR-069 rows aligned without rewriting ONT ACS policy."""
     if not acs_server_id:
-        return
+        return 0
     linked_devices = (
         db.query(Tr069CpeDevice)
         .filter(Tr069CpeDevice.ont_unit_id == ont.id)
         .filter(Tr069CpeDevice.is_active.is_(True))
         .all()
     )
+    updated = 0
     for linked_device in linked_devices:
         if linked_device.acs_server_id != acs_server_id:
             linked_device.acs_server_id = acs_server_id
+            updated += 1
+    return updated
 
 
 def refresh_ont_status_snapshot(
@@ -572,7 +546,11 @@ def link_tr069_device_to_ont(
     *,
     acs_server_id=None,  # type: ignore[no-untyped-def]
 ) -> None:
-    """Enforce a single active TR-069 link per ONT and align ACS assignment."""
+    """Enforce a single active TR-069 link per ONT.
+
+    The linked TR-069 row is observed ACS state. Linking must not rewrite the
+    ONT's desired ACS override/inheritance policy.
+    """
     if getattr(ont, "id", None) is None:
         raise ValueError("ONT must be persisted before linking TR-069 devices")
     previous_ont_id = getattr(device, "ont_unit_id", None)
@@ -594,14 +572,9 @@ def link_tr069_device_to_ont(
         db.flush()
 
     device.ont_unit_id = ont.id
-    target_acs_server_id = (
-        acs_server_id
-        or getattr(ont, "tr069_acs_server_id", None)
-        or device.acs_server_id
-    )
+    target_acs_server_id = acs_server_id or device.acs_server_id
     if target_acs_server_id and device.acs_server_id != target_acs_server_id:
         device.acs_server_id = target_acs_server_id
-    sync_ont_acs_server(db, ont, target_acs_server_id)
     db.flush()
     refresh_ont_status_snapshot(db, ont)
 
@@ -1125,7 +1098,6 @@ class CpeDevices(ListResponseMixin):
 
                 if ont:
                     previous_ont_id = cpe_dev.ont_unit_id
-                    previous_acs_id = ont.tr069_acs_server_id
                     link_tr069_device_to_ont(
                         db,
                         cpe_dev,
@@ -1134,7 +1106,7 @@ class CpeDevices(ListResponseMixin):
                     )
                     if previous_ont_id != ont.id:
                         explicit_links += 1
-                    if previous_acs_id != server.id:
+                    if cpe_dev.ont_unit_id == ont.id:
                         auto_linked += 1
                     # Update synthetic serials with real GenieACS serial
                     current = str(ont.serial_number or "")
@@ -1173,22 +1145,21 @@ class CpeDevices(ListResponseMixin):
             logger.warning("Auto-link ONTs after sync failed: %s", e)
             db.rollback()
 
-        local_ensure = CpeDevices.ensure_local_ont_devices(db, str(server.id))
-
         logger.info(
-            "GenieACS sync: created=%d, updated=%d, auto_linked=%d, local_created=%d, local_reactivated=%d",
+            "GenieACS sync: created=%d, updated=%d, auto_linked=%d",
             created,
             updated,
             auto_linked,
-            local_ensure["local_created"],
-            local_ensure["local_reactivated"],
         )
         return {
             "created": created,
             "updated": updated,
             "total": len(devices),
             "auto_linked": auto_linked,
-            **local_ensure,
+            "local_onts_checked": 0,
+            "local_created": 0,
+            "local_reactivated": 0,
+            "local_linked": 0,
         }
 
 
