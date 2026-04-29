@@ -75,7 +75,7 @@ class OntBatchItem(TypedDict):
     ont_id: int
     frame_slot: str
     port_num: str
-    online_status: str
+    olt_status: str
 
 
 class BatchStats(TypedDict):
@@ -548,7 +548,7 @@ def run(
             logger.info("  Pre-flight OK: %s", msg)
 
         # Find ALL ONTs on this OLT via active assignments
-        # (removed online_status filter — offline ONTs need rebind too,
+        # (removed olt_status filter — offline ONTs need rebind too,
         # the profile persists on OLT config and takes effect on next boot)
         stmt = (
             select(
@@ -556,7 +556,7 @@ def run(
                 OntUnit.board,
                 OntUnit.port,
                 OntUnit.external_id,
-                OntUnit.online_status,
+                OntUnit.olt_status,
             )
             .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
             .join(PonPort, PonPort.id == OntAssignment.pon_port_id)
@@ -580,7 +580,7 @@ def run(
             external_id = cast(str | None, r.external_id)
             board = cast(str | None, r.board)
             port = cast(str | None, r.port)
-            online_status = cast(str | None, r.online_status)
+            olt_status = cast(str | None, r.olt_status)
 
             ont_id = _parse_ont_id_from_external(external_id)
             fsp = _build_fsp(board, port)
@@ -595,7 +595,7 @@ def run(
                 totals["skipped"] += 1
                 continue
 
-            if online_status == "online":
+            if olt_status == "online":
                 online_count += 1
             else:
                 offline_count += 1
@@ -608,7 +608,7 @@ def run(
                     "ont_id": ont_id,
                     "frame_slot": f"{parts[0]}/{parts[1]}",
                     "port_num": parts[2],
-                    "online_status": online_status or "unknown",
+                    "olt_status": olt_status or "unknown",
                 }
             )
 
@@ -728,15 +728,15 @@ def verify_genieacs_informs(db: Session) -> dict[str, int | str]:
     logger.info("  Missing:  %d ONTs", len(missing_serials))
 
     if missing_serials:
-        # Check their online status in DB
+        # Check their OLT status in DB
         ont_rows = db.execute(
-            select(OntUnit.serial_number, OntUnit.online_status).where(
+            select(OntUnit.serial_number, OntUnit.olt_status).where(
                 OntUnit.serial_number.in_(missing_serials)
             )
         ).fetchall()
         status_counts: dict[str, int] = {}
         for r in ont_rows:
-            s = r.online_status or "unknown"
+            s = r.olt_status or "unknown"
             status_counts[s] = status_counts.get(s, 0) + 1
 
         logger.info("  Missing ONTs by status: %s", status_counts)

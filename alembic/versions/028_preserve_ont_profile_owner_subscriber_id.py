@@ -14,6 +14,7 @@ Create Date: 2026-04-17
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from typing import Any, cast
 
 from alembic import op
 
@@ -29,24 +30,26 @@ _UNIQUE_CONSTRAINT_NAME = "uq_ont_prov_profiles_owner_name"
 _FK_NAME = "ont_provisioning_profiles_owner_subscriber_id_fkey"
 
 
-def _get_column(inspector: sa.Inspector, column_name: str) -> dict | None:
+def _get_column(inspector: sa.Inspector, column_name: str) -> dict[str, Any] | None:
     for col in inspector.get_columns(_TABLE):
         if col["name"] == column_name:
-            return col
+            return cast(dict[str, Any], col)
     return None
 
 
-def _find_fk_for_column(inspector: sa.Inspector) -> dict | None:
+def _find_fk_for_column(inspector: sa.Inspector) -> dict[str, Any] | None:
     for fk in inspector.get_foreign_keys(_TABLE):
         if fk.get("constrained_columns") == [_COLUMN]:
-            return fk
+            return cast(dict[str, Any], fk)
     return None
 
 
-def _find_unique_constraint(inspector: sa.Inspector, columns: list[str]) -> dict | None:
+def _find_unique_constraint(
+    inspector: sa.Inspector, columns: list[str]
+) -> dict[str, Any] | None:
     for uc in inspector.get_unique_constraints(_TABLE):
         if uc.get("column_names") == columns:
-            return uc
+            return cast(dict[str, Any], uc)
     return None
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -155,6 +156,38 @@ def cleanup_olt_state_for_return(
     return True, completed, errors
 
 
+def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], list[str]]:
+    """Delete GenieACS device records linked to an ONT before inventory return."""
+    from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+    from app.services.genieacs_client import GenieACSError, create_genieacs_client
+
+    completed: list[str] = []
+    errors: list[str] = []
+    linked_devices = db.scalars(
+        select(Tr069CpeDevice).where(Tr069CpeDevice.ont_unit_id == ont.id)
+    ).all()
+    for device in linked_devices:
+        genieacs_device_id = str(getattr(device, "genieacs_device_id", "") or "").strip()
+        if not genieacs_device_id:
+            continue
+        server = db.get(Tr069AcsServer, device.acs_server_id)
+        if server is None or not getattr(server, "base_url", None):
+            errors.append(
+                f"Cannot delete ACS device {genieacs_device_id}: ACS server is missing."
+            )
+            return False, completed, errors
+        try:
+            create_genieacs_client(server.base_url).delete_device(genieacs_device_id)
+            completed.append(f"Deleted ACS device {genieacs_device_id}")
+        except GenieACSError as exc:
+            if "404" in str(exc):
+                completed.append(f"ACS device {genieacs_device_id} was already absent")
+                continue
+            errors.append(f"Failed to delete ACS device {genieacs_device_id}: {exc}")
+            return False, completed, errors
+    return True, completed, errors
+
+
 def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") -> None:
     """Clear desired-state and runtime cache for a reusable ONT.
 
@@ -249,6 +282,13 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                         f"Return to inventory stopped before local cleanup: {details}."
                     )
 
+            acs_ok, acs_completed, acs_errors = cleanup_acs_state_for_return(db, ont)
+            if not acs_ok:
+                details = ", ".join(acs_completed + acs_errors)
+                raise _ReturnToInventoryStopped(
+                    f"Return to inventory stopped before local cleanup: {details}."
+                )
+
             for assignment in active_assignments:
                 assignment.active = False
                 assignment.released_at = datetime.now(UTC)
@@ -308,6 +348,8 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
         )
     if cpe is not None:
         parts.append("CPE moved to inventory")
+    if "acs_completed" in locals() and acs_completed:
+        parts.append("ACS device state removed")
     parts.append("identity cleared for rediscovery")
     parts.append("service state cleared")
 

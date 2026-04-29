@@ -35,9 +35,7 @@ from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import log_network_action_result
 from app.services.network.olt_inventory import active_olt_scan_targets, get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
-from app.services.network.ont_authorization import (
-    authorize_autofind_ont_and_provision_network_audited,
-)
+from app.services.network.olt_read_cache import olt_cache
 from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.olt_detail_adapter import olt_detail_adapter
 from app.web.request_parsing import parse_form_data_sync
@@ -1103,6 +1101,9 @@ def olt_autofind_scan(
 
     If auto_authorize=True, automatically authorize all discovered ONTs.
     """
+    # Invalidate cache to ensure fresh scan when user explicitly clicks "Scan Now"
+    olt_cache.invalidate(olt_id, "autofind")
+
     ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
         db, olt_id, request=request
     )
@@ -1128,17 +1129,14 @@ def olt_autofind_scan(
             actor = getattr(getattr(request.state, "user", None), "email", None)
             for entry in entries:
                 try:
-                    auth_result = authorize_autofind_ont_and_provision_network_audited(
+                    auth_ok, auth_msg, ont_unit_id = olt_operations_service.authorize_ont(
                         db,
-                        olt_id,
-                        entry.fsp,
-                        entry.serial_number,
+                        olt_id=olt_id,
+                        fsp=entry.fsp,
+                        serial_number=entry.serial_number,
                         force_reauthorize=False,
                         request=request,
                     )
-                    auth_ok = auth_result.success
-                    auth_msg = auth_result.message
-                    ont_unit_id = auth_result.ont_unit_id
                     auth_results.append({
                         "serial_number": entry.serial_number,
                         "fsp": entry.fsp,
@@ -1146,7 +1144,7 @@ def olt_autofind_scan(
                         "message": auth_msg,
                         "ont_id": ont_unit_id,
                     })
-                    # authorize_autofind_ont_and_provision_network_audited commits on success
+                    # olt_operations_service.authorize_ont commits on success
                 except Exception as exc:
                     auth_results.append({
                         "serial_number": entry.serial_number,
@@ -1496,18 +1494,15 @@ def olt_authorize_ont(
     effective_preset_id = preset_id.strip() if preset_id else None
     try:
         # Run authorization synchronously - immediate success or failure
-        auth_result = authorize_autofind_ont_and_provision_network_audited(
+        auth_ok, auth_msg, ont_unit_id = olt_operations_service.authorize_ont(
             db,
-            olt_id,
-            fsp,
-            serial_number,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
             force_reauthorize=force,
             preset_id=effective_preset_id,
             request=request,
         )
-        auth_ok = auth_result.success
-        auth_msg = auth_result.message
-        ont_unit_id = auth_result.ont_unit_id
     except Exception as exc:
         db.rollback()
         logger.error(

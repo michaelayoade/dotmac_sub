@@ -121,6 +121,7 @@
             <button
                 hx-post="/admin/network/onts/{{ ont_id }}/return-to-inventory"
                 hx-swap="none"
+                hx-headers='{"X-CSRF-Token": "{{ request.state.csrf_token }}"}'
                 hx-confirm="Return this ONT to inventory? This will clear subscriber assignment and reset provisioning status."
                 data-network-action
                 data-loading-label="Returning to inventory..."

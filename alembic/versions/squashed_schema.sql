@@ -1233,6 +1233,7 @@ CREATE TYPE public.networkoperationstatus AS ENUM (
     'running',
     'waiting',
     'succeeded',
+    'warning',
     'failed',
     'canceled'
 );
@@ -4883,9 +4884,14 @@ CREATE TABLE public.ont_units (
     ont_voltage_v double precision,
     ont_bias_current_ma double precision,
     signal_updated_at timestamp with time zone,
-    online_status public.onuonlinestatus DEFAULT 'unknown'::public.onuonlinestatus NOT NULL,
+    olt_status public.onuonlinestatus DEFAULT 'unknown'::public.onuonlinestatus NOT NULL,
+    olt_status_seen_at timestamp with time zone,
     last_seen_at timestamp with time zone,
     offline_reason public.onuofflinereason,
+    acs_last_inform_at timestamp with time zone,
+    effective_status public.onuonlinestatus DEFAULT 'unknown'::public.onuonlinestatus NOT NULL,
+    effective_status_source public.ontstatussource DEFAULT 'derived'::public.ontstatussource NOT NULL,
+    consecutive_offline_polls integer DEFAULT 0 NOT NULL,
     zone_id uuid,
     onu_type_id uuid,
     olt_device_id uuid,

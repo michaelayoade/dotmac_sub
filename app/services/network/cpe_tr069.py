@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice
 from app.models.tr069 import Tr069CpeDevice
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network._common import decode_huawei_hex_serial, normalize_mac_address
 from app.services.network._resolve import resolve_genieacs_for_cpe
 from app.services.network.ont_tr069 import (

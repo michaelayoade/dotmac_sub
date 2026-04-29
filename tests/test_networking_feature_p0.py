@@ -247,7 +247,7 @@ def test_nas_index_renders_status_cards_with_non_active_buckets(
                 "status": None,
                 "pop_site_id": None,
                 "partner_org_id": None,
-                "online_status": None,
+                "olt_status": None,
                 "search": None,
                 "refresh": None,
             },
@@ -1639,7 +1639,7 @@ def test_network_map_context_uses_effective_ont_status(db_session):
         use_gps=True,
         gps_latitude=9.07,
         gps_longitude=7.51,
-        online_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.offline,
         effective_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)

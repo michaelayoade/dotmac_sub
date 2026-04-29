@@ -53,8 +53,8 @@ def _alter_columns(direction: str) -> None:
         if column_name not in columns:
             continue
         if direction == "upgrade":
-            existing_length = old_length
-            target_length = new_length
+            existing_length: int | None = old_length
+            target_length: int | None = new_length
         else:
             existing_length = new_length
             target_length = old_length

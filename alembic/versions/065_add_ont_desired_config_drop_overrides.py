@@ -18,7 +18,7 @@ branch_labels = None
 depends_on = None
 
 
-FIELD_PATHS = {
+FIELD_PATHS: dict[str, tuple[str, ...]] = {
     "config_method": ("device", "config_method"),
     "onu_mode": ("device", "onu_mode"),
     "ip_protocol": ("wan", "ip_protocol"),

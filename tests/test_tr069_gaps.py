@@ -204,7 +204,7 @@ class TestInformWebhook:
         assert parts[2] == "SERIAL123"
 
     def test_receive_inform_updates_linked_ont_last_seen_at(self, db_session) -> None:
-        from app.models.network import OntAcsStatus, OntUnit
+        from app.models.network import OntStatusSource, OntUnit
         from app.services import tr069 as tr069_service
 
         server = Tr069AcsServer(
@@ -238,8 +238,8 @@ class TestInformWebhook:
         db_session.refresh(ont)
         db_session.refresh(device)
         assert device.last_inform_at is not None
-        assert ont.acs_status == OntAcsStatus.online
         assert ont.acs_last_inform_at == device.last_inform_at
+        assert ont.effective_status_source == OntStatusSource.acs
         assert ont.last_seen_at == device.last_inform_at
 
 
@@ -285,7 +285,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": last_inform_at.isoformat(),
         }
-        with patch("app.services.tr069.create_acs_client") as MockClient:
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -346,7 +346,7 @@ class TestAutoLinkOnts:
             serial_number="E2E-OLT-ONT-ACS-001",
             olt_device=olt,
             is_active=True,
-            online_status=OnuOnlineStatus.unknown,
+            olt_status=OnuOnlineStatus.unknown,
         )
         db_session.add_all([olt, ont])
         db_session.commit()
@@ -361,7 +361,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": sync_last_inform.isoformat(),
         }
-        with patch("app.services.tr069.create_acs_client") as MockClient:
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -485,7 +485,7 @@ class TestAutoLinkOnts:
                 pon_port_id=None,
                 pon_hint=None,
                 zone_id=None,
-                online_status=None,
+                olt_status=None,
                 authorization="authorized",
                 signal_quality=None,
                 vendor=None,
@@ -572,7 +572,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": datetime.now(UTC).isoformat(),
         }
-        with patch("app.services.tr069.create_acs_client") as MockClient:
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -629,7 +629,7 @@ class TestAutoLinkOnts:
         db_session.add(device)
         db_session.commit()
 
-        with patch("app.services.tr069.create_acs_client") as MockClient:
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -678,7 +678,7 @@ class TestAutoLinkOnts:
         db_session.add(ont)
         db_session.commit()
 
-        with patch("app.services.tr069.create_acs_client") as MockClient:
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -739,7 +739,7 @@ class TestAutoLinkOnts:
             },
             "_lastInform": datetime.now(UTC).isoformat(),
         }
-        with patch("app.services.tr069.create_acs_client") as MockClient:
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
             instance.parse_device_id.return_value = (
@@ -1071,7 +1071,7 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "HWTC7D4733C3"},
         }
 
-        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [mock_device]]
             instance.extract_parameter_value.side_effect = lambda device, path: None
@@ -1115,7 +1115,7 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "485754437D4733C3"},
         }
 
-        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [], [mock_device]]
 
@@ -1160,7 +1160,7 @@ class TestDeviceResolution:
             },
         }
 
-        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
 
@@ -1208,7 +1208,7 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -1252,7 +1252,7 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
             result, reason = resolve_genieacs_with_reason(db_session, ont)
 
         assert result is not None
@@ -1305,7 +1305,7 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "48575443A31A3673"},
         }
 
-        with patch("app.services.network._resolve.create_acs_client") as MockClient:
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [], [mock_device]]
 

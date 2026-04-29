@@ -113,8 +113,8 @@ def test_download_firmware_records_provisioning_event(
 
     monkeypatch.setattr(
         ont_provision_steps,
-        "_acs_config_writer",
-        lambda: FakeWriter(),
+        "genieacs_service",
+        FakeWriter(),
     )
 
     result = ont_provision_steps.download_firmware(

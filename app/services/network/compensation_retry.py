@@ -206,7 +206,7 @@ def retry_compensation(
                 failure.resolved_at = datetime.now(UTC)
                 failure.resolved_by = resolved_by
                 failure.resolution_notes = "Successfully retried"
-                db.flush()
+                db.commit()
                 logger.info(
                     "Compensation failure %s resolved via retry",
                     failure_id,
@@ -217,7 +217,7 @@ def retry_compensation(
                 failure.failure_count += 1
                 failure.last_attempted_at = datetime.now(UTC)
                 failure.error_message = "; ".join(error_messages)
-                db.flush()
+                db.commit()
                 return False, f"Retry failed: {'; '.join(error_messages)}"
 
     except Exception as exc:
@@ -231,7 +231,7 @@ def retry_compensation(
         failure.failure_count += 1
         failure.last_attempted_at = datetime.now(UTC)
         failure.error_message = str(exc)
-        db.flush()
+        db.commit()
         return False, f"Retry error: {exc}"
 
 
@@ -268,13 +268,13 @@ def _retry_service_layer_compensation(
             failure.resolved_at = datetime.now(UTC)
             failure.resolved_by = resolved_by
             failure.resolution_notes = "Successfully retried via service layer"
-            db.flush()
+            db.commit()
             return True, result.message
 
         failure.failure_count += 1
         failure.last_attempted_at = datetime.now(UTC)
         failure.error_message = result.message
-        db.flush()
+        db.commit()
         return False, result.message
 
     return False, f"No service-layer retry handler for step {failure.step_name}"
@@ -312,7 +312,7 @@ def mark_abandoned(
     failure.resolved_at = datetime.now(UTC)
     failure.resolved_by = resolved_by
     failure.resolution_notes = notes or "Marked as abandoned"
-    db.flush()
+    db.commit()
 
     logger.info(
         "Compensation failure %s marked as abandoned by %s",
@@ -353,7 +353,7 @@ def mark_resolved(
     failure.resolved_at = datetime.now(UTC)
     failure.resolved_by = resolved_by
     failure.resolution_notes = notes or "Manually resolved"
-    db.flush()
+    db.commit()
 
     logger.info(
         "Compensation failure %s manually resolved by %s",
@@ -390,6 +390,9 @@ def retry_due_compensations(
         "errors": [],
     }
     errors: list[dict[str, str]] = []
+    retried = 0
+    resolved = 0
+    still_pending = 0
 
     for failure in due_failures:
         success, message = retry_compensation(
@@ -397,13 +400,16 @@ def retry_due_compensations(
             failure.id,
             resolved_by=resolved_by,
         )
-        summary["retried"] = int(summary["retried"]) + 1
+        retried += 1
         refreshed = db.get(CompensationFailure, failure.id)
         if success and refreshed is not None:
-            summary["resolved"] = int(summary["resolved"]) + 1
+            resolved += 1
             continue
-        summary["still_pending"] = int(summary["still_pending"]) + 1
+        still_pending += 1
         errors.append({"failure_id": str(failure.id), "message": message})
 
+    summary["retried"] = retried
+    summary["resolved"] = resolved
+    summary["still_pending"] = still_pending
     summary["errors"] = errors
     return summary

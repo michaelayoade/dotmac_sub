@@ -278,11 +278,13 @@ def _validate_olt_vendor_model(olt: object, report: OltReadinessReport) -> None:
 def _test_ssh_connectivity(olt: object) -> bool | None:
     """Test SSH connectivity to OLT."""
     try:
-        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+        from app.models.network import OLTDevice
+        from app.services.network.olt_ssh import test_connection
 
-        adapter = get_protocol_adapter(olt)
-        result = adapter.test_connection()
-        return result.success
+        if not isinstance(olt, OLTDevice):
+            return False
+        ok, _message, _prompt = test_connection(olt)
+        return ok
     except Exception as exc:
         logger.warning("SSH connectivity test failed for OLT %s: %s", getattr(olt, "name", "?"), exc)
         return False

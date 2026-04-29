@@ -6,11 +6,8 @@ import importlib
 from typing import Any
 
 _LAZY_MODULES = {
-    "acs_config_adapter",
-    "acs_event_adapter",
-    "acs_service",
-    "acs_service_intent_adapter",
-    "acs_state_adapter",
+    "genieacs_service",
+    "genieacs_service_intent",
     "audit_adapter",
     "billing_adapter",
     "contact",

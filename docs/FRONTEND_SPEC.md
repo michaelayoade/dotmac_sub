@@ -588,7 +588,7 @@ This is the **richest detail page** in the system:
     "accounts": list[Account],
     "subscriptions": list[Subscription],        # active, max 10
     "all_subscriptions": list[Subscription],    # all statuses
-    "online_status": dict[str, bool],           # subscription_id → is_online
+    "service_online_status": dict[str, bool],           # subscription_id → is_online
     "invoices": list[Invoice],
     "payments": list[Payment],
     "dunning_cases": list[DunningCase],

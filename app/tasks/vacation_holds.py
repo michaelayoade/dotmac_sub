@@ -11,6 +11,7 @@ from app.services.account_lifecycle import restore_subscription
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 
 @celery_app.task(name="app.tasks.vacation_holds.resume_expired_holds")
@@ -23,7 +24,8 @@ def resume_expired_holds() -> dict:
     Should be scheduled to run periodically (e.g., every hour or daily).
     """
     logger.info("Starting resume_expired_holds")
-    with db_session_adapter.session() as session:
+    session = SessionLocal()
+    try:
         now = datetime.now(UTC)
 
         # Find expired vacation holds
@@ -83,3 +85,8 @@ def resume_expired_holds() -> dict:
             "resumed": resumed,
             "failed": failed,
         }
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

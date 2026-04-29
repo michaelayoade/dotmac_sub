@@ -35,6 +35,7 @@ class NetworkOperationStatus(enum.Enum):
     running = "running"
     waiting = "waiting"  # Waiting on external system (device inform, reboot)
     succeeded = "succeeded"
+    warning = "warning"
     failed = "failed"
     canceled = "canceled"
 

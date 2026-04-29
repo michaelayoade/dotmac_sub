@@ -94,12 +94,17 @@ def _values_from_assignment(
     # wifi_enabled: explicit setting takes precedence, else True if SSID is set
     wifi_enabled = asn_wifi_enabled if asn_wifi_enabled is not None else (True if asn_wifi_ssid else None)
 
+    # Extract VLAN info (both ID and tag for compatibility)
+    wan_vlan = config_pack.internet_vlan if config_pack else None
+    mgmt_vlan = config_pack.management_vlan if config_pack else None
+
     return {
         "config_method": None,
         "onu_mode": asn_wan_mode,
         "ip_protocol": None,
         "wan_mode": asn_ip_mode,
-        "wan_vlan": config_pack.internet_vlan.tag if config_pack and config_pack.internet_vlan else None,
+        "wan_vlan": wan_vlan.tag if wan_vlan else None,
+        "wan_vlan_id": str(wan_vlan.id) if wan_vlan and wan_vlan.id else None,
         "pppoe_username": asn_pppoe_username,
         "pppoe_password": asn_pppoe_password,
         "wan_static_ip": asn_static_ip,
@@ -109,7 +114,8 @@ def _values_from_assignment(
         "wan_instance_index": 1,
         "wan_gem_index": config_pack.internet_gem_index if config_pack else None,
         "mgmt_ip_mode": asn_mgmt_ip_mode,
-        "mgmt_vlan": config_pack.management_vlan.tag if config_pack and config_pack.management_vlan else None,
+        "mgmt_vlan": mgmt_vlan.tag if mgmt_vlan else None,
+        "mgmt_vlan_id": str(mgmt_vlan.id) if mgmt_vlan and mgmt_vlan.id else None,
         "mgmt_ip_address": asn_mgmt_ip_address,
         "mgmt_subnet": asn_mgmt_subnet,
         "mgmt_gateway": asn_mgmt_gateway,

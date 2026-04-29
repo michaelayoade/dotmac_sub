@@ -11,7 +11,7 @@ from app.schemas.network import (
 )
 from app.services import network as network_service
 from app.services.network.ont_serials import looks_synthetic_ont_serial
-from app.services.network.ont_status_transitions import set_authorization_status
+from app.services.network.ont_status import set_authorization_status
 
 
 def test_manual_pon_port_create_rejects_card_from_other_olt(db_session):

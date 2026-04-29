@@ -132,7 +132,7 @@ def test_targeted_snmp_sync_updates_effective_status(db_session, monkeypatch) ->
         serial_number="ONT-TARGETED-STATUS",
         olt_device_id=olt.id,
         external_id="3",
-        online_status=OnuOnlineStatus.unknown,
+        olt_status=OnuOnlineStatus.unknown,
     )
     db_session.add(ont)
     db_session.commit()
@@ -165,7 +165,7 @@ def test_targeted_snmp_sync_updates_effective_status(db_session, monkeypatch) ->
 
     assert ok, message
     db_session.refresh(ont)
-    assert ont.online_status == OnuOnlineStatus.online
+    assert ont.olt_status == OnuOnlineStatus.online
     assert ont.effective_status == OnuOnlineStatus.online
     assert ont.effective_status_source == OntStatusSource.olt
 
@@ -394,7 +394,7 @@ def test_sync_impl_clears_stale_offline_reason_when_status_becomes_unknown(
         serial_number="ONT-UNKNOWN-1",
         olt_device_id=None,
         external_id="zte:99.7",
-        online_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.offline,
         offline_reason=OnuOfflineReason.los,
     )
     db_session.add(ont)
@@ -438,7 +438,7 @@ def test_sync_impl_clears_stale_offline_reason_when_status_becomes_unknown(
 
     db_session.refresh(ont)
     assert ok is True
-    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.olt_status == OnuOnlineStatus.unknown
     assert ont.offline_reason is None
 
 

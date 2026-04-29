@@ -18,7 +18,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.network import CPEDevice
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
@@ -653,7 +653,7 @@ def _request_lan_refresh(client: Any, device_id: str, root: str) -> None:
         return
     path = _LAN_CONFIG_PATHS[root]["refresh"]
     try:
-        refresh(device_id, f"{root}.{path}")
+        refresh(device_id, f"{root}.{path}", connection_request=True)
     except Exception:
         logger.debug(
             "Runtime refresh request failed for device %s after LAN config update",

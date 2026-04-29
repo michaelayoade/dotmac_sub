@@ -1,13 +1,8 @@
-"""ONT authorization service — OLT serial registration with DB state tracking.
+"""ONT authorization service - OLT serial registration with DB state tracking.
 
-This module handles the single atomic action of registering (or removing)
-an ONT serial on an OLT port. It wraps the raw SSH functions with DB
-updates to ``OntUnit.authorization_status``.
-
-Authorization is decoupled from provisioning: authorizing an ONT registers
-it on the OLT and assigns an ONT-ID, but does NOT configure service-ports,
-management IP, TR-069, or PPPoE. Those are provisioning steps the operator
-triggers separately.
+The foreground authorization path stays intentionally lean: it registers the
+autofind serial on the OLT, persists local inventory state, then queues
+post-authorization reconciliation for management IP, TR-069, and assignment work.
 """
 
 from __future__ import annotations
@@ -36,7 +31,7 @@ from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_provisioning.context import resolve_olt_context
 from app.services.network.ont_provisioning.result import StepResult
-from app.services.network.ont_status_transitions import (
+from app.services.network.ont_status import (
     set_authorization_status,
     set_provisioning_status,
 )
@@ -361,6 +356,51 @@ def _resolve_acs_for_new_ont(db: Session, olt_id: str) -> str | None:
     return tr069_service.resolve_acs_server_for_ont(db, olt_id=olt_id)
 
 
+def _queue_tr069_acs_connectivity(
+    *,
+    ont_unit_id: str,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    ont_id_on_olt: int,
+    countdown: int = 5,
+) -> dict[str, object]:
+    """Queue the ACS wait/bootstrap task after authorization."""
+    from app.services.queue_adapter import enqueue_task
+
+    result = enqueue_task(
+        "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
+        args=[ont_unit_id, olt_id, fsp, ont_id_on_olt],
+        queue="acs",
+        correlation_id=f"tr069_acs_connect:{ont_unit_id}",
+        source="post_authorization_follow_up",
+        countdown=countdown,
+    )
+    if result.queued:
+        logger.info(
+            "Queued TR-069 ACS connectivity task for ONT %s: task_id=%s",
+            serial_number,
+            result.task_id,
+        )
+        return {
+            "name": "Queue TR-069 ACS connectivity",
+            "success": True,
+            "message": "Queued background task to wait for ACS inform",
+            "task_id": result.task_id,
+        }
+
+    logger.warning(
+        "Failed to queue TR-069 ACS connectivity task for ONT %s: %s",
+        serial_number,
+        result.error,
+    )
+    return {
+        "name": "Queue TR-069 ACS connectivity",
+        "success": False,
+        "message": f"Failed to queue: {result.error}",
+    }
+
+
 def create_or_find_ont_for_authorized_serial(
     db: Session,
     *,
@@ -376,7 +416,7 @@ def create_or_find_ont_for_authorized_serial(
 
     clean_serials = _serial_predicates(serial_number)
     olt = get_olt_or_none(db, olt_id)
-    observed_online_status = (
+    observed_olt_status = (
         OnuOnlineStatus.online
         if str(olt_run_state or "").strip().lower() == "online"
         else None
@@ -400,8 +440,8 @@ def create_or_find_ont_for_authorized_serial(
             if len(parts) == 3:
                 existing.board = f"{parts[0]}/{parts[1]}"
                 existing.port = parts[2]
-            if observed_online_status is not None:
-                existing.online_status = observed_online_status
+            if observed_olt_status is not None:
+                existing.olt_status = observed_olt_status
                 existing.offline_reason = None
                 existing.last_seen_at = datetime.now(UTC)
                 existing.last_sync_source = "olt_authorization"
@@ -453,11 +493,11 @@ def create_or_find_ont_for_authorized_serial(
         is_active=True,
         authorization_status=OntAuthorizationStatus.authorized,
         provisioning_status=OntProvisioningStatus.unprovisioned,
-        online_status=observed_online_status or OnuOnlineStatus.unknown,
+        olt_status=observed_olt_status or OnuOnlineStatus.unknown,
         offline_reason=None,
-        last_seen_at=datetime.now(UTC) if observed_online_status else None,
-        last_sync_source="olt_authorization" if observed_online_status else None,
-        last_sync_at=datetime.now(UTC) if observed_online_status else None,
+        last_seen_at=datetime.now(UTC) if observed_olt_status else None,
+        last_sync_source="olt_authorization" if observed_olt_status else None,
+        last_sync_at=datetime.now(UTC) if observed_olt_status else None,
         pon_type="gpon",
         name=display_serial,
         desired_config={},
@@ -513,8 +553,6 @@ def run_post_authorization_follow_up(
     fsp: str,
     serial_number: str,
     ont_id_on_olt: int,
-    skip_autofind_resolve: bool = False,
-    queue_tr069_bootstrap: bool = True,
 ) -> tuple[bool, str, list[dict[str, object]]]:
     """Run minimal post-authorization bookkeeping.
 
@@ -525,11 +563,9 @@ def run_post_authorization_follow_up(
         fsp: Frame/Slot/Port string.
         serial_number: ONT serial number.
         ont_id_on_olt: ONT ID on the OLT.
-        skip_autofind_resolve: Skip autofind candidate resolution.
-        queue_tr069_bootstrap: If True, queue a background task to bind TR-069
-            profile and wait for ACS connectivity. This is non-blocking.
     """
     steps: list[dict[str, object]] = []
+
     assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
         db,
         ont_unit_id=ont_unit_id,
@@ -542,7 +578,9 @@ def run_post_authorization_follow_up(
     if not assignment_ok:
         return False, assignment_msg, steps
 
-    # Allocate management IP from OLT's pool (non-blocking failure)
+    # Allocate management IP from OLT's pool before scheduling ACS bootstrap.
+    # Without this, the follow-up can report queued while the ONT has no
+    # management path for TR-069 reachability.
     mgmt_ip_ok, mgmt_ip_msg, allocated_ip = allocate_management_ip_for_ont(
         db,
         ont_unit_id=ont_unit_id,
@@ -555,60 +593,40 @@ def run_post_authorization_follow_up(
         "allocated_ip": allocated_ip,
     })
     if not mgmt_ip_ok:
-        # Non-fatal - authorization still succeeded, but log warning
         logger.warning(
             "Failed to allocate management IP for ONT %s: %s",
             serial_number,
             mgmt_ip_msg,
         )
+        return False, mgmt_ip_msg, steps
 
-    # Queue background TR-069 ACS connectivity task (non-blocking)
-    if queue_tr069_bootstrap:
-        try:
-            from app.services.queue_adapter import enqueue_task
-
-            result = enqueue_task(
-                "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
-                args=[ont_unit_id, olt_id, fsp, ont_id_on_olt],
-                correlation_id=f"tr069_acs_connect:{ont_unit_id}",
-                source="post_authorization_follow_up",
-                countdown=5,  # Small delay to let OLT sync
-            )
-            if result.queued:
-                steps.append({
-                    "name": "Queue TR-069 ACS connectivity",
-                    "success": True,
-                    "message": "Queued background task to bind TR-069 and wait for ACS",
-                    "task_id": result.task_id,
-                })
-                logger.info(
-                    "Queued TR-069 ACS connectivity task for ONT %s: task_id=%s",
-                    serial_number,
-                    result.task_id,
-                )
-            else:
-                steps.append({
-                    "name": "Queue TR-069 ACS connectivity",
-                    "success": False,
-                    "message": f"Failed to queue: {result.error}",
-                })
-                logger.warning(
-                    "Failed to queue TR-069 ACS connectivity task for ONT %s: %s",
-                    serial_number,
-                    result.error,
-                )
-        except Exception as exc:
-            # Non-fatal - authorization still succeeded
-            steps.append({
-                "name": "Queue TR-069 ACS connectivity",
-                "success": False,
-                "message": str(exc),
-            })
-            logger.warning(
-                "Error queueing TR-069 ACS connectivity task for ONT %s: %s",
-                serial_number,
-                exc,
-            )
+    try:
+        queue_step = _queue_tr069_acs_connectivity(
+            ont_unit_id=ont_unit_id,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            ont_id_on_olt=ont_id_on_olt,
+            countdown=5,
+        )
+        steps.append(queue_step)
+    except Exception as exc:
+        queue_step = {
+            "name": "Queue TR-069 ACS connectivity",
+            "success": False,
+            "message": str(exc),
+        }
+        steps.append(queue_step)
+        logger.warning(
+            "Error queueing TR-069 ACS connectivity task for ONT %s: %s",
+            serial_number,
+            exc,
+        )
+    if not bool(queue_step.get("success")):
+        message = (
+            "Authorization follow-up failed: ACS connectivity task was not queued."
+        )
+        return False, message, steps
 
     return True, "Authorization follow-up completed.", steps
 
@@ -621,19 +639,14 @@ def authorize_autofind_ont(
     *,
     force_reauthorize: bool = False,
     preset_id: str | None = None,
-    run_post_auth_sync: bool = True,
 ) -> AuthorizationWorkflowResult:
     """Authorize an ONT on an OLT and persist ONT inventory state."""
     from app.services.network.olt_profile_resolution import (
         AuthorizationProfileResolution,
-        ensure_ont_service_profile_match,
         resolve_authorization_profiles_from_db,
     )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.olt_write_reconciliation import (
-        verify_ont_absent,
-        verify_ont_authorized,
-    )
+    from app.services.network.olt_write_reconciliation import verify_ont_absent
 
     steps: list[AuthorizationStepResult] = []
     started_at = monotonic()
@@ -742,20 +755,11 @@ def authorize_autofind_ont(
     ont_id = auth_result.ont_id
     if not auth_result.success or ont_id is None:
         if _is_serial_already_registered_message(auth_result.message):
-            duplicate = verify_ont_authorized(
-                olt,
-                fsp=fsp,
-                ont_id=None,
-                serial_number=normalized_serial,
-            )
-            if duplicate.success:
-                raw_ont_id = (duplicate.details or {}).get("ont_id")
-                if isinstance(raw_ont_id, int):
-                    ont_id = raw_ont_id
-                elif isinstance(raw_ont_id, str) and raw_ont_id.isdigit():
-                    ont_id = int(raw_ont_id)
-                else:
-                    ont_id = None
+            find_result = adapter.find_ont_by_serial(normalized_serial)
+            existing = find_result.data.get("registration") if find_result.success else None
+            if existing is not None and str(getattr(existing, "fsp", "")).strip() == fsp:
+                raw_ont_id = getattr(existing, "onu_id", None)
+                ont_id = int(raw_ont_id) if raw_ont_id is not None else None
                 add_step(
                     "Authorize ONT on OLT",
                     True,
@@ -763,35 +767,19 @@ def authorize_autofind_ont(
                     auth_started,
                 )
             else:
-                add_step("Authorize ONT on OLT", False, duplicate.message, auth_started)
-                return finish(success=False, message=duplicate.message, status="error")
+                message = (
+                    find_result.message
+                    if not find_result.success
+                    else "ONT serial already exists, but not on the expected port."
+                )
+                add_step("Authorize ONT on OLT", False, message, auth_started)
+                return finish(success=False, message=message, status="error")
         else:
             message = auth_result.message or "Authorization failed"
             add_step("Authorize ONT on OLT", False, message, auth_started)
             return finish(success=False, message=message, status="error")
     else:
         add_step("Authorize ONT on OLT", True, auth_result.message, auth_started)
-
-    verify_started = monotonic()
-    verification = verify_ont_authorized(
-        olt,
-        fsp=fsp,
-        ont_id=ont_id,
-        serial_number=normalized_serial,
-    )
-    add_step("Verify authorization on OLT", verification.success, verification.message, verify_started)
-    if not verification.success:
-        return finish(
-            success=False,
-            message=verification.message,
-            status="error",
-            ont_id_on_olt=ont_id,
-        )
-
-    if ont_id is not None:
-        match_started = monotonic()
-        match_ok, match_msg = ensure_ont_service_profile_match(olt, fsp=fsp, ont_id=ont_id)
-        add_step("Verify ONT service profile match", match_ok, match_msg, match_started)
 
     record_started = monotonic()
     ont_unit_id, create_msg = create_or_find_ont_for_authorized_serial(
@@ -800,7 +788,6 @@ def authorize_autofind_ont(
         fsp=fsp,
         serial_number=normalized_serial,
         ont_id_on_olt=ont_id,
-        olt_run_state=str((verification.details or {}).get("run_state") or ""),
     )
     add_step("Create or find ONT record", ont_unit_id is not None, create_msg, record_started)
     if ont_unit_id is None:
@@ -821,27 +808,6 @@ def authorize_autofind_ont(
     )
     add_step("Resolve autofind candidate", resolve_ok, resolve_msg, resolve_started)
 
-    if run_post_auth_sync:
-        follow_started = monotonic()
-        follow_ok, follow_msg, _follow_steps = run_post_authorization_follow_up(
-            db,
-            ont_unit_id=ont_unit_id,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=normalized_serial,
-            ont_id_on_olt=ont_id or 0,
-        )
-        add_step("Post-authorization follow-up", follow_ok, follow_msg, follow_started)
-        if not follow_ok:
-            return finish(
-                success=True,
-                message=f"ONT authorization completed, but follow-up failed: {follow_msg}",
-                status="warning",
-                ont_unit_id=ont_unit_id,
-                ont_id_on_olt=ont_id,
-                completed_authorization=True,
-            )
-
     return finish(
         success=True,
         message="ONT authorization completed.",
@@ -850,6 +816,76 @@ def authorize_autofind_ont(
         ont_id_on_olt=ont_id,
         completed_authorization=True,
     )
+
+
+def queue_post_authorization_follow_up(
+    db: Session,
+    *,
+    ont_unit_id: str,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    ont_id_on_olt: int,
+) -> str | None:
+    """Queue non-critical reconciliation after foreground OLT authorization."""
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+    from app.services.queue_adapter import enqueue_task
+
+    operation = network_operations.start(
+        db,
+        NetworkOperationType.ont_provision,
+        NetworkOperationTargetType.ont,
+        ont_unit_id,
+        correlation_key=f"post-authorize:{ont_unit_id}:{fsp}:{ont_id_on_olt}",
+        input_payload={
+            "olt_id": olt_id,
+            "fsp": fsp,
+            "serial_number": serial_number,
+            "ont_id_on_olt": ont_id_on_olt,
+        },
+    )
+    db.commit()
+
+    dispatch = enqueue_task(
+        "app.tasks.ont_authorization.run_post_authorization_follow_up",
+        args=[
+            str(operation.id),
+            ont_unit_id,
+            olt_id,
+            fsp,
+            serial_number,
+            ont_id_on_olt,
+        ],
+        queue="tr069",
+        correlation_id=f"post-authorize:{ont_unit_id}",
+        source="ont_authorization",
+        countdown=2,
+    )
+    if not dispatch.queued:
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            dispatch.error or "Failed to queue post-authorization follow-up",
+        )
+        db.commit()
+        logger.warning(
+            "Failed to queue post-authorization follow-up for ONT %s: %s",
+            serial_number,
+            dispatch.error,
+        )
+        return None
+
+    logger.info(
+        "Queued post-authorization follow-up for ONT %s: operation_id=%s task_id=%s",
+        serial_number,
+        operation.id,
+        dispatch.task_id,
+    )
+    return str(operation.id)
 
 
 def authorize_autofind_ont_and_provision_network_audited(
@@ -875,12 +911,37 @@ def authorize_autofind_ont_and_provision_network_audited(
         serial_number,
         force_reauthorize=force_reauthorize,
         preset_id=preset_id,
-        run_post_auth_sync=True,
     )
 
     # Commit on success
     if result.success:
         db.commit()
+        if result.ont_unit_id and result.ont_id_on_olt is not None:
+            try:
+                result.follow_up_operation_id = queue_post_authorization_follow_up(
+                    db,
+                    ont_unit_id=result.ont_unit_id,
+                    olt_id=olt_id,
+                    fsp=fsp,
+                    serial_number=serial_number,
+                    ont_id_on_olt=result.ont_id_on_olt,
+                )
+                if result.follow_up_operation_id is None:
+                    result.status = "warning"
+                    result.message = (
+                        "ONT authorized, but post-authorization ACS follow-up was not queued."
+                    )
+            except Exception as exc:
+                db.rollback()
+                logger.warning(
+                    "Authorization succeeded but post-authorization follow-up was not queued for ONT %s: %s",
+                    serial_number,
+                    exc,
+                )
+                result.status = "warning"
+                result.message = (
+                    "ONT authorized, but post-authorization ACS follow-up was not queued."
+                )
 
     status = getattr(result, "status", "success" if result.success else "error")
     log_olt_audit_event(
@@ -947,7 +1008,6 @@ class OntAuthorizationService:
             return StepResult("authorize", False, err, critical=True)
 
         from app.services.network.olt_profile_resolution import (
-            ensure_ont_service_profile_match,
             resolve_authorization_profiles_from_db,
         )
         from app.services.network.olt_protocol_adapters import get_protocol_adapter
@@ -975,63 +1035,18 @@ class OntAuthorizationService:
         olt_ont_id = auth_result.ont_id
 
         if ok:
-            from app.services.network.olt_write_reconciliation import (
-                verify_ont_authorized,
-            )
-
             set_authorization_status(
-                ctx.ont, OntAuthorizationStatus.pending, strict=False
+                ctx.ont, OntAuthorizationStatus.authorized, strict=False
             )
             if olt_ont_id is not None:
                 ctx.ont.external_id = str(olt_ont_id)
-
-            verification = verify_ont_authorized(
-                ctx.olt,
-                fsp=ctx.fsp,
-                ont_id=olt_ont_id,
-                serial_number=ctx.ont.serial_number,
+            db.flush()
+            logger.info(
+                "ONT %s authorized on OLT %s (ONT-ID %s)",
+                ctx.ont.serial_number,
+                ctx.olt.name,
+                olt_ont_id,
             )
-            if verification.success:
-                if olt_ont_id is not None:
-                    match_ok, match_msg = ensure_ont_service_profile_match(
-                        ctx.olt,
-                        fsp=ctx.fsp,
-                        ont_id=olt_ont_id,
-                    )
-                    if not match_ok:
-                        set_provisioning_status(
-                            ctx.ont,
-                            OntProvisioningStatus.failed,
-                            strict=False,
-                        )
-                        db.flush()
-                        return StepResult("authorize", False, match_msg, critical=True)
-                set_authorization_status(
-                    ctx.ont, OntAuthorizationStatus.authorized, strict=False
-                )
-                db.flush()
-                logger.info(
-                    "ONT %s authorized on OLT %s (ONT-ID %s)",
-                    ctx.ont.serial_number,
-                    ctx.olt.name,
-                    olt_ont_id,
-                )
-            else:
-                set_provisioning_status(
-                    ctx.ont,
-                    OntProvisioningStatus.failed,
-                    strict=False,
-                )
-                db.flush()
-                logger.warning(
-                    "ONT %s authorization write accepted on OLT %s but verification failed: %s",
-                    ctx.ont.serial_number,
-                    ctx.olt.name,
-                    verification.message,
-                )
-                return StepResult(
-                    "authorize", False, verification.message, critical=True
-                )
         else:
             logger.warning(
                 "ONT %s authorization failed on OLT %s: %s",

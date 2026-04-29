@@ -717,8 +717,8 @@ class NetworkDevices(ListResponseMixin):
         # ---- Device counts (always from all devices for accurate stats) ----
         base_query = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True))
         devices = base_query.order_by(NetworkDevice.name).all()
-        online_statuses = {DStatus.online, DStatus.degraded, DStatus.maintenance}
-        devices_online = sum(1 for d in devices if d.status in online_statuses)
+        olt_statuses = {DStatus.online, DStatus.degraded, DStatus.maintenance}
+        devices_online = sum(1 for d in devices if d.status in olt_statuses)
         devices_offline = sum(1 for d in devices if d.status == DStatus.offline)
 
         online_count = sum(1 for d in devices if d.status == DStatus.online)
@@ -1300,19 +1300,19 @@ def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
     total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
     online = (
         db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.online_status == OnuOnlineStatus.online)
+        .filter(OntUnit.olt_status == OnuOnlineStatus.online)
         .scalar()
         or 0
     )
     offline = (
         db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.online_status == OnuOnlineStatus.offline)
+        .filter(OntUnit.olt_status == OnuOnlineStatus.offline)
         .scalar()
         or 0
     )
     unknown = (
         db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.online_status == OnuOnlineStatus.unknown)
+        .filter(OntUnit.olt_status == OnuOnlineStatus.unknown)
         .scalar()
         or 0
     )
@@ -1355,7 +1355,7 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         )
         .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
         .filter(
-            OntUnit.online_status == OnuOnlineStatus.offline,
+            OntUnit.olt_status == OnuOnlineStatus.offline,
             OntAssignment.active.is_(True),
         )
         .all()

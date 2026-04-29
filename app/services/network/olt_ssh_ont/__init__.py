@@ -24,7 +24,6 @@ from app.services.network.olt_ssh_ont.iphost import (
     parse_iphost_config_output,
 )
 from app.services.network.olt_ssh_ont.lifecycle import (
-    _load_linked_acs_payload,
     authorize_ont,
     deauthorize_ont,
     delete_ont_registration,
@@ -87,5 +86,4 @@ __all__ = [
     "remote_ping_ont",
     # Internal helpers (re-exported for backward compatibility)
     "_safe_profile_name",
-    "_load_linked_acs_payload",
 ]

@@ -7,8 +7,9 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from urllib.parse import quote_plus
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import SQLColumnExpression
 from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntUnit
@@ -43,7 +44,8 @@ def _candidate_serial_values(candidate: OltAutofindCandidate) -> list[str]:
     return values
 
 
-def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
+def _normalized_serial_expr(column: SQLColumnExpression[str]) -> ColumnElement[str]:
+    """Build a SQL expression that normalizes a serial number column for comparison."""
     expr = func.upper(column)
     for token in ("-", " ", ":", ".", "_", "/"):
         expr = func.replace(expr, token, "")
@@ -327,7 +329,7 @@ def sync_olt_autofind_entries(
         candidate.resolved_at = now
         resolved += 1
 
-    db.flush()  # Let caller control transaction boundary
+    db.commit()
     return {
         "discovered": len(entry_list),
         "created": created,
@@ -373,6 +375,9 @@ def resolve_candidate_authorized(
 def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
     """Restore a disappeared autofind candidate to active state.
 
+    Uses SELECT FOR UPDATE with skip_locked to prevent race conditions
+    when multiple restore requests target the same candidate.
+
     Args:
         db: Database session
         candidate_id: UUID of the autofind candidate
@@ -382,9 +387,14 @@ def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
     """
     from app.services.common import coerce_uuid
 
-    candidate = db.get(OltAutofindCandidate, coerce_uuid(candidate_id))
+    uuid_id = coerce_uuid(candidate_id)
+    candidate = db.scalars(
+        select(OltAutofindCandidate)
+        .where(OltAutofindCandidate.id == uuid_id)
+        .with_for_update(skip_locked=True)
+    ).first()
     if not candidate:
-        return False, "Autofind candidate not found"
+        return False, "Autofind candidate not found or locked by another operation"
     if candidate.is_active:
         return False, "Candidate is already active"
     if candidate.resolution_reason != "disappeared":

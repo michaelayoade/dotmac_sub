@@ -12,6 +12,7 @@ from app.models.network_operation import NetworkOperation, NetworkOperationStatu
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 _RETENTION_DAYS = 90
 _STALE_RUNNING_HOURS = 4
@@ -28,7 +29,8 @@ def cleanup_old_operations() -> dict[str, int]:
         Statistics dict with purged, stale_marked, errors.
     """
     logger.info("Starting network operations cleanup")
-    with db_session_adapter.session() as db:
+    db = SessionLocal()
+    try:
         cutoff = datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)
         stale_cutoff = datetime.now(UTC) - timedelta(hours=_STALE_RUNNING_HOURS)
 
@@ -94,4 +96,10 @@ def cleanup_old_operations() -> dict[str, int]:
 
         result = {"purged": purged, "stale_marked": stale_marked, "errors": 0}
         logger.info("Network operations cleanup complete: %s", result)
+        db.commit()
         return result
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

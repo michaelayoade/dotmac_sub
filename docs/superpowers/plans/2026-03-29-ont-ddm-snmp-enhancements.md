@@ -848,7 +848,7 @@ def test_push_signal_metrics_includes_ddm_lines(test_db) -> None:
         ont_temperature_c=42.0,
         ont_voltage_v=3.3,
         ont_bias_current_ma=15.2,
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         signal_updated_at=datetime.now(UTC),
         is_active=True,
     )

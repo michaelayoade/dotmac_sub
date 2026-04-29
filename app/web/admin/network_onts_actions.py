@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
+from app.config import settings
 from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
@@ -554,8 +555,11 @@ def ont_toggle_lan_port(
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    port_str = request.query_params.get("port", "1")
-    enabled_str = request.query_params.get("enabled", "true")
+    form = parse_form_data_sync(request)
+    port_str = request.query_params.get("port") or _form_str(form, "port", "1")
+    enabled_str = request.query_params.get("enabled") or _form_str(
+        form, "enabled", "true"
+    )
     try:
         port = int(port_str)
     except ValueError:
@@ -638,6 +642,66 @@ def ont_set_lan_config(
 
 
 @router.post(
+    "/onts/{ont_id}/wan-remote-access",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_wan_remote_access(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Enable or disable WAN remote access via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    enabled = _form_str(form, "enabled").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+        "enabled",
+    }
+    result = web_network_ont_actions_service.set_wan_remote_access(
+        db, ont_id, enabled=enabled, request=request
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WAN Remote Access",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/mgmt-remote-access",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_mgmt_remote_access(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Enable or disable management-side remote access via OLT IPHOST + TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    enabled = _form_str(form, "enabled").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+        "enabled",
+    }
+    result = web_network_ont_actions_service.set_mgmt_remote_access(
+        db, ont_id, enabled=enabled, request=request
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set MGMT Remote Access",
+    )
+
+
+@router.post(
     "/onts/{ont_id}/voip-config",
     dependencies=[Depends(require_permission("network:write"))],
 )
@@ -660,6 +724,82 @@ def ont_set_voip_config(
         request=request,
         ont_id=ont_id,
         action="Set VoIP Config",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/web-credentials",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_web_credentials(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Set ONT web login credentials via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    username = _form_str(form, "username").strip()
+    password = _form_str(form, "password").strip()
+    if not username or not password:
+        return _action_json_response(
+            success=False,
+            message="Web username and password are required",
+            action="Set Web Credentials",
+            request=request,
+            ont_id=ont_id,
+        )
+    result = web_network_ont_actions_service.set_web_credentials(
+        db, ont_id, username=username, password=password, request=request
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set Web Credentials",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/connection-request-credentials",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_connection_request_credentials(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Set ONT ACS connection-request credentials via TR-069."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    form = parse_form_data_sync(request)
+    username = _form_str(form, "username").strip()
+    password = _form_str(form, "password").strip()
+    default_interval = settings.tr069_periodic_inform_interval
+    interval_raw = _form_str(
+        form, "periodic_inform_interval", str(default_interval)
+    ).strip()
+    interval = int(interval_raw) if interval_raw.isdigit() else default_interval
+    if not username or not password:
+        return _action_json_response(
+            success=False,
+            message="Connection request username and password are required",
+            action="Set Connection Request Credentials",
+            request=request,
+            ont_id=ont_id,
+        )
+    result = web_network_ont_actions_service.set_connection_request_credentials(
+        db,
+        ont_id,
+        username=username,
+        password=password,
+        periodic_inform_interval=interval,
+        request=request,
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set Connection Request Credentials",
     )
 
 

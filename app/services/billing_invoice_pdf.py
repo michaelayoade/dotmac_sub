@@ -43,6 +43,7 @@ STALE_EXPORT_SECONDS = 20
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
 INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 3, 18, 9, 0, tzinfo=UTC)
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 
 def _normalize_requested_by_id(db: Session, requested_by_id: str | None) -> str | None:
@@ -1179,7 +1180,7 @@ def stream_export(db: Session, export: InvoicePdfExport) -> StreamResult:
 
 
 def process_export(export_id: str) -> dict[str, Any]:
-    db = db_session_adapter.create_session()
+    db = SessionLocal()
     export: InvoicePdfExport | None = None
     started_at = datetime.now(UTC)
     try:

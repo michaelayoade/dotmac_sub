@@ -119,9 +119,9 @@ This document maps the relationships between OLT, ONT, and ACS services in the D
 │                           ACS / TR-069 LAYER                                         │
 │                                                                                      │
 │  ┌────────────────────────────────────────────────────────────────────────────────┐ │
-│  │                    acs_client.py (Protocol Definition)                          │ │
+│  │                    genieacs_client.py (Concrete GenieACS client)                          │ │
 │  │  AcsClient Protocol: Structural interface for ACS backends                      │ │
-│  │  create_acs_client(): Factory for server-specific client                        │ │
+│  │  create_genieacs_client(): Factory for server-specific client                        │ │
 │  └────────────────────────────────┬───────────────────────────────────────────────┘ │
 │                                   │                                                  │
 │  ┌────────────────────────────────▼───────────────────────────────────────────────┐ │
@@ -167,7 +167,7 @@ This document maps the relationships between OLT, ONT, and ACS services in the D
 │  │actions           │ │                  │ │                  │                     │
 │  └──────────────────┘ └──────────────────┘ └──────────────────┘                     │
 │  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐                     │
-│  │AcsConfigAdapter  │ │AcsServiceIntent  │ │SubscriberOnt    │                     │
+│  │GenieAcsService  │ │AcsServiceIntent  │ │SubscriberOnt    │                     │
 │  │Build config      │ │Adapter           │ │Adapter          │                     │
 │  │payloads          │ │Intent→ACS tasks  │ │ONT→Customer link│                     │
 │  └──────────────────┘ └──────────────────┘ └──────────────────┘                     │
@@ -217,8 +217,8 @@ User clicks "Authorize"
 ```
 ONT authorized + provisioning enabled
     → provisioning_coordinator (phase: acs_config_push)
-    → acs_service_intent_adapter.push_service_intent_to_acs()
-    → acs_config_adapter.build_acs_config()  [WiFi, WAN, LAN params]
+    → genieacs_service_intent.push_service_intent_to_acs()
+    → genieacs_service  [WiFi, WAN, LAN params]
     → genieacs.set_parameter_values_and_wait()
     → Poll until complete or timeout
 ```
@@ -288,7 +288,7 @@ OntUnit
 | `Tr069CpeDevices` | `tr069.py` | Device registration |
 | `Tr069Jobs` | `tr069.py` | Task queue management |
 | `GenieACSClient` | `genieacs.py` | HTTP client for GenieACS NBI |
-| `AcsConfigAdapter` | `acs_config_adapter.py` | Config payload building |
+| `GenieAcsService` | `genieacs_service.py` | Config payload building |
 | `olt_tr069_admin` | `olt_tr069_admin.py` | ACS resolution for OLT flows |
 
 ### Provisioning Services
@@ -317,8 +317,8 @@ adapter_registry.register(example_adapter)
 - `OltProfileAdapter` - Live OLT profile data
 - `OltObservedStateAdapter` - Real-time OLT state
 - `SubscriberOntAdapter` - ONT-to-customer linking
-- `AcsServiceIntentAdapter` - Service intent to ACS tasks
-- `AcsConfigAdapter` - Config payload building
+- `GenieAcsServiceIntent` - Service intent to ACS tasks
+- `GenieAcsService` - Config payload building
 - `AcsStateAdapter` - ACS device state tracking
 
 ## Critical Architecture Notes
@@ -392,8 +392,8 @@ app/services/network/ont_provisioning/         # Orchestration
 ```
 app/services/tr069.py                          # Complete lifecycle
 app/services/genieacs.py                       # HTTP client
-app/services/acs_client.py                     # Protocol definition
-app/services/acs_config_adapter.py             # Config adapter
+app/services/genieacs_client.py                     # Concrete GenieACS HTTP client
+app/services/genieacs_service.py             # Application-facing GenieACS service
 app/services/network/ont_tr069.py              # Parameter aggregation
 app/services/network/olt_tr069_admin.py        # OLT TR-069 admin
 app/services/network/tr069_profile_matching.py # Profile matching
@@ -406,7 +406,7 @@ app/services/network/tr069_paths.py            # Path resolution
 app/services/olt_action_adapter.py
 app/services/olt_detail_adapter.py
 app/services/olt_profile_adapter.py
-app/services/acs_service_intent_adapter.py
+app/services/genieacs_service_intent.py
 app/services/network/authorization_executor.py
 app/services/network/provisioning_coordinator.py
 ```

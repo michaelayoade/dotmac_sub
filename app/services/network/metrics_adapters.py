@@ -135,7 +135,7 @@ def parse_time_range(time_range: str) -> tuple[datetime, datetime, str]:
 
 def normalize_serial(ont_serial: str) -> list[str]:
     """Generate serial number candidates for matching."""
-    from app.services.genieacs import normalize_tr069_serial
+    from app.services.genieacs_client import normalize_tr069_serial
 
     raw = str(ont_serial or "").strip()
     if not raw:

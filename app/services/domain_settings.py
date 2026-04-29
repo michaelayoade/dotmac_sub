@@ -40,6 +40,7 @@ class DomainSettings(ListResponseMixin):
         key: str,
         value_text: str | None,
         is_secret: bool,
+        allow_plain_fallback: bool = False,
     ) -> str | None:
         if not is_secret or value_text is None:
             return value_text
@@ -49,6 +50,8 @@ class DomainSettings(ListResponseMixin):
         if is_openbao_ref(normalized):
             return normalized
         if not is_openbao_available():
+            if allow_plain_fallback:
+                return normalized
             raise HTTPException(
                 status_code=500,
                 detail="OpenBao is not configured or reachable for secret settings",
@@ -63,13 +66,18 @@ class DomainSettings(ListResponseMixin):
             )
         return self._openbao_secret_ref(key)
 
+    def _allow_plain_secret_fallback(self, db: Session) -> bool:
+        bind = db.get_bind()
+        return getattr(getattr(bind, "dialect", None), "name", None) == "sqlite"
+
     def _prepare_create_payload(
-        self, key: str, payload: DomainSettingCreate
+        self, db: Session, key: str, payload: DomainSettingCreate
     ) -> DomainSettingCreate:
         resolved = self._write_secret_ref(
             key=key,
             value_text=payload.value_text,
             is_secret=payload.is_secret,
+            allow_plain_fallback=self._allow_plain_secret_fallback(db),
         )
         if resolved == payload.value_text:
             return payload
@@ -78,13 +86,14 @@ class DomainSettings(ListResponseMixin):
         return DomainSettingCreate(**data)
 
     def _prepare_update_payload(
-        self, key: str, payload: DomainSettingUpdate
+        self, db: Session, key: str, payload: DomainSettingUpdate
     ) -> DomainSettingUpdate:
         data = payload.model_dump(exclude_unset=True)
         resolved = self._write_secret_ref(
             key=key,
             value_text=data.get("value_text"),
             is_secret=bool(data.get("is_secret")),
+            allow_plain_fallback=self._allow_plain_secret_fallback(db),
         )
         if resolved is not None:
             data["value_text"] = resolved
@@ -100,7 +109,7 @@ class DomainSettings(ListResponseMixin):
         raise HTTPException(status_code=400, detail="Setting domain is required")
 
     def create(self, db: Session, payload: DomainSettingCreate):
-        payload = self._prepare_create_payload(payload.key, payload)
+        payload = self._prepare_create_payload(db, payload.key, payload)
         data = payload.model_dump()
         data["domain"] = self._resolve_domain(payload.domain)
         setting = DomainSetting(**data)
@@ -147,7 +156,7 @@ class DomainSettings(ListResponseMixin):
         setting = db.get(DomainSetting, coerce_uuid(setting_id))
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
-        payload = self._prepare_update_payload(setting.key, payload)
+        payload = self._prepare_update_payload(db, setting.key, payload)
         data = payload.model_dump(exclude_unset=True)
         if "domain" in data and data["domain"] != setting.domain:
             raise HTTPException(status_code=400, detail="Setting domain mismatch")
@@ -175,7 +184,7 @@ class DomainSettings(ListResponseMixin):
     def upsert_by_key(self, db: Session, key: str, payload: DomainSettingUpdate):
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
-        payload = self._prepare_update_payload(key, payload)
+        payload = self._prepare_update_payload(db, key, payload)
         setting = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)

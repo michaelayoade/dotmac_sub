@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
+from app.services.genieacs_service import genieacs_service
 from app.services.network._common import NasTarget
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_provisioning.context import (
@@ -70,11 +71,6 @@ _TR069_TASK_READY_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_timeout_
 _TR069_TASK_READY_POLL_INTERVAL_SEC = (
     _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
 )
-
-def _acs_config_writer():
-    from app.services.acs_service import create_acs_service
-
-    return create_acs_service().config_writer
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +604,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     ont = db.get(OntUnit, ont_id)
     if ont is None:
         return StepResult("apply_saved_service_config", False, "ONT not found")
-    acs_config_adapter = _acs_config_writer()
+    acs = genieacs_service
     effective_values = resolve_effective_ont_config(db, ont).get("values", {})
 
     steps: list[dict[str, object]] = []
@@ -627,7 +623,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     if cr_username and cr_password:
         _append(
             "set_connection_request_credentials",
-            acs_config_adapter.set_connection_request_credentials(
+            acs.set_connection_request_credentials(
                 db,
                 ont_id,
                 str(cr_username),
@@ -671,7 +667,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             dhcp_enabled_value = True
         _append(
             "configure_lan_tr069",
-            acs_config_adapter.set_lan_config(
+            acs.set_lan_config(
                 db,
                 ont_id,
                 lan_ip=str(lan_values.get("lan_ip") or "") or None,
@@ -710,7 +706,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         wifi_enabled_value = wifi_values.get("enabled")
         _append(
             "configure_wifi_tr069",
-            acs_config_adapter.set_wifi_config(
+            acs.set_wifi_config(
                 db,
                 ont_id,
                 enabled=wifi_enabled_value
@@ -876,7 +872,7 @@ def download_firmware(
     if ont is None:
         return StepResult("download_firmware", False, "ONT not found")
 
-    result = _acs_config_writer().firmware_upgrade(db, ont_id, firmware_image_id)
+    result = genieacs_service.firmware_upgrade(db, ont_id, firmware_image_id)
     ms = int((time.monotonic() - t0) * 1000)
     step_result = StepResult(
         "download_firmware",

@@ -21,7 +21,7 @@ from app.services import (
 )
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_provision_steps as steps
-from app.services.network.action_logging import log_network_action_result
+from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_scope import can_manage_ont_from_request
@@ -479,9 +479,8 @@ def retry_ont_compensation_failure(
     success, message = retry_compensation(
         db,
         failure_id,
-        resolved_by=web_admin_service.actor_label(request),
+        resolved_by=actor_label(request),
     )
-    db.commit()
     return _redirect_to_request_target(
         request,
         f"/admin/network/onts/{ont_id}?tab=history",
@@ -514,9 +513,8 @@ def resolve_ont_compensation_failure(
     success, message = mark_resolved(
         db,
         failure_id,
-        resolved_by=web_admin_service.actor_label(request),
+        resolved_by=actor_label(request),
     )
-    db.commit()
     return _redirect_to_request_target(
         request,
         f"/admin/network/onts/{ont_id}?tab=history",
@@ -549,9 +547,8 @@ def abandon_ont_compensation_failure(
     success, message = mark_abandoned(
         db,
         failure_id,
-        resolved_by=web_admin_service.actor_label(request),
+        resolved_by=actor_label(request),
     )
-    db.commit()
     return _redirect_to_request_target(
         request,
         f"/admin/network/onts/{ont_id}?tab=history",

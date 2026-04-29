@@ -126,6 +126,17 @@ encrypt-credentials-execute: ## Encrypt existing NAS credentials (execute)
 generate-encryption-key: ## Generate a new credential encryption key
 	@python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
+# ─── GenieACS Setup ──────────────────────────────────────
+
+setup-genieacs: ## Deploy provisions, virtual params, presets to GenieACS
+	poetry run python scripts/setup_genieacs.py
+
+setup-genieacs-dry-run: ## Preview GenieACS setup without making changes
+	poetry run python scripts/setup_genieacs.py --dry-run
+
+setup-genieacs-list: ## List current GenieACS provisions and presets
+	poetry run python scripts/setup_genieacs.py --list
+
 # ─── Pre-commit ───────────────────────────────────────────
 
 pre-commit-install: ## Install pre-commit hooks

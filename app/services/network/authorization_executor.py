@@ -65,6 +65,14 @@ class AuthorizationExecutionResult:
                 data={k: v for k, v in data.items() if v is not None},
             )
 
+        if self.details.get("status") == "warning":
+            return OperationResult(
+                status=ResultStatus.warning,
+                message=self.message,
+                title="Authorization Warning",
+                data={k: v for k, v in data.items() if v is not None},
+            )
+
         return OperationResult(
             status=ResultStatus.success,
             message=self.message,
@@ -141,7 +149,9 @@ def execute_authorization(
                 else AuthorizationExecutionMode.sync_error
             ),
             details={
+                "status": result.status,
                 "ont_id_on_olt": result.ont_id_on_olt,
+                "follow_up_operation_id": result.follow_up_operation_id,
             },
         )
 

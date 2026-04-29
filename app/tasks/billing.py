@@ -7,6 +7,7 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 
 @celery_app.task(name="app.tasks.billing.run_invoice_cycle")
@@ -15,7 +16,8 @@ logger = logging.getLogger(__name__)
 )
 def run_invoice_cycle() -> dict[str, int]:
     logger.info("Starting billing invoice cycle")
-    with db_session_adapter.session() as session:
+    session = SessionLocal()
+    try:
         result = billing_automation_service.run_invoice_cycle(session)
         processed = result.get("subscriptions_billed", 0)
         errors = result.get("errors", 0)
@@ -25,7 +27,13 @@ def run_invoice_cycle() -> dict[str, int]:
             result.get("invoices_created", 0),
             errors,
         )
+        session.commit()
         return {"processed": processed, "errors": errors}
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 @celery_app.task(name="app.tasks.billing.mark_invoices_overdue")
@@ -35,10 +43,17 @@ def run_invoice_cycle() -> dict[str, int]:
 def mark_invoices_overdue() -> dict[str, int]:
     """Hourly task: detect past-due invoices and trigger enforcement."""
     logger.info("Starting overdue invoice detection")
-    with db_session_adapter.session() as session:
+    session = SessionLocal()
+    try:
         result = billing_automation_service.mark_overdue_invoices(session)
         logger.info(
             "Overdue detection completed: %d marked",
             result.get("marked_overdue", 0),
         )
+        session.commit()
         return result
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

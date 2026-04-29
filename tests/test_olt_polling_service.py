@@ -216,7 +216,7 @@ def test_mark_stale_onts_unknown_updates_effective_status_snapshot(db_session) -
         serial_number="ONT-STALE-1",
         olt_device_id=olt.id,
         is_active=True,
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         effective_status=OnuOnlineStatus.online,
         signal_updated_at=now - timedelta(minutes=30),
     )
@@ -227,11 +227,11 @@ def test_mark_stale_onts_unknown_updates_effective_status_snapshot(db_session) -
 
     db_session.refresh(ont)
     assert marked == 1
-    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.olt_status == OnuOnlineStatus.unknown
     assert ont.effective_status == OnuOnlineStatus.unknown
     assert ont.effective_status_source == OntStatusSource.derived
     assert ont.offline_reason is None
-    assert ont.status_resolved_at is not None
+    assert ont.olt_status_seen_at is not None
 
 
 def test_mark_stale_onts_unknown_keeps_recent_acs_inform_effective_online(
@@ -239,7 +239,6 @@ def test_mark_stale_onts_unknown_keeps_recent_acs_inform_effective_online(
 ) -> None:
     from app.models.network import (
         OLTDevice,
-        OntAcsStatus,
         OntStatusSource,
         OntUnit,
         OnuOnlineStatus,
@@ -260,7 +259,7 @@ def test_mark_stale_onts_unknown_keeps_recent_acs_inform_effective_online(
         serial_number="ONT-STALE-ACS-ONLINE",
         olt_device_id=olt.id,
         is_active=True,
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         effective_status=OnuOnlineStatus.online,
         acs_last_inform_at=now - timedelta(minutes=2),
         signal_updated_at=now - timedelta(minutes=30),
@@ -272,10 +271,10 @@ def test_mark_stale_onts_unknown_keeps_recent_acs_inform_effective_online(
 
     db_session.refresh(ont)
     assert marked == 1
-    assert ont.online_status == OnuOnlineStatus.unknown
-    assert ont.acs_status == OntAcsStatus.online
+    assert ont.olt_status == OnuOnlineStatus.unknown
     assert ont.effective_status == OnuOnlineStatus.online
     assert ont.effective_status_source == OntStatusSource.acs
+    assert ont.last_seen_at == ont.acs_last_inform_at
     assert ont.offline_reason is None
 
 
@@ -303,7 +302,7 @@ def test_mark_stale_huawei_numeric_external_id_unknown_not_los(db_session) -> No
         serial_number="48575443348F8A84",
         olt_device_id=olt.id,
         is_active=True,
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         effective_status=OnuOnlineStatus.online,
         external_id="8",
         signal_updated_at=now - timedelta(minutes=30),
@@ -315,7 +314,7 @@ def test_mark_stale_huawei_numeric_external_id_unknown_not_los(db_session) -> No
 
     db_session.refresh(ont)
     assert marked == 1
-    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.olt_status == OnuOnlineStatus.unknown
     assert ont.effective_status == OnuOnlineStatus.unknown
     assert ont.effective_status_source == OntStatusSource.derived
     assert ont.offline_reason is None

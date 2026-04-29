@@ -465,7 +465,7 @@ def _operator_summary_context(
         ]
     else:
         olt_status_rows = [
-            ("Run State", entry.get("run_state") or entry.get("online_status") or "—"),
+            ("Run State", entry.get("run_state") or entry.get("olt_status") or "—"),
             ("Config State", entry.get("config_state") or "—"),
             ("Match State", entry.get("match_state") or "—"),
             ("F/S/P", entry.get("fsp") or "—"),
@@ -691,9 +691,27 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
     if mgmt_mode_value in {"dhcp", "static_ip"}:
         mgmt_remote_access = True
 
-    # Extract VLAN info from config pack
-    wan_vlan = values.get("wan_vlan")
-    mgmt_vlan = values.get("mgmt_vlan")
+    # Extract VLAN info from config pack (tags for display, IDs for selection)
+    wan_vlan = values.get("wan_vlan")  # tag for display
+    mgmt_vlan = values.get("mgmt_vlan")  # tag for display
+    wan_vlan_id = values.get("wan_vlan_id")  # UUID for matching
+    mgmt_vlan_id = values.get("mgmt_vlan_id")  # UUID for matching
+
+    # Get available VLANs from the OLT for dropdown selection
+    from app.services.web_network_onts import get_vlans_for_ont
+    olt_vlans = get_vlans_for_ont(db, ont)
+    available_vlans = []
+    for vlan in olt_vlans:
+        if vlan.tag is None:
+            continue
+        purpose = vlan.purpose.value if vlan.purpose else "other"
+        available_vlans.append({
+            "id": str(vlan.id),  # UUID for form value and matching
+            "tag": vlan.tag,  # Integer tag for display
+            "name": vlan.name or f"VLAN {vlan.tag}",
+            "purpose": purpose,
+        })
+    available_vlans.sort(key=lambda v: (v["purpose"] != "internet", v["purpose"] != "management", v["tag"] or 0))
 
     # TR-069 profile info
     tr069_profile_id = values.get("tr069_olt_profile_id")
@@ -720,12 +738,14 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
         "wan_mode": wan_mode or values.get("wan_mode"),
         "ip_protocol": values.get("ip_protocol"),
         "pppoe_username": str(values.get("pppoe_username") or ""),
-        "wan_vlan": str(wan_vlan or ""),
+        "wan_vlan": wan_vlan,  # tag for display
+        "wan_vlan_id": wan_vlan_id or "",  # UUID for form selection
         # Management
         "mgmt_ip_mode": mgmt_mode_value,
         "mgmt_ip_address": str(mgmt_ip or ""),
         "mgmt_remote_access": mgmt_remote_access,
-        "mgmt_vlan": str(mgmt_vlan or ""),
+        "mgmt_vlan": mgmt_vlan,  # tag for display
+        "mgmt_vlan_id": mgmt_vlan_id or "",  # UUID for form selection
         # LAN (prefer observed/stored values)
         "lan_gateway_ip": str(lan_gateway or ""),
         "lan_subnet_mask": str(lan_subnet or ""),
@@ -743,6 +763,8 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
         "tr069_profile_name": tr069_profile_name,
         "has_tr069": has_tr069,
         "acs_last_inform": acs_last_inform,
+        # Available VLANs from OLT for dropdown selection
+        "available_vlans": available_vlans,
     }
     mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
     context["mgmt_ip_pool"] = mgmt_ip_pool_ctx.get("mgmt_ip_pool")
@@ -775,13 +797,13 @@ def olt_status_context(db: Session, ont_id: str) -> dict[str, object]:
     result = fetch_olt_status(db, ont_id)
     entry = result.get("entry") or {}
     raw_run_state = str(
-        entry.get("run_state") or entry.get("online_status") or ""
+        entry.get("run_state") or entry.get("olt_status") or ""
     ).lower()
     run_state = "" if raw_run_state == "unknown" else raw_run_state
     rows = [
         (
             "Run State",
-            _display_olt_value(entry.get("run_state") or entry.get("online_status")),
+            _display_olt_value(entry.get("run_state") or entry.get("olt_status")),
         ),
         ("Config State", _display_olt_value(entry.get("config_state"))),
         ("Match State", _display_olt_value(entry.get("match_state"))),

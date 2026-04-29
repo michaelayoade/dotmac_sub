@@ -28,7 +28,7 @@ No new external service dependency is needed.
 | ONT inventory with serial tracking | **Complete** | `OntUnit` model with vendor/model/firmware |
 | ONT assignment to PON ports + subscribers | **Complete** | `OntAssignment` model + UI |
 | ONT signal fields (ONU Rx, OLT Rx, distance) | **Complete** | `OntUnit.onu_rx_signal_dbm`, `olt_rx_signal_dbm`, `distance_meters` |
-| ONT online status + offline reason | **Complete** | `OntUnit.online_status`, `offline_reason`, `last_seen_at` |
+| ONT online status + offline reason | **Complete** | `OntUnit.olt_status`, `offline_reason`, `last_seen_at` |
 | Signal threshold classification (good/warning/critical) | **Complete** | `olt_polling.py` — `classify_signal()`, `get_signal_thresholds()` |
 | Vendor-specific SNMP OID mappings | **Complete** | `olt_polling.py` — Huawei, ZTE, Nokia OIDs |
 | Periodic signal polling Celery task | **Complete** | `tasks/olt_polling.py` — `poll_all_olt_signals()` |
@@ -77,7 +77,7 @@ No new external service dependency is needed.
 
 import logging
 from sqlalchemy.orm import Session
-from app.services.genieacs import GenieACSClient
+from app.services.genieacs_client import GenieACSClient
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ Use HTMX for in-page actions:
 """TR-069 parameter aggregation for ONT detail display."""
 
 import logging
-from app.services.genieacs import GenieACSClient
+from app.services.genieacs_client import GenieACSClient
 
 logger = logging.getLogger(__name__)
 

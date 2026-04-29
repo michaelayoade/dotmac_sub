@@ -7,12 +7,10 @@ import re
 
 from paramiko.ssh_exception import SSHException
 
-from app.config import settings
 from app.models.network import OLTDevice
 from app.services.network._common import encode_to_hex_serial
 from app.services.network.olt_ssh_ont._common import (
     _SSH_CONNECTION_ERRORS,
-    _safe_profile_name,
     _send_slow,
     _validate_fsp,
     _validate_serial,
@@ -220,149 +218,6 @@ def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 delete_ont_registration = deauthorize_ont
 
 
-def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
-    """Load the linked TR-069 ACS server config for an OLT."""
-    from app.services.credential_crypto import decrypt_credential
-
-    server = None
-    try:
-        server = getattr(olt, "tr069_acs_server", None)
-    except AttributeError:
-        server = None
-
-    if server is None and getattr(olt, "tr069_acs_server_id", None):
-        try:
-            from app.models.tr069 import Tr069AcsServer
-            from app.services.db_session_adapter import db_session_adapter
-
-            with db_session_adapter.create_session() as db:
-                server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
-                if server is None:
-                    return None
-                password = (
-                    decrypt_credential(server.cwmp_password)
-                    if server.cwmp_password
-                    else ""
-                )
-                return {
-                    "name": server.name,
-                    "acs_url": server.cwmp_url or "",
-                    "username": server.cwmp_username or "",
-                    "password": password or "",
-                    "inform_interval": server.periodic_inform_interval
-                    or settings.tr069_periodic_inform_interval,
-                }
-        except (ImportError, LookupError, AttributeError) as exc:
-            logger.warning("Failed to load linked ACS for OLT %s: %s", olt.name, exc)
-            return None
-
-    if server is None or not getattr(server, "cwmp_url", None):
-        return None
-    password = (
-        decrypt_credential(server.cwmp_password)
-        if getattr(server, "cwmp_password", None)
-        else ""
-    )
-    return {
-        "name": getattr(server, "name", "ACS"),
-        "acs_url": server.cwmp_url or "",
-        "username": server.cwmp_username or "",
-        "password": password or "",
-        "inform_interval": getattr(server, "periodic_inform_interval", None)
-        or settings.tr069_periodic_inform_interval,
-    }
-
-
-def _auto_bind_tr069_after_authorize(
-    olt: OLTDevice, fsp: str, ont_id: int | None
-) -> None:
-    """Best-effort: bind a newly authorized ONT to the OLT's linked ACS profile.
-
-    Called after successful ONT authorization. Skips when the OLT has no linked
-    ACS, and creates the OLT profile if the linked ACS profile does not exist.
-    """
-    from app.services.network.olt_ssh_ont.tr069 import bind_tr069_server_profile
-    from app.services.network.olt_ssh_profiles import (
-        create_tr069_server_profile,
-        get_tr069_server_profiles,
-    )
-    from app.services.network.tr069_profile_matching import (
-        match_tr069_profile,
-        normalize_acs_url,
-    )
-
-    if ont_id is None:
-        return
-    try:
-        payload = _load_linked_acs_payload(olt)
-        if payload is None or not str(payload.get("acs_url") or "").strip():
-            logger.info("Skipping TR-069 auto-bind for OLT %s: no linked ACS", olt.name)
-            return
-
-        ok, _msg, profiles = get_tr069_server_profiles(olt)
-        if not ok:
-            return
-        target_url = normalize_acs_url(str(payload["acs_url"]))
-        target_username = str(payload.get("username") or "").strip()
-        profile = match_tr069_profile(
-            profiles,
-            acs_url=str(payload["acs_url"]),
-            acs_username=target_username,
-        )
-        profile_id = profile.profile_id if profile else None
-
-        if profile_id is None:
-            profile_name = f"ACS {_safe_profile_name(str(payload.get('name') or ''))}"
-            ok, msg = create_tr069_server_profile(
-                olt,
-                profile_name=profile_name,
-                acs_url=str(payload["acs_url"]),
-                username=target_username,
-                password=str(payload.get("password") or ""),
-                inform_interval=int(str(payload.get("inform_interval") or 300)),
-            )
-            if not ok:
-                logger.warning(
-                    "Auto-create TR-069 profile failed for OLT %s: %s",
-                    olt.name,
-                    msg,
-                )
-                return
-            ok, _msg, profiles = get_tr069_server_profiles(olt)
-            if not ok:
-                return
-            profile = match_tr069_profile(
-                profiles,
-                acs_url=str(payload["acs_url"]),
-                acs_username=target_username,
-            )
-            profile_id = profile.profile_id if profile else None
-        if profile_id is None:
-            logger.warning(
-                "Could not resolve TR-069 profile for linked ACS %s on OLT %s",
-                target_url,
-                olt.name,
-            )
-            return
-
-        ok, msg = bind_tr069_server_profile(
-            olt, fsp=fsp, ont_id=ont_id, profile_id=profile_id
-        )
-        if ok:
-            logger.info(
-                "Auto-bound ONT %d on %s to TR-069 profile %d",
-                ont_id,
-                fsp,
-                profile_id,
-            )
-        else:
-            logger.warning(
-                "Auto-bind TR-069 failed for ONT %d on %s: %s", ont_id, fsp, msg
-            )
-    except (*_SSH_CONNECTION_ERRORS, ValueError, RuntimeError) as exc:
-        logger.warning("Auto-bind TR-069 error for ONT %d: %s", ont_id, exc)
-
-
 def authorize_ont(
     olt: OLTDevice,
     fsp: str,
@@ -455,9 +310,6 @@ def authorize_ont(
                 olt.name,
                 fsp,
             )
-            # Auto-bind to the OLT's linked ACS TR-069 profile if configured.
-            _auto_bind_tr069_after_authorize(olt, fsp, ont_id)
-
             message = f"ONT {serial_number} authorized on port {fsp}"
             if ont_id is not None:
                 message += f" (ONT-ID {ont_id})"

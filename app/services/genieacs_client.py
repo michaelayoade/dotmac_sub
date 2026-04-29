@@ -18,6 +18,27 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# TR-069 CWMP Download File Types (per TR-069 Amendment 6)
+# Format: "N Description" where N is the numeric code
+CWMP_FILE_TYPES = frozenset({
+    "1 Firmware Upgrade Image",
+    "2 Web Content",
+    "3 Vendor Configuration File",
+    "4 Tone File",
+    "5 Ringer File",
+    "6 Stored Firmware Image",
+})
+
+# Aliases for convenience - maps common names to official file types
+CWMP_FILE_TYPE_ALIASES: dict[str, str] = {
+    "firmware": "1 Firmware Upgrade Image",
+    "config": "3 Vendor Configuration File",
+    "web": "2 Web Content",
+    "tone": "4 Tone File",
+    "ringer": "5 Ringer File",
+    "stored_firmware": "6 Stored Firmware Image",
+}
+
 
 def _infer_cwmp_value_type(path: str, value: Any) -> str:
     """Infer a CWMP xsd type for a GenieACS setParameterValues item.
@@ -446,6 +467,7 @@ class GenieACSClient:
         self,
         device_id: str,
         task: dict,
+        connection_request: bool | None = None,
         dedupe_pending: bool = True,
         enforce_safety: bool = True,
         allow_broad_refresh: bool = False,
@@ -498,6 +520,11 @@ class GenieACSClient:
             response = self._request(
                 "POST",
                 f"/devices/{encoded_id}/tasks",
+                params={
+                    "connection_request": str(connection_request).lower()
+                }
+                if connection_request is not None
+                else None,
                 json_data=task,
             )
         except Exception:
@@ -518,6 +545,15 @@ class GenieACSClient:
                 wait_thread.join(timeout=0.1)
 
         result = response.json() if response.text else {}
+        reason_phrase = str(getattr(response, "reason_phrase", "") or "")
+        if (
+            isinstance(result, dict)
+            and "connectionRequestError" not in result
+            and response.status_code == 202
+            and reason_phrase
+            and reason_phrase.lower() != "accepted"
+        ):
+            result["connectionRequestError"] = reason_phrase
 
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(
@@ -632,21 +668,40 @@ class GenieACSClient:
         file_type: str,
         file_url: str,
         filename: str | None = None,
+        *,
+        validate_file_type: bool = True,
     ) -> dict:
         """Trigger firmware/config download on device.
 
         Args:
             device_id: Device ID
-            file_type: File type (e.g., "1 Firmware Upgrade Image")
+            file_type: File type - either official CWMP format (e.g., "1 Firmware Upgrade Image")
+                       or alias (e.g., "firmware", "config")
             file_url: URL to download from
             filename: Optional filename
+            validate_file_type: If True (default), validates file_type against CWMP spec
 
         Returns:
             Task result
+
+        Raises:
+            ValueError: If file_type is invalid and validate_file_type is True
         """
+        # Resolve alias to official file type
+        resolved_type = CWMP_FILE_TYPE_ALIASES.get(file_type.lower(), file_type)
+
+        if validate_file_type and resolved_type not in CWMP_FILE_TYPES:
+            valid_types = ", ".join(sorted(CWMP_FILE_TYPES))
+            valid_aliases = ", ".join(sorted(CWMP_FILE_TYPE_ALIASES.keys()))
+            raise ValueError(
+                f"Invalid file type '{file_type}'. "
+                f"Valid types: {valid_types}. "
+                f"Aliases: {valid_aliases}."
+            )
+
         task = {
             "name": "download",
-            "fileType": file_type,
+            "fileType": resolved_type,
             "url": file_url,
         }
         if filename:
@@ -1051,3 +1106,13 @@ class GenieACSClient:
             return None
 
         return current
+
+
+def create_genieacs_client(
+    base_url: str,
+    *,
+    timeout: float = 30.0,
+    headers: dict | None = None,
+) -> GenieACSClient:
+    """Create the concrete GenieACS NBI client used by application services."""
+    return GenieACSClient(base_url, timeout=timeout, headers=headers)

@@ -59,7 +59,7 @@ def detect_data_model_root(
         return ont.tr069_data_model
 
     try:
-        from app.services.genieacs import GenieACSError
+        from app.services.genieacs_client import GenieACSError
 
         device = client.get_device(device_id)
         if isinstance(device.get("Device"), dict):
@@ -257,6 +257,8 @@ def set_and_verify(
     expected: dict[str, str] | None = None,
     timeout_sec: int = 30,
     skip_verification: bool = False,
+    connection_request_attempts: int | None = None,
+    connection_request_backoff_sec: float = 1.0,
 ) -> dict[str, object]:
     """Apply params via setParameterValues and poll until completion.
 
@@ -279,7 +281,7 @@ def set_and_verify(
     Raises:
         GenieACSError: If task times out or verification fails.
     """
-    from app.services.genieacs import GenieACSError  # local import avoids cycle
+    from app.services.genieacs_client import GenieACSError  # local import avoids cycle
 
     if not params:
         raise GenieACSError("set_and_verify called with no parameters")
@@ -293,15 +295,30 @@ def set_and_verify(
     if not task_id:
         # Task accepted immediately (no pending task created)
         logger.debug("SPV accepted without task ID for %s", device_id)
-        return spv_result
-
-    # Poll until task completes
-    completed, msg = _wait_for_task(
-        client, device_id, task_id, timeout_sec=timeout_sec
-    )
-    if not completed:
-        _delete_task_quietly(client, spv_result)
-        raise GenieACSError(f"setParameterValues task timed out: {msg}")
+    elif connection_request_attempts:
+        paths = list(expected_values)
+        last_error = ""
+        for _attempt in range(max(connection_request_attempts, 1)):
+            gpv_result = client.get_parameter_values(device_id, paths)
+            last_error = str(gpv_result.get("connectionRequestError") or "")
+            if not last_error:
+                break
+            _delete_task_quietly(client, gpv_result)
+            time.sleep(connection_request_backoff_sec)
+        else:
+            _delete_task_quietly(client, spv_result)
+            raise GenieACSError(
+                "Connection request failed after "
+                f"{connection_request_attempts} attempts: {last_error}"
+            )
+    else:
+        # Poll until task completes
+        completed, msg = _wait_for_task(
+            client, device_id, task_id, timeout_sec=timeout_sec
+        )
+        if not completed:
+            _delete_task_quietly(client, spv_result)
+            raise GenieACSError(f"setParameterValues task timed out: {msg}")
 
     if skip_verification or not expected_values:
         return spv_result

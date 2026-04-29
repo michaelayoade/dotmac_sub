@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from app.services import web_network_core_devices_views as core_devices_views
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network import ont_action_wifi
 
 

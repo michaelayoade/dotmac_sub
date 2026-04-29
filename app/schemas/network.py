@@ -585,8 +585,7 @@ class OntUnitRead(OntUnitBase):
     olt_rx_signal_dbm: float | None = None
     distance_meters: int | None = None
     signal_updated_at: datetime | None = None
-    online_status: str | None = None
-    acs_status: str | None = None
+    olt_status: str | None = None
     effective_status: str | None = None
     effective_status_source: str | None = None
     acs_last_inform_at: datetime | None = None

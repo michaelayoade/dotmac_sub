@@ -305,7 +305,7 @@ class PppoeHealthClassifier:
         When category is ``"issues"``, returns all ONTs with any issue.
         """
         stmt = _health_base_query().where(
-            OntUnit.online_status == OnuOnlineStatus.online,
+            OntUnit.olt_status == OnuOnlineStatus.online,
             OntUnit.is_active.is_(True),
         )
 

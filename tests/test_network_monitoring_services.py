@@ -157,17 +157,17 @@ def test_get_onu_status_summary_uses_effective_status(db_session):
         [
             OntUnit(
                 serial_number="ONT-SUM-1",
-                online_status=OnuOnlineStatus.offline,
+                olt_status=OnuOnlineStatus.offline,
                 effective_status=OnuOnlineStatus.online,
             ),
             OntUnit(
                 serial_number="ONT-SUM-2",
-                online_status=OnuOnlineStatus.online,
+                olt_status=OnuOnlineStatus.online,
                 effective_status=OnuOnlineStatus.offline,
             ),
             OntUnit(
                 serial_number="ONT-SUM-3",
-                online_status=OnuOnlineStatus.unknown,
+                olt_status=OnuOnlineStatus.unknown,
                 effective_status=OnuOnlineStatus.unknown,
             ),
         ]
@@ -186,17 +186,17 @@ def test_get_onu_olt_status_summary_uses_raw_olt_status(db_session):
         [
             OntUnit(
                 serial_number="ONT-OLT-SUM-1",
-                online_status=OnuOnlineStatus.online,
+                olt_status=OnuOnlineStatus.online,
                 effective_status=OnuOnlineStatus.offline,
             ),
             OntUnit(
                 serial_number="ONT-OLT-SUM-2",
-                online_status=OnuOnlineStatus.offline,
+                olt_status=OnuOnlineStatus.offline,
                 effective_status=OnuOnlineStatus.online,
             ),
             OntUnit(
                 serial_number="ONT-OLT-SUM-3",
-                online_status=OnuOnlineStatus.unknown,
+                olt_status=OnuOnlineStatus.unknown,
                 effective_status=OnuOnlineStatus.online,
             ),
         ]
@@ -227,7 +227,7 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
     for idx in range(2):
         ont = OntUnit(
             serial_number=f"FULL-{idx}-{uuid.uuid4().hex[:8]}",
-            online_status=OnuOnlineStatus.offline,
+            olt_status=OnuOnlineStatus.offline,
             effective_status=OnuOnlineStatus.offline,
         )
         db_session.add(ont)
@@ -238,12 +238,12 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
 
     offline_partial = OntUnit(
         serial_number=f"PARTIAL-OFFLINE-{uuid.uuid4().hex[:8]}",
-        online_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.offline,
         effective_status=OnuOnlineStatus.offline,
     )
     online_partial = OntUnit(
         serial_number=f"PARTIAL-ONLINE-{uuid.uuid4().hex[:8]}",
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         effective_status=OnuOnlineStatus.online,
     )
     db_session.add_all([offline_partial, online_partial])
@@ -333,14 +333,14 @@ def test_push_signal_metrics_uses_effective_status_and_separate_olt_counts(
                 serial_number="ONT-METRIC-1",
                 is_active=True,
                 signal_updated_at=datetime.now(UTC),
-                online_status=OnuOnlineStatus.offline,
+                olt_status=OnuOnlineStatus.offline,
                 effective_status=OnuOnlineStatus.online,
             ),
             OntUnit(
                 serial_number="ONT-METRIC-2",
                 is_active=True,
                 signal_updated_at=datetime.now(UTC),
-                online_status=OnuOnlineStatus.online,
+                olt_status=OnuOnlineStatus.online,
                 effective_status=OnuOnlineStatus.offline,
             ),
         ]

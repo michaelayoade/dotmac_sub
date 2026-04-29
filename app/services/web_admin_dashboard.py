@@ -662,7 +662,7 @@ def dashboard(request: Request, db: Session):
         attention_items.append(
             {
                 "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
-                "href": "/admin/network/onts?view=list&online_status=offline",
+                "href": "/admin/network/onts?view=list&olt_status=offline",
                 "severity": "warning",
             }
         )

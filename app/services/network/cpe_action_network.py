@@ -12,7 +12,7 @@ from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,

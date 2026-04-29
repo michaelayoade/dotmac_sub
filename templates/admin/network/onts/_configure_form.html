@@ -62,6 +62,8 @@
 <form hx-post="/admin/network/onts/{{ ont_id }}/configure"
       hx-target="#configure-content"
       hx-swap="innerHTML"
+      hx-indicator=".config-spinner"
+      hx-disabled-elt="button[type=submit]"
       class="space-y-3"
       x-data="{
           wanMode: '{{ wan_mode_val }}',
@@ -86,6 +88,74 @@
           }
       }">
     {% include "components/forms/csrf_input.html" %}
+
+    {# ═══════════════════════ MANAGEMENT SECTION ═══════════════════════ #}
+    <div class="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-700/50">
+            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Management</span>
+            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ mgmt_ip_address or (mgmt_ip_mode_val | replace('_', ' ')) }}{% if mgmt_vlan %} · vlan {{ mgmt_vlan }}{% endif %}{% if mgmt_remote_access %} · remote{% endif %}</span>
+        </div>
+        <div class="p-3">
+            <div class="flex flex-wrap items-end gap-3">
+                <div class="w-28">
+                    <label for="mgmt_ip_mode" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">IP Mode</label>
+                    <select id="mgmt_ip_mode" name="mgmt_ip_mode" x-model="mgmtIpMode"
+                            class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="inactive" {% if mgmt_ip_mode_val == 'inactive' %}selected{% endif %}>Inactive</option>
+                        <option value="dhcp" {% if mgmt_ip_mode_val == 'dhcp' %}selected{% endif %}>DHCP</option>
+                        <option value="static_ip" {% if mgmt_ip_mode_val == 'static_ip' %}selected{% endif %}>Static</option>
+                    </select>
+                </div>
+                <div class="w-32">
+                    <label for="mgmt_vlan_id" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">VLAN</label>
+                    <select id="mgmt_vlan_id" name="mgmt_vlan_id"
+                            class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Default</option>
+                        {% for vlan in available_vlans %}
+                        {% if vlan.purpose in ['management', 'tr069'] %}
+                        <option value="{{ vlan.id }}" {% if mgmt_vlan_id and mgmt_vlan_id == vlan.id %}selected{% endif %}>{{ vlan.tag }} · {{ vlan.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                        {% for vlan in available_vlans %}
+                        {% if vlan.purpose not in ['management', 'tr069', 'internet'] %}
+                        <option value="{{ vlan.id }}" {% if mgmt_vlan_id and mgmt_vlan_id == vlan.id %}selected{% endif %}>{{ vlan.tag }} · {{ vlan.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                </div>
+                <template x-if="mgmtIpMode === 'static_ip'">
+                    <div class="w-44">
+                        <label for="mgmt_ip_address" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">IP Address{% if available_mgmt_ips %} <span class="text-slate-400">({{ available_mgmt_ips|length }})</span>{% endif %}</label>
+                        {% if available_mgmt_ips %}
+                        <select id="mgmt_ip_address" name="mgmt_ip_address"
+                                class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Select IP</option>
+                            {% if mgmt_ip_address %}
+                            <option value="{{ mgmt_ip_address }}" selected>{{ mgmt_ip_address }}</option>
+                            {% endif %}
+                            {% for ip in available_mgmt_ips %}
+                            {% set ip_address = ip.address %}
+                            {% if ip_address != mgmt_ip_address %}
+                            <option value="{{ ip_address }}">{{ ip.label or ip_address }}</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
+                        {% else %}
+                        <input type="text" id="mgmt_ip_address" name="mgmt_ip_address" value="{{ mgmt_ip_address or '' }}" placeholder="IP address"
+                               class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% endif %}
+                    </div>
+                </template>
+                <div class="ml-auto">
+                    <button type="submit" name="push_scope" value="management"
+                            class="inline-flex items-center gap-1 rounded border border-cyan-300 bg-cyan-50 px-2.5 py-1.5 text-xs font-medium text-cyan-700 shadow-sm hover:bg-cyan-100 disabled:opacity-50 dark:border-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50">
+                        <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        Apply Mgmt
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     {# ═══════════════════════ WAN SECTION ═══════════════════════ #}
     <div class="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
@@ -115,6 +185,23 @@
                         <option value="dual_stack" {% if ip_protocol_val == 'dual_stack' %}selected{% endif %}>Dual-stack</option>
                     </select>
                 </div>
+                <div class="w-32">
+                    <label for="wan_vlan_id" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">VLAN</label>
+                    <select id="wan_vlan_id" name="wan_vlan_id"
+                            class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Default</option>
+                        {% for vlan in available_vlans %}
+                        {% if vlan.purpose == 'internet' %}
+                        <option value="{{ vlan.id }}" {% if wan_vlan_id and wan_vlan_id == vlan.id %}selected{% endif %}>{{ vlan.tag }} · {{ vlan.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                        {% for vlan in available_vlans %}
+                        {% if vlan.purpose not in ['internet', 'management', 'tr069'] %}
+                        <option value="{{ vlan.id }}" {% if wan_vlan_id and wan_vlan_id == vlan.id %}selected{% endif %}>{{ vlan.tag }} · {{ vlan.name }}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                </div>
                 <template x-if="wanMode === 'pppoe'">
                     <div class="flex items-end gap-2">
                         <div class="w-40">
@@ -136,60 +223,9 @@
                 </template>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="wan"
-                            class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                            class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply WAN
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    {# ═══════════════════════ MANAGEMENT SECTION ═══════════════════════ #}
-    <div class="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-        <div class="flex items-center justify-between border-b border-slate-100 px-3 py-2 dark:border-slate-700/50">
-            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Management</span>
-            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ mgmt_ip_address or (mgmt_ip_mode_val | replace('_', ' ')) }}{% if mgmt_vlan %} · vlan {{ mgmt_vlan }}{% endif %}{% if mgmt_remote_access %} · remote{% endif %}</span>
-        </div>
-        <div class="p-3">
-            <div class="flex flex-wrap items-end gap-3">
-                <div class="w-28">
-                    <label for="mgmt_ip_mode" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">IP Mode</label>
-                    <select id="mgmt_ip_mode" name="mgmt_ip_mode" x-model="mgmtIpMode"
-                            class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="inactive" {% if mgmt_ip_mode_val == 'inactive' %}selected{% endif %}>Inactive</option>
-                        <option value="dhcp" {% if mgmt_ip_mode_val == 'dhcp' %}selected{% endif %}>DHCP</option>
-                        <option value="static_ip" {% if mgmt_ip_mode_val == 'static_ip' %}selected{% endif %}>Static</option>
-                    </select>
-                </div>
-                <template x-if="mgmtIpMode === 'static_ip'">
-                    <div class="w-44">
-                        <label for="mgmt_ip_address" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">IP Address{% if available_mgmt_ips %} <span class="text-slate-400">({{ available_mgmt_ips|length }})</span>{% endif %}</label>
-                        {% if available_mgmt_ips %}
-                        <select id="mgmt_ip_address" name="mgmt_ip_address"
-                                class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="">Select IP</option>
-                            {% if mgmt_ip_address %}
-                            <option value="{{ mgmt_ip_address }}" selected>{{ mgmt_ip_address }}</option>
-                            {% endif %}
-                            {% for ip in available_mgmt_ips %}
-                            {% set ip_address = ip.address %}
-                            {% if ip_address != mgmt_ip_address %}
-                            <option value="{{ ip_address }}">{{ ip.label or ip_address }}</option>
-                            {% endif %}
-                            {% endfor %}
-                        </select>
-                        {% else %}
-                        <input type="text" id="mgmt_ip_address" name="mgmt_ip_address" value="{{ mgmt_ip_address or '' }}" placeholder="IP address"
-                               class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        {% endif %}
-                    </div>
-                </template>
-                <div class="ml-auto">
-                    <button type="submit" name="push_scope" value="management"
-                            class="inline-flex items-center gap-1 rounded border border-cyan-300 bg-cyan-50 px-2.5 py-1.5 text-xs font-medium text-cyan-700 shadow-sm hover:bg-cyan-100 dark:border-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                        Apply Mgmt
                     </button>
                 </div>
             </div>
@@ -250,8 +286,8 @@
                 </div>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="lan"
-                            class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                            class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply LAN
                     </button>
                 </div>
@@ -310,8 +346,8 @@
                 </div>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="wifi"
-                            class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                            class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                        <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply WiFi
                     </button>
                 </div>
@@ -326,8 +362,8 @@
         <button type="submit"
                 name="push_scope"
                 value="all"
-                class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-slate-900">
+            <svg class="config-spinner htmx-indicator h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
             Apply All
         </button>
     </div>

@@ -45,18 +45,18 @@ class ServiceIntentUiAdapter:
         ont_id: str,
     ) -> dict[str, object]:
         """Return ACS/TR-069 observed state mapped to service intent UI data."""
-        from app.services.acs_service_intent_adapter import acs_service_intent_adapter
+        from app.services.genieacs_service_intent import genieacs_service_intent
 
-        return acs_service_intent_adapter.load_observed_intent_for_ont(db, ont_id=ont_id)
+        return genieacs_service_intent.load_observed_intent_for_ont(db, ont_id=ont_id)
 
     def build_acs_observed_service_intent(
         self,
         summary: object | None,
     ) -> dict[str, object]:
         """Map an existing ACS/TR-069 summary without another ACS fetch."""
-        from app.services.acs_service_intent_adapter import acs_service_intent_adapter
+        from app.services.genieacs_service_intent import genieacs_service_intent
 
-        return acs_service_intent_adapter.build_observed_intent(summary)
+        return genieacs_service_intent.build_observed_intent(summary)
 
     def resolve_effective_tr069_profile(
         self, db: Session, *, ont: object

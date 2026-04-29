@@ -286,7 +286,7 @@ def build_network_map_context(db: Session) -> dict:
             }
         )
 
-    # Customers with addresses that have coordinates, including online status
+    # Customers with addresses that have coordinates, including OLT status
     active_sessions_subq = (
         db.query(Subscription.subscriber_id)
         .join(

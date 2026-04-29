@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntProvisioningProfile, OnuType
-from app.services.network.olt_ssh_profiles import OltProfileEntry
+from app.services.network.olt_ssh_profiles import OltProfileEntry, _parse_profile_table
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ def resolve_authorization_profiles(
         core._run_huawei_cmd(channel, "screen-length 0 temporary")
 
         line_output = core._run_huawei_cmd(channel, "display ont-lineprofile gpon all")
-        line_profiles = core._parse_profile_table(line_output)
+        line_profiles = _parse_profile_table(line_output)
         line_tr069: dict[int, bool] = {}
         for profile in line_profiles:
             detail = core._run_huawei_cmd(
@@ -346,7 +346,7 @@ def resolve_authorization_profiles(
         service_output = core._run_huawei_cmd(
             channel, "display ont-srvprofile gpon all"
         )
-        service_entries = core._parse_profile_table(service_output)
+        service_entries = _parse_profile_table(service_output)
         service_details: list[ServiceProfileDetail] = []
         for entry in service_entries:
             detail = core._run_huawei_cmd(
@@ -455,7 +455,7 @@ def ensure_ont_service_profile_match(
         service_output = core._run_huawei_cmd(
             channel, "display ont-srvprofile gpon all"
         )
-        service_entries = core._parse_profile_table(service_output)
+        service_entries = _parse_profile_table(service_output)
         service_details: list[ServiceProfileDetail] = []
         for entry in service_entries:
             detail = core._run_huawei_cmd(

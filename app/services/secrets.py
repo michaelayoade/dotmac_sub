@@ -78,7 +78,12 @@ def _parse_ref(reference: str) -> tuple[str, str, str]:
 
 
 @lru_cache(maxsize=_CACHE_SIZE)
-def _fetch_secret_data(url: str, token: str, namespace: str | None) -> dict:
+def _fetch_secret_data(
+    url: str,
+    token: str,
+    namespace: str | None,
+    http_get_identity: int,
+) -> dict:
     """Fetch and cache a secret payload from OpenBao."""
     headers: dict[str, str] = {"X-Vault-Token": token}
     if namespace:
@@ -108,7 +113,7 @@ def resolve_openbao_ref(reference: str) -> str:
         url = f"{addr}/v1/{mount}/{path}"
     else:
         url = f"{addr}/v1/{mount}/data/{path}"
-    raw_data = _fetch_secret_data(url, token, namespace)
+    raw_data = _fetch_secret_data(url, token, namespace, id(httpx.get))
     if str(kv_version) == "1":
         secret_data = raw_data
     else:

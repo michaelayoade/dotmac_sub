@@ -59,7 +59,7 @@ class OidSet:
     bias_current: str = ""  # ONU laser bias current
     voltage: str = ""  # ONU supply voltage
     distance: str = ""  # ONU distance from OLT
-    status: str = ""  # ONU online status
+    status: str = ""  # ONU OLT status
     offline_reason: str = ""  # Last offline reason
     serial_number: str = ""  # ONU serial number
 
@@ -410,9 +410,10 @@ class HuaweiOltAdapter(BaseOltAdapter):
         if "ma5600" in model_str:
             return self.SSH_POLICIES["ma5600"]
 
-        # Default to MA5800 policy
-        logger.debug("Unknown Huawei model '%s', using MA5800 SSH policy", model_str)
-        return self.SSH_POLICIES["ma5800"]
+        raise ValueError(
+            f"Huawei SSH policy is not configured for model {model!r}. "
+            "Supported models: MA5608T, MA5800, MA5600."
+        )
 
     def decode_snmp_index(self, raw_index: int) -> str | None:
         """Decode Huawei packed FSP index.

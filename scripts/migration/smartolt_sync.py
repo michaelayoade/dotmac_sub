@@ -572,7 +572,7 @@ def sync_onts(
         )
         wan_mode = WAN_MODE_MAP.get(o.get("wan_mode", ""))
         onu_mode = ONU_MODE_MAP.get(o.get("mode", ""))
-        online_status = STATUS_MAP.get(o.get("status"), "unknown")
+        olt_status = STATUS_MAP.get(o.get("status"), "unknown")
         offline_reason = OFFLINE_REASON_MAP.get(o.get("status"))
 
         # Resolve VLAN UUIDs
@@ -595,7 +595,7 @@ def sync_onts(
             "onu_type_id": onu_type_id,
             "onu_mode": onu_mode,
             "wan_mode": wan_mode,
-            "online_status": online_status,
+            "olt_status": olt_status,
             "pppoe_username": o.get("username") or None,
             "pppoe_password": (
                 encrypt_credential(o.get("password"))
@@ -673,7 +673,7 @@ def sync_onts(
                         "(id, serial_number, vendor, model, olt_device_id, "
                         "board, port, pon_type, external_id, is_active, "
                         "name, address_or_comment, zone_id, onu_type_id, "
-                        "onu_mode, wan_mode, online_status, offline_reason, "
+                        "onu_mode, wan_mode, olt_status, offline_reason, "
                         "pppoe_username, pppoe_password, "
                         "mgmt_ip_mode, mgmt_ip_address, mgmt_vlan_id, "
                         "voip_enabled, tr069_acs_server_id, "
@@ -684,7 +684,7 @@ def sync_onts(
                         "(:id, :sn, 'Huawei', :model, :olt_id, "
                         ":board, :port, 'gpon', :ext_id, true, "
                         ":name, :address, :zone_id, :onu_type_id, "
-                        ":onu_mode, :wan_mode, :online_status, :offline_reason, "
+                        ":onu_mode, :wan_mode, :olt_status, :offline_reason, "
                         ":pppoe_username, :pppoe_password, "
                         ":mgmt_ip_mode, :mgmt_ip_address, :mgmt_vlan_id, "
                         ":voip_enabled, :tr069_acs_server_id, "
@@ -706,7 +706,7 @@ def sync_onts(
                         "onu_type_id": fields["onu_type_id"],
                         "onu_mode": fields["onu_mode"],
                         "wan_mode": fields["wan_mode"],
-                        "online_status": fields["online_status"],
+                        "olt_status": fields["olt_status"],
                         "offline_reason": fields.get("offline_reason"),
                         "pppoe_username": fields["pppoe_username"],
                         "pppoe_password": fields["pppoe_password"],

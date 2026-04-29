@@ -93,7 +93,7 @@ def test_subscriber_detail_snapshot_equipment_uses_effective_ont_status(db_sessi
     ont = OntUnit(
         serial_number="ONT-SUB-1",
         name="Subscriber ONT",
-        online_status=OnuOnlineStatus.offline,
+        olt_status=OnuOnlineStatus.offline,
         effective_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)

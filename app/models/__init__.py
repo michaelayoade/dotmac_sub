@@ -224,7 +224,6 @@ from app.models.network import (  # noqa: F401
     OltPowerUnit,
     OltSfpModule,
     OltShelf,
-    OntAcsStatus,
     OntAssignment,
     OntProfileType,
     OntProfileWanService,

@@ -49,7 +49,7 @@ from app.services.network.olt_polling_parsers import (
     _parse_ddm_value as _parse_ddm_value,  # noqa: F401
 )
 from app.services.network.olt_polling_parsers import (
-    _parse_online_status as _parse_online_status,  # noqa: F401
+    _parse_olt_status as _parse_olt_status,  # noqa: F401
 )
 from app.services.network.olt_polling_parsers import (
     _parse_signal_value as _parse_signal_value,  # noqa: F401
@@ -78,6 +78,60 @@ SIGNAL_QUALITY_GOOD = "good"
 SIGNAL_QUALITY_WARNING = "warning"
 SIGNAL_QUALITY_CRITICAL = "critical"
 SIGNAL_QUALITY_UNKNOWN = "unknown"
+
+
+def poll_olt_ont_signals(
+    db: Session,
+    olt: OLTDevice,
+    community: str | None = None,
+) -> dict[str, int]:
+    """Compatibility wrapper for legacy OLT signal polling callers.
+
+    Direct SNMP polling has moved to Zabbix ingestion. This function now
+    summarizes currently stored inventory signal data while preserving the old
+    callable boundary for monitoring integrations and tests.
+    """
+    from sqlalchemy import func
+
+    from app.models.network import OntUnit
+
+    warning_threshold, _ = get_signal_thresholds(db, olt=olt)
+    total = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(OntUnit.is_active.is_(True))
+            .where(OntUnit.olt_device_id == olt.id)
+        )
+        or 0
+    )
+    updated = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(OntUnit.is_active.is_(True))
+            .where(OntUnit.olt_device_id == olt.id)
+            .where(OntUnit.olt_rx_signal_dbm.is_not(None))
+        )
+        or 0
+    )
+    low_signal = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(OntUnit.is_active.is_(True))
+            .where(OntUnit.olt_device_id == olt.id)
+            .where(OntUnit.olt_rx_signal_dbm.is_not(None))
+            .where(OntUnit.olt_rx_signal_dbm < warning_threshold)
+        )
+        or 0
+    )
+    return {
+        "polled": int(total),
+        "updated": int(updated),
+        "low_signal": int(low_signal),
+        "errors": 0,
+    }
 
 
 def classify_signal(

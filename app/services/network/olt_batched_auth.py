@@ -39,6 +39,9 @@ class MgmtIpConfig:
     gateway: str | None = None
     vlan_id: int | None = None
     priority: int = 0
+    ip_index: int = 0
+    internet_config_ip_index: int | None = None
+    wan_config_profile_id: int | None = None
 
 
 @dataclass
@@ -167,16 +170,41 @@ def build_authorization_command_batch(
             mc = spec.mgmt_config
             if mc.mode == "dhcp":
                 ip_cmd = (
-                    f"ont ipconfig {port} {{ont_id}} ip-index 0 dhcp vlan {mc.vlan_id}"
+                    f"ont ipconfig {port} {{ont_id}} ip-index {mc.ip_index} "
+                    f"dhcp vlan {mc.vlan_id}"
                 )
             else:
                 ip_cmd = (
-                    f"ont ipconfig {port} {{ont_id}} ip-index 0 "
+                    f"ont ipconfig {port} {{ont_id}} ip-index {mc.ip_index} "
                     f"static ip-address {mc.ip_address} "
                     f"mask {mc.netmask} gateway {mc.gateway} "
                     f"vlan {mc.vlan_id} priority {mc.priority}"
                 )
             commands.append((ip_cmd, "Configure management IP", False))
+
+            if mc.internet_config_ip_index is not None:
+                commands.append(
+                    (
+                        f"ont internet-config {port} {{ont_id}} "
+                        f"ip-index {mc.internet_config_ip_index}",
+                        "Activate management internet-config",
+                        False,
+                    )
+                )
+
+            if (
+                mc.wan_config_profile_id is not None
+                and mc.internet_config_ip_index is not None
+            ):
+                commands.append(
+                    (
+                        f"ont wan-config {port} {{ont_id}} "
+                        f"ip-index {mc.internet_config_ip_index} "
+                        f"profile-id {mc.wan_config_profile_id}",
+                        "Configure management WAN profile",
+                        False,
+                    )
+                )
 
         # TR-069 profile
         if spec.tr069_profile_id is not None:
@@ -323,4 +351,3 @@ def _extract_service_port_index(output: str) -> int | None:
             return int(match.group(1))
 
     return None
-

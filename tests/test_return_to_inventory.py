@@ -56,7 +56,7 @@ def sample_ont(db_session, sample_olt):
         port="2",
         external_id="0/1/2:5",
         provisioning_status=OntProvisioningStatus.provisioned,
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         mac_address="AA:BB:CC:DD:EE:FF",
         observed_wan_ip="192.168.1.100",
         desired_config={"wan_mode": "pppoe", "vlan": 100},
@@ -128,14 +128,14 @@ class TestResetOntServiceState:
         assert sample_ont.tr069_last_snapshot == {}
         assert sample_ont.olt_observed_snapshot == {}
 
-    def test_clears_online_status(self, db_session, sample_ont):
-        """Test that online status is reset to unknown."""
-        assert sample_ont.online_status == OnuOnlineStatus.online
+    def test_clears_olt_status(self, db_session, sample_ont):
+        """Test that OLT status is reset to unknown."""
+        assert sample_ont.olt_status == OnuOnlineStatus.online
 
         reset_ont_service_state(db_session, sample_ont, reason="test")
         db_session.flush()
 
-        assert sample_ont.online_status == OnuOnlineStatus.unknown
+        assert sample_ont.olt_status == OnuOnlineStatus.unknown
         assert sample_ont.effective_status == OnuOnlineStatus.unknown
 
     def test_deletes_wan_service_instances(self, db_session, sample_ont, sample_wan_service):
@@ -598,6 +598,125 @@ class TestReturnToInventoryWebAction:
         db_session.refresh(tr069_device)
         assert tr069_device.ont_unit_id is None
 
+    def test_deletes_genieacs_device_before_clearing_tr069_binding(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """Return to inventory deletes the ACS device record when one is linked."""
+        from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+        from app.services.network.ont_inventory import return_ont_to_inventory
+
+        acs_server = Tr069AcsServer(
+            name="Return ACS",
+            base_url="http://genieacs.example:7557",
+        )
+        db_session.add(acs_server)
+        db_session.flush()
+        tr069_device = Tr069CpeDevice(
+            serial_number=sample_ont.serial_number,
+            acs_server_id=acs_server.id,
+            ont_unit_id=sample_ont.id,
+            genieacs_device_id="ABC-ONT-HWTC12345678",
+        )
+        db_session.add(tr069_device)
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+        mock_client = MagicMock()
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.genieacs_client.create_genieacs_client",
+                return_value=mock_client,
+            ) as create_client,
+            patch("app.services.network.ont_inventory.emit_event"),
+            patch(
+                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
+                return_value={"ok": True, "rediscovered": False},
+            ),
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is True
+        create_client.assert_called_once_with("http://genieacs.example:7557")
+        mock_client.delete_device.assert_called_once_with("ABC-ONT-HWTC12345678")
+        db_session.refresh(tr069_device)
+        assert tr069_device.ont_unit_id is None
+
+    def test_genieacs_delete_failure_stops_inventory_return(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """Do not clear local inventory if the linked ACS device cannot be removed."""
+        from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+        from app.services.genieacs_client import GenieACSError
+        from app.services.network.ont_inventory import return_ont_to_inventory
+
+        acs_server = Tr069AcsServer(
+            name="Return ACS Failure",
+            base_url="http://genieacs.example:7557",
+        )
+        db_session.add(acs_server)
+        db_session.flush()
+        tr069_device = Tr069CpeDevice(
+            serial_number=sample_ont.serial_number,
+            acs_server_id=acs_server.id,
+            ont_unit_id=sample_ont.id,
+            genieacs_device_id="ABC-ONT-HWTC12345678",
+        )
+        db_session.add(tr069_device)
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+        mock_client = MagicMock()
+        mock_client.delete_device.side_effect = GenieACSError("API error: 502")
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.genieacs_client.create_genieacs_client",
+                return_value=mock_client,
+            ),
+            patch("app.services.network.ont_inventory.emit_event"),
+            patch(
+                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind"
+            ) as mock_autofind,
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is False
+        assert "acs device" in result.message.lower()
+        mock_autofind.assert_not_called()
+        db_session.refresh(sample_ont)
+        db_session.refresh(sample_assignment)
+        db_session.refresh(tr069_device)
+        assert sample_ont.olt_device_id == sample_olt.id
+        assert sample_assignment.active is True
+        assert tr069_device.ont_unit_id == sample_ont.id
+
     def test_releases_service_port_allocations(
         self, db_session, sample_ont, sample_olt, sample_assignment
     ):
@@ -643,7 +762,9 @@ class TestReturnToInventoryForWeb:
 
     def test_returns_not_found_for_missing_ont(self, db_session):
         """Test that missing ONT returns failure result."""
-        from app.services.web_network_ont_actions.inventory import return_to_inventory_for_web
+        from app.services.web_network_ont_actions.inventory import (
+            return_to_inventory_for_web,
+        )
 
         result = return_to_inventory_for_web(
             db_session,
@@ -655,7 +776,9 @@ class TestReturnToInventoryForWeb:
 
     def test_logs_audit_event(self, db_session, sample_ont, sample_olt, sample_assignment):
         """Test that audit event is logged."""
-        from app.services.web_network_ont_actions.inventory import return_to_inventory_for_web
+        from app.services.web_network_ont_actions.inventory import (
+            return_to_inventory_for_web,
+        )
 
         mock_adapter = MagicMock()
         mock_adapter.get_service_ports_for_ont.return_value = ActionResult(

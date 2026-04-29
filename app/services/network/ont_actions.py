@@ -12,8 +12,6 @@ from app.services.network.ont_action_device import (
     get_running_config,
     reboot,
     refresh_status,
-)
-from app.services.network.ont_action_diagnostics import (
     run_ping_diagnostic,
     run_traceroute_diagnostic,
 )

@@ -817,7 +817,7 @@ def build_nas_dashboard_data(
     status: str | None,
     pop_site_id: str | None,
     partner_org_id: str | None,
-    online_status: str | None,
+    olt_status: str | None,
     search: str | None,
     refresh: str | None,
     page: int,
@@ -859,13 +859,13 @@ def build_nas_dashboard_data(
     ping_statuses_all = {
         str(device.id): get_cached_ping_status(device) for device in devices_all
     }
-    if online_status == "online":
+    if olt_status == "online":
         devices_all = [
             d
             for d in devices_all
             if ping_statuses_all.get(str(d.id), {}).get("state") == "reachable"
         ]
-    elif online_status == "offline":
+    elif olt_status == "offline":
         devices_all = [
             d
             for d in devices_all
@@ -924,7 +924,7 @@ def build_nas_dashboard_data(
             "status": status,
             "pop_site_id": pop_site_id,
             "partner_org_id": partner_org_id,
-            "online_status": online_status,
+            "olt_status": olt_status,
             "search": search,
             "refresh": refresh,
         },

@@ -31,7 +31,7 @@ def _online_silent_ont(db_session) -> OntUnit:
         olt_device=olt,
         is_active=True,
         authorization_status=OntAuthorizationStatus.authorized,
-        online_status=OnuOnlineStatus.online,
+        olt_status=OnuOnlineStatus.online,
         acs_last_inform_at=None,
         board="0/1",
         port="1",

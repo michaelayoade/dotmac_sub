@@ -669,7 +669,7 @@ def execute_bulk_action(
     """
     from app.services.network.ont_actions import OntActions
     from app.services.network.ont_decommission import decommission_ont
-    from app.services.web_network_ont_actions import return_to_inventory
+    from app.services.network.ont_inventory import return_ont_to_inventory
 
     if action not in _BULK_ACTIONS:
         return {
@@ -706,7 +706,7 @@ def execute_bulk_action(
             elif action == "firmware_upgrade" and firmware_image_id:
                 result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
             elif action == "return_to_inventory":
-                result = return_to_inventory(db, ont_id)
+                result = return_ont_to_inventory(db, ont_id)
             elif action == "decommission":
                 result = decommission_ont(
                     db,
@@ -953,10 +953,10 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "speed_profiles_download": get_speed_profiles(db, "download"),
         "speed_profiles_upload": get_speed_profiles(db, "upload"),
         "signal_info": {
-            "online_status": getattr(
+            "olt_status": getattr(
                 getattr(ont, "effective_status", None),
                 "value",
-                getattr(ont, "online_status", "unknown"),
+                getattr(ont, "olt_status", "unknown"),
             ),
             "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
         },

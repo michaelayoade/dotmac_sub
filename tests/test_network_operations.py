@@ -133,6 +133,27 @@ class TestNetworkOperationLifecycle:
         assert updated.completed_at is not None
         assert updated.error == "Connection refused"
 
+    def test_running_to_warning(self, db_session):
+        """mark_warning records degraded success as a terminal warning."""
+        op = network_operations.start(
+            db_session,
+            NetworkOperationType.ont_authorize,
+            NetworkOperationTargetType.olt,
+            _make_target_id(),
+        )
+        network_operations.mark_running(db_session, str(op.id))
+        payload = {"status": "warning"}
+        updated = network_operations.mark_warning(
+            db_session,
+            str(op.id),
+            "ONT authorized, but ACS follow-up was not queued.",
+            output_payload=payload,
+        )
+        assert updated.status == NetworkOperationStatus.warning
+        assert updated.completed_at is not None
+        assert updated.error == "ONT authorized, but ACS follow-up was not queued."
+        assert updated.output_payload == payload
+
     def test_operation_logs_include_structured_fields(self, db_session, caplog):
         caplog.set_level("INFO")
         op = network_operations.start(
@@ -526,6 +547,9 @@ class TestParentStatusDerivation:
             elif status == NetworkOperationStatus.failed:
                 network_operations.mark_running(db_session, str(child.id))
                 network_operations.mark_failed(db_session, str(child.id), "test error")
+            elif status == NetworkOperationStatus.warning:
+                network_operations.mark_running(db_session, str(child.id))
+                network_operations.mark_warning(db_session, str(child.id), "test warning")
             elif status == NetworkOperationStatus.waiting:
                 network_operations.mark_running(db_session, str(child.id))
                 network_operations.mark_waiting(db_session, str(child.id), "test wait")
@@ -581,6 +605,16 @@ class TestParentStatusDerivation:
         updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.waiting
         assert updated.completed_at is None
+
+    def test_any_warning(self, db_session):
+        """Parent is warning when children are succeeded + warning."""
+        parent = self._make_parent_with_children(
+            db_session,
+            [NetworkOperationStatus.succeeded, NetworkOperationStatus.warning],
+        )
+        updated = network_operations.update_parent_status(db_session, str(parent.id))
+        assert updated.status == NetworkOperationStatus.warning
+        assert updated.completed_at is not None
 
     def test_no_children_returns_unchanged(self, db_session):
         """Parent with no children is returned unchanged."""

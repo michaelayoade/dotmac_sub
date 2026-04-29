@@ -84,7 +84,7 @@ def persist_authorized_ont_inventory(
     ont.board = board
     ont.port = port
     ont.external_id = str(ont_id)
-    ont.online_status = OnuOnlineStatus.unknown
+    ont.olt_status = OnuOnlineStatus.unknown
     ont.authorization_status = OntAuthorizationStatus.authorized
     acs_server_id = tr069_service.resolve_acs_server_for_ont(db, ont=ont, olt_id=str(olt.id))
     ont.last_sync_source = "olt_ssh_authorize"

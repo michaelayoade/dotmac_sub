@@ -18,6 +18,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, "/opt/dotmac_sub")
 
@@ -100,7 +101,7 @@ def _hex_to_serial(hex_sn: str) -> str:
 
 def parse_ont_registrations(filepath: Path) -> dict[tuple[int, int], str]:
     """Parse ONT registrations to build (port, ont_id) -> serial_number map."""
-    result = {}
+    result: dict[tuple[int, int], str] = {}
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
@@ -121,7 +122,7 @@ def parse_ont_registrations(filepath: Path) -> dict[tuple[int, int], str]:
 
 def parse_config_file(filepath: Path) -> list[ParsedServicePort]:
     """Parse service-port entries from a config file."""
-    results = []
+    results: list[ParsedServicePort] = []
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
@@ -187,7 +188,7 @@ def get_ont_by_fsp_and_id(
 
     # First try by serial number if provided (most reliable)
     if serial_number:
-        stmt = select(OntUnit).where(
+        stmt: Any = select(OntUnit).where(
             OntUnit.olt_device_id == olt_id,
             OntUnit.serial_number == serial_number,
             OntUnit.is_active.is_(True),
@@ -285,10 +286,10 @@ def import_from_config(
             logger.info("  Found %d ONT registrations", len(ont_registrations))
 
             # Get or create pool for this OLT
-            stmt = select(OltServicePortPool).where(
+            pool_stmt = select(OltServicePortPool).where(
                 OltServicePortPool.olt_device_id == olt.id
             )
-            pool = db.scalars(stmt).first()
+            pool = db.scalars(pool_stmt).first()
             if not pool:
                 pool = OltServicePortPool(
                     olt_device_id=olt.id,
@@ -300,10 +301,10 @@ def import_from_config(
                 logger.info("  Created pool for OLT %s", olt.name)
 
             # Get existing allocations
-            stmt = select(ServicePortAllocation.port_index).where(
+            allocation_stmt = select(ServicePortAllocation.port_index).where(
                 ServicePortAllocation.pool_id == pool.id
             )
-            existing_indices = set(db.scalars(stmt).all())
+            existing_indices: set[int] = set(db.scalars(allocation_stmt).all())
 
             file_results = {
                 "created": 0,

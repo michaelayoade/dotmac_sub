@@ -61,7 +61,7 @@ dev = [
 package-mode = false
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+asyncio_mode = "strict"
 
 [tool.ruff]
 line-length = 88
@@ -132,9 +132,7 @@ module = [
     "app.services.events.handlers.provisioning",
     "app.services.integrations.accounting_sync",
     "app.services.integrations.connectors.whatsapp",
-    "app.services.acs_config_adapter",
-    "app.services.acs_service_intent_adapter",
-    "app.services.acs_state_adapter",
+    "app.services.genieacs_service_intent",
     "app.services.nas",
     "app.services.nas_pkg.web_builders",
     "app.services.notification_adapter",
@@ -157,7 +155,6 @@ module = [
     "app.services.network.olt_monitoring_devices",
     "app.services.network.olt_protocol_adapters",
     "app.services.network.olt_vendor_adapters",
-    "app.services.network.ont_status_adapter",
     "app.services.network.ont_provision_steps",
     "app.services.network.ont_service_intent",
     "app.services.network.provisioning_coordinator",

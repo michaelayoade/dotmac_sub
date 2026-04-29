@@ -1,8 +1,7 @@
 {# HTMX partial: ONT autofind scan results #}
 {% from "components/ui/macros.html" import data_table, table_head, empty_state %}
 
-{# Alpine.js component for managing authorization operations with WebSocket updates #}
-<div x-data="autofindOperations()" @operationqueued.window="handleOperationQueued($event.detail)">
+<div>
 
 {% if not autofind_ok %}
 <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">
@@ -39,7 +38,7 @@
     {{ table_head(["Serial Number", "Port (F/S/P)", "Model", "MAC Address", "Software", "Found At", ""]) }}
     <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
         {% for entry in autofind_entries %}
-        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50" :class="getRowStatus('{{ entry.serial_number }}') === 'succeeded' && 'bg-emerald-50 dark:bg-emerald-900/20'">
+        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
             <td class="px-6 py-3 whitespace-nowrap">
                 <span class="text-sm font-medium font-mono text-slate-900 dark:text-white">{{ entry.serial_number }}</span>
                 {% if entry.vendor_id %}
@@ -68,34 +67,6 @@
                     </span>
                     {% endif %}
                 {% else %}
-                {# Show success badge with link if operation completed #}
-                <template x-if="getRowStatus('{{ entry.serial_number }}') === 'succeeded'">
-                    <a :href="getRowViewUrl('{{ entry.serial_number }}') || '#'"
-                       class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
-                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        Authorized
-                        <svg class="h-3 w-3 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    </a>
-                </template>
-                {# Show failure badge if operation failed #}
-                <template x-if="getRowStatus('{{ entry.serial_number }}') === 'failed'">
-                    <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">
-                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                        Failed
-                    </span>
-                </template>
-                {# Show running indicator if operation in progress #}
-                <template x-if="getRowStatus('{{ entry.serial_number }}') === 'running'">
-                    <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                        <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Authorizing...
-                    </span>
-                </template>
-                {# Show form if no operation in progress for this row #}
-                <template x-if="!getRowStatus('{{ entry.serial_number }}')">
                     <form method="POST" action="/admin/network/olts/{{ olt_id }}/authorize-ont"
                           hx-post="/admin/network/olts/{{ olt_id }}/authorize-ont"
                           hx-swap="none"
@@ -127,7 +98,6 @@
                             <span x-show="submitting" x-cloak>Queuing...</span>
                         </button>
                     </form>
-                </template>
                 {% endif %}
             </td>
         </tr>
@@ -137,94 +107,3 @@
 {% endif %}
 
 </div>
-
-<script>
-/**
- * Autofind Operations - Uses global OperationTracker for WebSocket updates
- */
-function autofindOperations() {
-    return {
-        // Track operations by serial number: { status, operation_id, view_url }
-        operations: {},
-
-        init() {
-            // Listen for operation status updates from the global tracker
-            window.addEventListener('operation-status', (e) => this.handleOperationStatus(e.detail));
-        },
-
-        /**
-         * Handle operation queued event from HTMX response
-         */
-        handleOperationQueued(detail) {
-            if (!detail || !detail.operation_id || !detail.serial_number) return;
-
-            const { operation_id, serial_number } = detail;
-
-            // Track the operation locally
-            this.operations[serial_number] = {
-                status: 'running',
-                operation_id: operation_id,
-                view_url: null
-            };
-
-            // Use global tracker for WebSocket subscription
-            if (window.operationTracker) {
-                window.operationTracker.track(operation_id, {
-                    showToasts: true,
-                    onSuccess: (data) => this.updateOperation(serial_number, 'succeeded', data),
-                    onWarning: (data) => this.updateOperation(serial_number, 'succeeded', data),
-                    onError: (data) => this.updateOperation(serial_number, 'failed', data)
-                });
-            }
-        },
-
-        /**
-         * Handle operation status event from global tracker
-         */
-        handleOperationStatus(detail) {
-            if (!detail || !detail.operation_id) return;
-
-            // Find matching operation by ID
-            const serial = detail.serial_number || this.findSerialByOperationId(detail.operation_id);
-            if (serial && this.operations[serial]) {
-                this.updateOperation(serial, detail.status, detail);
-            }
-        },
-
-        /**
-         * Update local operation state
-         */
-        updateOperation(serial, status, data) {
-            if (!this.operations[serial]) {
-                this.operations[serial] = {};
-            }
-            this.operations[serial].status = status;
-            if (data && data.view_url) {
-                this.operations[serial].view_url = data.view_url;
-            }
-        },
-
-        /**
-         * Find serial number by operation ID
-         */
-        findSerialByOperationId(operationId) {
-            for (const [serial, op] of Object.entries(this.operations)) {
-                if (op.operation_id === operationId) {
-                    return serial;
-                }
-            }
-            return null;
-        },
-
-        getRowStatus(serialNumber) {
-            const op = this.operations[serialNumber];
-            return op ? op.status : null;
-        },
-
-        getRowViewUrl(serialNumber) {
-            const op = this.operations[serialNumber];
-            return op ? op.view_url : null;
-        }
-    };
-}
-</script>

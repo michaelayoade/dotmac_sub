@@ -86,7 +86,7 @@ class TestGetEnriched:
         ont = OntUnit(
             serial_number="ONT-READ-LAST-SEEN",
             is_active=True,
-            online_status=OnuOnlineStatus.unknown,
+            olt_status=OnuOnlineStatus.unknown,
             last_seen_at=now - timedelta(days=1),
             acs_last_inform_at=now,
         )

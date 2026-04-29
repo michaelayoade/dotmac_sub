@@ -116,11 +116,11 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
 
     # Start with the ONT node
     ont_status = "unknown"
-    if hasattr(ont, "online_status") and ont.online_status:
+    if hasattr(ont, "olt_status") and ont.olt_status:
         ont_status = (
-            ont.online_status.value
-            if hasattr(ont.online_status, "value")
-            else str(ont.online_status)
+            ont.olt_status.value
+            if hasattr(ont.olt_status, "value")
+            else str(ont.olt_status)
         )
 
     ont_node = TopologyNode(

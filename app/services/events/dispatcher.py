@@ -93,7 +93,8 @@ class EventDispatcher:
         # This avoids committing the caller's pending transaction
         event_record_id: UUID | None = None
         try:
-            event_session = SessionLocal()
+            use_external_session = not isinstance(db, Session)
+            event_session = db if use_external_session else SessionLocal()
             try:
                 event_record = EventStore(
                     event_id=event.event_id,
@@ -121,7 +122,8 @@ class EventDispatcher:
                 )
                 event_session.rollback()
             finally:
-                event_session.close()
+                if not use_external_session:
+                    event_session.close()
         except Exception as session_exc:
             logger.warning(
                 "event_session_failed",

@@ -16,7 +16,7 @@ from time import sleep
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, joinedload
 
@@ -737,7 +737,7 @@ class OntUnits(CRUDManager[OntUnit]):
         pon_hint: str | None = None,
         zone_id: str | None = None,
         signal_quality: str | None = None,
-        online_status: str | None = None,
+        olt_status: str | None = None,
         authorization_status: str | None = None,
         vendor: str | None = None,
         search: str | None = None,
@@ -818,12 +818,12 @@ class OntUnits(CRUDManager[OntUnit]):
         # Filter by active state
         stmt = apply_active_state(stmt, OntUnit.is_active, is_active)
 
-        # Filter by online status
+        # Filter by OLT status
         from app.models.network import OnuOnlineStatus
 
-        if online_status and online_status in ("online", "offline", "unknown"):
+        if olt_status and olt_status in ("online", "offline", "unknown"):
             stmt = stmt.where(
-                OntUnit.effective_status == OnuOnlineStatus(online_status)
+                OntUnit.effective_status == OnuOnlineStatus(olt_status)
             )
 
         # Filter by OLT authorization state. The service-facing ONT fleet should
@@ -833,9 +833,22 @@ class OntUnits(CRUDManager[OntUnit]):
         if authorization_status:
             normalized_auth = authorization_status.strip().lower()
             if normalized_auth == "authorized":
+                active_assignment = aliased(OntAssignment)
+                has_active_assignment = exists(
+                    select(1)
+                    .select_from(active_assignment)
+                    .where(
+                        active_assignment.ont_unit_id == OntUnit.id,
+                        active_assignment.active.is_(True),
+                    )
+                    .correlate(OntUnit)
+                )
                 stmt = stmt.where(
-                    OntUnit.authorization_status
-                    == OntAuthorizationStatus.authorized
+                    or_(
+                        OntUnit.authorization_status
+                        == OntAuthorizationStatus.authorized,
+                        has_active_assignment,
+                    )
                 )
             elif normalized_auth == "unauthorized":
                 stmt = stmt.where(

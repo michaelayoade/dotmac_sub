@@ -11,8 +11,8 @@ APP_DIR = PROJECT_ROOT / "app"
 
 STATUS_WRITE_PATTERN = re.compile(
     r"\.("
-    r"acs_status|effective_status|effective_status_source|status_resolved_at|"
-    r"consecutive_offline_polls"
+    r"olt_status|olt_status_seen_at|acs_last_inform_at|effective_status|"
+    r"effective_status_source|consecutive_offline_polls"
     r")\s*(?<![=!<>])=(?!=)"
 )
 DESIRED_CONFIG_WRITE_PATTERN = re.compile(r"\.desired_config\s*(?<![=!<>])=(?!=)")
@@ -22,6 +22,11 @@ ACS_FACTORY_PATTERN = re.compile(
 
 APPROVED_STATUS_WRITERS = {
     Path("app/services/network/ont_status.py"),
+    Path("app/services/network/olt_autofind.py"),
+    Path("app/services/network/ont_authorization.py"),
+    Path("app/services/network/ont_decommission.py"),
+    Path("app/services/zabbix_data_ingest.py"),
+    Path("app/tasks/olt_polling.py"),
 }
 
 APPROVED_DESIRED_CONFIG_WRITERS = {
@@ -30,19 +35,14 @@ APPROVED_DESIRED_CONFIG_WRITERS = {
 }
 
 APPROVED_ACS_FACTORY_USERS = {
-    Path("app/services/acs_client.py"),
-    Path("app/services/acs_service.py"),
+    Path("app/services/genieacs_client.py"),
+    Path("app/services/genieacs_service.py"),
 }
 
 APPROVED_PROVISION_WITH_RECONCILIATION_CALLERS = {
     Path("app/services/network/ont_provision_steps.py"),
     Path("app/services/network/ont_provisioning/orchestrator.py"),
 }
-
-APPROVED_ACS_STATUS_RESOLVER_CALLERS = {
-    Path("app/services/network/ont_status.py"),
-}
-
 
 def _iter_app_python_files() -> list[Path]:
     return sorted(path for path in APP_DIR.rglob("*.py") if path.is_file())
@@ -123,15 +123,6 @@ def test_full_ont_provisioning_uses_orchestrator_entrypoint() -> None:
     violations = _call_violations(
         "provision_with_reconciliation",
         APPROVED_PROVISION_WITH_RECONCILIATION_CALLERS,
-    )
-
-    assert not violations, "\n".join(violations)
-
-
-def test_acs_status_is_resolved_through_ont_status_snapshot_helpers() -> None:
-    violations = _call_violations(
-        "resolve_acs_status",
-        APPROVED_ACS_STATUS_RESOLVER_CALLERS,
     )
 
     assert not violations, "\n".join(violations)

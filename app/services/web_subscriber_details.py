@@ -289,7 +289,7 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     """Collect subscriber detail page data from multiple services."""
     subscriptions = []
     all_subscriptions = []
-    online_status = {}
+    olt_status = {}
     try:
         all_subscriptions = catalog_service.subscriptions.list(
             db=db,
@@ -319,22 +319,22 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                 .first()
             )
             if latest_session:
-                online_status[str(sub.id)] = (
+                olt_status[str(sub.id)] = (
                     latest_session.status_type
                     in (AccountingStatus.start, AccountingStatus.interim)
                     and latest_session.session_end is None
                 )
             else:
-                online_status[str(sub.id)] = False
+                olt_status[str(sub.id)] = False
     except Exception:
         logger.exception(
-            "Failed to load subscriber subscriptions/online status for detail snapshot",
+            "Failed to load subscriber subscriptions/OLT status for detail snapshot",
             extra={"subscriber_id": str(subscriber_id)},
         )
         db.rollback()
         subscriptions = []
         all_subscriptions = []
-        online_status = {}
+        olt_status = {}
 
     accounts = []
     invoices = []
@@ -564,7 +564,7 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         "accounts": accounts,
         "subscriptions": subscriptions,
         "all_subscriptions": all_subscriptions,
-        "online_status": online_status,
+        "olt_status": olt_status,
         "invoices": invoices,
         "payments": payments,
         "dunning_cases": dunning_cases,

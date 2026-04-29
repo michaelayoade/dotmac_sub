@@ -10,23 +10,27 @@ import logging
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.catalog import NasDevice
-from app.models.network import OLTDevice
 from app.models.network_monitoring import (
     Alert,
     AlertEvent,
-    AlertRule,
     AlertSeverity,
     AlertStatus,
     MetricType,
+)
+from app.services.autofind_trigger import (
+    AutofindTriggerResult,
+    trigger_autofind_by_identifier,
+)
+from app.services.zabbix_webhook import (
+    find_device_by_zabbix_host_id,
+    find_open_zabbix_alert,
+    get_or_create_zabbix_alert_rule,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +103,9 @@ class ZabbixWebhookResponse(BaseModel):
     status: str = "ok"
     alert_id: str | None = None
     message: str | None = None
+    autofind_triggered: bool = False
+    autofind_task_id: str | None = None
+    autofind_message: str | None = None
 
 
 def _map_zabbix_severity(zabbix_severity: str) -> AlertSeverity:
@@ -114,52 +121,6 @@ def _map_zabbix_severity(zabbix_severity: str) -> AlertSeverity:
     return severity_map.get(zabbix_severity.lower(), AlertSeverity.warning)
 
 
-def _find_device_by_zabbix_host_id(
-    db: Session, zabbix_host_id: str
-) -> tuple[str | None, UUID | None]:
-    """Find OLT or NAS device by Zabbix host ID.
-
-    Returns (device_type, device_id) or (None, None) if not found.
-    """
-    # Check OLTs first
-    olt = db.scalars(
-        select(OLTDevice).where(OLTDevice.zabbix_host_id == zabbix_host_id)
-    ).first()
-    if olt:
-        return ("olt", olt.id)
-
-    # Check NAS devices
-    nas = db.scalars(
-        select(NasDevice).where(NasDevice.zabbix_host_id == zabbix_host_id)
-    ).first()
-    if nas:
-        return ("nas", nas.id)
-
-    return (None, None)
-
-
-def _get_or_create_zabbix_alert_rule(db: Session) -> AlertRule:
-    """Get or create a default alert rule for Zabbix-sourced alerts."""
-    rule = db.scalars(
-        select(AlertRule).where(AlertRule.name == "Zabbix Alert")
-    ).first()
-
-    if not rule:
-        rule = AlertRule(
-            name="Zabbix Alert",
-            notes="Alerts forwarded from Zabbix monitoring",
-            metric_type=MetricType.custom,
-            severity=AlertSeverity.warning,
-            threshold=0,
-            operator="gt",  # gt=greater than, gte=>=, lt=<, lte=<=, eq==
-            is_active=True,
-        )
-        db.add(rule)
-        db.flush()
-
-    return rule
-
-
 def _parse_item_value(item_value: str | None) -> float:
     """Parse item value to float, returning 0.0 on failure."""
     if not item_value:
@@ -173,6 +134,95 @@ def _parse_item_value(item_value: str | None) -> float:
         return float(value)
     except (ValueError, TypeError):
         return 0.0
+
+
+def _is_autofind_problem(payload: ZabbixAlertPayload) -> bool:
+    """Return True when a Zabbix problem event should trigger OLT autofind."""
+    if payload.trigger_status.upper() != "PROBLEM":
+        return False
+
+    tags = {str(k).lower(): str(v).lower() for k, v in (payload.tags or {}).items()}
+    tag_values = set(tags.values())
+    if (
+        tags.get("dotmac_event") == "autofind"
+        or tags.get("event_type") == "autofind"
+        or tags.get("autofind") in {"1", "true", "yes"}
+        or "autofind" in tag_values
+    ):
+        return True
+
+    text = " ".join(
+        part
+        for part in (
+            payload.trigger_name,
+            payload.item_name or "",
+            payload.item_key or "",
+        )
+        if part
+    ).lower()
+    markers = (
+        "ontautofind",
+        "ont autofind",
+        "autofind",
+        "unconfigured ont",
+        "unauthorized ont",
+        "unauthenticated ont",
+        "rogue ont",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _trigger_autofind_for_zabbix_problem(
+    db: Session,
+    payload: ZabbixAlertPayload,
+    *,
+    device_type: str | None,
+    device_id: Any | None,
+) -> AutofindTriggerResult | None:
+    if not _is_autofind_problem(payload):
+        return None
+
+    identifiers: list[str] = []
+    if device_type == "olt" and device_id is not None:
+        identifiers.append(str(device_id))
+    if payload.host_ip:
+        identifiers.append(payload.host_ip)
+    identifiers.append(payload.host_name)
+
+    seen: set[str] = set()
+    for identifier in identifiers:
+        normalized = str(identifier or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result = trigger_autofind_by_identifier(
+            db=db,
+            identifier=normalized,
+            source="zabbix",
+        )
+        if result.triggered or result.olt_id:
+            return result
+
+    return AutofindTriggerResult(
+        triggered=False,
+        reason="No active OLT matched Zabbix autofind event",
+    )
+
+
+def _response(
+    *,
+    alert_id: str | None = None,
+    message: str | None = None,
+    autofind_result: AutofindTriggerResult | None = None,
+) -> ZabbixWebhookResponse:
+    return ZabbixWebhookResponse(
+        status="ok",
+        alert_id=alert_id,
+        message=message,
+        autofind_triggered=bool(autofind_result and autofind_result.triggered),
+        autofind_task_id=autofind_result.task_id if autofind_result else None,
+        autofind_message=autofind_result.reason if autofind_result else None,
+    )
 
 
 @router.post("/webhook/alert", response_model=ZabbixWebhookResponse)
@@ -197,10 +247,10 @@ def receive_zabbix_alert(
     )
 
     # Find associated device
-    device_type, device_id = _find_device_by_zabbix_host_id(db, payload.host_id)
+    device_type, device_id = find_device_by_zabbix_host_id(db, payload.host_id)
 
     # Get or create Zabbix alert rule
-    rule = _get_or_create_zabbix_alert_rule(db)
+    rule = get_or_create_zabbix_alert_rule(db)
 
     # Map severity
     severity = _map_zabbix_severity(payload.trigger_severity)
@@ -210,20 +260,33 @@ def receive_zabbix_alert(
 
     # Determine if this is a new alert, update, or resolution
     is_problem = payload.trigger_status.upper() == "PROBLEM"
+    autofind_result = _trigger_autofind_for_zabbix_problem(
+        db,
+        payload,
+        device_type=device_type,
+        device_id=device_id,
+    )
+    if autofind_result:
+        logger.info(
+            "zabbix_autofind_trigger_result",
+            extra={
+                "triggered": autofind_result.triggered,
+                "olt_id": autofind_result.olt_id,
+                "task_id": autofind_result.task_id,
+                "reason": autofind_result.reason,
+                "host_id": payload.host_id,
+            },
+        )
 
     # Build unique identifier for deduplication
     zabbix_event_key = f"zabbix:{payload.trigger_id}:{payload.host_id}"
 
     # Check for existing alert
-    existing_alert = db.scalars(
-        select(Alert)
-        .where(
-            Alert.rule_id == rule.id,
-            Alert.notes.contains(zabbix_event_key),
-            Alert.status != AlertStatus.resolved,
-        )
-        .order_by(Alert.triggered_at.desc())
-    ).first()
+    existing_alert = find_open_zabbix_alert(
+        db,
+        rule_id=rule.id,
+        zabbix_event_key=zabbix_event_key,
+    )
 
     if is_problem:
         if existing_alert:
@@ -245,10 +308,10 @@ def receive_zabbix_alert(
                 extra={"alert_id": str(existing_alert.id)},
             )
 
-            return ZabbixWebhookResponse(
-                status="ok",
+            return _response(
                 alert_id=str(existing_alert.id),
                 message="Alert updated",
+                autofind_result=autofind_result,
             )
         else:
             # Create new alert
@@ -288,10 +351,10 @@ def receive_zabbix_alert(
                 extra={"alert_id": str(alert.id)},
             )
 
-            return ZabbixWebhookResponse(
-                status="ok",
+            return _response(
                 alert_id=str(alert.id),
                 message="Alert created",
+                autofind_result=autofind_result,
             )
     else:
         # This is a recovery (OK/RESOLVED)
@@ -313,8 +376,7 @@ def receive_zabbix_alert(
                 extra={"alert_id": str(existing_alert.id)},
             )
 
-            return ZabbixWebhookResponse(
-                status="ok",
+            return _response(
                 alert_id=str(existing_alert.id),
                 message="Alert resolved",
             )
@@ -323,10 +385,7 @@ def receive_zabbix_alert(
                 "zabbix_alert_resolve_no_match",
                 extra={"trigger_id": payload.trigger_id},
             )
-            return ZabbixWebhookResponse(
-                status="ok",
-                message="No matching alert to resolve",
-            )
+            return _response(message="No matching alert to resolve")
 
 
 @router.post("/webhook/sync", response_model=dict[str, Any])

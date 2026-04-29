@@ -522,9 +522,10 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if ont.last_seen_at %}
-                                <span class="text-xs text-slate-600 dark:text-slate-400" title="{{ ont.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') if ont.last_seen_at else '' }}">
-                                    {{ ont.last_seen_at.strftime('%b %d, %H:%M') if ont.last_seen_at else '-' }}
+                                {% set effective_last_seen_at = sd.get("last_seen_at") or ont.last_seen_at %}
+                                {% if effective_last_seen_at %}
+                                <span class="text-xs text-slate-600 dark:text-slate-400" title="{{ effective_last_seen_at.strftime('%Y-%m-%d %H:%M:%S') if effective_last_seen_at else '' }}">
+                                    {{ effective_last_seen_at.strftime('%b %d, %H:%M') if effective_last_seen_at else '-' }}
                                 </span>
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>

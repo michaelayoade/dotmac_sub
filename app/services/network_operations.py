@@ -43,6 +43,7 @@ _ACTIVE_STATUSES = (
 _TERMINAL_STATUSES = frozenset(
     {
         NetworkOperationStatus.succeeded,
+        NetworkOperationStatus.warning,
         NetworkOperationStatus.failed,
         NetworkOperationStatus.canceled,
     }
@@ -305,6 +306,36 @@ class NetworkOperations(ListResponseMixin):
         return op
 
     @staticmethod
+    def mark_warning(
+        db: Session,
+        operation_id: str,
+        warning: str,
+        *,
+        output_payload: dict[str, Any] | None = None,
+    ) -> NetworkOperation:
+        """Transition operation to warning status for degraded success."""
+        op = _get_operation(db, operation_id)
+        _check_not_terminal(op)
+        op.status = NetworkOperationStatus.warning
+        op.completed_at = datetime.now(UTC)
+        op.error = warning
+        if output_payload is not None:
+            op.output_payload = output_payload
+        db.flush()
+        extra = _operation_extra(op)
+        extra["warning"] = warning
+        extra["output_payload"] = output_payload
+        logger.warning(
+            "Operation %s completed with warning on %s %s: %s",
+            op.operation_type.value,
+            op.target_type.value,
+            op.target_id,
+            str(warning)[:100],
+            extra=extra,
+        )
+        return op
+
+    @staticmethod
     def mark_waiting(
         db: Session,
         operation_id: str,
@@ -386,6 +417,7 @@ class NetworkOperations(ListResponseMixin):
         - Any child failed and none running -> parent failed
         - Any child pending and none running/failed -> parent pending
         - Any child waiting and none running/failed/pending -> parent waiting
+        - Any child warning and none running/failed/pending/waiting -> parent warning
         - All children succeeded -> parent succeeded
         """
         parent = db.get(NetworkOperation, parent_id)
@@ -413,6 +445,8 @@ class NetworkOperations(ListResponseMixin):
             derived = NetworkOperationStatus.pending
         elif NetworkOperationStatus.waiting in statuses:
             derived = NetworkOperationStatus.waiting
+        elif NetworkOperationStatus.warning in statuses:
+            derived = NetworkOperationStatus.warning
         else:
             derived = NetworkOperationStatus.succeeded
 
@@ -422,6 +456,7 @@ class NetworkOperations(ListResponseMixin):
         parent.status = derived
         if derived in (
             NetworkOperationStatus.succeeded,
+            NetworkOperationStatus.warning,
             NetworkOperationStatus.failed,
         ):
             parent.completed_at = datetime.now(UTC)

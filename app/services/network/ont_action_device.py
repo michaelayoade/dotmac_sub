@@ -6,14 +6,16 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     DeviceConfig,
+    build_tr069_params,
     detect_data_model_root,
     get_ont_client_or_error,
     get_ont_strict_or_error,
     persist_data_model_root,
+    set_and_verify,
 )
 from app.services.network.tr069_paths import VIRTUAL_PARAM_GROUPS
 
@@ -110,6 +112,30 @@ _RUNTIME_REFRESH_PARAMS = {
     ],
 }
 
+_PING_PATHS = {
+    "Device": {
+        "host": "IP.Diagnostics.IPPing.Host",
+        "count": "IP.Diagnostics.IPPing.NumberOfRepetitions",
+        "state": "IP.Diagnostics.IPPing.DiagnosticsState",
+    },
+    "InternetGatewayDevice": {
+        "host": "IPPingDiagnostics.Host",
+        "count": "IPPingDiagnostics.NumberOfRepetitions",
+        "state": "IPPingDiagnostics.DiagnosticsState",
+    },
+}
+
+_TRACEROUTE_PATHS = {
+    "Device": {
+        "host": "IP.Diagnostics.TraceRoute.Host",
+        "state": "IP.Diagnostics.TraceRoute.DiagnosticsState",
+    },
+    "InternetGatewayDevice": {
+        "host": "TraceRouteDiagnostics.Host",
+        "state": "TraceRouteDiagnostics.DiagnosticsState",
+    },
+}
+
 
 def _unwrap_parameter_value(value: object) -> object:
     if isinstance(value, dict):
@@ -154,7 +180,7 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
     Uses the ONT Status Adapter to get unified status and updates the database.
     Also triggers a TR-069 parameter refresh if ACS is available.
     """
-    from app.services.network.ont_status_adapter import (
+    from app.services.network.ont_status import (
         StatusProviderMode,
         refresh_ont_status,
     )
@@ -177,11 +203,11 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         # No ACS available - return just the cached status
         return ActionResult(
             success=True,
-            message=f"Status updated from cache: {status_result.online_status.value}",
+            message=f"Status updated from cache: {status_result.effective_status.value}",
             data={
-                "status": status_result.online_status.value,
+                "status": status_result.effective_status.value,
                 "source": status_result.status_source.value,
-                "acs_status": status_result.acs_status.value,
+                "effective_status_source": status_result.status_source.value,
             },
         )
 
@@ -201,7 +227,7 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
             success=True,
             message=f"Status refresh requested for {ont.serial_number}.",
             data={
-                "status": status_result.online_status.value,
+                "status": status_result.effective_status.value,
                 "source": status_result.status_source.value,
                 "tr069_task": result,
             },
@@ -213,7 +239,7 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
             success=True,
             message=f"Status from cache (TR-069 refresh failed: {exc})",
             data={
-                "status": status_result.online_status.value,
+                "status": status_result.effective_status.value,
                 "source": status_result.status_source.value,
             },
         )
@@ -331,3 +357,100 @@ def firmware_upgrade(db: Session, ont_id: str, firmware_image_id: str) -> Action
     except GenieACSError as exc:
         logger.error("Firmware upgrade failed for ONT %s: %s", ont.serial_number, exc)
         return ActionResult(success=False, message=f"Firmware upgrade failed: {exc}")
+
+
+def run_ping_diagnostic(
+    db: Session, ont_id: str, host: str, count: int = 4
+) -> ActionResult:
+    if not host or not host.strip():
+        return ActionResult(success=False, message="Ping target host is required.")
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
+    count = max(1, min(count, 20))
+    paths = _PING_PATHS[root]
+    params = build_tr069_params(
+        root,
+        {
+            paths["host"]: host.strip(),
+            paths["count"]: str(count),
+            paths["state"]: "Requested",
+        },
+    )
+    expected = {
+        f"{root}.{paths['host']}": host.strip(),
+        f"{root}.{paths['count']}": str(count),
+    }
+    try:
+        result = set_and_verify(client, device_id, params, expected=expected)
+        logger.info(
+            "Ping diagnostic started on ONT %s -> %s (%d pings)",
+            ont.serial_number,
+            host.strip(),
+            count,
+        )
+        return ActionResult(
+            success=True,
+            message=(
+                f"Ping diagnostic started on {ont.serial_number} -> "
+                f"{host.strip()} ({count} pings). Results will appear after "
+                "the next device inform."
+            ),
+            data=result,
+        )
+    except GenieACSError as exc:
+        logger.error("Ping diagnostic failed for ONT %s: %s", ont.serial_number, exc)
+        return ActionResult(
+            success=False, message=f"Failed to start ping diagnostic: {exc}"
+        )
+
+
+def run_traceroute_diagnostic(db: Session, ont_id: str, host: str) -> ActionResult:
+    if not host or not host.strip():
+        return ActionResult(
+            success=False, message="Traceroute target host is required."
+        )
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
+    paths = _TRACEROUTE_PATHS[root]
+    params = build_tr069_params(
+        root,
+        {
+            paths["host"]: host.strip(),
+            paths["state"]: "Requested",
+        },
+    )
+    expected = {f"{root}.{paths['host']}": host.strip()}
+    try:
+        result = set_and_verify(client, device_id, params, expected=expected)
+        logger.info(
+            "Traceroute diagnostic started on ONT %s -> %s",
+            ont.serial_number,
+            host.strip(),
+        )
+        return ActionResult(
+            success=True,
+            message=(
+                f"Traceroute started on {ont.serial_number} -> {host.strip()}. "
+                "Results will appear after the next device inform."
+            ),
+            data=result,
+        )
+    except GenieACSError as exc:
+        logger.error(
+            "Traceroute diagnostic failed for ONT %s: %s", ont.serial_number, exc
+        )
+        return ActionResult(success=False, message=f"Failed to start traceroute: {exc}")

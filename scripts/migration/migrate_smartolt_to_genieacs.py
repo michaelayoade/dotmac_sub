@@ -327,7 +327,7 @@ def step1_sync_genieacs(
 ) -> None:
     """Sync GenieACS device list into tr069_cpe_devices and auto-link to ONTs."""
     from app.models.tr069 import Tr069AcsServer
-    from app.services.genieacs import GenieACSClient
+    from app.services.genieacs_client import GenieACSClient
     from app.services.tr069 import CpeDevices
 
     logger.info("=" * 60)
@@ -494,7 +494,7 @@ def step3_push_config_via_tr069(
     from app.models.network import OntUnit
     from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
     from app.services.credential_crypto import decrypt_credential
-    from app.services.genieacs import GenieACSClient, GenieACSError
+    from app.services.genieacs_client import GenieACSClient, GenieACSError
     from app.services.network.ont_action_common import (
         TR069_ROOT_DEVICE,
         TR069_ROOT_IGD,
@@ -750,7 +750,7 @@ def step4_update_provisioning_status(
 
 def _resolve_genieacs_device_id(client, cpe_dev, ont) -> str | None:
     """Resolve GenieACS device ID from CPE or ONT serial number."""
-    from app.services.genieacs import GenieACSError
+    from app.services.genieacs_client import GenieACSError
 
     serial = ont.serial_number or cpe_dev.serial_number
     if not serial:
@@ -785,7 +785,7 @@ def _resolve_genieacs_device_id(client, cpe_dev, ont) -> str | None:
 
 def _detect_and_cache_data_model(db, client, device_id: str, ont) -> str | None:
     """Detect TR-098 vs TR-181 data model and cache on ONT."""
-    from app.services.genieacs import GenieACSError
+    from app.services.genieacs_client import GenieACSError
     from app.services.network.ont_action_common import TR069_ROOT_DEVICE, TR069_ROOT_IGD
 
     if ont.tr069_data_model in (TR069_ROOT_DEVICE, TR069_ROOT_IGD):

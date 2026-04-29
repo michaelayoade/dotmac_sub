@@ -25,7 +25,7 @@ def first_present(*values: Any, exclude_empty_list: bool = False) -> Any:
         - Empty string "" is treated as empty
         - Empty list [] is only excluded if exclude_empty_list=True
     """
-    empty = (None, "", []) if exclude_empty_list else (None, "")
+    empty: tuple[Any, ...] = (None, "", []) if exclude_empty_list else (None, "")
     for value in values:
         if value not in empty:
             return value
@@ -37,7 +37,7 @@ def first_present_enum(*values: Any, exclude_empty_list: bool = False) -> Any:
 
     If a value has a .value attribute (like an Enum), returns .value instead.
     """
-    empty = (None, "", []) if exclude_empty_list else (None, "")
+    empty: tuple[Any, ...] = (None, "", []) if exclude_empty_list else (None, "")
     for value in values:
         if value not in empty:
             return getattr(value, "value", value)

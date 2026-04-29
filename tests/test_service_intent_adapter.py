@@ -195,7 +195,7 @@ def test_ui_adapter_builds_service_port_defaults_from_profile_intent() -> None:
     assert defaults["planned_services"] == []
 
 
-def test_acs_service_intent_adapter_maps_observed_summary_without_secrets() -> None:
+def test_genieacs_service_intent_maps_observed_summary_without_secrets() -> None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     summary = SimpleNamespace(
@@ -299,7 +299,7 @@ def test_acs_service_intent_adapter_maps_observed_summary_without_secrets() -> N
     assert "super-secret-password" not in repr(intent)
 
 
-def test_acs_service_intent_adapter_hides_metadata_only_wan_nodes() -> None:
+def test_genieacs_service_intent_hides_metadata_only_wan_nodes() -> None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     metadata_node = {"_object": False, "_writable": False}
@@ -336,7 +336,7 @@ def test_acs_service_intent_adapter_hides_metadata_only_wan_nodes() -> None:
     assert "{'_object'" not in repr(intent)
 
 
-def test_acs_service_intent_adapter_preserves_tracked_points_for_partial_unavailable_data() -> None:
+def test_genieacs_service_intent_preserves_tracked_points_for_partial_unavailable_data() -> None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     intent = service_intent_ui_adapter.build_acs_observed_service_intent(
@@ -360,7 +360,7 @@ def test_acs_service_intent_adapter_preserves_tracked_points_for_partial_unavail
     assert intent["tracked_point_index"]["wan.wan_ip"]["raw_value"] == "100.64.1.20"
 
 
-def test_acs_service_intent_adapter_counts_active_ethernet_ports_by_link_status() -> None:
+def test_genieacs_service_intent_counts_active_ethernet_ports_by_link_status() -> None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     intent = service_intent_ui_adapter.build_acs_observed_service_intent(
@@ -437,7 +437,7 @@ def test_service_intent_ui_adapter_delegates_ont_capabilities(monkeypatch) -> No
     assert calls["args"] == (db, "ont-1")
 
 
-def test_acs_service_intent_adapter_handles_unavailable_summary() -> None:
+def test_genieacs_service_intent_handles_unavailable_summary() -> None:
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     intent = service_intent_ui_adapter.build_acs_observed_service_intent(

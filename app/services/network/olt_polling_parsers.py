@@ -532,8 +532,8 @@ def _parse_ddm_value(
     return value
 
 
-def _parse_online_status(raw: str) -> bool | None:
-    """Parse ONU online status from SNMP value."""
+def _parse_olt_status(raw: str) -> bool | None:
+    """Parse ONU OLT status from SNMP value."""
     lowered = raw.lower().strip()
     match = re.search(r"(\d+)", lowered)
     if match:

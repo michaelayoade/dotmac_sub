@@ -14,10 +14,10 @@ from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_actions import ActionResult
-from app.services.network.ont_status_adapter import (
+from app.services.network.ont_status import (
     OntStatusResult,
 )
-from app.services.network.ont_status_adapter import (
+from app.services.network.ont_status import (
     get_ont_status as get_adapter_status,
 )
 from app.services.web_network_ont_actions._common import (
@@ -627,7 +627,7 @@ def reconcile_operational_state(
 def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     """Fetch ONT config/state from OLT side via SSH-backed services.
 
-    Uses the ont_status_adapter for unified status resolution (combining
+    Uses the ont_status for unified status resolution (combining
     SNMP polling data and TR-069 status), with live SSH queries for
     detailed OLT-side configuration.
     """
@@ -667,9 +667,9 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
                 f"Match State: {_display_olt_value(ssh_status.match_state)}",
             ]
             # Add unified status from adapter
-            status_lines.append(f"Effective Status: {adapter_status.online_status.value}")
+            status_lines.append(f"Effective Status: {adapter_status.effective_status.value}")
             status_lines.append(f"Status Source: {adapter_status.status_source.value}")
-            status_lines.append(f"ACS Status: {adapter_status.acs_status.value}")
+            status_lines.append(f"Effective Source: {adapter_status.status_source.value}")
             if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
                 metrics = adapter_status.optical_metrics
                 if metrics.olt_rx_dbm is not None:
@@ -683,9 +683,9 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
             # SSH failed but we may still have adapter status
             status_lines = [
                 f"SSH Query: {ssh_msg}",
-                f"Effective Status: {adapter_status.online_status.value}",
+                f"Effective Status: {adapter_status.effective_status.value}",
                 f"Status Source: {adapter_status.status_source.value}",
-                f"ACS Status: {adapter_status.acs_status.value}",
+                f"Effective Source: {adapter_status.status_source.value}",
             ]
             status_text = "\n".join(status_lines)
     except Exception as exc:
@@ -741,7 +741,7 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
 def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
     """Query ONT registration state using the unified status adapter.
 
-    Uses ont_status_adapter for unified status resolution (combining SNMP
+    Uses ont_status for unified status resolution (combining SNMP
     polling data and TR-069 status), with live SSH query for GPON layer
     details (run/config/match states).
 
@@ -771,9 +771,9 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
         "fsp": fsp,
         "ont_id": ont_id_on_olt,
         # Unified status from adapter
-        "effective_status": adapter_status.online_status.value,
+        "effective_status": adapter_status.effective_status.value,
         "status_source": adapter_status.status_source.value,
-        "acs_status": adapter_status.acs_status.value,
+        "effective_status_source": adapter_status.status_source.value,
     }
 
     # Add SSH-based GPON layer details if available

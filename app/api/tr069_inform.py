@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services.acs_service import create_acs_service
+from app.services.genieacs_service import genieacs_service
 from app.services import tr069_auth
 
 router = APIRouter(prefix="/tr069", tags=["tr069-webhooks"])
@@ -43,7 +43,7 @@ def receive_inform(
     GenieACS can be configured to POST to this endpoint on device inform.
     The payload contains device identity and event information.
     """
-    acs = create_acs_service()
+    acs = genieacs_service
     return acs.receive_inform(
         db,
         serial_number=payload.serial_number,

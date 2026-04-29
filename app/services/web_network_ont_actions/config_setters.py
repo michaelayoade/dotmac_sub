@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OntUnit
-from app.services.acs_service import create_acs_service
+from app.services.genieacs_service import genieacs_service
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
 from app.services.web_network_ont_actions._common import (
@@ -21,15 +21,11 @@ from app.services.web_network_ont_actions._common import (
 logger = logging.getLogger(__name__)
 
 
-def _acs_config_writer():
-    return create_acs_service().config_writer
-
-
 def set_wifi_ssid(
     db: Session, ont_id: str, ssid: str, *, request: Request | None = None
 ) -> ActionResult:
     """Set WiFi SSID and return result."""
-    result = _acs_config_writer().set_wifi_ssid(db, ont_id, ssid)
+    result = genieacs_service.set_wifi_ssid(db, ont_id, ssid)
     _log_action_audit(
         db,
         request=request,
@@ -44,7 +40,7 @@ def set_wifi_password(
     db: Session, ont_id: str, password: str, *, request: Request | None = None
 ) -> ActionResult:
     """Set WiFi password and return result."""
-    result = _acs_config_writer().set_wifi_password(db, ont_id, password)
+    result = genieacs_service.set_wifi_password(db, ont_id, password)
     if result.success:
         ont = db.get(OntUnit, ont_id)
         # Emit audit event for credential change
@@ -85,7 +81,7 @@ def set_wifi_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WiFi radio, SSID, security, and password fields."""
-    result = _acs_config_writer().set_wifi_config(
+    result = genieacs_service.set_wifi_config(
         db,
         ont_id,
         enabled=enabled,
@@ -154,7 +150,7 @@ def toggle_lan_port(
     request: Request | None = None,
 ) -> ActionResult:
     """Toggle a LAN port and return result."""
-    result = _acs_config_writer().toggle_lan_port(db, ont_id, port, enabled)
+    result = genieacs_service.toggle_lan_port(db, ont_id, port, enabled)
     _log_action_audit(
         db,
         request=request,
@@ -185,7 +181,7 @@ def set_lan_config(
     LAN settings are explicit ONT-local desired config because they are
     customer-specific runtime intent, not OLT config-pack defaults.
     """
-    result = _acs_config_writer().set_lan_config(
+    result = genieacs_service.set_lan_config(
         db,
         ont_id,
         lan_ip=lan_ip,

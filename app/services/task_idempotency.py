@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+SessionLocal = db_session_adapter.create_session
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -229,7 +230,7 @@ def idempotent_task(
                 task_name, key_func, key_params, args, kwargs
             )
 
-            db = db_session_adapter.create_session()
+            db = SessionLocal()
             try:
                 execution, is_new = _get_or_create_execution(
                     db,

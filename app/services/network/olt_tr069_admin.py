@@ -427,7 +427,7 @@ def get_tr069_profiles_context(
                 "port": ont.port or "",
                 "onu_index": onu_index,
                 "name": ont.name or "",
-                "online": ont.online_status.value if ont.online_status else "unknown",
+                "online": ont.olt_status.value if ont.olt_status else "unknown",
                 "subscriber_name": getattr(ont, "address_or_comment", "") or "",
             }
         )

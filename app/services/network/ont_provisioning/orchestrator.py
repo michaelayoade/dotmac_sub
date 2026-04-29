@@ -85,7 +85,7 @@ def provision_ont_from_desired_config(
         provision_with_reconciliation,
         wait_tr069_bootstrap,
     )
-    from app.services.network.ont_status_transitions import set_provisioning_status
+    from app.services.network.ont_status import set_provisioning_status
 
     t0 = time.monotonic()
     steps: list[StepResult] = []

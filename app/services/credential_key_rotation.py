@@ -120,8 +120,10 @@ def _validate_model_fields() -> None:
     for model, fields in _MODEL_FIELDS:
         columns = model.__table__.columns
         for field in fields:
-            if field not in columns:
-                raise ValueError(f"{model.__name__}.{field} is not a mapped column")
+            if field not in columns and not hasattr(model, field):
+                raise ValueError(
+                    f"{model.__name__}.{field} is not a mapped column or model attribute"
+                )
 
 
 def _rotate_model_fields(
@@ -137,6 +139,7 @@ def _rotate_model_fields(
     columns = model.__table__.columns
     column_lengths = {
         field: getattr(columns[field].type, "length", None) for field in fields
+        if field in columns
     }
     logger.debug("Rotating credential fields for model %s", model.__name__)
     for row in db.scalars(select(model)).all():

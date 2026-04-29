@@ -12,7 +12,7 @@ from ncclient import manager
 
 from app.config import settings
 from app.models.provisioning import ProvisioningVendor
-from app.services.acs_client import create_acs_client
+from app.services.genieacs_client import create_genieacs_client
 from app.services.adapters.base import AdapterResult
 from app.services.network.ont_action_common import set_and_verify
 from app.services.response import ListResponseMixin
@@ -20,12 +20,7 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
-@dataclass(init=False)
 class ProvisioningResult(AdapterResult, ListResponseMixin):
-    status: str
-    detail: str | None = None
-    payload: dict | None = None
-
     def __init__(
         self,
         status: str,
@@ -37,7 +32,7 @@ class ProvisioningResult(AdapterResult, ListResponseMixin):
             message=detail or status,
             data=payload or {},
         )
-        self.status = status
+        self.status = status  # type: ignore[assignment]
         self.detail = detail
         self.payload = payload
 
@@ -378,7 +373,7 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         headers = dict(connector.get("headers") or {})
         headers.update(config.get("headers") or {})
         timeout = config.get("timeout_sec") or connector.get("timeout_sec") or 30.0
-        client = create_acs_client(base_url, timeout=float(timeout), headers=headers)
+        client = create_genieacs_client(base_url, timeout=float(timeout), headers=headers)
 
         use_verified_write = bool(config.get("connection_request", True))
         results: list[dict] = []

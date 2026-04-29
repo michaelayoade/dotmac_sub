@@ -8,6 +8,8 @@ from app.services import integration as integration_service
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 
+SessionLocal = db_session_adapter.create_session
+
 
 @celery_app.task(name="app.tasks.integrations.run_integration_job")
 def run_integration_job(job_id: str):
@@ -15,22 +17,26 @@ def run_integration_job(job_id: str):
     status = "success"
     logger = get_logger(__name__)
     logger.info("INTEGRATION_JOB_START job_id=%s", job_id)
+    session = SessionLocal()
     try:
-        with db_session_adapter.session() as session:
-            running = (
-                session.query(IntegrationRun.id)
-                .filter(IntegrationRun.job_id == coerce_uuid(job_id))
-                .filter(IntegrationRun.status == IntegrationRunStatus.running)
-                .first()
-            )
-            if running:
-                status = "skipped"
-                logger.info("integration_job_skipped_running job_id=%s", job_id)
-                return
-            integration_service.integration_jobs.run(session, job_id)
+        running = (
+            session.query(IntegrationRun.id)
+            .filter(IntegrationRun.job_id == coerce_uuid(job_id))
+            .filter(IntegrationRun.status == IntegrationRunStatus.running)
+            .first()
+        )
+        if running:
+            status = "skipped"
+            logger.info("integration_job_skipped_running job_id=%s", job_id)
+            session.rollback()
+            return
+        integration_service.integration_jobs.run(session, job_id)
+        session.commit()
     except Exception:
         status = "error"
+        session.rollback()
         raise
     finally:
+        session.close()
         duration = time.monotonic() - start
         observe_job("integration_job", status, duration)

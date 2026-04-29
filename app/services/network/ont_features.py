@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
+from app.services.genieacs_service import genieacs_service
 from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
@@ -15,12 +16,6 @@ from app.services.network.ont_action_common import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _acs_config_writer():
-    from app.services.acs_service import create_acs_service
-
-    return create_acs_service().config_writer
 
 
 def _check_capability(db: Session, ont: OntUnit, feature: str) -> ActionResult | None:
@@ -106,12 +101,12 @@ class OntFeatureService:
             return cap_err
 
         if ssid is not None:
-            result = _acs_config_writer().set_wifi_ssid(db, ont_id, ssid)
+            result = genieacs_service.set_wifi_ssid(db, ont_id, ssid)
             if not result.success:
                 return result
 
         if password is not None:
-            result = _acs_config_writer().set_wifi_password(db, ont_id, password)
+            result = genieacs_service.set_wifi_password(db, ont_id, password)
             if not result.success:
                 return result
 
@@ -246,7 +241,7 @@ class OntFeatureService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        result = _acs_config_writer().toggle_lan_port(db, ont_id, port_number, enabled)
+        result = genieacs_service.toggle_lan_port(db, ont_id, port_number, enabled)
         if result.success:
             _set_sync_meta(ont, "tr069")
             db.commit()

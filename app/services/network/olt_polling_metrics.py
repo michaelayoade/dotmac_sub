@@ -199,9 +199,9 @@ def _push_signal_metrics(db: Session) -> int:
 
     # Expose raw OLT link counts separately so physical state remains visible.
     olt_status_counts = db.execute(
-        select(OntUnit.online_status, func.count())
+        select(OntUnit.olt_status, func.count())
         .where(OntUnit.is_active.is_(True))
-        .group_by(OntUnit.online_status)
+        .group_by(OntUnit.olt_status)
     ).all()
 
     for status_val, count in olt_status_counts:

@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice
+from app.services.genieacs_service import genieacs_service
 from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.provisioning_settings import get_stale_runtime_hours
@@ -41,12 +42,6 @@ def _effective_field(db: Session, ont: OntUnit, key: str) -> object | None:
     resolved = resolve_effective_ont_config(db, ont)
     values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
     return values.get(key)
-
-
-def _acs_config_writer():
-    from app.services.acs_service import create_acs_service
-
-    return create_acs_service().config_writer
 
 
 @dataclass
@@ -241,10 +236,10 @@ class ProvisioningEnforcement:
         """Send connection requests to force TR-069 bootstrap."""
         sent = 0
         failed = 0
-        acs_config_adapter = _acs_config_writer()
+        acs = genieacs_service
         for ont_id in ont_ids:
             try:
-                result = acs_config_adapter.send_connection_request(db, ont_id)
+                result = acs.send_connection_request(db, ont_id)
                 if result.success:
                     sent += 1
                 else:
@@ -276,7 +271,7 @@ class ProvisioningEnforcement:
         """
         from app.services.credential_crypto import decrypt_credential
 
-        acs_config_adapter = _acs_config_writer()
+        acs = genieacs_service
         pushed = 0
         failed = 0
         skipped = 0
@@ -307,7 +302,7 @@ class ProvisioningEnforcement:
             wifi_security_mode = _effective_field(db, ont, "wifi_security_mode")
 
             try:
-                result = acs_config_adapter.set_wifi_config(
+                result = acs.set_wifi_config(
                     db,
                     ont_id,
                     enabled=True if wifi_enabled is None else bool(wifi_enabled),

@@ -20,7 +20,7 @@ from app.services.events.types import EventType
 from app.services.network.olt_operations import validate_cli_command
 from app.services.network.olt_polling import (
     _derive_offline_reason,
-    _parse_online_status,
+    _parse_olt_status,
     _parse_signal_value,
     classify_signal,
 )
@@ -389,25 +389,25 @@ class TestMultiVendorSignalParsing:
 
 
 # ---------------------------------------------------------------------------
-# 4. Online status parsing
+# 4. OLT status parsing
 # ---------------------------------------------------------------------------
 
 
 class TestOnlineStatusParsing:
     def test_code_1_is_online(self) -> None:
-        assert _parse_online_status("1") is True
+        assert _parse_olt_status("1") is True
 
     def test_code_2_is_offline(self) -> None:
-        assert _parse_online_status("2") is False
+        assert _parse_olt_status("2") is False
 
     def test_code_3_is_offline(self) -> None:
-        assert _parse_online_status("3") is False
+        assert _parse_olt_status("3") is False
 
     def test_text_online(self) -> None:
-        assert _parse_online_status("online") is True
+        assert _parse_olt_status("online") is True
 
     def test_text_offline(self) -> None:
-        assert _parse_online_status("offline") is False
+        assert _parse_olt_status("offline") is False
 
 
 class TestOfflineReasonDerivation:

@@ -138,7 +138,7 @@ def onts_list(
     pon_port_id: str | None = None,
     pon_hint: str | None = None,
     zone_id: str | None = None,
-    online_status: str | None = None,
+    olt_status: str | None = None,
     authorization: str | None = None,
     offline_reason: str | None = None,
     signal_quality: str | None = None,
@@ -160,7 +160,7 @@ def onts_list(
         pon_port_id=pon_port_id,
         pon_hint=pon_hint,
         zone_id=zone_id,
-        online_status=online_status,
+        olt_status=olt_status,
         authorization=authorization,
         offline_reason=offline_reason,
         signal_quality=signal_quality,
@@ -335,7 +335,9 @@ def ont_detail(
     context.update(
         {
             **page_data,
-            **web_network_ont_actions_service.unified_config_context(db, ont_id),
+            **web_network_ont_actions_service.unified_config_context(
+                db, ont_id, detail_payload=page_data
+            ),
             "activities": activities,
             "operations": operations,
             "ont_active_tab": active_tab,
@@ -608,6 +610,12 @@ def ont_onu_mode_update(
     )
     if result.not_found:
         raise HTTPException(status_code=404, detail="ONT not found")
+    if result.error:
+        return _ont_redirect(
+            ont_id,
+            status="error",
+            message=result.error,
+        )
 
     return _ont_redirect(
         ont_id,

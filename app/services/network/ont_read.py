@@ -72,8 +72,8 @@ class OntReadFacade:
             "vendor": ont.vendor,
             "model": ont.model,
             "firmware_version": ont.firmware_version,
-            "online_status": olt_status,
-            "acs_status": status_snapshot.acs_status.value,
+            "olt_status": olt_status,
+            "effective_status_source": status_snapshot.effective_status_source.value,
             "effective_status": effective_status,
             "effective_status_source": status_snapshot.effective_status_source.value,
             "acs_last_inform_at": status_snapshot.acs_last_inform_at,
@@ -134,9 +134,9 @@ class OntReadFacade:
         # Live TR-069 query (optional, slower)
         if live_query:
             try:
-                from app.services.acs_service import create_acs_service
+                from app.services.genieacs_service import genieacs_service
 
-                summary = create_acs_service().get_device_summary(
+                summary = genieacs_service.get_device_summary(
                     db, ont_id, persist_observed_runtime=True
                 )
                 if summary and summary.available:
@@ -192,9 +192,9 @@ class OntReadFacade:
     @staticmethod
     def get_tr069_summary(db: Session, ont_id: str) -> dict[str, Any]:
         """Read the ACS/TR-069 summary through the ACS state adapter."""
-        from app.services.acs_service import create_acs_service
+        from app.services.genieacs_service import genieacs_service
 
-        summary = create_acs_service().get_device_summary(db, ont_id)
+        summary = genieacs_service.get_device_summary(db, ont_id)
         if not summary or not summary.available:
             return {"available": False, "error": summary.error if summary else None}
         return asdict(summary)
@@ -202,16 +202,16 @@ class OntReadFacade:
     @staticmethod
     def get_lan_hosts(db: Session, ont_id: str) -> list[dict[str, Any]]:
         """Read LAN hosts through the ACS state adapter."""
-        from app.services.acs_service import create_acs_service
+        from app.services.genieacs_service import genieacs_service
 
-        return create_acs_service().get_lan_hosts(db, ont_id)
+        return genieacs_service.get_lan_hosts(db, ont_id)
 
     @staticmethod
     def get_ethernet_ports(db: Session, ont_id: str) -> list[dict[str, Any]]:
         """Read Ethernet ports through the ACS state adapter."""
-        from app.services.acs_service import create_acs_service
+        from app.services.genieacs_service import genieacs_service
 
-        return create_acs_service().get_ethernet_ports(db, ont_id)
+        return genieacs_service.get_ethernet_ports(db, ont_id)
 
     @staticmethod
     def get_vlan_chain_status(db: Session, ont_id: str) -> dict[str, Any]:

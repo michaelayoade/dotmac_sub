@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from app.services.genieacs import (
+from app.services.genieacs_client import (
     GenieACSClient,
     GenieACSError,
     GenieACSTaskRejectedError,
@@ -67,7 +67,7 @@ class TestGenieACSClientInit:
         assert client.timeout == 60.0
 
     def test_normalize_tr069_serial_removes_formatting(self):
-        from app.services.genieacs import normalize_tr069_serial
+        from app.services.genieacs_client import normalize_tr069_serial
 
         assert normalize_tr069_serial("HWTC-7D47 33:C3") == "HWTC7D4733C3"
 
@@ -292,7 +292,7 @@ class TestTaskOperations:
                 mock_response(json_data=task_result, text=json.dumps(task_result))
             )
 
-            with caplog.at_level("INFO", logger="app.services.genieacs"):
+            with caplog.at_level("INFO", logger="app.services.genieacs_client"):
                 result = client.create_task("device1", task)
 
         assert result == task_result

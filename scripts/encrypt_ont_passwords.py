@@ -50,9 +50,11 @@ def run(*, dry_run: bool = True) -> dict[str, int]:
     }
 
     try:
-        onts = db.scalars(
-            select(OntUnit).where(OntUnit.pppoe_password.isnot(None))
-        ).all()
+        onts = [
+            ont
+            for ont in db.scalars(select(OntUnit)).all()
+            if getattr(ont, "pppoe_password", None)
+        ]
 
         stats["total"] = len(onts)
         logger.info("Found %d ONTs with pppoe_password set", len(onts))

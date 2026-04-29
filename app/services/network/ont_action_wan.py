@@ -34,7 +34,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     detect_data_model_root,

@@ -20,14 +20,21 @@ def poll_all_olt_signals() -> dict[str, int]:
     """Periodic task to poll all active OLTs for ONT signal levels.
 
     DEPRECATED: OLT SNMP polling has been moved to Zabbix.
-    This task now only handles stale ONT detection; actual polling
-    is performed by Zabbix with data ingested via zabbix_data_ingest.
+    The per-OLT tasks queued here are retained as a compatibility and
+    observability boundary; actual signal polling is performed by Zabbix
+    with data ingested via zabbix_data_ingest.
 
     Returns:
-        Statistics dict with olts_dispatched (always 0) and stale_marked_offline counts.
+        Statistics dict with olts_dispatched and stale_marked_offline counts.
     """
-    logger.info("Running stale ONT detection (SNMP polling now handled by Zabbix)")
+    from sqlalchemy import select
+
+    from app.celery_app import enqueue_celery_task
+    from app.models.network import OLTDevice
+
+    logger.info("Running OLT polling compatibility dispatch and stale ONT detection")
     stale_marked = 0
+    olts_dispatched = 0
     try:
         with db_session_adapter.session() as db:
             # Mark stale ONTs as unknown
@@ -38,10 +45,38 @@ def poll_all_olt_signals() -> dict[str, int]:
             except Exception as exc:
                 logger.warning("Failed to mark stale ONTs unknown: %s", exc)
 
-        return {"olts_dispatched": 0, "stale_marked_offline": stale_marked}
+            rows = db.execute(
+                select(OLTDevice.id, OLTDevice.name)
+                .where(OLTDevice.is_active.is_(True))
+                .order_by(OLTDevice.name.asc())
+            ).all()
+            for row in rows:
+                olt_id = str(row.id)
+                enqueue_celery_task(
+                    "app.tasks.olt_polling.poll_olt_signal",
+                    args=[olt_id],
+                    correlation_id=f"olt_poll:{olt_id}",
+                    source="poll_all_olts",
+                )
+                olts_dispatched += 1
+
+        return {
+            "olts_dispatched": olts_dispatched,
+            "stale_marked_offline": stale_marked,
+        }
     except Exception as e:
         logger.error("Stale ONT detection failed: %s", e, exc_info=True)
         raise
+
+
+@celery_app.task(name="app.tasks.olt_polling.poll_olt_signal")
+def poll_olt_signal(olt_id: str) -> dict[str, str]:
+    """Compatibility task for legacy per-OLT signal polling dispatch."""
+    logger.info(
+        "Skipping legacy SNMP signal poll for OLT %s; handled by Zabbix ingestion",
+        olt_id,
+    )
+    return {"olt_id": olt_id, "status": "skipped_zabbix_managed"}
 
 
 def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
@@ -60,7 +95,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     """
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import func
+    from sqlalchemy import func, select
     from sqlalchemy.orm import joinedload
 
     from app.models.network import (
@@ -69,7 +104,10 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         OnuOnlineStatus,
         PollStatus,
     )
-    from app.services.network.ont_status import resolve_ont_status_for_model
+    from app.services.network.ont_status import (
+        apply_status_snapshot,
+        resolve_ont_status_for_model,
+    )
 
     now = datetime.now(UTC)
     threshold = now - timedelta(minutes=stale_threshold_minutes)
@@ -121,7 +159,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
                 joinedload(OntUnit.tr069_acs_server),
                 joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
             )
-            .where(OntUnit.online_status == OnuOnlineStatus.online)
+            .where(OntUnit.olt_status == OnuOnlineStatus.online)
             .where(OntUnit.is_active.is_(True))
             .where(huawei_non_deterministic_identity)
             .where(stale_filter)
@@ -129,17 +167,14 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     )
     unknown_marked = 0
     for ont in unknown_candidates:
-        ont.online_status = OnuOnlineStatus.unknown
+        ont.olt_status = OnuOnlineStatus.unknown
+        ont.olt_status_seen_at = now
         ont.offline_reason = None
         snapshot = resolve_ont_status_for_model(ont, now=now)
-        ont.acs_status = snapshot.acs_status
-        ont.acs_last_inform_at = snapshot.acs_last_inform_at
-        ont.effective_status = snapshot.effective_status
-        ont.effective_status_source = snapshot.effective_status_source
-        ont.status_resolved_at = snapshot.status_resolved_at
+        apply_status_snapshot(ont, snapshot)
         unknown_marked += 1
 
-    # Find stale ONTs: online status but not seen recently
+    # Find stale ONTs: OLT status but not seen recently
     # AND their OLT was recently polled (so the ONT should have been seen).
     # Huawei rows without packed SNMP identity are deliberately excluded above:
     # when polling cannot map the packed index, the safe state is unknown, not LOS.
@@ -150,7 +185,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
                 joinedload(OntUnit.tr069_acs_server),
                 joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
             )
-            .where(OntUnit.online_status == OnuOnlineStatus.online)
+            .where(OntUnit.olt_status == OnuOnlineStatus.online)
             .where(OntUnit.is_active.is_(True))
             .where(OntUnit.olt_device_id.in_(reachable_olt_ids))
             .where(~huawei_non_deterministic_identity)
@@ -159,14 +194,11 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     )
     marked = 0
     for ont in stale_candidates:
-        ont.online_status = OnuOnlineStatus.unknown
+        ont.olt_status = OnuOnlineStatus.unknown
+        ont.olt_status_seen_at = now
         ont.offline_reason = None
         snapshot = resolve_ont_status_for_model(ont, now=now)
-        ont.acs_status = snapshot.acs_status
-        ont.acs_last_inform_at = snapshot.acs_last_inform_at
-        ont.effective_status = snapshot.effective_status
-        ont.effective_status_source = snapshot.effective_status_source
-        ont.status_resolved_at = snapshot.status_resolved_at
+        apply_status_snapshot(ont, snapshot)
         marked += 1
 
     db.commit()

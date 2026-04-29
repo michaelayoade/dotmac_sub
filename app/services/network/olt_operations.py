@@ -24,7 +24,7 @@ from app.services.network import olt_ssh_config as olt_ssh_config_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_monitoring_devices import find_linked_network_device
 from app.services.network.olt_web_audit import log_olt_audit_event
-from app.services.network.ont_status_adapter import (
+from app.services.network.ont_status import (
     get_ont_status as get_adapter_status,
 )
 from app.services.network.serial_utils import (
@@ -809,9 +809,9 @@ def get_ont_status_by_serial(
     ont_record = _find_ont_by_serial_in_db(db, normalized_serial, olt.id)
     if ont_record:
         adapter_status = get_adapter_status(db, ont_record, include_optical=True)
-        payload["effective_status"] = adapter_status.online_status.value
+        payload["effective_status"] = adapter_status.effective_status.value
         payload["status_source"] = adapter_status.status_source.value
-        payload["acs_status"] = adapter_status.acs_status.value
+        payload["effective_status_source"] = adapter_status.status_source.value
         if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
             metrics = adapter_status.optical_metrics
             payload["olt_rx_signal_dbm"] = metrics.olt_rx_dbm

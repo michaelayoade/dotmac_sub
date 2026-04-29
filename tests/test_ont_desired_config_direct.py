@@ -360,8 +360,8 @@ def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
         fake_set_pppoe,
     )
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps._acs_config_writer",
-        lambda: SimpleNamespace(
+        "app.services.network.ont_provision_steps.genieacs_service",
+        SimpleNamespace(
             set_connection_request_credentials=lambda *args, **kwargs: SimpleNamespace(
                 success=True,
                 message="credentials pushed",
@@ -1066,8 +1066,8 @@ def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unse
         return SimpleNamespace(success=True, message="lan ok")
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps._acs_config_writer",
-        lambda: SimpleNamespace(
+        "app.services.network.ont_provision_steps.genieacs_service",
+        SimpleNamespace(
             set_connection_request_credentials=lambda *a, **kw: SimpleNamespace(
                 success=True, message="cr ok"
             ),
@@ -1160,8 +1160,8 @@ def test_apply_saved_service_config_respects_explicit_dhcp_disable(
         return SimpleNamespace(success=True, message="lan ok")
 
     monkeypatch.setattr(
-        "app.services.network.ont_provision_steps._acs_config_writer",
-        lambda: SimpleNamespace(
+        "app.services.network.ont_provision_steps.genieacs_service",
+        SimpleNamespace(
             set_connection_request_credentials=lambda *a, **kw: SimpleNamespace(
                 success=True, message="cr ok"
             ),

@@ -12,8 +12,8 @@ from app.models.domain_settings import SettingDomain
 from app.models.network import CPEDevice, OLTDevice, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
-from app.services.acs_client import AcsClient, create_acs_client
-from app.services.genieacs import GenieACSError, normalize_tr069_serial
+from app.services.genieacs_client import GenieACSClient, create_genieacs_client
+from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
     return None
 
 
-def _resolve_device_id_from_server(client: AcsClient, serial_number: str) -> str | None:
+def _resolve_device_id_from_server(client: GenieACSClient, serial_number: str) -> str | None:
     for candidate in _serial_search_candidates(serial_number):
         escaped_candidate = re.escape(candidate)
         devices = client.list_devices(
@@ -185,14 +185,14 @@ def _cache_genieacs_device_id(
         )
 
 
-def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[AcsClient, str] | None:
+def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[GenieACSClient, str] | None:
     resolved, _reason = resolve_genieacs_with_reason(db, ont)
     return resolved
 
 
 def resolve_genieacs_with_reason(
     db: Session, ont: OntUnit
-) -> tuple[tuple[AcsClient, str] | None, str]:
+) -> tuple[tuple[GenieACSClient, str] | None, str]:
     """Resolve GenieACS client and device ID for an ONT.
 
     Resolution priority:
@@ -223,7 +223,7 @@ def resolve_genieacs_with_reason(
         if server:
             desired_server = acs_resolution.server
             if desired_server is None or linked.acs_server_id == desired_server.id:
-                client = create_acs_client(server.base_url)
+                client = create_genieacs_client(server.base_url)
                 return (
                     client,
                     linked.genieacs_device_id,
@@ -251,7 +251,7 @@ def resolve_genieacs_with_reason(
 
     serial = str(getattr(ont, "serial_number", "") or "").strip()
     for server, reason in servers_to_try:
-        client = create_acs_client(server.base_url)
+        client = create_genieacs_client(server.base_url)
         try:
             found_device_id = (
                 _resolve_device_id_from_server(client, serial) if serial else None
@@ -276,7 +276,7 @@ def resolve_genieacs_with_reason(
 
 def resolve_genieacs_for_cpe(
     db: Session, cpe: CPEDevice
-) -> tuple[AcsClient, str] | None:
+) -> tuple[GenieACSClient, str] | None:
     """Resolve GenieACS client and device ID for a CPE device."""
     resolved, _reason = resolve_genieacs_for_cpe_with_reason(db, cpe)
     return resolved
@@ -284,7 +284,7 @@ def resolve_genieacs_for_cpe(
 
 def resolve_genieacs_for_cpe_with_reason(
     db: Session, cpe: CPEDevice
-) -> tuple[tuple[AcsClient, str] | None, str]:
+) -> tuple[tuple[GenieACSClient, str] | None, str]:
     """Resolve GenieACS client and device ID for a CPE device.
 
     Resolution tiers (simpler than ONT — no OLT hierarchy):
@@ -313,7 +313,7 @@ def resolve_genieacs_for_cpe_with_reason(
         if linked and linked.acs_server_id:
             server = _resolve_server_by_id(db, str(linked.acs_server_id))
             if server:
-                client = create_acs_client(server.base_url)
+                client = create_genieacs_client(server.base_url)
                 if linked.genieacs_device_id:
                     return (
                         client,
@@ -348,7 +348,7 @@ def resolve_genieacs_for_cpe_with_reason(
         if cpe_tr069 and cpe_tr069.acs_server_id:
             server = _resolve_server_by_id(db, str(cpe_tr069.acs_server_id))
             if server:
-                client = create_acs_client(server.base_url)
+                client = create_genieacs_client(server.base_url)
                 if cpe_tr069.genieacs_device_id:
                     return (
                         client,
@@ -371,7 +371,7 @@ def resolve_genieacs_for_cpe_with_reason(
     if default_server_id:
         server = _resolve_server_by_id(db, str(default_server_id))
         if server:
-            client = create_acs_client(server.base_url)
+            client = create_genieacs_client(server.base_url)
             try:
                 device_id = _resolve_device_id_from_server(client, serial)
                 if device_id:

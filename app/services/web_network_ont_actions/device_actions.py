@@ -14,8 +14,8 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
-from app.services.acs_service import create_acs_service
-from app.services.acs_service_intent_adapter import acs_service_intent_adapter
+from app.services.genieacs_service import genieacs_service
+from app.services.genieacs_service_intent import genieacs_service_intent
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.ont_actions import ActionResult, OntActions
@@ -26,10 +26,6 @@ from app.services.web_network_ont_actions._common import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _acs_config_writer():
-    return create_acs_service().config_writer
 
 
 def execute_reboot(
@@ -104,7 +100,7 @@ def execute_config_snapshot_refresh(
     db: Session, ont_id: str, *, request: Request | None = None
 ) -> ActionResult:
     """Fetch live TR-069 config and persist the last-known snapshot."""
-    summary = acs_service_intent_adapter.refresh_observed_summary_for_ont(
+    summary = genieacs_service_intent.refresh_observed_summary_for_ont(
         db, ont_id=ont_id
     )
     success = bool(summary.available and summary.source == "live" and not summary.error)
@@ -231,7 +227,7 @@ def execute_connection_request(
         NetworkOperationType.ont_send_conn_request,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: _acs_config_writer().send_connection_request(db, ont_id),
+        lambda: genieacs_service.send_connection_request(db, ont_id),
         correlation_key=f"ont_conn_req:{ont_id}",
         initiated_by=initiated_by,
     )

@@ -1,4 +1,4 @@
-"""Application-facing adapter for ACS/TR-069 ONT configuration writes."""
+"""Application-facing GenieACS service boundary."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.services.adapters import adapter_registry
 from app.services.network.ont_action_common import ActionResult
 
 
@@ -31,10 +30,10 @@ class AcsConfigQueueResult:
         return self.error or "ACS configuration could not be queued."
 
 
-class GenieAcsConfigWriter:
-    """Write ONT configuration through the current GenieACS/TR-069 backend."""
+class GenieAcsService:
+    """Read, write, and ingest ONT state through GenieACS/TR-069."""
 
-    name = "acs.config"
+    name = "genieacs"
     depends_on: tuple[str, ...] = ("queue.celery", "db.session.sqlalchemy")
 
     _QUEUE_TASK = "app.tasks.tr069.apply_acs_config"
@@ -149,7 +148,7 @@ class GenieAcsConfigWriter:
             },
             queue=self._QUEUE_NAME,
             correlation_id=correlation_id or f"acs_config:{ont_id}:{action}",
-            source="acs_config_adapter",
+            source="genieacs_service",
             request_id=request_id,
             actor_id=actor_id,
         )
@@ -406,7 +405,7 @@ class GenieAcsConfigWriter:
         timeout_sec: int = 30,
     ) -> ActionResult:
         """Push raw ACS parameters and force immediate device processing."""
-        from app.services.genieacs import GenieACSError
+        from app.services.genieacs_client import GenieACSError
         from app.services.network.ont_action_common import (
             get_ont_client_or_error,
             set_and_verify,
@@ -439,7 +438,8 @@ class GenieAcsConfigWriter:
                 device_id,
                 normalized_parameters,
                 expected=normalized_expected,
-                timeout_sec=timeout_sec,
+                connection_request_attempts=3,
+                connection_request_backoff_sec=1.0,
             )
         except GenieACSError as exc:
             return ActionResult(
@@ -488,7 +488,7 @@ class GenieAcsConfigWriter:
         filename: str | None = None,
     ) -> ActionResult:
         """Trigger an ACS Download RPC for an ONT."""
-        from app.services.genieacs import GenieACSError
+        from app.services.genieacs_client import GenieACSError
         from app.services.network.ont_action_common import get_ont_client_or_error
 
         if not file_type.strip():
@@ -1022,6 +1022,78 @@ class GenieAcsConfigWriter:
         )
 
 
-AcsConfigAdapter = GenieAcsConfigWriter
-acs_config_adapter = GenieAcsConfigWriter()
-adapter_registry.register(acs_config_adapter)
+    def get_device_summary(
+        self,
+        db: Session,
+        ont_id: str,
+        *,
+        persist_observed_runtime: bool = False,
+    ) -> Any:
+        from app.services.network.ont_tr069 import OntTR069
+
+        return OntTR069.get_device_summary(
+            db,
+            ont_id,
+            persist_observed_runtime=persist_observed_runtime,
+        )
+
+    def get_lan_hosts(self, db: Session, ont_id: str) -> list[dict[str, Any]]:
+        from app.services.network.ont_tr069 import OntTR069
+
+        return OntTR069.get_lan_hosts(db, ont_id)
+
+    def get_ethernet_ports(self, db: Session, ont_id: str) -> list[dict[str, Any]]:
+        from app.services.network.ont_tr069 import OntTR069
+
+        return OntTR069.get_ethernet_ports(db, ont_id)
+
+    def persist_observed_runtime(
+        self,
+        db: Session,
+        ont: object,
+        summary: object,
+        *,
+        commit: bool = True,
+    ) -> None:
+        from app.services.network.ont_tr069 import OntTR069
+
+        OntTR069._persist_observed_runtime(
+            db,
+            ont,
+            summary,
+            commit=commit,
+        )
+
+    def receive_inform(
+        self,
+        db: Session,
+        *,
+        serial_number: str | None,
+        device_id_raw: str | None,
+        event: Any,
+        raw_payload: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        remote_addr: str | None = None,
+        headers: dict[str, Any] | None = None,
+        oui: str | None = None,
+        product_class: str | None = None,
+        acs_server_id: str | None = None,
+    ) -> dict[str, Any]:
+        from app.services import tr069 as tr069_service
+
+        return tr069_service.receive_inform(
+            db,
+            serial_number=serial_number,
+            device_id_raw=device_id_raw,
+            event=event,
+            raw_payload=raw_payload,
+            request_id=request_id,
+            remote_addr=remote_addr,
+            headers=headers,
+            oui=oui,
+            product_class=product_class,
+            acs_server_id=acs_server_id,
+        )
+
+
+genieacs_service = GenieAcsService()

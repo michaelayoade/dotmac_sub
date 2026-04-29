@@ -1,140 +1,67 @@
-{# Low-frequency ACS/OLT actions kept out of the primary configuration flow. #}
-{% set advanced_wan_mode = 'bridge' if wan_mode in ['bridge', 'bridged', 'setup_via_onu'] else ('static' if wan_mode == 'static_ip' else (wan_mode if wan_mode in ['dhcp', 'pppoe', 'static'] else 'dhcp')) %}
+{# Advanced TR-069 actions - repair tools and credentials #}
+{% macro spinner() %}<svg class="htmx-indicator mr-1 inline h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>{% endmacro %}
 
-<details id="advanced-device-actions"
-         class="mt-5 rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-    <summary class="cursor-pointer border-b border-slate-200 px-5 py-4 text-sm font-semibold text-slate-900 marker:text-slate-400 dark:border-slate-700 dark:text-white">
-        Apply Device Config
+<details id="advanced-device-actions" class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700">
+    <summary class="cursor-pointer px-3 py-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+        Advanced
     </summary>
-
-    <div class="grid gap-5 p-5 xl:grid-cols-2">
-        <form hx-post="/admin/network/onts/{{ ont_id }}/wan/config"
-              hx-swap="none"
-              class="space-y-3"
-              x-data="{ wanMode: '{{ advanced_wan_mode }}' }">
+    <div class="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2.5 dark:border-slate-700">
+        {# WAN repair tools #}
+        <form hx-post="/admin/network/onts/{{ ont_id }}/wan/probe" hx-swap="none" hx-indicator="find button" class="contents">
             {% include "components/forms/csrf_input.html" %}
-            <h3 class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">WAN Service</h3>
-            <div class="grid gap-3 sm:grid-cols-3">
-                <select name="wan_mode" x-model="wanMode" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="dhcp" {% if advanced_wan_mode == 'dhcp' %}selected{% endif %}>DHCP</option>
-                    <option value="pppoe" {% if advanced_wan_mode == 'pppoe' %}selected{% endif %}>PPPoE</option>
-                    <option value="static" {% if advanced_wan_mode == 'static' %}selected{% endif %}>Static</option>
-                    <option value="bridge" {% if advanced_wan_mode == 'bridge' %}selected{% endif %}>Bridge</option>
-                </select>
-                <input name="instance_index" value="1" inputmode="numeric" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" aria-label="WAN instance index">
-                <input value="{{ desired_wan_config.wan_vlan if desired_wan_config is defined else '' }}" disabled class="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300" aria-label="WAN VLAN from OLT pack" placeholder="VLAN from OLT pack">
-            </div>
-            <div class="grid gap-3 sm:grid-cols-2" x-show="wanMode === 'pppoe'" x-transition x-cloak>
-                <input name="pppoe_username" value="{{ pppoe_username or '' }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="PPPoE username">
-                <input name="pppoe_password" type="password" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="PPPoE password">
-            </div>
-            <div class="grid gap-3 sm:grid-cols-2" x-show="wanMode === 'static' || wanMode === 'static_ip'" x-transition x-cloak>
-                <input name="ip_address" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Static IP">
-                <input name="subnet_mask" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Subnet mask">
-                <input name="gateway" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Gateway">
-                <input name="dns_servers" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="DNS servers">
-            </div>
-            <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                <input type="checkbox" name="ensure_instance" value="true" checked class="h-4 w-4 rounded border-slate-300 text-blue-600">
-                <span>Ensure WAN instance exists</span>
-            </label>
-            <div class="flex flex-wrap gap-2">
-                <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply WAN</button>
-                <button class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300" type="button" hx-post="/admin/network/onts/{{ ont_id }}/wan/probe" hx-include="closest form" hx-swap="none">Probe</button>
-                <button class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300" type="button" hx-post="/admin/network/onts/{{ ont_id }}/wan/ensure-instance" hx-include="closest form" hx-swap="none">Ensure</button>
-                <button class="rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300" type="button" hx-post="/admin/network/onts/{{ ont_id }}/wan/normalize" hx-include="closest form" hx-swap="none">Normalize</button>
-            </div>
+            <input type="hidden" name="instance_index" value="1">
+            <button class="inline-flex items-center rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400">{{ spinner() }}Probe</button>
+        </form>
+        <form hx-post="/admin/network/onts/{{ ont_id }}/wan/ensure-instance" hx-swap="none" hx-indicator="find button" class="contents">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="instance_index" value="1">
+            <button class="inline-flex items-center rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400">{{ spinner() }}Ensure</button>
+        </form>
+        <form hx-post="/admin/network/onts/{{ ont_id }}/wan/normalize" hx-swap="none" hx-indicator="find button" class="contents">
+            {% include "components/forms/csrf_input.html" %}
+            <button class="inline-flex items-center rounded border border-amber-300 px-2 py-1 text-xs text-amber-600 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-400">{{ spinner() }}Normalize</button>
         </form>
 
-        <div class="space-y-3">
-            <h3 class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Access</h3>
-            <form hx-post="/admin/network/onts/{{ ont_id }}/wan-remote-access" hx-swap="none" class="flex flex-wrap items-center gap-2">
-                {% include "components/forms/csrf_input.html" %}
-                <select name="enabled" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="true" {% if ont.wan_remote_access %}selected{% endif %}>WAN remote access on</option>
-                    <option value="false" {% if not ont.wan_remote_access %}selected{% endif %}>WAN remote access off</option>
-                </select>
-                <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply</button>
-            </form>
-            <form hx-post="/admin/network/onts/{{ ont_id }}/http-management" hx-swap="none" class="flex flex-wrap items-center gap-2">
-                {% include "components/forms/csrf_input.html" %}
-                <select name="enabled" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="true">HTTP management on</option>
-                    <option value="false">HTTP management off</option>
-                </select>
-                <input name="port" value="80" inputmode="numeric" class="w-24 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" aria-label="HTTP port">
-                <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply</button>
-            </form>
-            <form hx-post="/admin/network/onts/{{ ont_id }}/mgmt-remote-access" hx-swap="none" class="flex flex-wrap items-center gap-2">
-                {% include "components/forms/csrf_input.html" %}
-                <select name="enabled" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="true" {% if ont.mgmt_remote_access %}selected{% endif %}>MGMT remote access on</option>
-                    <option value="false" {% if not ont.mgmt_remote_access %}selected{% endif %}>MGMT remote access off</option>
-                </select>
-                <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply</button>
-            </form>
-            <form hx-post="/admin/network/onts/{{ ont_id }}/lan-port" hx-swap="none" class="flex flex-wrap items-center gap-2">
-                {% include "components/forms/csrf_input.html" %}
-                <input name="port" value="1" inputmode="numeric" class="w-24 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" aria-label="LAN port number">
-                <select name="enabled" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="true">Enable LAN port</option>
-                    <option value="false">Disable LAN port</option>
-                </select>
-                <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply LAN Port</button>
-            </form>
-        </div>
+        <span class="mx-1 text-slate-300 dark:text-slate-600">|</span>
 
-        <form hx-post="/admin/network/onts/{{ ont_id }}/lan-config" hx-swap="none" class="space-y-3">
+        {# Access toggles #}
+        <form hx-post="/admin/network/onts/{{ ont_id }}/wan-remote-access" hx-swap="none" hx-indicator="find button" class="contents">
             {% include "components/forms/csrf_input.html" %}
-            <h3 class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">LAN Config</h3>
-            <div class="grid gap-3 sm:grid-cols-2">
-                <input name="lan_ip" value="{{ lan_gateway_ip or '' }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Gateway IP">
-                <input name="lan_subnet" value="{{ lan_subnet_mask or '' }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Subnet mask">
-                <input name="dhcp_start" value="{{ lan_dhcp_start or '' }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="DHCP start">
-                <input name="dhcp_end" value="{{ lan_dhcp_end or '' }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="DHCP end">
-            </div>
-            <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                <input type="checkbox" name="dhcp_enabled" value="true" {% if lan_dhcp_enabled_val %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-blue-600">
-                <span>{{ "DHCP server enabled" if lan_dhcp_enabled_val else "DHCP server disabled" }}</span>
-            </label>
-            <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply LAN Config</button>
+            <input type="hidden" name="enabled" value="{{ 'false' if ont.wan_remote_access else 'true' }}">
+            <button class="inline-flex items-center rounded px-2 py-1 text-xs disabled:opacity-50 {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' if ont.wan_remote_access else 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400' }}">
+                {{ spinner() }}WAN{% if ont.wan_remote_access %} ✓{% endif %}
+            </button>
+        </form>
+        <form hx-post="/admin/network/onts/{{ ont_id }}/mgmt-remote-access" hx-swap="none" hx-indicator="find button" class="contents">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="enabled" value="{{ 'false' if ont.mgmt_remote_access else 'true' }}">
+            <button class="inline-flex items-center rounded px-2 py-1 text-xs disabled:opacity-50 {{ 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' if ont.mgmt_remote_access else 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400' }}">
+                {{ spinner() }}Mgmt{% if ont.mgmt_remote_access %} ✓{% endif %}
+            </button>
+        </form>
+        <form hx-post="/admin/network/onts/{{ ont_id }}/http-management" hx-swap="none" hx-indicator="find button" class="contents">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="enabled" value="true">
+            <input type="hidden" name="port" value="80">
+            <button class="inline-flex items-center rounded bg-slate-100 px-2 py-1 text-xs text-slate-500 disabled:opacity-50 dark:bg-slate-700 dark:text-slate-400">{{ spinner() }}HTTP</button>
         </form>
 
-        <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-config" hx-swap="none" class="space-y-3">
+        <span class="mx-1 text-slate-300 dark:text-slate-600">|</span>
+
+        {# Web credentials inline #}
+        <form hx-post="/admin/network/onts/{{ ont_id }}/web-credentials" hx-swap="none" hx-indicator="find button" class="contents">
             {% include "components/forms/csrf_input.html" %}
-            <h3 class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">WiFi Config</h3>
-            <div class="grid gap-3 sm:grid-cols-2">
-                <select name="enabled" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="true" {% if wifi_enabled_val %}selected{% endif %}>WiFi enabled</option>
-                    <option value="false" {% if not wifi_enabled_val %}selected{% endif %}>WiFi disabled</option>
-                </select>
-                <input name="ssid" value="{{ wifi_ssid or '' }}" maxlength="32" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="SSID">
-                <input name="password" type="password" minlength="8" maxlength="64" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="WiFi password">
-                <input name="channel" value="{{ wifi_channel or '' }}" inputmode="numeric" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Channel">
-                <input name="security_mode" value="{{ wifi_security_mode or '' }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Security mode">
-            </div>
-            <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply WiFi Config</button>
+            <input name="username" placeholder="web user" maxlength="32" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <input name="password" type="password" placeholder="web pass" maxlength="64" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <button class="inline-flex items-center rounded bg-slate-500 px-2 py-1 text-xs text-white hover:bg-slate-600 disabled:opacity-50">{{ spinner() }}Web</button>
         </form>
 
-        <form hx-post="/admin/network/onts/{{ ont_id }}/web-credentials" hx-swap="none" class="space-y-3">
+        {# TR-069 CR credentials inline #}
+        <form hx-post="/admin/network/onts/{{ ont_id }}/connection-request-credentials" hx-swap="none" hx-indicator="find button" class="contents">
             {% include "components/forms/csrf_input.html" %}
-            <h3 class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Web Credentials</h3>
-            <div class="grid gap-3 sm:grid-cols-2">
-                <input name="username" maxlength="32" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Web username">
-                <input name="password" type="password" minlength="8" maxlength="64" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Web password">
-            </div>
-            <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply Web Credentials</button>
-        </form>
-
-        <form hx-post="/admin/network/onts/{{ ont_id }}/connection-request-credentials" hx-swap="none" class="space-y-3">
-            {% include "components/forms/csrf_input.html" %}
-            <h3 class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Connection Request Credentials</h3>
-            <div class="grid gap-3 sm:grid-cols-3">
-                <input name="username" maxlength="64" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="CR username">
-                <input name="password" type="password" maxlength="64" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="CR password">
-                <input name="periodic_inform_interval" value="{{ tr069_periodic_inform_interval or 300 }}" inputmode="numeric" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" aria-label="Periodic inform interval">
-            </div>
-            <button class="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700" type="submit">Apply Connection Request Credentials</button>
+            <input name="username" placeholder="CR user" maxlength="64" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <input name="password" type="password" placeholder="CR pass" maxlength="64" class="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <button class="inline-flex items-center rounded bg-slate-500 px-2 py-1 text-xs text-white hover:bg-slate-600 disabled:opacity-50">{{ spinner() }}CR</button>
         </form>
     </div>
 </details>

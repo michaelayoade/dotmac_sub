@@ -124,7 +124,7 @@ def _parse_distance_m(raw: str | None) -> int | None:
     return value
 
 
-def _parse_online_status(
+def _parse_olt_status(
     raw: str | None,
 ) -> tuple[OnuOnlineStatus, OnuOfflineReason | None]:
     if not raw:
@@ -739,9 +739,9 @@ def _sync_onts_from_olt_snmp_impl(
     tr069_runtime_errors = 0
     if olt.tr069_acs_server_id:
         try:
-            from app.services.acs_service import create_acs_service
+            from app.services.genieacs_service import genieacs_service
 
-            acs = create_acs_service()
+            acs = genieacs_service
             onts_for_olt = list(
                 db.scalars(
                     select(OntUnit)

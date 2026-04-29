@@ -1,79 +1,9 @@
 from __future__ import annotations
 
 
-def test_acs_backend_registry_supports_non_genie_backends() -> None:
-    from app.services.acs_client import (
-        AcsBackend,
-        create_acs_config_writer,
-        create_acs_event_ingestor,
-        create_acs_state_reader,
-        register_acs_backend,
-        registered_acs_backends,
-    )
-
-    class FakeWriter:
-        pass
-
-    class FakeReader:
-        pass
-
-    class FakeIngestor:
-        pass
-
-    class FakeClient:
-        def __init__(self, base_url, *, timeout=30.0, headers=None):
-            self.base_url = base_url
-            self.timeout = timeout
-            self.headers = headers
-
-    register_acs_backend(
-        "axiroscwmp",
-        AcsBackend(
-            create_client=FakeClient,
-            create_config_writer=FakeWriter,
-            create_state_reader=FakeReader,
-            create_event_ingestor=FakeIngestor,
-        ),
-        aliases=("axiros",),
-    )
-
-    assert "axiroscwmp" in registered_acs_backends()
-    assert isinstance(create_acs_config_writer("axiros"), FakeWriter)
-    assert isinstance(create_acs_state_reader("axiroscwmp"), FakeReader)
-    assert isinstance(create_acs_event_ingestor("axiros"), FakeIngestor)
-
-
-def test_acs_adapter_factories_return_genieacs_implementations() -> None:
-    from app.services.acs_client import (
-        create_acs_config_writer,
-        create_acs_event_ingestor,
-        create_acs_state_reader,
-    )
-    from app.services.acs_config_adapter import GenieAcsConfigWriter
-    from app.services.acs_event_adapter import GenieAcsEventIngestor
-    from app.services.acs_state_adapter import GenieAcsStateReader
-
-    assert isinstance(create_acs_config_writer(), GenieAcsConfigWriter)
-    assert isinstance(create_acs_state_reader(), GenieAcsStateReader)
-    assert isinstance(create_acs_event_ingestor(), GenieAcsEventIngestor)
-
-
-def test_acs_service_facade_exposes_genieacs_ports() -> None:
-    from app.services.acs_config_adapter import GenieAcsConfigWriter
-    from app.services.acs_event_adapter import GenieAcsEventIngestor
-    from app.services.acs_service import create_acs_service
-    from app.services.acs_state_adapter import GenieAcsStateReader
-
-    acs = create_acs_service()
-
-    assert isinstance(acs.config_writer, GenieAcsConfigWriter)
-    assert isinstance(acs.state_reader, GenieAcsStateReader)
-    assert isinstance(acs.event_ingestor, GenieAcsEventIngestor)
-
-
-def test_acs_event_ingestor_delegates_inform(monkeypatch) -> None:
+def test_genieacs_service_receives_inform(monkeypatch) -> None:
     from app.services import tr069 as tr069_service
-    from app.services.acs_event_adapter import GenieAcsEventIngestor
+    from app.services.genieacs_service import GenieAcsService
 
     calls = {}
 
@@ -84,7 +14,7 @@ def test_acs_event_ingestor_delegates_inform(monkeypatch) -> None:
 
     monkeypatch.setattr(tr069_service, "receive_inform", fake_receive_inform)
 
-    result = GenieAcsEventIngestor().receive_inform(
+    result = GenieAcsService().receive_inform(
         object(),
         serial_number="ABC123",
         device_id_raw="OUI-Model-ABC123",
@@ -99,7 +29,7 @@ def test_acs_event_ingestor_delegates_inform(monkeypatch) -> None:
     assert calls["kwargs"]["request_id"] == "req-1"
 
 
-def test_tr069_inform_route_uses_event_ingestor_factory(monkeypatch) -> None:
+def test_tr069_inform_route_uses_genieacs_service(monkeypatch) -> None:
     from app.api import tr069_inform
 
     calls = {}
@@ -120,11 +50,7 @@ def test_tr069_inform_route_uses_event_ingestor_factory(monkeypatch) -> None:
             "user-agent": "pytest",
         }
 
-    monkeypatch.setattr(
-        tr069_inform,
-        "create_acs_service",
-        lambda: FakeAcsService(),
-    )
+    monkeypatch.setattr(tr069_inform, "genieacs_service", FakeAcsService())
 
     payload = tr069_inform.InformPayload(
         serial_number="ABC123",
@@ -139,8 +65,8 @@ def test_tr069_inform_route_uses_event_ingestor_factory(monkeypatch) -> None:
     assert calls["kwargs"]["request_id"] == "req-route"
 
 
-def test_acs_config_adapter_delegates_wifi_config(monkeypatch) -> None:
-    from app.services.acs_config_adapter import acs_config_adapter
+def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:
+    from app.services.genieacs_service import genieacs_service
     from app.services.network import ont_action_wifi
     from app.services.network.ont_action_common import ActionResult
 
@@ -150,11 +76,11 @@ def test_acs_config_adapter_delegates_wifi_config(monkeypatch) -> None:
         calls["db"] = db
         calls["ont_id"] = ont_id
         calls["kwargs"] = kwargs
-        return ActionResult(success=True, message="ok", data={"adapter": "acs"})
+        return ActionResult(success=True, message="ok", data={"service": "genieacs"})
 
     monkeypatch.setattr(ont_action_wifi, "set_wifi_config", fake_set_wifi_config)
 
-    result = acs_config_adapter.set_wifi_config(
+    result = genieacs_service.set_wifi_config(
         object(),
         "ont-1",
         enabled=True,
@@ -175,10 +101,10 @@ def test_acs_config_adapter_delegates_wifi_config(monkeypatch) -> None:
     }
 
 
-def test_acs_config_adapter_push_config_urgent_uses_verified_connection_request(
+def test_genieacs_service_push_config_urgent_uses_verified_connection_request(
     monkeypatch,
 ) -> None:
-    from app.services.acs_config_adapter import acs_config_adapter
+    from app.services.genieacs_service import genieacs_service
     from app.services.network import ont_action_common
 
     calls = {}
@@ -215,7 +141,7 @@ def test_acs_config_adapter_push_config_urgent_uses_verified_connection_request(
     )
     monkeypatch.setattr(ont_action_common, "set_and_verify", fake_set_and_verify)
 
-    result = acs_config_adapter.push_config_urgent(
+    result = genieacs_service.push_config_urgent(
         object(),
         "ont-1",
         {"Device.WiFi.SSID.1.SSID": "DOTMAC"},
@@ -290,7 +216,7 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
 ) -> None:
     import pytest
 
-    from app.services.genieacs import GenieACSError
+    from app.services.genieacs_client import GenieACSError
     from app.services.network.ont_action_common import set_and_verify
 
     deleted = []
@@ -321,25 +247,8 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
     assert deleted == ["gpv-task", "gpv-task", "spv-task"]
 
 
-def test_acs_client_pool_falls_back_on_unavailable_primary() -> None:
-    from app.services.acs_client import AcsClientPool
-    from app.services.genieacs import GenieACSError
-
-    class Primary:
-        def list_devices(self, **_kwargs):
-            raise GenieACSError("Request error: connection refused")
-
-    class Secondary:
-        def list_devices(self, **_kwargs):
-            return [{"_id": "device-1"}]
-
-    pool = AcsClientPool(Primary(), Secondary())
-
-    assert pool.list_devices() == [{"_id": "device-1"}]
-
-
-def test_acs_config_adapter_download_uses_acs_download_rpc(monkeypatch) -> None:
-    from app.services.acs_config_adapter import acs_config_adapter
+def test_genieacs_service_download_uses_acs_download_rpc(monkeypatch) -> None:
+    from app.services.genieacs_service import genieacs_service
     from app.services.network import ont_action_common
 
     calls = {}
@@ -364,7 +273,7 @@ def test_acs_config_adapter_download_uses_acs_download_rpc(monkeypatch) -> None:
         fake_get_ont_client_or_error,
     )
 
-    result = acs_config_adapter.download(
+    result = genieacs_service.download(
         object(),
         "ont-1",
         file_type="1 Firmware Upgrade Image",
@@ -382,11 +291,11 @@ def test_acs_config_adapter_download_uses_acs_download_rpc(monkeypatch) -> None:
     }
 
 
-def test_acs_config_adapter_firmware_upgrade_uses_firmware_image(
+def test_genieacs_service_firmware_upgrade_uses_firmware_image(
     db_session, monkeypatch
 ) -> None:
     from app.models.network import OntFirmwareImage
-    from app.services.acs_config_adapter import acs_config_adapter
+    from app.services.genieacs_service import genieacs_service
     from app.services.network import ont_action_common
 
     firmware = OntFirmwareImage(
@@ -416,7 +325,7 @@ def test_acs_config_adapter_firmware_upgrade_uses_firmware_image(
         lambda _db, _ont_id: ((FakeOnt(), FakeClient(), "device-1"), None),
     )
 
-    result = acs_config_adapter.firmware_upgrade(
+    result = genieacs_service.firmware_upgrade(
         db_session,
         "ont-1",
         str(firmware.id),
@@ -427,8 +336,8 @@ def test_acs_config_adapter_firmware_upgrade_uses_firmware_image(
     assert result.data["firmware_version"] == "V1R2"
     assert result.data["task"] == {"_id": "firmware-task"}
 
-def test_acs_config_adapter_queues_wifi_config(monkeypatch) -> None:
-    from app.services.acs_config_adapter import acs_config_adapter
+def test_genieacs_service_queues_wifi_config(monkeypatch) -> None:
+    from app.services.genieacs_service import genieacs_service
     from app.services.queue_adapter import QueueDispatchResult
 
     calls = {}
@@ -445,7 +354,7 @@ def test_acs_config_adapter_queues_wifi_config(monkeypatch) -> None:
 
     monkeypatch.setattr("app.services.queue_adapter.enqueue_task", fake_enqueue_task)
 
-    result = acs_config_adapter.queue_set_wifi_config(
+    result = genieacs_service.queue_set_wifi_config(
         object(),
         "ont-1",
         enabled=True,
@@ -475,17 +384,17 @@ def test_acs_config_adapter_queues_wifi_config(monkeypatch) -> None:
             },
             "queue": "acs",
             "correlation_id": "acs_config:ont-1:set_wifi_config",
-            "source": "acs_config_adapter",
+            "source": "genieacs_service",
             "request_id": None,
             "actor_id": "admin-1",
         },
     }
 
 
-def test_acs_config_adapter_rejects_unknown_queue_action() -> None:
-    from app.services.acs_config_adapter import acs_config_adapter
+def test_genieacs_service_rejects_unknown_queue_action() -> None:
+    from app.services.genieacs_service import genieacs_service
 
-    result = acs_config_adapter.queue_config_action(
+    result = genieacs_service.queue_config_action(
         object(),
         "delete_everything",
         "ont-1",
@@ -495,8 +404,7 @@ def test_acs_config_adapter_rejects_unknown_queue_action() -> None:
     assert "Unsupported ACS configuration action" in str(result.error)
 
 
-def test_apply_acs_config_task_executes_adapter_method(monkeypatch) -> None:
-    from app.services import acs_service
+def test_apply_acs_config_task_executes_genieacs_service_method(monkeypatch) -> None:
     from app.services.network.ont_action_common import ActionResult
     from app.tasks import tr069
 
@@ -517,7 +425,7 @@ def test_apply_acs_config_task_executes_adapter_method(monkeypatch) -> None:
     session = FakeSession()
     calls = {}
 
-    class FakeWriter:
+    class FakeGenieAcsService:
         @property
         def queueable_actions(self):
             return frozenset({"set_wifi_ssid"})
@@ -544,11 +452,7 @@ def test_apply_acs_config_task_executes_adapter_method(monkeypatch) -> None:
         return session
 
     monkeypatch.setattr(tr069, "SessionLocal", fake_session_local)
-    monkeypatch.setattr(
-        acs_service,
-        "create_acs_config_writer",
-        lambda kind=None: FakeWriter(),
-    )
+    monkeypatch.setattr(tr069, "genieacs_service", FakeGenieAcsService())
 
     result = tr069.apply_acs_config.run(
         "set_wifi_ssid",
@@ -596,13 +500,10 @@ def test_web_ont_config_writer_is_resolved_per_call(monkeypatch) -> None:
     writers = iter([FakeWriter("first"), FakeWriter("second")])
 
     class FakeAcsService:
-        @property
-        def config_writer(self):
-            return next(writers)
+        def set_wifi_ssid(self, db, ont_id, ssid):
+            return next(writers).set_wifi_ssid(db, ont_id, ssid)
 
-    monkeypatch.setattr(
-        config_setters, "create_acs_service", lambda: FakeAcsService()
-    )
+    monkeypatch.setattr(config_setters, "genieacs_service", FakeAcsService())
 
     config_setters.set_wifi_ssid(object(), "ont-1", "SSID-1")
     config_setters.set_wifi_ssid(object(), "ont-2", "SSID-2")

@@ -122,7 +122,7 @@ class SubscriberOntInfo:
     assignment_id: str
     serial_number: str | None
     model: str | None
-    online_status: str | None
+    olt_status: str | None
     olt_name: str | None
     pon_port: str | None
     service_address: str | None
@@ -606,7 +606,7 @@ class DefaultSubscriberOntLinker:
                     assignment_id=str(assignment.id),
                     serial_number=ont.serial_number,
                     model=ont.model,
-                    online_status=ont.online_status.value if ont.online_status else None,
+                    olt_status=ont.olt_status.value if ont.olt_status else None,
                     olt_name=olt_name,
                     pon_port=pon_port_str,
                     service_address=service_address_str,

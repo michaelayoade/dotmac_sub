@@ -1,4 +1,4 @@
-"""Adapter for ACS/TR-069 observed service intent data."""
+"""GenieACS observed service-intent mapping helpers."""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
-
-from app.services.adapters import adapter_registry
 
 if TYPE_CHECKING:
     from app.services.network.ont_tr069 import TR069Summary
@@ -106,17 +104,17 @@ def _count_link_up_ports(values: list[dict[str, object]]) -> int:
     )
 
 
-class AcsServiceIntentAdapter:
+class GenieAcsServiceIntent:
     """Normalize ACS observed state into service-intent-shaped UI data."""
 
-    name = "acs.service_intent"
+    name = "genieacs.service_intent"
 
     def load_observed_intent_for_ont(
         self, db: Session, *, ont_id: str
     ) -> dict[str, object]:
-        from app.services.acs_service import create_acs_service
+        from app.services.genieacs_service import genieacs_service
 
-        summary = create_acs_service().get_device_summary(
+        summary = genieacs_service.get_device_summary(
             db,
             ont_id,
             persist_observed_runtime=True,
@@ -443,14 +441,13 @@ class AcsServiceIntentAdapter:
         self, db: Session, *, ont_id: str
     ) -> "TR069Summary":
         """Refresh/persist ACS observed runtime through the adapter boundary."""
-        from app.services.acs_service import create_acs_service
+        from app.services.genieacs_service import genieacs_service
 
-        return create_acs_service().get_device_summary(
+        return genieacs_service.get_device_summary(
             db,
             ont_id,
             persist_observed_runtime=True,
         )
 
 
-acs_service_intent_adapter = AcsServiceIntentAdapter()
-adapter_registry.register(acs_service_intent_adapter)
+genieacs_service_intent = GenieAcsServiceIntent()

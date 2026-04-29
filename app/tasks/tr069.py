@@ -23,6 +23,7 @@ from app.models.tr069 import (
     Tr069Session,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.genieacs_service import genieacs_service
 from app.services.network.serial_utils import parse_ont_id_on_olt
 from app.services.task_idempotency import idempotent_task
 
@@ -289,10 +290,8 @@ def apply_acs_config(
     kwargs: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Execute a queued ACS configuration action through the ACS adapter."""
-    from app.services.acs_service import create_acs_service
-
-    acs = create_acs_service()
-    if not acs.config_writer.supports_config_action(action):
+    acs = genieacs_service
+    if not acs.supports_config_action(action):
         raise ValueError(f"Unsupported ACS configuration action: {action}")
 
     db = SessionLocal()
@@ -899,12 +898,12 @@ def refresh_single_ont_runtime(ont_id: str) -> dict[str, object]:
     Returns:
         Stats: {ont_id, success, error, source}.
     """
-    from app.services.acs_service_intent_adapter import acs_service_intent_adapter
+    from app.services.genieacs_service_intent import genieacs_service_intent
 
     logger.info("Refreshing TR-069 runtime for ONT %s", ont_id)
     db = db_session_adapter.create_session()
     try:
-        summary = acs_service_intent_adapter.refresh_observed_summary_for_ont(
+        summary = genieacs_service_intent.refresh_observed_summary_for_ont(
             db, ont_id=ont_id
         )
         success = bool(summary.available and not summary.error)
@@ -950,8 +949,8 @@ def cleanup_stale_genieacs_tasks(
     Returns:
         Stats: {tasks_deleted, faults_deleted, servers_processed, errors}.
     """
-    from app.services.acs_client import create_acs_client
-    from app.services.genieacs import GenieACSError
+    from app.services.genieacs_client import create_genieacs_client
+    from app.services.genieacs_client import GenieACSError
 
     logger.info(
         "Starting GenieACS stale task cleanup (max_age=%dh, dry_run=%s)",
@@ -981,7 +980,7 @@ def cleanup_stale_genieacs_tasks(
             if not server.base_url:
                 continue
             try:
-                client = create_acs_client(server.base_url)
+                client = create_genieacs_client(server.base_url)
 
                 # Delete stale tasks
                 result = client.delete_stale_tasks(
@@ -1143,7 +1142,7 @@ def scrape_genieacs_metrics() -> dict[str, Any]:
             for (s,) in db.execute(
                 select(OntUnit.serial_number).where(
                     OntUnit.is_active.is_(True),
-                    OntUnit.online_status == OnuOnlineStatus.online,
+                    OntUnit.olt_status == OnuOnlineStatus.online,
                     OntUnit.serial_number.is_not(None),
                 )
             ).all()
@@ -1245,7 +1244,7 @@ def heal_online_silent_onts(
             select(OntUnit)
             .where(OntUnit.is_active.is_(True))
             .where(OntUnit.authorization_status == OntAuthorizationStatus.authorized)
-            .where(OntUnit.online_status == OnuOnlineStatus.online)
+            .where(OntUnit.olt_status == OnuOnlineStatus.online)
             .where(
                 (OntUnit.acs_last_inform_at.is_(None))
                 | (OntUnit.acs_last_inform_at < stale_cutoff)
@@ -1387,9 +1386,9 @@ def heal_online_silent_onts(
                         ont.acs_last_inform_at,
                     )
                     try:
-                        from app.services.acs_service import create_acs_service
+                        from app.services.genieacs_service import genieacs_service
 
-                        result = create_acs_service().send_connection_request(
+                        result = genieacs_service.send_connection_request(
                             db, str(ont.id)
                         )
                         if result.success:

@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     DeviceConfig,

@@ -26,6 +26,10 @@ from app.schemas.subscriber import (
 )
 from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
+from app.services.nin_verifications import (
+    get_or_create_pending_nin_verification,
+    latest_nin_verification,
+)
 from app.services.nin_matching import normalize_nin, validate_nin
 from app.services.queue_adapter import enqueue_task
 from app.tasks.nin_tasks import verify_nin_task
@@ -57,46 +61,6 @@ def _nin_verification_payload(
         if verification.created_at
         else None,
     }
-
-
-def _latest_nin_verification(
-    db: Session,
-    subscriber_id: uuid.UUID,
-) -> SubscriberNINVerification | None:
-    return (
-        db.query(SubscriberNINVerification)
-        .filter(SubscriberNINVerification.subscriber_id == subscriber_id)
-        .order_by(SubscriberNINVerification.created_at.desc())
-        .first()
-    )
-
-
-def _get_or_create_pending_nin_verification(
-    db: Session,
-    subscriber_id: uuid.UUID,
-    nin: str,
-) -> SubscriberNINVerification:
-    verification = (
-        db.query(SubscriberNINVerification)
-        .filter(
-            SubscriberNINVerification.subscriber_id == subscriber_id,
-            SubscriberNINVerification.nin == nin,
-            SubscriberNINVerification.status == NINVerificationStatus.pending,
-        )
-        .order_by(SubscriberNINVerification.created_at.desc())
-        .first()
-    )
-    if verification is not None:
-        return verification
-
-    verification = SubscriberNINVerification(
-        subscriber_id=subscriber_id,
-        nin=nin,
-        status=NINVerificationStatus.pending,
-    )
-    db.add(verification)
-    db.flush()
-    return verification
 
 
 @router.post(
@@ -267,7 +231,7 @@ async def verify_subscriber_nin(
     if subscriber is None:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
-    verification = _get_or_create_pending_nin_verification(
+    verification = get_or_create_pending_nin_verification(
         db,
         subscriber_uuid,
         normalized_nin,
@@ -311,7 +275,7 @@ def get_subscriber_nin_verification(
     if subscriber is None:
         raise HTTPException(status_code=404, detail="Subscriber not found")
 
-    return _nin_verification_payload(_latest_nin_verification(db, subscriber_uuid))
+    return _nin_verification_payload(latest_nin_verification(db, subscriber_uuid))
 
 
 @router.post(

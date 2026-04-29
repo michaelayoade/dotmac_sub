@@ -53,7 +53,7 @@ class TestOntActionSchemas:
 
     def test_connection_request_credentials_valid(self):
         req = OntConnectionRequestCredentials(username="admin", password="secret123")
-        assert req.periodic_inform_interval == 3600
+        assert req.periodic_inform_interval == 300
 
     def test_connection_request_credentials_interval(self):
         req = OntConnectionRequestCredentials(
@@ -77,17 +77,20 @@ class TestOntEnrichedReadSchema:
         assert read.capabilities == {}
 
     def test_full_enriched_read(self):
+        now = datetime.now(UTC)
         read = OntEnrichedRead(
             id="00000000-0000-0000-0000-000000000001",
             serial_number="HWTC-1234",
             vendor="Huawei",
             model="EG8145V5",
-            online_status="online",
+            olt_status="online",
+            last_seen_at=now,
             signal_quality="good",
             olt_rx_signal_dbm=-20.5,
             capabilities={"wifi": True, "voip": False},
         )
         assert read.signal_quality == "good"
+        assert read.last_seen_at == now
         assert read.capabilities["wifi"] is True
 
 
@@ -96,15 +99,13 @@ class TestOntUnitReadSchema:
         read = OntUnitRead(
             id="00000000-0000-0000-0000-000000000002",
             serial_number="HWTC-5678",
-            online_status="offline",
-            acs_status="online",
+            olt_status="offline",
             effective_status="online",
             effective_status_source="acs",
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
-        assert read.online_status == "offline"
-        assert read.acs_status == "online"
+        assert read.olt_status == "offline"
         assert read.effective_status == "online"
         assert read.effective_status_source == "acs"
 

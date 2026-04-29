@@ -203,13 +203,6 @@ class OnuOfflineReason(enum.Enum):
     unknown = "unknown"
 
 
-class OntAcsStatus(enum.Enum):
-    online = "online"
-    stale = "stale"
-    unmanaged = "unmanaged"
-    unknown = "unknown"
-
-
 class OntStatusSource(enum.Enum):
     olt = "olt"
     acs = "acs"
@@ -1164,19 +1157,15 @@ class OntUnit(Base):
     ont_bias_current_ma: Mapped[float | None] = mapped_column(Float)
 
     signal_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    online_status: Mapped[OnuOnlineStatus] = mapped_column(
+    olt_status: Mapped[OnuOnlineStatus] = mapped_column(
         Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
         default=OnuOnlineStatus.unknown,
         server_default="unknown",
     )
+    olt_status_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     offline_reason: Mapped[OnuOfflineReason | None] = mapped_column(
         Enum(OnuOfflineReason, name="onuofflinereason", create_constraint=False),
-    )
-    acs_status: Mapped[OntAcsStatus] = mapped_column(
-        Enum(OntAcsStatus, name="ontacsstatus", create_constraint=False),
-        default=OntAcsStatus.unknown,
-        server_default="unknown",
     )
     acs_last_inform_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     effective_status: Mapped[OnuOnlineStatus] = mapped_column(
@@ -1189,7 +1178,6 @@ class OntUnit(Base):
         default=OntStatusSource.derived,
         server_default="derived",
     )
-    status_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Flap protection: count consecutive offline polls before emitting event
     consecutive_offline_polls: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"

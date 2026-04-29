@@ -15,8 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.services.acs_client import AcsClient
-from app.services.genieacs import GenieACSError
+from app.services.genieacs_client import GenieACSClient
+from app.services.genieacs_client import GenieACSError
 from app.services.network._common import normalize_mac_address
 from app.services.network._resolve import resolve_genieacs
 from app.services.network.tr069_paths import VIRTUAL_PARAM_GROUPS
@@ -70,7 +70,7 @@ class TR069Summary:
 
 
 def _extract_first(
-    client: AcsClient,
+    client: GenieACSClient,
     device: dict[str, Any],
     param_paths: list[str],
 ) -> Any:
@@ -84,7 +84,7 @@ def _extract_first(
 
 
 def _extract_group(
-    client: AcsClient,
+    client: GenieACSClient,
     device: dict[str, Any],
     group_name: str,
 ) -> dict[str, Any]:
@@ -799,9 +799,11 @@ class OntTR069:
             apply_status_snapshot(
                 ont,
                 resolve_ont_status_snapshot(
-                    olt_status=getattr(ont, "online_status", None),
+                    olt_status=getattr(ont, "olt_status", None),
                     acs_last_inform_at=linked_tr069.last_inform_at,
-                    managed=True,
+                    consecutive_offline_polls=int(
+                        getattr(ont, "consecutive_offline_polls", 0) or 0
+                    ),
                     online_window_minutes=resolve_acs_online_window_minutes_for_model(
                         ont
                     ),

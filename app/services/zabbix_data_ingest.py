@@ -62,7 +62,7 @@ ITEM_KEY_PATTERNS = {
         "ont.signal.onu_tx",
         "onu.tx.power",
     ],
-    # ONT online status
+    # ONT OLT status
     "status": [
         "gpon.ont.status",
         "ont.online.status",
@@ -290,13 +290,13 @@ def ingest_olt_signal_data(
             ont.onu_tx_signal_dbm = metrics["onu_tx"]
             changed = True
 
-        # Update online status based on signal presence
+        # Update OLT status based on signal presence
         # If we have valid signal data, the ONT must be online
         if changed:
             from app.models.network import OnuOnlineStatus
             from app.services.network.ont_status import apply_resolved_status_for_model
 
-            ont.online_status = OnuOnlineStatus.online
+            ont.olt_status = OnuOnlineStatus.online
             ont.last_seen_at = now
             ont.signal_updated_at = now
             # Resolve effective_status considering ACS data

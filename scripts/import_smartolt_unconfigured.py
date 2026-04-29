@@ -52,7 +52,6 @@ from app.models.network import (
     OnuOnlineStatus,
     PonPort,
     PonType,
-    WanMode,
 )
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber
@@ -687,7 +686,7 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
                         "port",
                         "name",
                         "address_or_comment",
-                        "wan_mode",
+                        "desired_config",
                         "pppoe_username",
                         "pppoe_password",
                         "is_active",
@@ -709,11 +708,17 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
                     external_id=row.allocated_onu or None,
                     name=row.name or None,
                     address_or_comment=row.address or None,
-                    online_status=OnuOnlineStatus.unknown,
-                    wan_mode=WanMode.pppoe,
+                    olt_status=OnuOnlineStatus.unknown,
                     pppoe_username=row.username,
                     pppoe_password=encrypt_credential(row.password),
                 )
+                ont.desired_config = {
+                    **(ont.desired_config or {}),
+                    "wan": {
+                        **((ont.desired_config or {}).get("wan") or {}),
+                        "mode": "pppoe",
+                    },
+                }
                 db.add(ont)
                 db.flush()
                 rollback_entry["created_ont_id"] = str(ont.id)
@@ -731,7 +736,13 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
             ont.port = row.port or ont.port
             ont.name = row.name or ont.name
             ont.address_or_comment = row.address or ont.address_or_comment
-            ont.wan_mode = WanMode.pppoe
+            ont.desired_config = {
+                **(ont.desired_config or {}),
+                "wan": {
+                    **((ont.desired_config or {}).get("wan") or {}),
+                    "mode": "pppoe",
+                },
+            }
             ont.pppoe_username = row.username
             ont.pppoe_password = encrypt_credential(row.password)
             ont.is_active = True
@@ -966,7 +977,7 @@ def _rollback(rollback_path: Path) -> None:
                     ont.port = ont_before["port"]
                     ont.name = ont_before["name"]
                     ont.address_or_comment = ont_before["address_or_comment"]
-                    ont.wan_mode = _restore_enum(WanMode, ont_before["wan_mode"])
+                    ont.desired_config = ont_before["desired_config"]
                     ont.pppoe_username = ont_before["pppoe_username"]
                     ont.pppoe_password = ont_before["pppoe_password"]
                     ont.is_active = ont_before["is_active"]

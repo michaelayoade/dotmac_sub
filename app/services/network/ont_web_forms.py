@@ -306,6 +306,7 @@ def update_onu_mode_from_form(
     except HTTPException:
         return OntFormResult(not_found=True)
     before_snapshot = model_to_dict(ont)
+    previous_wan_remote_access = bool(getattr(ont, "wan_remote_access", False))
     assignment = active_assignment_for_ont(db, ont)
     onu_mode = form_str(form, "onu_mode").strip() or None
     wan_mode = form_str(form, "wan_mode").strip() or None
@@ -326,9 +327,21 @@ def update_onu_mode_from_form(
         assignment.pppoe_password = None
     elif pw := form_str(form, "pppoe_password").strip():
         assignment.pppoe_password = encrypt_credential(pw)
-    ont.wan_remote_access = form_str(form, "wan_remote_access") == "true"
+    wan_remote_access = form_str(form, "wan_remote_access") == "true"
+    ont.wan_remote_access = wan_remote_access
     db.add(ont)
     db.flush()
+
+    if wan_remote_access != previous_wan_remote_access:
+        from app.services.network.ont_features import OntFeatureService
+
+        result = OntFeatureService.toggle_wan_remote_access(
+            db, ont_id, enabled=wan_remote_access
+        )
+        if not result.success:
+            db.rollback()
+            return OntFormResult(ont=ont, form_model=ont, error=result.message)
+
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
     metadata: dict[str, object] | None = {"changes": changes} if changes else None

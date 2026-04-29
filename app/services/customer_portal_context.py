@@ -129,18 +129,18 @@ def _get_subscriber_devices(db: Session, subscriber_id: str) -> list:
         onts = get_subscriber_onts(db, subscriber_id)
         devices = []
         for ont_info in onts:
-            # Map online status to user-friendly display
+            # Map OLT status to user-friendly display
             status_display = {
                 "online": "Online",
                 "offline": "Offline",
                 "unknown": "Unknown",
-            }.get(ont_info.online_status or "unknown", "Unknown")
+            }.get(ont_info.olt_status or "unknown", "Unknown")
 
             devices.append(
                 SimpleNamespace(
                     serial_number=ont_info.serial_number or "Unknown",
                     model=ont_info.model or "ONT Device",
-                    status=ont_info.online_status or "unknown",
+                    status=ont_info.olt_status or "unknown",
                     status_display=status_display,
                     location=ont_info.service_address or "Service address",
                 )
@@ -351,11 +351,12 @@ def get_restricted_since(subscriber: Subscriber) -> datetime | None:
 
 def get_total_outstanding_balance(db: Session, account_id: object) -> float:
     """Sum all active positive invoice balances for the account."""
-    total = db.scalar(
-        select(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .where(Invoice.account_id == coerce_uuid(account_id))
-        .where(Invoice.is_active.is_(True))
-        .where(Invoice.balance_due > 0)
+    total = (
+        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.balance_due > 0)
+        .scalar()
     )
     return float(total or 0)
 

@@ -318,20 +318,17 @@ def decommission_ont(
         # Optionally delete from ACS entirely
         if remove_from_acs and genieacs_device_id and ont.tr069_acs_server:
             try:
-                from app.services.acs_client import create_acs_client
+                from app.services.genieacs_client import create_genieacs_client
 
-                acs_client = create_acs_client(ont.tr069_acs_server)
+                acs_client = create_genieacs_client(ont.tr069_acs_server)
                 if acs_client:
-                    delete_ok = acs_client.delete_device(genieacs_device_id)
-                    if delete_ok:
-                        logger.info(
-                            "Deleted ONT %s from ACS during decommission",
-                            serial_number,
-                        )
-                        # Also delete the local CPE device record
-                        db.delete(tr069_device)
-                    else:
-                        errors.append("ACS device delete failed")
+                    acs_client.delete_device(genieacs_device_id)
+                    logger.info(
+                        "Deleted ONT %s from ACS during decommission",
+                        serial_number,
+                    )
+                    # Also delete the local CPE device record
+                    db.delete(tr069_device)
             except Exception as exc:
                 errors.append(f"ACS delete error: {exc}")
                 logger.warning(
@@ -346,7 +343,7 @@ def decommission_ont(
     ont.is_active = False
     ont.authorization_status = None  # type: ignore[assignment]  # Clear status
     ont.provisioning_status = None  # type: ignore[assignment]
-    ont.online_status = OnuOnlineStatus.unknown
+    ont.olt_status = OnuOnlineStatus.unknown
     ont.external_id = None  # Clear OLT registration ID
     # Store decommission metadata in notes
     decommission_note = (
@@ -422,6 +419,7 @@ def decommission_ont_audited(
     """Decommission an ONT with audit logging.
 
     Wrapper around decommission_ont that adds audit event logging.
+    Commits on success, rollbacks on failure.
 
     SAFETY: The `confirm` parameter MUST be True or the operation will be rejected.
     """
@@ -441,6 +439,12 @@ def decommission_ont_audited(
         deauthorize_on_olt=deauthorize_on_olt,
         actor=actor,
     )
+
+    # Commit or rollback based on result
+    if result.success:
+        db.commit()
+    else:
+        db.rollback()
 
     # Get OLT ID for audit
     ont = db.get(OntUnit, ont_id)

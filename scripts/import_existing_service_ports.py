@@ -19,6 +19,7 @@ import argparse
 import logging
 import sys
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 # Add app to path
@@ -89,7 +90,7 @@ def get_ont_by_pon_port_and_id(
 ) -> OntUnit | None:
     """Find ONT by PON port and ONT-ID."""
     # Find PON port
-    stmt = select(PonPort).where(
+    stmt: Any = select(PonPort).where(
         PonPort.olt_id == olt_id,
         PonPort.name == fsp,
     )
@@ -135,15 +136,15 @@ def import_service_ports_for_olt(
     pool = get_or_create_pool(db, olt)
 
     # Get existing allocations for this pool
-    stmt = select(ServicePortAllocation.port_index).where(
+    allocation_stmt = select(ServicePortAllocation.port_index).where(
         ServicePortAllocation.pool_id == pool.id,
         ServicePortAllocation.is_active.is_(True),
     )
-    existing_indices = set(db.scalars(stmt).all())
+    existing_indices: set[int] = set(db.scalars(allocation_stmt).all())
 
     # Get all PON ports for this OLT
-    stmt = select(PonPort).where(PonPort.olt_id == olt.id)
-    pon_ports = list(db.scalars(stmt).all())
+    pon_port_stmt = select(PonPort).where(PonPort.olt_id == olt.id)
+    pon_ports = list(db.scalars(pon_port_stmt).all())
 
     for pon_port in pon_ports:
         fsp_raw = pon_port.name

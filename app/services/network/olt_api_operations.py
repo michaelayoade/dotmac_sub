@@ -50,6 +50,66 @@ def authorize_ont(
     )
 
 
+def queue_authorize_ont(
+    db: Session,
+    olt_id: str,
+    *,
+    fsp: str,
+    serial_number: str,
+    force_reauthorize: bool = False,
+    request: Request | None = None,
+) -> OltApiWriteResult:
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+    from app.services.queue_adapter import enqueue_task
+
+    operation = network_operations.start(
+        db,
+        NetworkOperationType.ont_authorize,
+        NetworkOperationTargetType.olt,
+        olt_id,
+        correlation_key=f"olt-authorize:{olt_id}:{fsp}:{serial_number}",
+        input_payload={
+            "fsp": fsp,
+            "serial_number": serial_number,
+            "force_reauthorize": force_reauthorize,
+        },
+    )
+    db.commit()
+    dispatch = enqueue_task(
+        "app.tasks.ont_authorization.authorize_ont_from_olt_api",
+        args=[str(operation.id), olt_id, fsp, serial_number, force_reauthorize],
+        correlation_id=f"olt-authorize:{olt_id}:{fsp}:{serial_number}",
+        source="api_network_olt_ops",
+    )
+    if not dispatch.queued:
+        message = dispatch.error or "Failed to queue ONT authorization task"
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            message,
+            output_payload={
+                "status": "queue_failed",
+                "task_name": "app.tasks.ont_authorization.authorize_ont_from_olt_api",
+                "error": message,
+            },
+        )
+        db.commit()
+        return OltApiWriteResult(
+            False,
+            f"Authorization was not queued: {message}",
+            {"status": "queue_failed", "operation_id": str(operation.id)},
+        )
+    return OltApiWriteResult(
+        True,
+        "Authorization queued. Track progress in operation history.",
+        {"status": "queued", "operation_id": str(operation.id)},
+    )
+
+
 def _serialize_autofind_entry(entry: object) -> dict[str, object]:
     return {
         "fsp": getattr(entry, "fsp", ""),

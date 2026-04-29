@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.celery_app import celery_app
 from app.models.network import OLTDevice
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network.olt_read_cache import olt_cache
 from app.services.operation_notifications import publish_operation_status
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,9 @@ def scan_olts_autofind(
             )
 
             try:
+                # Invalidate cache to ensure fresh data from OLT
+                olt_cache.invalidate(str(olt.id), "autofind")
+
                 ok, message, stats = autofind_service.sync_olt_autofind_candidates(
                     db,
                     str(olt.id),

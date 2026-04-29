@@ -100,7 +100,7 @@ def upgrade() -> None:
     op.execute(
         """
         UPDATE ont_units
-        SET effective_status = COALESCE(CAST(online_status AS TEXT), 'unknown')::onteffectivestatus,
+        SET effective_status = COALESCE(CAST(olt_status AS TEXT), 'unknown')::onteffectivestatus,
             effective_status_source = 'olt'::ontstatussource,
             status_resolved_at = CURRENT_TIMESTAMP
         """

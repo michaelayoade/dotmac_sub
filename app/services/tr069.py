@@ -28,19 +28,18 @@ from app.schemas.tr069 import (
     Tr069SessionCreate,
     Tr069SessionUpdate,
 )
-from app.services.acs_client import AcsClient, create_acs_client
+from app.services.genieacs_client import GenieACSClient, create_genieacs_client
 from app.services.common import (
     apply_ordering,
     apply_pagination,
     validate_enum,
 )
 from app.services.credential_crypto import encrypt_credential
-from app.services.genieacs import GenieACSError, normalize_tr069_serial
+from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
 from app.services.network import cpe as cpe_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_status import (
     apply_status_snapshot,
-    ont_has_acs_management,
     resolve_acs_online_window_minutes_for_model,
     resolve_ont_status_snapshot,
 )
@@ -531,9 +530,11 @@ def refresh_ont_status_snapshot(
         .scalar()
     )
     snapshot = resolve_ont_status_snapshot(
-        olt_status=getattr(ont, "online_status", None),
+        olt_status=getattr(ont, "olt_status", None),
         acs_last_inform_at=acs_last_inform_at,
-        managed=ont_has_acs_management(ont, acs_last_inform_at=acs_last_inform_at),
+        consecutive_offline_polls=int(
+            getattr(ont, "consecutive_offline_polls", 0) or 0
+        ),
         online_window_minutes=resolve_acs_online_window_minutes_for_model(ont),
     )
     apply_status_snapshot(ont, snapshot)
@@ -664,7 +665,7 @@ class CpeDevices(ListResponseMixin):
 
     @staticmethod
     def _extract_identity(
-        client: AcsClient, device_data: dict
+        client: GenieACSClient, device_data: dict
     ) -> tuple[str | None, str | None, str | None]:
         device_id = str(device_data.get("_id") or "").strip()
         parsed_oui: str | None = None
@@ -829,9 +830,11 @@ class CpeDevices(ListResponseMixin):
             apply_status_snapshot(
                 ont,
                 resolve_ont_status_snapshot(
-                    olt_status=getattr(ont, "online_status", None),
+                    olt_status=getattr(ont, "olt_status", None),
                     acs_last_inform_at=device.last_inform_at,
-                    managed=True,
+                    consecutive_offline_polls=int(
+                        getattr(ont, "consecutive_offline_polls", 0) or 0
+                    ),
                     online_window_minutes=(
                         resolve_acs_online_window_minutes_for_model(ont)
                     ),
@@ -957,7 +960,7 @@ class CpeDevices(ListResponseMixin):
             raise HTTPException(status_code=404, detail="ACS server not found")
 
         try:
-            client = create_acs_client(server.base_url)
+            client = create_genieacs_client(server.base_url)
             devices = client.list_devices()
         except GenieACSError as e:
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
@@ -1116,9 +1119,11 @@ class CpeDevices(ListResponseMixin):
                     apply_status_snapshot(
                         ont,
                         resolve_ont_status_snapshot(
-                            olt_status=getattr(ont, "online_status", None),
+                            olt_status=getattr(ont, "olt_status", None),
                             acs_last_inform_at=cpe_dev.last_inform_at,
-                            managed=True,
+                            consecutive_offline_polls=int(
+                                getattr(ont, "consecutive_offline_polls", 0) or 0
+                            ),
                             online_window_minutes=(
                                 resolve_acs_online_window_minutes_for_model(ont)
                             ),
@@ -1402,7 +1407,7 @@ class Jobs(ListResponseMixin):
         )
 
         try:
-            client = create_acs_client(server.base_url)
+            client = create_genieacs_client(server.base_url)
 
             genieacs_device_id = str(device.genieacs_device_id or "").strip()
             if not genieacs_device_id:
@@ -1647,9 +1652,11 @@ def receive_inform(
             apply_status_snapshot(
                 ont,
                 resolve_ont_status_snapshot(
-                    olt_status=getattr(ont, "online_status", None),
+                    olt_status=getattr(ont, "olt_status", None),
                     acs_last_inform_at=now,
-                    managed=True,
+                    consecutive_offline_polls=int(
+                        getattr(ont, "consecutive_offline_polls", 0) or 0
+                    ),
                     online_window_minutes=resolve_acs_online_window_minutes_for_model(
                         ont
                     ),
@@ -1939,7 +1946,7 @@ def push_acs_enforcement_preset(
     )
 
     # Push to GenieACS
-    client = create_acs_client(server.base_url)
+    client = create_genieacs_client(server.base_url)
 
     try:
         # Create provision first
@@ -1997,7 +2004,7 @@ def remove_acs_enforcement_preset(db: Session, acs_server_id: str) -> dict:
     provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
     preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
 
-    client = create_acs_client(server.base_url)
+    client = create_genieacs_client(server.base_url)
     removed = {"provision": False, "preset": False}
 
     try:
@@ -2046,7 +2053,7 @@ def get_acs_enforcement_status(db: Session, acs_server_id: str) -> dict:
     provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
     preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
 
-    client = create_acs_client(server.base_url)
+    client = create_genieacs_client(server.base_url)
     status = {
         "provision_id": provision_name,
         "preset_id": preset_id,

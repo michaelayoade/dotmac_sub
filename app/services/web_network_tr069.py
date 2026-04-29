@@ -23,9 +23,9 @@ from app.schemas.tr069 import (
 )
 from app.services import network as network_service
 from app.services import tr069 as tr069_service
-from app.services.acs_client import create_acs_client
+from app.services.genieacs_client import create_genieacs_client
 from app.services.common import coerce_uuid
-from app.services.genieacs import GenieACSError, normalize_tr069_serial
+from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
 from app.services.network import cpe as cpe_service
 from app.services.network._common import decode_huawei_hex_serial
 from app.services.tr069_web_audit import log_tr069_audit_event
@@ -205,7 +205,7 @@ def validate_acs_connection(values: dict[str, object]) -> str | None:
 
     try:
         # Lightweight reachability/auth check against the configured ACS NBI.
-        create_acs_client(base_url, timeout=5.0).count_devices()
+        create_genieacs_client(base_url, timeout=5.0).count_devices()
     except GenieACSError as exc:
         return f"Failed to connect to GenieACS ({base_url}): {exc}"
     return None
@@ -389,7 +389,7 @@ def acs_task_console_data(
 
     if server:
         try:
-            client = create_acs_client(str(server.base_url))
+            client = create_genieacs_client(str(server.base_url))
             tasks = client.list_tasks()
         except Exception as exc:
             error = str(exc)
@@ -491,7 +491,7 @@ def delete_acs_task(
     clean_task_id = str(task_id or "").strip()
     if not clean_task_id:
         raise ValueError("Task ID is required")
-    client = create_acs_client(str(server.base_url))
+    client = create_genieacs_client(str(server.base_url))
     client.delete_task(clean_task_id)
     log_tr069_audit_event(
         db,
@@ -512,7 +512,7 @@ def clear_acs_tasks(
     _, _, server = _selected_acs_server(db, acs_server_id)
     if not server:
         raise ValueError("ACS server not found")
-    client = create_acs_client(str(server.base_url))
+    client = create_genieacs_client(str(server.base_url))
     tasks = client.list_tasks()
     deleted = 0
     errors: list[dict[str, str]] = []

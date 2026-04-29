@@ -120,10 +120,6 @@ def test_adapter_registry_tracks_named_adapters() -> None:
 
 def test_global_adapter_registry_contains_core_singletons() -> None:
     from app.services import (
-        acs_config_adapter,
-        acs_event_adapter,
-        acs_service_intent_adapter,
-        acs_state_adapter,
         audit_adapter,
         billing_adapter,
         db_session_adapter,
@@ -144,10 +140,6 @@ def test_global_adapter_registry_contains_core_singletons() -> None:
     from app.services.adapters import adapter_registry
 
     expected = {
-        "acs.config": acs_config_adapter.acs_config_adapter,
-        "acs.events": acs_event_adapter.acs_event_adapter,
-        "acs.service_intent": acs_service_intent_adapter.acs_service_intent_adapter,
-        "acs.state": acs_state_adapter.acs_state_adapter,
         "audit": audit_adapter.audit_adapter,
         "billing": billing_adapter.billing_adapter,
         "db.session.sqlalchemy": db_session_adapter.db_session_adapter,
