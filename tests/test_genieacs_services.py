@@ -812,6 +812,68 @@ class TestTaskOperations:
             task = call_args.kwargs["json"]
             assert task["name"] == "factoryReset"
 
+    def test_create_task_and_wait_succeeds_after_task_is_consumed(
+        self, client, mock_response
+    ):
+        """Synchronous UI tasks only succeed after GenieACS consumes them."""
+        with (
+            patch("httpx.Client") as mock_client,
+            patch.object(
+                client,
+                "wait_for_task_completion",
+                return_value=(True, "Task completed"),
+            ) as wait_for_task,
+            patch.object(client, "list_faults", return_value=[]),
+        ):
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data={"_id": "task1", "name": "reboot"})
+            )
+
+            result = client.create_task_and_wait(
+                "device1", {"name": "reboot"}, timeout_sec=5
+            )
+
+            assert result["_id"] == "task1"
+            request_call = mock_client.return_value.__enter__.return_value.request
+            assert request_call.call_args.kwargs["params"] == {
+                "connection_request": "true"
+            }
+            wait_for_task.assert_called_once_with(
+                "device1", "task1", timeout_sec=5
+            )
+
+    def test_create_task_and_wait_deletes_and_fails_pending_task(self, client):
+        """A task that remains pending is failure, not UI success."""
+        with (
+            patch.object(
+                client,
+                "create_task",
+                return_value={"_id": "task1", "name": "factoryReset"},
+            ),
+            patch.object(
+                client,
+                "wait_for_task_completion",
+                return_value=(False, "Task task1 did not complete within 1s"),
+            ),
+            patch.object(client, "list_faults", return_value=[]),
+            patch.object(client, "delete_task") as delete_task,
+        ):
+            with pytest.raises(GenieACSError) as exc_info:
+                client.create_task_and_wait(
+                    "device1", {"name": "factoryReset"}, timeout_sec=1
+                )
+
+            assert "did not complete synchronously" in str(exc_info.value)
+            delete_task.assert_called_once_with("task1")
+
+    def test_factory_reset_and_wait_creates_synchronous_factory_reset(self, client):
+        with patch.object(client, "create_task_and_wait") as create_task_and_wait:
+            client.factory_reset_and_wait("device1", timeout_sec=5)
+
+            create_task_and_wait.assert_called_once_with(
+                "device1", {"name": "factoryReset"}, timeout_sec=5
+            )
+
     def test_download(self, client, mock_response):
         """Test download creates correct task."""
         with patch("httpx.Client") as mock_client:

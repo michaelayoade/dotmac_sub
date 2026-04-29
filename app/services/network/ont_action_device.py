@@ -162,11 +162,13 @@ def reboot(db: Session, ont_id: str) -> ActionResult:
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     try:
-        result = client.reboot_device(device_id)
-        logger.info("Reboot sent to ONT %s (device %s)", ont.serial_number, device_id)
+        result = client.reboot_device_and_wait(device_id)
+        logger.info(
+            "Reboot completed for ONT %s (device %s)", ont.serial_number, device_id
+        )
         return ActionResult(
             success=True,
-            message=f"Reboot command sent to {ont.serial_number}.",
+            message=f"Reboot completed for {ont.serial_number}.",
             data=result,
         )
     except GenieACSError as exc:
@@ -218,14 +220,21 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
     try:
         root = detect_data_model_root(db, ont, client, device_id)
         persist_data_model_root(ont, root)
-        result = client.get_parameter_values(
+        result = client.create_task_and_wait(
             device_id,
-            _RUNTIME_REFRESH_PARAMS.get(root, _RUNTIME_REFRESH_PARAMS["Device"]),
+            {
+                "name": "getParameterValues",
+                "parameterNames": _RUNTIME_REFRESH_PARAMS.get(
+                    root, _RUNTIME_REFRESH_PARAMS["Device"]
+                ),
+            },
         )
-        logger.info("Refresh sent to ONT %s (device %s)", ont.serial_number, device_id)
+        logger.info(
+            "Refresh completed for ONT %s (device %s)", ont.serial_number, device_id
+        )
         return ActionResult(
             success=True,
-            message=f"Status refresh requested for {ont.serial_number}.",
+            message=f"Status refresh completed for {ont.serial_number}.",
             data={
                 "status": status_result.effective_status.value,
                 "source": status_result.status_source.value,
@@ -234,10 +243,9 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         )
     except GenieACSError as exc:
         logger.error("Refresh failed for ONT %s: %s", ont.serial_number, exc)
-        # Return cached status even if TR-069 refresh failed
         return ActionResult(
-            success=True,
-            message=f"Status from cache (TR-069 refresh failed: {exc})",
+            success=False,
+            message=f"TR-069 status refresh failed: {exc}",
             data={
                 "status": status_result.effective_status.value,
                 "source": status_result.status_source.value,
@@ -297,13 +305,24 @@ def factory_reset(db: Session, ont_id: str) -> ActionResult:
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     try:
-        result = client.factory_reset(device_id)
+        result = client.factory_reset_and_wait(device_id)
+        ont.observed_wan_ip = None
+        ont.observed_pppoe_status = None
+        ont.observed_lan_mode = None
+        ont.observed_wifi_clients = None
+        ont.observed_lan_hosts = None
+        ont.observed_runtime_updated_at = None
+        ont.tr069_last_snapshot = {}
+        ont.tr069_last_snapshot_at = None
+        db.flush()
         logger.info(
-            "Factory reset sent to ONT %s (device %s)", ont.serial_number, device_id
+            "Factory reset completed for ONT %s (device %s)",
+            ont.serial_number,
+            device_id,
         )
         return ActionResult(
             success=True,
-            message=f"Factory reset command sent to {ont.serial_number}.",
+            message=f"Factory reset completed for {ont.serial_number}.",
             data=result,
         )
     except GenieACSError as exc:
@@ -334,7 +353,7 @@ def firmware_upgrade(db: Session, ont_id: str, firmware_image_id: str) -> Action
 
     _, client, device_id = resolved
     try:
-        result = client.download(
+        result = client.download_and_wait(
             device_id,
             file_type="1 Firmware Upgrade Image",
             file_url=firmware.file_url,
@@ -349,8 +368,8 @@ def firmware_upgrade(db: Session, ont_id: str, firmware_image_id: str) -> Action
         return ActionResult(
             success=True,
             message=(
-                f"Firmware upgrade to v{firmware.version} initiated for "
-                f"{ont.serial_number}. The ONT will download and reboot."
+                f"Firmware upgrade to v{firmware.version} accepted by "
+                f"{ont.serial_number}."
             ),
             data=result,
         )

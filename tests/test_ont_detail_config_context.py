@@ -305,6 +305,95 @@ def test_unified_config_context_exposes_shared_db_observed_state(
     assert context["tr069_profiles_freshness"]["fetched_at"] == fetched_at
 
 
+def test_unified_config_context_includes_configure_form_values(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network import OntUnit
+    from app.services.web_network_ont_actions import context_builders
+
+    ont = OntUnit(
+        serial_number="CTX-FORM-VALUES-001",
+        lan_gateway_ip="192.168.70.1",
+        wifi_ssid="StoredWiFi",
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        context_builders,
+        "resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "config_pack": SimpleNamespace(
+                name="Residential GPON",
+                tr069_profile_name="DotMac ACS",
+            ),
+            "desired_config_keys": ["wan.mode"],
+            "values": {
+                "wan_mode": "pppoe",
+                "ip_protocol": "ipv4",
+                "pppoe_username": "subscriber@example",
+                "wan_vlan": 203,
+                "wan_vlan_id": "wan-vlan-id",
+                "mgmt_ip_mode": "static_ip",
+                "mgmt_ip_address": "10.30.0.44",
+                "mgmt_vlan": 300,
+                "mgmt_vlan_id": "mgmt-vlan-id",
+                "lan_ip": "192.168.1.1",
+                "wifi_ssid": "DesiredWiFi",
+                "wifi_enabled": True,
+                "tr069_olt_profile_id": 7,
+            },
+        },
+    )
+
+    context = context_builders.unified_config_context(db_session, str(ont.id))
+
+    assert context["wan_mode"] == "pppoe"
+    assert context["ip_protocol"] == "ipv4"
+    assert context["pppoe_username"] == "subscriber@example"
+    assert context["wan_vlan"] == 203
+    assert context["wan_vlan_id"] == "wan-vlan-id"
+    assert context["mgmt_ip_mode"] == "static_ip"
+    assert context["mgmt_ip_address"] == "10.30.0.44"
+    assert context["mgmt_vlan"] == 300
+    assert context["mgmt_vlan_id"] == "mgmt-vlan-id"
+    assert context["lan_gateway_ip"] == "192.168.70.1"
+    assert context["wifi_ssid"] == "StoredWiFi"
+    assert context["config_pack_name"] == "Residential GPON"
+    assert context["tr069_profile_name"] == "DotMac ACS"
+
+
+def test_configure_form_context_does_not_use_lan_mode_as_wan_mode(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network import OntUnit
+    from app.services.web_network_ont_actions import context_builders
+
+    ont = OntUnit(
+        serial_number="CTX-WAN-MODE-001",
+        observed_lan_mode="router",
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        context_builders,
+        "resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "config_pack": None,
+            "desired_config_keys": [],
+            "values": {
+                "wan_mode": "pppoe",
+                "ip_protocol": "ipv4",
+            },
+        },
+    )
+
+    context = context_builders.configure_form_context(db_session, str(ont.id))
+
+    assert context["wan_mode"] == "pppoe"
+
+
 def test_tr069_profiles_resolve_olt_from_active_assignment(db_session, monkeypatch) -> None:
     from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
     from app.services import web_network_onts as web_network_onts_service

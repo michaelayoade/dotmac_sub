@@ -50,11 +50,13 @@ def reboot(db: Session, cpe_id: str) -> ActionResult:
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     try:
-        result = client.reboot_device(device_id)
-        logger.info("Reboot sent to CPE %s (device %s)", cpe.serial_number, device_id)
+        result = client.reboot_device_and_wait(device_id)
+        logger.info(
+            "Reboot completed for CPE %s (device %s)", cpe.serial_number, device_id
+        )
         return ActionResult(
             success=True,
-            message=f"Reboot command sent to {cpe.serial_number}.",
+            message=f"Reboot completed for {cpe.serial_number}.",
             data=result,
         )
     except GenieACSError as exc:
@@ -71,14 +73,16 @@ def refresh_status(db: Session, cpe_id: str) -> ActionResult:
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     try:
-        result = client.refresh_object(
+        result = client.create_task_and_wait(
             device_id,
-            "Device.DeviceInfo.",
+            {"name": "refreshObject", "objectName": "Device.DeviceInfo"},
         )
-        logger.info("Refresh sent to CPE %s (device %s)", cpe.serial_number, device_id)
+        logger.info(
+            "Refresh completed for CPE %s (device %s)", cpe.serial_number, device_id
+        )
         return ActionResult(
             success=True,
-            message=f"Status refresh requested for {cpe.serial_number}.",
+            message=f"Status refresh completed for {cpe.serial_number}.",
             data=result,
         )
     except GenieACSError as exc:
@@ -133,13 +137,15 @@ def factory_reset(db: Session, cpe_id: str) -> ActionResult:
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     try:
-        result = client.factory_reset(device_id)
+        result = client.factory_reset_and_wait(device_id)
         logger.info(
-            "Factory reset sent to CPE %s (device %s)", cpe.serial_number, device_id
+            "Factory reset completed for CPE %s (device %s)",
+            cpe.serial_number,
+            device_id,
         )
         return ActionResult(
             success=True,
-            message=f"Factory reset command sent to {cpe.serial_number}.",
+            message=f"Factory reset completed for {cpe.serial_number}.",
             data=result,
         )
     except GenieACSError as exc:

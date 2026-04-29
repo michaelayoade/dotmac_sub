@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OntAssignment
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
@@ -79,6 +78,7 @@ def _desired_config_context(
         },
         "desired_wan_config": {
             "wan_mode": wan_mode or "",
+            "ip_protocol": str(values.get("ip_protocol") or ""),
             "wan_vlan": str(wan_vlan or ""),
             "ip_address": str(values.get("wan_ip") or ""),
             "subnet_mask": str(values.get("subnet_mask") or ""),
@@ -179,12 +179,14 @@ def _resolve_cached_tr069_profile(
     db: Session,
     ont: object,
     profiles: list[object],
+    *,
+    effective: dict[str, object] | None = None,
 ) -> object | None:
     """Resolve the effective TR-069 profile from cached OLT profiles only."""
     if not profiles:
         return None
 
-    effective = resolve_effective_ont_config(db, ont)
+    effective = effective or resolve_effective_ont_config(db, ont)
     values = effective.get("values", {}) if isinstance(effective, dict) else {}
     planned_profile_id = values.get("tr069_olt_profile_id")
     if planned_profile_id is not None:
@@ -206,13 +208,6 @@ def _load_subscriber_info(db: Session, ont: object) -> dict[str, object]:
     ).first()
     if not assignment or not assignment.subscriber_id:
         return {}
-    db.scalars(
-        select(Subscription)
-        .where(Subscription.subscriber_id == assignment.subscriber_id)
-        .where(Subscription.status == SubscriptionStatus.active)
-        .order_by(Subscription.created_at.desc())
-        .limit(1)
-    ).first()
     if assignment.subscriber:
         return {
             "name": str(
@@ -257,7 +252,6 @@ def _build_db_observed_service_intent(
     db: Session, linked_tr069: object, ont: object
 ) -> dict[str, object]:
     # DB-backed observed intent is read-only display; desired config remains separate.
-    values = resolve_effective_ont_config(db, ont)["values"]
     return service_intent_ui_adapter.build_acs_observed_service_intent(
         SimpleNamespace(
             available=bool(linked_tr069),
@@ -268,24 +262,17 @@ def _build_db_observed_service_intent(
                 "MACAddress": getattr(ont, "mac_address", None),
             },
             wan={
-                "pppoe_username": values.get("pppoe_username"),
-                "wan_ip": getattr(ont, "observed_wan_ip", None),
-                "status": getattr(ont, "observed_pppoe_status", None),
-                "wan_mode": values.get("wan_mode"),
+                "WAN IP": getattr(ont, "observed_wan_ip", None),
+                "Status": getattr(ont, "observed_pppoe_status", None),
             },
             lan={
-                "lan_ip": getattr(ont, "lan_gateway_ip", None),
-                "lan_subnet": getattr(ont, "lan_subnet_mask", None),
-                "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
-                "dhcp_start": getattr(ont, "lan_dhcp_start", None),
-                "dhcp_end": getattr(ont, "lan_dhcp_end", None),
+                "LAN IP": getattr(ont, "lan_gateway_ip", None),
+                "Subnet Mask": getattr(ont, "lan_subnet_mask", None),
+                "DHCP Enabled": getattr(ont, "lan_dhcp_enabled", None),
+                "DHCP Start": getattr(ont, "lan_dhcp_start", None),
+                "DHCP End": getattr(ont, "lan_dhcp_end", None),
             },
-            wireless={
-                "SSID": values.get("wifi_ssid"),
-                "Enable": values.get("wifi_enabled"),
-                "Channel": values.get("wifi_channel"),
-                "Security Mode": values.get("wifi_security_mode"),
-            },
+            wireless={},
             ethernet_ports=[],
             lan_hosts=[],
         )
@@ -338,6 +325,129 @@ def _unified_summary_context(
             )
             or desired_wifi.get("ssid")
         },
+    }
+
+
+def _available_vlan_options(vlans: list[object]) -> list[dict[str, object]]:
+    available_vlans = []
+    for vlan in vlans:
+        if vlan.tag is None:
+            continue
+        purpose = vlan.purpose.value if vlan.purpose else "other"
+        available_vlans.append(
+            {
+                "id": str(vlan.id),
+                "tag": vlan.tag,
+                "name": vlan.name or f"VLAN {vlan.tag}",
+                "purpose": purpose,
+            }
+        )
+    available_vlans.sort(
+        key=lambda v: (
+            v["purpose"] != "internet",
+            v["purpose"] != "management",
+            v["tag"] or 0,
+        )
+    )
+    return available_vlans
+
+
+def _configure_form_context_from_state(
+    db: Session,
+    ont: object,
+    ont_id: str,
+    *,
+    effective: dict[str, object],
+    linked_tr069: object | None = None,
+    vlans: list[object] | None = None,
+) -> dict[str, object]:
+    values = effective["values"]
+    config_pack = effective.get("config_pack")
+
+    def _prefer_stored(stored_value: object, desired_key: str) -> object:
+        if stored_value not in (None, ""):
+            return stored_value
+        return values.get(desired_key)
+
+    lan_gateway = _prefer_stored(getattr(ont, "lan_gateway_ip", None), "lan_ip")
+    lan_subnet = _prefer_stored(getattr(ont, "lan_subnet_mask", None), "lan_subnet")
+    lan_dhcp_enabled = getattr(ont, "lan_dhcp_enabled", None)
+    if lan_dhcp_enabled is None:
+        lan_dhcp_enabled = values.get("lan_dhcp_enabled")
+    lan_dhcp_start = _prefer_stored(
+        getattr(ont, "lan_dhcp_start", None), "lan_dhcp_start"
+    )
+    lan_dhcp_end = _prefer_stored(getattr(ont, "lan_dhcp_end", None), "lan_dhcp_end")
+
+    wifi_ssid = _prefer_stored(getattr(ont, "wifi_ssid", None), "wifi_ssid")
+    wifi_enabled = getattr(ont, "wifi_enabled", None)
+    if wifi_enabled is None:
+        wifi_enabled = values.get("wifi_enabled")
+    wifi_channel = _prefer_stored(getattr(ont, "wifi_channel", None), "wifi_channel")
+    wifi_security = _prefer_stored(
+        getattr(ont, "wifi_security_mode", None), "wifi_security_mode"
+    )
+
+    mgmt_mode = _prefer_stored(
+        _enum_value(getattr(ont, "mgmt_ip_mode", None)),
+        "mgmt_ip_mode",
+    )
+    mgmt_ip = _prefer_stored(getattr(ont, "mgmt_ip_address", None), "mgmt_ip_address")
+    mgmt_mode_value = _enum_value(mgmt_mode) or ""
+    mgmt_remote_access = bool(getattr(ont, "mgmt_remote_access", False))
+    if mgmt_mode_value in {"dhcp", "static_ip"}:
+        mgmt_remote_access = True
+
+    available_vlans = _available_vlan_options(list(vlans or []))
+
+    tr069_profile_id = values.get("tr069_olt_profile_id")
+    tr069_profile_name = None
+    if config_pack:
+        tr069_profile_name = getattr(config_pack, "tr069_profile_name", None)
+
+    if linked_tr069 is None:
+        linked_tr069 = _resolve_linked_tr069_device(db, ont)
+    has_tr069 = bool(
+        linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
+    )
+    acs_last_inform = getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
+
+    config_pack_name = None
+    if config_pack:
+        config_pack_name = getattr(config_pack, "name", None)
+
+    mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
+    return {
+        "ont": ont,
+        "ont_id": ont_id,
+        "wan_mode": values.get("wan_mode"),
+        "ip_protocol": values.get("ip_protocol"),
+        "pppoe_username": str(values.get("pppoe_username") or ""),
+        "wan_vlan": values.get("wan_vlan"),
+        "wan_vlan_id": values.get("wan_vlan_id") or "",
+        "mgmt_ip_mode": mgmt_mode_value,
+        "mgmt_ip_address": str(mgmt_ip or ""),
+        "mgmt_remote_access": mgmt_remote_access,
+        "mgmt_vlan": values.get("mgmt_vlan"),
+        "mgmt_vlan_id": values.get("mgmt_vlan_id") or "",
+        "lan_gateway_ip": str(lan_gateway or ""),
+        "lan_subnet_mask": str(lan_subnet or ""),
+        "lan_dhcp_enabled": lan_dhcp_enabled,
+        "lan_dhcp_start": str(lan_dhcp_start or ""),
+        "lan_dhcp_end": str(lan_dhcp_end or ""),
+        "wifi_enabled": wifi_enabled,
+        "wifi_ssid": str(wifi_ssid or ""),
+        "wifi_channel": str(wifi_channel or ""),
+        "wifi_security_mode": str(wifi_security or ""),
+        "config_pack_name": config_pack_name,
+        "tr069_profile_id": tr069_profile_id,
+        "tr069_profile_name": tr069_profile_name,
+        "has_tr069": has_tr069,
+        "acs_last_inform": acs_last_inform,
+        "available_vlans": available_vlans,
+        "mgmt_ip_pool": mgmt_ip_pool_ctx.get("mgmt_ip_pool"),
+        "available_mgmt_ips": mgmt_ip_pool_ctx.get("available_mgmt_ips", []),
+        "mgmt_ip_choice_message": mgmt_ip_pool_ctx.get("mgmt_ip_choice_message"),
     }
 
 
@@ -547,10 +657,17 @@ def unified_config_context(
         ],
         "deferred": True,
     }
+    desired_context = _desired_config_context(
+        db,
+        ont,
+        ont_plan=ont_plan,
+        initial_iphost_form=observed_state["initial_form"],
+    )
     current_profile = _resolve_cached_tr069_profile(
         db,
         ont,
         list(observed_state["tr069_profiles"]),
+        effective=desired_context["effective_config"],
     )
     current_profile_name = getattr(current_profile, "profile_name", None) or getattr(
         current_profile, "name", None
@@ -595,48 +712,22 @@ def unified_config_context(
         "service_ports_context": service_ports_context,
         "olt_status": olt_status,
     }
+    context.update(desired_context)
+
+    effective_config = context.get("effective_config", {})
     context.update(
-        _desired_config_context(
+        _configure_form_context_from_state(
             db,
             ont,
-            ont_plan=ont_plan,
-            initial_iphost_form=observed_state["initial_form"],
+            ont_id,
+            effective=effective_config,
+            linked_tr069=linked_tr069,
+            vlans=list(observed_state["vlans"]),
         )
     )
-
-    # Add VLAN dropdown options from OLT
-    from app.services.web_network_onts import get_vlans_for_ont
-    from app.services.network.effective_ont_config import resolve_effective_ont_config
-    olt_vlans = get_vlans_for_ont(db, ont)
-    available_vlans = []
-    for vlan in olt_vlans:
-        if vlan.tag is None:
-            continue
-        purpose = vlan.purpose.value if vlan.purpose else "other"
-        available_vlans.append({
-            "id": str(vlan.id),
-            "tag": vlan.tag,
-            "name": vlan.name or f"VLAN {vlan.tag}",
-            "purpose": purpose,
-        })
-    available_vlans.sort(key=lambda v: (v["purpose"] != "internet", v["purpose"] != "management", v["tag"] or 0))
-    context["available_vlans"] = available_vlans
-
-    # Add effective VLAN IDs for form selection
-    effective = resolve_effective_ont_config(db, ont)
-    values = effective.get("values", {}) if isinstance(effective, dict) else {}
-    context["wan_vlan"] = values.get("wan_vlan")
-    context["wan_vlan_id"] = values.get("wan_vlan_id") or ""
-    context["mgmt_vlan"] = values.get("mgmt_vlan")
-    context["mgmt_vlan_id"] = values.get("mgmt_vlan_id") or ""
-
-    # Add management IP pool context for the dropdown
-    mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
-    context["mgmt_ip_pool"] = mgmt_ip_pool_ctx.get("mgmt_ip_pool")
-    context["available_mgmt_ips"] = mgmt_ip_pool_ctx.get("available_mgmt_ips", [])
-    # Add effective_values for easy access in templates
-    effective_config = context.get("effective_config", {})
-    context["effective_values"] = effective_config.get("values", {}) if isinstance(effective_config, dict) else {}
+    context["effective_values"] = (
+        effective_config.get("values", {}) if isinstance(effective_config, dict) else {}
+    )
     context.update(
         _unified_summary_context(
             desired_mgmt=context["desired_mgmt_config"],
@@ -665,139 +756,18 @@ def unified_config_context(
 
 
 def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
-    """Build context for the ONT service configure form.
-
-    Merges observed (running) config with desired config, preferring observed values
-    so techs see actual device state and can edit from there.
-    """
+    """Build context for the ONT service configure form."""
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-
     effective = resolve_effective_ont_config(db, ont)
-    values = effective["values"]
-    config_pack = effective.get("config_pack")
-
-    # Helper to prefer observed (from ont model) over desired (from effective config)
-    def _prefer_observed(observed_val: object, desired_key: str) -> object:
-        if observed_val not in (None, ""):
-            return observed_val
-        return values.get(desired_key)
-
-    # WAN: prefer observed from ont model
-    wan_mode = _prefer_observed(
-        getattr(ont, "observed_lan_mode", None),  # TODO: observed_wan_mode when available
-        "wan_mode",
-    )
-
-    # LAN: prefer values stored directly on ont model (these ARE the running config)
-    lan_gateway = _prefer_observed(getattr(ont, "lan_gateway_ip", None), "lan_ip")
-    lan_subnet = _prefer_observed(getattr(ont, "lan_subnet_mask", None), "lan_subnet")
-    lan_dhcp_enabled = getattr(ont, "lan_dhcp_enabled", None)
-    if lan_dhcp_enabled is None:
-        lan_dhcp_enabled = values.get("lan_dhcp_enabled")
-    lan_dhcp_start = _prefer_observed(getattr(ont, "lan_dhcp_start", None), "lan_dhcp_start")
-    lan_dhcp_end = _prefer_observed(getattr(ont, "lan_dhcp_end", None), "lan_dhcp_end")
-
-    # WiFi: prefer values from ont model
-    wifi_ssid = _prefer_observed(getattr(ont, "wifi_ssid", None), "wifi_ssid")
-    wifi_enabled = getattr(ont, "wifi_enabled", None)
-    if wifi_enabled is None:
-        wifi_enabled = values.get("wifi_enabled")
-    wifi_channel = _prefer_observed(getattr(ont, "wifi_channel", None), "wifi_channel")
-    wifi_security = _prefer_observed(
-        getattr(ont, "wifi_security_mode", None), "wifi_security_mode"
-    )
-
-    # Management IP: prefer from ont model
-    mgmt_mode = _prefer_observed(
-        _enum_value(getattr(ont, "mgmt_ip_mode", None)),
-        "mgmt_ip_mode",
-    )
-    mgmt_ip = _prefer_observed(getattr(ont, "mgmt_ip_address", None), "mgmt_ip_address")
-    mgmt_mode_value = _enum_value(mgmt_mode) or ""
-    mgmt_remote_access = bool(getattr(ont, "mgmt_remote_access", False))
-    if mgmt_mode_value in {"dhcp", "static_ip"}:
-        mgmt_remote_access = True
-
-    # Extract VLAN info from config pack (tags for display, IDs for selection)
-    wan_vlan = values.get("wan_vlan")  # tag for display
-    mgmt_vlan = values.get("mgmt_vlan")  # tag for display
-    wan_vlan_id = values.get("wan_vlan_id")  # UUID for matching
-    mgmt_vlan_id = values.get("mgmt_vlan_id")  # UUID for matching
-
-    # Get available VLANs from the OLT for dropdown selection
     from app.services.web_network_onts import get_vlans_for_ont
-    olt_vlans = get_vlans_for_ont(db, ont)
-    available_vlans = []
-    for vlan in olt_vlans:
-        if vlan.tag is None:
-            continue
-        purpose = vlan.purpose.value if vlan.purpose else "other"
-        available_vlans.append({
-            "id": str(vlan.id),  # UUID for form value and matching
-            "tag": vlan.tag,  # Integer tag for display
-            "name": vlan.name or f"VLAN {vlan.tag}",
-            "purpose": purpose,
-        })
-    available_vlans.sort(key=lambda v: (v["purpose"] != "internet", v["purpose"] != "management", v["tag"] or 0))
 
-    # TR-069 profile info
-    tr069_profile_id = values.get("tr069_olt_profile_id")
-    tr069_profile_name = None
-    if config_pack:
-        tr069_profile_name = getattr(config_pack, "tr069_profile_name", None)
-
-    # Linked TR-069 device status
-    linked_tr069 = _resolve_linked_tr069_device(db, ont)
-    has_tr069 = bool(
-        linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
+    return _configure_form_context_from_state(
+        db,
+        ont,
+        ont_id,
+        effective=effective,
+        vlans=get_vlans_for_ont(db, ont),
     )
-    acs_last_inform = getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
-
-    # Config pack name for display
-    config_pack_name = None
-    if config_pack:
-        config_pack_name = getattr(config_pack, "name", None)
-
-    context = {
-        "ont": ont,
-        "ont_id": ont_id,
-        # WAN
-        "wan_mode": wan_mode or values.get("wan_mode"),
-        "ip_protocol": values.get("ip_protocol"),
-        "pppoe_username": str(values.get("pppoe_username") or ""),
-        "wan_vlan": wan_vlan,  # tag for display
-        "wan_vlan_id": wan_vlan_id or "",  # UUID for form selection
-        # Management
-        "mgmt_ip_mode": mgmt_mode_value,
-        "mgmt_ip_address": str(mgmt_ip or ""),
-        "mgmt_remote_access": mgmt_remote_access,
-        "mgmt_vlan": mgmt_vlan,  # tag for display
-        "mgmt_vlan_id": mgmt_vlan_id or "",  # UUID for form selection
-        # LAN (prefer observed/stored values)
-        "lan_gateway_ip": str(lan_gateway or ""),
-        "lan_subnet_mask": str(lan_subnet or ""),
-        "lan_dhcp_enabled": lan_dhcp_enabled,
-        "lan_dhcp_start": str(lan_dhcp_start or ""),
-        "lan_dhcp_end": str(lan_dhcp_end or ""),
-        # WiFi (prefer observed/stored values)
-        "wifi_enabled": wifi_enabled,
-        "wifi_ssid": str(wifi_ssid or ""),
-        "wifi_channel": str(wifi_channel or ""),
-        "wifi_security_mode": str(wifi_security or ""),
-        # Network plane info (read-only, from OLT config pack)
-        "config_pack_name": config_pack_name,
-        "tr069_profile_id": tr069_profile_id,
-        "tr069_profile_name": tr069_profile_name,
-        "has_tr069": has_tr069,
-        "acs_last_inform": acs_last_inform,
-        # Available VLANs from OLT for dropdown selection
-        "available_vlans": available_vlans,
-    }
-    mgmt_ip_pool_ctx = management_ip_choices_for_ont(db, ont)
-    context["mgmt_ip_pool"] = mgmt_ip_pool_ctx.get("mgmt_ip_pool")
-    context["available_mgmt_ips"] = mgmt_ip_pool_ctx.get("available_mgmt_ips", [])
-    context["mgmt_ip_choice_message"] = mgmt_ip_pool_ctx.get("mgmt_ip_choice_message")
-    return context
 
 def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build display context for OLT-side ONT config."""

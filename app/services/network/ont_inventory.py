@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.compensation_failure import CompensationFailure
 from app.models.network import (
     OLTDevice,
     OntAssignment,
@@ -160,9 +162,41 @@ def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], lis
     """Delete GenieACS device records linked to an ONT before inventory return."""
     from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
     from app.services.genieacs_client import GenieACSError, create_genieacs_client
+    from app.services.network._resolve import _serial_search_candidates
 
     completed: list[str] = []
     errors: list[str] = []
+    deleted: set[tuple[str, str]] = set()
+    clients: dict[str, object] = {}
+
+    def _client_for(server: Tr069AcsServer):
+        key = str(server.id)
+        if key not in clients:
+            clients[key] = create_genieacs_client(server.base_url)
+        return clients[key]
+
+    def _delete_device(server: Tr069AcsServer, genieacs_device_id: str) -> bool:
+        key = (str(server.id), genieacs_device_id)
+        if key in deleted:
+            return True
+        if not getattr(server, "base_url", None):
+            errors.append(
+                f"Cannot delete ACS device {genieacs_device_id}: ACS server is missing."
+            )
+            return False
+        try:
+            _client_for(server).delete_device(genieacs_device_id)
+            deleted.add(key)
+            completed.append(f"Deleted ACS device {genieacs_device_id}")
+            return True
+        except GenieACSError as exc:
+            if "404" in str(exc):
+                deleted.add(key)
+                completed.append(f"ACS device {genieacs_device_id} was already absent")
+                return True
+            errors.append(f"Failed to delete ACS device {genieacs_device_id}: {exc}")
+            return False
+
     linked_devices = db.scalars(
         select(Tr069CpeDevice).where(Tr069CpeDevice.ont_unit_id == ont.id)
     ).all()
@@ -171,21 +205,94 @@ def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], lis
         if not genieacs_device_id:
             continue
         server = db.get(Tr069AcsServer, device.acs_server_id)
-        if server is None or not getattr(server, "base_url", None):
+        if server is None:
             errors.append(
                 f"Cannot delete ACS device {genieacs_device_id}: ACS server is missing."
             )
             return False, completed, errors
-        try:
-            create_genieacs_client(server.base_url).delete_device(genieacs_device_id)
-            completed.append(f"Deleted ACS device {genieacs_device_id}")
-        except GenieACSError as exc:
-            if "404" in str(exc):
-                completed.append(f"ACS device {genieacs_device_id} was already absent")
-                continue
-            errors.append(f"Failed to delete ACS device {genieacs_device_id}: {exc}")
+        if not _delete_device(server, genieacs_device_id):
             return False, completed, errors
+
+    serial_candidates = _serial_search_candidates(getattr(ont, "serial_number", None))
+    if not serial_candidates:
+        return True, completed, errors
+
+    active_servers = list(
+        db.scalars(
+            select(Tr069AcsServer)
+            .where(Tr069AcsServer.is_active.is_(True))
+            .order_by(Tr069AcsServer.name)
+        ).all()
+    )
+    linked_servers = [
+        db.get(Tr069AcsServer, device.acs_server_id) for device in linked_devices
+    ]
+    servers = []
+    seen_server_ids = set()
+    for server in [*linked_servers, *active_servers]:
+        if server is None or str(server.id) in seen_server_ids:
+            continue
+        seen_server_ids.add(str(server.id))
+        servers.append(server)
+
+    for server in servers:
+        if not getattr(server, "base_url", None):
+            continue
+        client = _client_for(server)
+        for candidate in serial_candidates:
+            try:
+                devices = client.list_devices(
+                    query={
+                        "$or": [
+                            {"_id": {"$regex": f".*-{re.escape(candidate)}$"}},
+                            {"_deviceId._SerialNumber": candidate},
+                            {"_deviceId.SerialNumber": candidate},
+                            {"Device.DeviceInfo.SerialNumber._value": candidate},
+                            {
+                                "InternetGatewayDevice.DeviceInfo.SerialNumber._value": (
+                                    candidate
+                                )
+                            },
+                        ]
+                    },
+                    projection={"_id": 1},
+                )
+            except GenieACSError as exc:
+                errors.append(
+                    f"Failed to search ACS server {server.name} for serial {candidate}: {exc}"
+                )
+                return False, completed, errors
+            for row in devices:
+                device_id = str(row.get("_id") or "").strip()
+                if not device_id:
+                    continue
+                if not _delete_device(server, device_id):
+                    return False, completed, errors
     return True, completed, errors
+
+
+def _record_return_to_inventory_compensation(
+    db: Session,
+    *,
+    ont,
+    olt_id: object | None,
+    fsp: str | None,
+    description: str,
+    error_message: str,
+) -> None:
+    failure = CompensationFailure(
+        ont_unit_id=getattr(ont, "id", None),
+        olt_device_id=olt_id,
+        operation_type="return_to_inventory",
+        step_name="manual_return_cleanup_review",
+        undo_commands=[],
+        description=description,
+        resource_id=str(getattr(ont, "id", "")),
+        interface_path=fsp,
+        error_message=error_message,
+    )
+    db.add(failure)
+    db.commit()
 
 
 def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") -> None:
@@ -272,7 +379,16 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
         or ont.external_id
     )
     cpe = None
+    acs_completed: list[str] = []
     try:
+        acs_ok, acs_completed, acs_errors = cleanup_acs_state_for_return(db, ont)
+        if not acs_ok:
+            details = ", ".join(acs_completed + acs_errors)
+            return ActionResult(
+                success=False,
+                message=f"Return to inventory stopped before OLT/local cleanup: {details}.",
+            )
+
         with db.begin_nested():
             if needs_olt_cleanup:
                 ok, completed, errors = cleanup_olt_state_for_return(db, ont_id)
@@ -281,13 +397,6 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                     raise _ReturnToInventoryStopped(
                         f"Return to inventory stopped before local cleanup: {details}."
                     )
-
-            acs_ok, acs_completed, acs_errors = cleanup_acs_state_for_return(db, ont)
-            if not acs_ok:
-                details = ", ".join(acs_completed + acs_errors)
-                raise _ReturnToInventoryStopped(
-                    f"Return to inventory stopped before local cleanup: {details}."
-                )
 
             for assignment in active_assignments:
                 assignment.active = False
@@ -319,6 +428,24 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                     "Moved CPE %s to inventory for returned ONT %s", cpe.id, ont.id
                 )
     except _ReturnToInventoryStopped as exc:
+        if acs_completed:
+            try:
+                _record_return_to_inventory_compensation(
+                    db,
+                    ont=ont,
+                    olt_id=previous_olt_db_id,
+                    fsp=previous_fsp,
+                    description=(
+                        "ACS device state was removed, but return-to-inventory stopped "
+                        "before OLT/local cleanup completed. Operator review is required."
+                    ),
+                    error_message=str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to record return-to-inventory compensation for ONT %s",
+                    ont_id,
+                )
         return ActionResult(success=False, message=str(exc))
     except Exception as exc:
         logger.exception(

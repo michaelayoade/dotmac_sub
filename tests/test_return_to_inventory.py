@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.compensation_failure import CompensationFailure
 from app.models.network import (
     OLTDevice,
     OntAssignment,
@@ -578,11 +579,17 @@ class TestReturnToInventoryWebAction:
             success=True,
             message="ONT deauthorized",
         )
+        mock_client = MagicMock()
+        mock_client.list_devices.return_value = []
 
         with (
             patch(
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.genieacs_client.create_genieacs_client",
+                return_value=mock_client,
             ),
             patch(
                 "app.services.network.ont_inventory.emit_event"
@@ -631,6 +638,7 @@ class TestReturnToInventoryWebAction:
             message="ONT deauthorized",
         )
         mock_client = MagicMock()
+        mock_client.list_devices.return_value = []
 
         with (
             patch(
@@ -709,6 +717,8 @@ class TestReturnToInventoryWebAction:
 
         assert result.success is False
         assert "acs device" in result.message.lower()
+        mock_adapter.get_service_ports_for_ont.assert_not_called()
+        mock_adapter.deauthorize_ont.assert_not_called()
         mock_autofind.assert_not_called()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
@@ -716,6 +726,120 @@ class TestReturnToInventoryWebAction:
         assert sample_ont.olt_device_id == sample_olt.id
         assert sample_assignment.active is True
         assert tr069_device.ont_unit_id == sample_ont.id
+
+    def test_genieacs_same_serial_device_is_removed_without_tr069_link(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """Return cleanup removes same-serial GenieACS records even if no local link exists."""
+        from app.models.tr069 import Tr069AcsServer
+        from app.services.network.ont_inventory import return_ont_to_inventory
+
+        acs_server = Tr069AcsServer(
+            name="Return ACS Search",
+            base_url="http://genieacs.example:7557",
+            is_active=True,
+        )
+        db_session.add(acs_server)
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+        mock_client = MagicMock()
+        mock_client.list_devices.return_value = [{"_id": "ABC-ONT-HWTC12345678"}]
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.genieacs_client.create_genieacs_client",
+                return_value=mock_client,
+            ),
+            patch("app.services.network.ont_inventory.emit_event"),
+            patch(
+                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
+                return_value={"ok": True, "rediscovered": False},
+            ),
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is True
+        mock_client.delete_device.assert_called_once_with("ABC-ONT-HWTC12345678")
+        assert mock_client.list_devices.call_count >= 1
+
+    def test_records_compensation_when_olt_cleanup_fails_after_acs_delete(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """If ACS cleanup succeeds but OLT cleanup fails, record manual review."""
+        from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+        from app.services.network.ont_inventory import return_ont_to_inventory
+
+        acs_server = Tr069AcsServer(
+            name="Return ACS Partial",
+            base_url="http://genieacs.example:7557",
+            is_active=True,
+        )
+        db_session.add(acs_server)
+        db_session.flush()
+        tr069_device = Tr069CpeDevice(
+            serial_number=sample_ont.serial_number,
+            acs_server_id=acs_server.id,
+            ont_unit_id=sample_ont.id,
+            genieacs_device_id="ABC-ONT-HWTC12345678",
+        )
+        db_session.add(tr069_device)
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=False,
+            message="SSH connection failed",
+        )
+        mock_client = MagicMock()
+        mock_client.list_devices.return_value = []
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.genieacs_client.create_genieacs_client",
+                return_value=mock_client,
+            ),
+            patch("app.services.network.ont_inventory.emit_event"),
+            patch(
+                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind"
+            ) as mock_autofind,
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is False
+        assert "local cleanup" in result.message.lower()
+        mock_client.delete_device.assert_called_once_with("ABC-ONT-HWTC12345678")
+        mock_autofind.assert_not_called()
+        db_session.refresh(sample_ont)
+        db_session.refresh(sample_assignment)
+        db_session.refresh(tr069_device)
+        assert sample_ont.olt_device_id == sample_olt.id
+        assert sample_assignment.active is True
+        assert tr069_device.ont_unit_id == sample_ont.id
+
+        failure = db_session.query(CompensationFailure).one()
+        assert failure.operation_type == "return_to_inventory"
+        assert failure.step_name == "manual_return_cleanup_review"
+        assert failure.ont_unit_id == sample_ont.id
+        assert failure.olt_device_id == sample_olt.id
+        assert failure.interface_path == "0/1/2"
 
     def test_releases_service_port_allocations(
         self, db_session, sample_ont, sample_olt, sample_assignment
@@ -1030,3 +1154,55 @@ def test_return_to_inventory_htmx_buttons_send_csrf_header():
     for template in (hero_template, health_template):
         assert "/return-to-inventory" in template
         assert '"X-CSRF-Token": "{{ request.state.csrf_token }}"' in template
+
+
+def test_factory_reset_clears_stale_observed_runtime(db_session, sample_ont):
+    """Successful factory reset invalidates runtime observations from the old config."""
+    from app.services.network.ont_action_device import factory_reset
+
+    observed_at = datetime.now(UTC)
+    sample_ont.observed_wan_ip = "100.64.10.5"
+    sample_ont.observed_pppoe_status = "Connected"
+    sample_ont.observed_lan_mode = "router"
+    sample_ont.observed_wifi_clients = 3
+    sample_ont.observed_lan_hosts = 5
+    sample_ont.observed_runtime_updated_at = observed_at
+    sample_ont.tr069_last_snapshot = {"wan": {"WAN IP": "100.64.10.5"}}
+    sample_ont.tr069_last_snapshot_at = observed_at
+    db_session.commit()
+
+    mock_client = MagicMock()
+    mock_client.factory_reset_and_wait.return_value = {"task": "completed"}
+
+    with patch(
+        "app.services.network.ont_action_device.get_ont_client_or_error",
+        return_value=((sample_ont, mock_client, "ABC-ONT-HWTC12345678"), None),
+    ):
+        result = factory_reset(db_session, str(sample_ont.id))
+
+    assert result.success is True
+    mock_client.factory_reset_and_wait.assert_called_once_with(
+        "ABC-ONT-HWTC12345678"
+    )
+    assert sample_ont.observed_wan_ip is None
+    assert sample_ont.observed_pppoe_status is None
+    assert sample_ont.observed_lan_mode is None
+    assert sample_ont.observed_wifi_clients is None
+    assert sample_ont.observed_lan_hosts is None
+    assert sample_ont.observed_runtime_updated_at is None
+    assert sample_ont.tr069_last_snapshot == {}
+    assert sample_ont.tr069_last_snapshot_at is None
+
+
+def test_factory_reset_buttons_require_confirmation():
+    """Every single-ONT factory reset affordance must require explicit confirmation."""
+    hero_template = Path("templates/admin/network/onts/_hero_header.html").read_text()
+    health_template = Path("templates/admin/network/onts/_operational_health.html").read_text()
+
+    expected = (
+        'hx-confirm="Factory reset will ERASE ALL configuration on this ONT. '
+        "The device will reboot and return to factory defaults. Continue?"
+    )
+    for template in (hero_template, health_template):
+        assert "/factory-reset" in template
+        assert expected in template

@@ -571,6 +571,96 @@ class GenieACSClient:
 
         return result
 
+    @classmethod
+    def _ui_task_timeout_seconds(cls) -> int:
+        return max(cls._env_int("GENIEACS_UI_TASK_TIMEOUT_SECONDS", 45), 1)
+
+    @staticmethod
+    def _task_error_message(task_result: dict[str, Any]) -> str | None:
+        error = task_result.get("connectionRequestError")
+        if error:
+            return str(error)
+        fault = task_result.get("fault")
+        if isinstance(fault, dict):
+            message = fault.get("message") or fault.get("detail")
+            if message:
+                return str(message)
+        return None
+
+    @staticmethod
+    def _fault_ids(faults: list[dict[str, Any]]) -> set[str]:
+        return {str(fault.get("_id") or "") for fault in faults if fault.get("_id")}
+
+    def create_task_and_wait(
+        self,
+        device_id: str,
+        task: dict,
+        *,
+        timeout_sec: int | None = None,
+        connection_request: bool = True,
+        delete_on_timeout: bool = True,
+        allow_when_pending: bool = False,
+    ) -> dict:
+        """Create a GenieACS task and require it to be consumed before success.
+
+        UI-initiated actions should call this instead of treating a 202 from
+        GenieACS as success. A still-pending task means the CPE did not receive
+        the command within the operator's request window.
+        """
+        baseline_fault_ids = self._fault_ids(self.list_faults(device_id))
+        task_result = self.create_task(
+            device_id,
+            task,
+            connection_request=connection_request,
+            allow_when_pending=allow_when_pending,
+        )
+        if not isinstance(task_result, dict):
+            raise GenieACSError("GenieACS returned an invalid task response.")
+
+        task_name = str(task.get("name") or "task")
+        immediate_error = self._task_error_message(task_result)
+        if immediate_error:
+            raise GenieACSError(f"{task_name} connection request failed: {immediate_error}")
+
+        task_id = str(task_result.get("_id") or "").strip()
+        if not task_id:
+            return task_result
+
+        ok, message = self.wait_for_task_completion(
+            device_id,
+            task_id,
+            timeout_sec=timeout_sec or self._ui_task_timeout_seconds(),
+        )
+        if ok:
+            faults = [
+                fault
+                for fault in self.list_faults(device_id)
+                if str(fault.get("_id") or "") not in baseline_fault_ids
+            ]
+            if faults:
+                fault = faults[0]
+                fault_message = (
+                    fault.get("message")
+                    or fault.get("faultString")
+                    or fault.get("detail")
+                    or fault.get("_id")
+                    or "unknown GenieACS fault"
+                )
+                raise GenieACSError(f"{task_name} failed on device: {fault_message}")
+            return task_result
+
+        if delete_on_timeout:
+            try:
+                self.delete_task(task_id)
+            except GenieACSError:
+                logger.warning(
+                    "Failed to delete timed-out GenieACS task %s for %s",
+                    task_id,
+                    device_id,
+                    exc_info=True,
+                )
+        raise GenieACSError(f"{task_name} did not complete synchronously: {message}")
+
     def get_parameter_values(
         self,
         device_id: str,
@@ -650,6 +740,19 @@ class GenieACSClient:
         task = {"name": "reboot"}
         return self.create_task(device_id, task)
 
+    def reboot_device_and_wait(
+        self,
+        device_id: str,
+        *,
+        timeout_sec: int | None = None,
+    ) -> dict:
+        """Reboot a device and only return success once the task is consumed."""
+        return self.create_task_and_wait(
+            device_id,
+            {"name": "reboot"},
+            timeout_sec=timeout_sec,
+        )
+
     def factory_reset(self, device_id: str) -> dict:
         """Factory reset device.
 
@@ -661,6 +764,19 @@ class GenieACSClient:
         """
         task = {"name": "factoryReset"}
         return self.create_task(device_id, task)
+
+    def factory_reset_and_wait(
+        self,
+        device_id: str,
+        *,
+        timeout_sec: int | None = None,
+    ) -> dict:
+        """Factory reset a device and only return success once the task is consumed."""
+        return self.create_task_and_wait(
+            device_id,
+            {"name": "factoryReset"},
+            timeout_sec=timeout_sec,
+        )
 
     def download(
         self,
@@ -707,6 +823,35 @@ class GenieACSClient:
         if filename:
             task["filename"] = filename
         return self.create_task(device_id, task)
+
+    def download_and_wait(
+        self,
+        device_id: str,
+        file_type: str,
+        file_url: str,
+        filename: str | None = None,
+        *,
+        validate_file_type: bool = True,
+        timeout_sec: int | None = None,
+    ) -> dict:
+        """Trigger a download and only return success once the task is consumed."""
+        resolved_type = CWMP_FILE_TYPE_ALIASES.get(file_type.lower(), file_type)
+        if validate_file_type and resolved_type not in CWMP_FILE_TYPES:
+            valid_types = ", ".join(sorted(CWMP_FILE_TYPES))
+            valid_aliases = ", ".join(sorted(CWMP_FILE_TYPE_ALIASES.keys()))
+            raise ValueError(
+                f"Invalid file type '{file_type}'. "
+                f"Valid types: {valid_types}. "
+                f"Aliases: {valid_aliases}."
+            )
+        task = {
+            "name": "download",
+            "fileType": resolved_type,
+            "url": file_url,
+        }
+        if filename:
+            task["filename"] = filename
+        return self.create_task_and_wait(device_id, task, timeout_sec=timeout_sec)
 
     def add_object(
         self,
