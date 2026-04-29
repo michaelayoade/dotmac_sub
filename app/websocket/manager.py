@@ -119,7 +119,7 @@ class ConnectionManager:
                     if ws.client_state == WebSocketState.CONNECTED:
                         await ws.send_json(event_data)
                 except Exception:
-                    await self._remove_connection(user_id, ws)
+                    self._remove_connection(user_id, ws)
 
     async def register_connection(self, user_id: str, websocket: WebSocket):
         """Register a new WebSocket connection for a user."""
@@ -137,9 +137,9 @@ class ConnectionManager:
 
     async def unregister_connection(self, user_id: str, websocket: WebSocket):
         """Remove a WebSocket connection."""
-        await self._remove_connection(user_id, websocket)
+        self._remove_connection(user_id, websocket)
 
-    async def _remove_connection(self, user_id: str, websocket: WebSocket):
+    def _remove_connection(self, user_id: str, websocket: WebSocket):
         """Internal method to remove a connection and clean up subscriptions."""
         if user_id in self._connections:
             if websocket in self._connections[user_id]:
@@ -156,7 +156,7 @@ class ConnectionManager:
 
         logger.debug("websocket_unregistered user_id=%s", user_id)
 
-    async def subscribe_conversation(self, user_id: str, conversation_id: str):
+    def subscribe_conversation(self, user_id: str, conversation_id: str):
         """Subscribe a user to conversation updates."""
         if conversation_id not in self._subscriptions:
             self._subscriptions[conversation_id] = set()
@@ -167,7 +167,7 @@ class ConnectionManager:
             conversation_id,
         )
 
-    async def unsubscribe_conversation(self, user_id: str, conversation_id: str):
+    def unsubscribe_conversation(self, user_id: str, conversation_id: str):
         """Unsubscribe a user from conversation updates."""
         if conversation_id in self._subscriptions:
             self._subscriptions[conversation_id].discard(user_id)
@@ -210,7 +210,7 @@ class ConnectionManager:
                 if ws.client_state == WebSocketState.CONNECTED:
                     await ws.send_json(event_data)
             except Exception:
-                await self._remove_connection(user_id, ws)
+                self._remove_connection(user_id, ws)
 
     async def send_heartbeat(self, user_id: str, websocket: WebSocket):
         """Send heartbeat response to a specific connection."""
@@ -221,7 +221,7 @@ class ConnectionManager:
         try:
             await websocket.send_json(heartbeat.model_dump(mode="json"))
         except Exception:
-            await self._remove_connection(user_id, websocket)
+            self._remove_connection(user_id, websocket)
 
 
 # Singleton instance
