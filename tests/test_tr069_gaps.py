@@ -346,7 +346,7 @@ class TestAutoLinkOnts:
             serial_number="E2E-OLT-ONT-ACS-001",
             olt_device=olt,
             is_active=True,
-            olt_status=OnuOnlineStatus.unknown,
+            olt_status=OnuOnlineStatus.offline,
         )
         db_session.add_all([olt, ont])
         db_session.commit()

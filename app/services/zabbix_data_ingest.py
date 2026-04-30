@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import OLTDevice, OntUnit, OnuOfflineReason, OnuOnlineStatus
 from app.services.zabbix import ZabbixClient, ZabbixClientError
 
 logger = logging.getLogger(__name__)
@@ -171,6 +171,30 @@ def _identify_metric_type(item_key: str) -> str | None:
     return None
 
 
+def _parse_status_code(value: float) -> tuple[OnuOnlineStatus, OnuOfflineReason | None]:
+    """Parse SNMP status code to ONT status and offline reason.
+
+    Huawei status codes:
+        1: online
+        2: offline (unknown reason)
+        3: offline (power fail)
+        4: offline (LOS - loss of signal)
+        5: offline (dying gasp)
+    """
+    code = int(value)
+    if code == 1:
+        return OnuOnlineStatus.online, None
+    if code == 2:
+        return OnuOnlineStatus.offline, OnuOfflineReason.unknown
+    if code == 3:
+        return OnuOnlineStatus.offline, OnuOfflineReason.power_fail
+    if code == 4:
+        return OnuOnlineStatus.offline, OnuOfflineReason.los
+    if code == 5:
+        return OnuOnlineStatus.offline, OnuOfflineReason.dying_gasp
+    return OnuOnlineStatus.offline, None
+
+
 def ingest_olt_signal_data(
     db: Session,
     olt: OLTDevice,
@@ -255,64 +279,95 @@ def ingest_olt_signal_data(
         logger.debug("olt_no_ont_data", extra={"olt_id": str(olt.id)})
         return 0
 
+    from app.services.network.ont_status import apply_olt_status_observation
+
+    # Build mapping from poll data keys to external_ids
+    key_to_external_id: dict[tuple[str, int], str] = {}
+    for pon_port, ont_index in ont_data.keys():
+        normalized_port = pon_port.lower().replace("gpon", "").strip()
+        key_to_external_id[(pon_port, ont_index)] = f"{normalized_port}.{ont_index}"
+
+    poll_external_ids = set(key_to_external_id.values())
+
+    # Single query: get all active ONTs on this OLT that are either:
+    # - previously online (to detect missing), OR
+    # - in the current poll data (to update)
+    all_relevant_stmt = (
+        select(OntUnit)
+        .where(OntUnit.olt_device_id == olt.id)
+        .where(OntUnit.is_active.is_(True))
+        .where(
+            (OntUnit.olt_status == OnuOnlineStatus.online)
+            | (OntUnit.external_id.in_(poll_external_ids))
+        )
+    )
+    all_relevant = {ont.external_id: ont for ont in db.scalars(all_relevant_stmt).all()}
+
+    # Track which previously-online ONTs we see in this poll
+    previously_online_ids = {
+        eid for eid, ont in all_relevant.items()
+        if ont.olt_status == OnuOnlineStatus.online
+    }
+
     # Update OntUnit records
     updated_count = 0
-    for (pon_port, ont_index), metrics in ont_data.items():
-        # Find matching OntUnit by external_id (format: board/port.ont_index)
-        # Normalize pon_port by stripping "gpon" prefix if present
-        normalized_port = pon_port.lower().replace("gpon", "").strip()
-        external_id = f"{normalized_port}.{ont_index}"
-
-        stmt = (
-            select(OntUnit)
-            .where(OntUnit.olt_device_id == olt.id)
-            .where(OntUnit.is_active.is_(True))
-            .where(OntUnit.external_id == external_id)
-        )
-
-        ont = db.scalars(stmt).first()
+    offline_count = 0
+    for key, metrics in ont_data.items():
+        external_id = key_to_external_id[key]
+        ont = all_relevant.get(external_id)
         if not ont:
             continue
 
+        # Check explicit status from SNMP walk
+        polled_status = None
+        if "status" in metrics:
+            polled_status, offline_reason = _parse_status_code(metrics["status"])
+            if polled_status == OnuOnlineStatus.offline:
+                apply_olt_status_observation(ont, polled_status, offline_reason, now=now)
+                ont.signal_updated_at = now
+                offline_count += 1
+                continue  # Don't process signal data for offline ONTs
+
         # Update signal fields
-        changed = False
         if metrics.get("_saw_olt_rx") and "olt_rx" not in metrics:
             if ont.olt_rx_signal_dbm is not None:
                 ont.olt_rx_signal_dbm = None
-                changed = True
         if "olt_rx" in metrics:
             ont.olt_rx_signal_dbm = metrics["olt_rx"]
-            changed = True
         if "onu_rx" in metrics:
             ont.onu_rx_signal_dbm = metrics["onu_rx"]
-            changed = True
         if "onu_tx" in metrics:
             ont.onu_tx_signal_dbm = metrics["onu_tx"]
-            changed = True
 
-        # Update OLT status based on signal presence
-        # If we have valid signal data, the ONT must be online
-        if changed:
-            from app.models.network import OnuOnlineStatus
-            from app.services.network.ont_status import apply_resolved_status_for_model
-
-            ont.olt_status = OnuOnlineStatus.online
-            ont.last_seen_at = now
+        # ONT appeared in poll - mark online and refresh timestamp
+        # Trust explicit status=online OR presence of signal data
+        has_signal = any(k in metrics for k in ("olt_rx", "onu_rx", "onu_tx", "_saw_olt_rx"))
+        if polled_status == OnuOnlineStatus.online or has_signal:
+            apply_olt_status_observation(ont, OnuOnlineStatus.online, now=now)
             ont.signal_updated_at = now
-            # Resolve effective_status considering ACS data
-            apply_resolved_status_for_model(ont, now=now)
             updated_count += 1
+
+    # Mark previously-online ONTs as offline if they weren't seen in this poll
+    missing_count = 0
+    for external_id in previously_online_ids:
+        if external_id not in poll_external_ids:
+            ont = all_relevant[external_id]
+            apply_olt_status_observation(ont, OnuOnlineStatus.offline, OnuOfflineReason.los, now=now)
+            ont.signal_updated_at = now
+            missing_count += 1
 
     db.flush()
     logger.info(
         "olt_signal_ingest_complete",
         extra={
             "olt_id": str(olt.id),
-            "onts_updated": updated_count,
+            "onts_online": updated_count,
+            "onts_offline": offline_count,
+            "onts_missing": missing_count,
             "items_processed": len(ont_data),
         },
     )
-    return updated_count
+    return updated_count + offline_count + missing_count
 
 
 def ingest_all_olt_signals(db: Session) -> IngestResult:

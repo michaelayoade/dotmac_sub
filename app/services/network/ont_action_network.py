@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address, IPv4Network
 from typing import Any
 
-import httpx
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -662,22 +661,6 @@ def _request_lan_refresh(client: Any, device_id: str, root: str) -> None:
         )
 
 
-def _send_connection_request_http(
-    conn_url: str,
-    username: str | None = None,
-    password: str | None = None,
-) -> int:
-    with httpx.Client(timeout=10.0) as http:
-        if username:
-            response = http.get(
-                str(conn_url),
-                auth=httpx.DigestAuth(str(username), str(password)),
-            )
-        else:
-            response = http.get(str(conn_url))
-    return response.status_code
-
-
 def _split_dns_servers(value: Any) -> list[str]:
     raw = str(value or "").strip()
     if not raw:
@@ -1005,10 +988,11 @@ def set_connection_request_credentials(
 
 
 def send_connection_request(db: Session, ont_id: str) -> ActionResult:
-    """Send an HTTP connection request to the ONT for on-demand management.
+    """Ask GenieACS to send a connection request to the ONT.
 
-    Reads the ConnectionRequestURL from the ACS device record
-    and performs an HTTP GET with Digest auth.
+    The request must originate from the ACS routing namespace. Sending the HTTP
+    request directly from the app container can fail for management VLANs that
+    are only routed from the ACS/host network.
     """
     resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
@@ -1033,39 +1017,36 @@ def send_connection_request(db: Session, ont_id: str) -> ActionResult:
             message="No ConnectionRequestURL found on device — ONT may not have bootstrapped yet.",
         )
 
-    # Use server-configured credentials - these are what we pushed to the CPE.
+    # Keep this validation because GenieACS cannot initiate an on-demand session
+    # until the CPE has reported a connection request URL.
     server_auth = _resolve_ont_connection_request_auth(db, ont.serial_number)
     if not server_auth:
         return ActionResult(
             success=False,
             message="No connection request credentials configured on ACS server.",
         )
-    conn_user, conn_pass = server_auth
 
     try:
-        status_code = _send_connection_request_http(
-            str(conn_url),
-            conn_user,
-            conn_pass,
+        client.create_task_and_wait(
+            device_id,
+            {
+                "name": "refreshObject",
+                "objectName": f"{root}.ManagementServer.",
+            },
+            connection_request=True,
+            timeout_sec=30,
+            delete_on_timeout=True,
         )
-        if status_code in (200, 204):
-            logger.info(
-                "Connection request sent to ONT %s at %s", ont.serial_number, conn_url
-            )
-            return ActionResult(
-                success=True,
-                message=f"Connection request sent to {ont.serial_number} ({status_code}).",
-            )
-        logger.warning(
-            "Connection request to ONT %s returned %d",
+        logger.info(
+            "Connection request sent to ONT %s via GenieACS at %s",
             ont.serial_number,
-            status_code,
+            conn_url,
         )
         return ActionResult(
-            success=False,
-            message=f"Connection request returned HTTP {status_code}.",
+            success=True,
+            message=f"Connection request sent to {ont.serial_number} via GenieACS.",
         )
-    except httpx.RequestError as exc:
+    except GenieACSError as exc:
         logger.error("Connection request failed for ONT %s: %s", ont.serial_number, exc)
         return ActionResult(success=False, message=f"Connection request failed: {exc}")
 

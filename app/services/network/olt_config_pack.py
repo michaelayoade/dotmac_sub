@@ -350,6 +350,29 @@ class ConfigPackValidation:
         }
 
 
+def _validate_gem_index(
+    validation: ConfigPackValidation,
+    *,
+    name: str,
+    value: int | str | None,
+    minimum: int = 1,
+    maximum: int = 8,
+) -> None:
+    if value is None:
+        return
+    try:
+        gem_index = int(value)
+    except (TypeError, ValueError):
+        validation.is_valid = False
+        validation.errors.append(f"{name} GEM index must be an integer")
+        return
+    if gem_index < minimum or gem_index > maximum:
+        validation.is_valid = False
+        validation.errors.append(
+            f"{name} GEM index {gem_index} is outside supported range {minimum}-{maximum}"
+        )
+
+
 def validate_config_pack_comprehensive(
     db: Session,
     olt_id: str | UUID,
@@ -363,11 +386,11 @@ def validate_config_pack_comprehensive(
     - Authorization profiles (line/service)
     - Internet VLAN
     - Management VLAN
+    - Management IP pool
     - TR-069 ACS server
     - TR-069 OLT profile ID
 
     Optional fields (WARNING if missing):
-    - Management IP Pool
     - Connection request credentials
 
     Args:
@@ -435,13 +458,50 @@ def validate_config_pack_comprehensive(
             "Missing management VLAN - ONTs cannot reach TR-069 ACS"
         )
 
-    # ========== WARNINGS (non-blocking) ==========
-
-    # Management IP pool is needed for static IP allocation
     if not olt.mgmt_ip_pool_id:
-        validation.warnings.append(
-            "Missing management IP pool - ONTs will use DHCP for management"
+        validation.is_valid = False
+        validation.errors.append(
+            "Missing management IP pool - ONTs cannot receive a managed ACS address"
         )
+
+    _validate_gem_index(
+        validation,
+        name="Internet",
+        value=config_pack.internet_gem_index,
+    )
+    _validate_gem_index(
+        validation,
+        name="Management",
+        value=config_pack.mgmt_gem_index,
+    )
+    _validate_gem_index(validation, name="VoIP", value=config_pack.voip_gem_index)
+    _validate_gem_index(validation, name="IPTV", value=config_pack.iptv_gem_index)
+
+    if (
+        config_pack.tr069_acs_server_id
+        and config_pack.tr069_olt_profile_id is not None
+        and config_pack.management_vlan.id
+        and olt.mgmt_ip_pool_id
+    ):
+        from app.services.network.acs_reachability import (
+            validate_olt_acs_management_reachability,
+        )
+
+        reachability_error = validate_olt_acs_management_reachability(
+            db,
+            {
+                "tr069_acs_server_id": config_pack.tr069_acs_server_id,
+                "default_tr069_olt_profile_id": config_pack.tr069_olt_profile_id,
+                "management_vlan_id": config_pack.management_vlan.id,
+                "mgmt_ip_pool_id": olt.mgmt_ip_pool_id,
+            },
+            current_olt=olt,
+        )
+        if reachability_error:
+            validation.is_valid = False
+            validation.errors.append(reachability_error)
+
+    # ========== WARNINGS (non-blocking) ==========
 
     # Connection request credentials enable push notifications
     if not config_pack.cr_username or not config_pack.cr_password:
@@ -540,8 +600,6 @@ REQUIRED_CONFIG_PACK_KEYS = [
     "internet_vlan_id",
     "management_vlan_id",
     "tr069_olt_profile_id",
-    "mgmt_gem_index",
-    "internet_gem_index",
 ]
 
 
@@ -579,6 +637,8 @@ def validate_config_pack_required(
     # Also check tr069_acs_server_id which is a FK on OLT, not in config_pack
     if olt.tr069_acs_server_id is None:
         missing.append("tr069_acs_server_id")
+    if olt.mgmt_ip_pool_id is None:
+        missing.append("mgmt_ip_pool_id")
 
     if missing and raise_on_error:
         raise ConfigPackIncompleteError(olt.name or str(olt.id), missing)

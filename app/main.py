@@ -49,6 +49,7 @@ _DEFERRED_ROUTER_TASK = None
 
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
+    ("app.api.tr069_auth", "router", "api", "none"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
     ("app.web.auth", "router", "web", "none"),

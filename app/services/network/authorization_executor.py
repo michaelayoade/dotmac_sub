@@ -151,7 +151,6 @@ def execute_authorization(
             details={
                 "status": result.status,
                 "ont_id_on_olt": result.ont_id_on_olt,
-                "follow_up_operation_id": result.follow_up_operation_id,
             },
         )
 

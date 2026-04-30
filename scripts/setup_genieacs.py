@@ -19,7 +19,6 @@ Options:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -61,6 +60,8 @@ PRESET_DEFINITIONS = {
 CONFIG_ENTRIES = {
     # CPE authentication using auth extension
     "cwmp.auth": 'EXT("auth", "authenticateCpe", username, password, DeviceID.ID, DeviceID.SerialNumber)',
+    # Connection-request authentication using per-device/effective config.
+    "cwmp.connectionRequestAuth": 'EXT("auth", "connectionRequest", DeviceID.ID, DeviceID.SerialNumber)',
 }
 
 

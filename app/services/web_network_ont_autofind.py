@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote_plus
 
 from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import SQLColumnExpression
 from starlette.requests import Request
@@ -111,9 +112,18 @@ def sync_olt_autofind_candidates(
     entries = result.data.get("autofind_entries", [])
     stats = sync_olt_autofind_entries(db, olt_id=olt_id, entries=entries)
 
-    # Record sync time for deduplication
-    olt.autofind_last_sync_at = datetime.now(UTC)
-    db.flush()
+    # Record sync time for deduplication. This is non-critical; do not fail a
+    # successful candidate refresh if another background sync is holding the OLT row.
+    try:
+        olt.autofind_last_sync_at = datetime.now(UTC)
+        db.flush()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.warning(
+            "Autofind candidate refresh completed but sync timestamp update failed: olt_id=%s error=%s",
+            olt_id,
+            exc,
+        )
 
     return True, result.message, stats
 
@@ -160,6 +170,100 @@ def refresh_returned_ont_autofind(
         "rediscovered": rediscovered,
         "url": target_url,
     }
+
+
+def ensure_returned_inventory_candidate(
+    db: Session,
+    *,
+    olt_id: str | None,
+    fsp: str | None,
+    serial_number: str | None,
+    ont_unit_id: object | None = None,
+) -> tuple[bool, str]:
+    """Make a returned ONT immediately selectable for authorization.
+
+    Huawei autofind may not report a deauthorized ONT until the device physically
+    re-registers. Return-to-inventory already knows the previous OLT, FSP, and
+    serial, so preserve that as an active inventory candidate for reauthorization.
+    """
+    clean_olt_id = str(olt_id or "").strip()
+    clean_fsp = str(fsp or "").strip()
+    clean_serial = str(serial_number or "").strip()
+    serial_variants = [
+        candidate
+        for candidate in dict.fromkeys(serial_search_candidates(clean_serial))
+        if candidate
+    ]
+    normalized_serials = {
+        normalize_serial(candidate) for candidate in serial_variants if candidate
+    }
+    if not clean_olt_id or not clean_fsp or not normalized_serials:
+        return False, "Missing OLT, port, or serial for returned inventory candidate"
+
+    now = datetime.now(UTC)
+    candidates = list(
+        db.scalars(
+            select(OltAutofindCandidate).where(
+                OltAutofindCandidate.olt_id == clean_olt_id,
+                OltAutofindCandidate.fsp == clean_fsp,
+            )
+        ).all()
+    )
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if normalized_serials.intersection(_candidate_serial_values(item))
+        ),
+        None,
+    )
+
+    display_serial = next(
+        (
+            variant
+            for variant in serial_variants
+            if len(normalize_serial(variant)) == 12
+            and normalize_serial(variant)[:4].isalpha()
+        ),
+        clean_serial,
+    )
+    serial_hex = next(
+        (
+            normalize_serial(variant)
+            for variant in serial_variants
+            if len(normalize_serial(variant)) == 16
+            and normalize_serial(variant).startswith("48575443")
+        ),
+        None,
+    )
+
+    if candidate is None:
+        candidate = OltAutofindCandidate(
+            olt_id=clean_olt_id,
+            ont_unit_id=ont_unit_id,
+            fsp=clean_fsp,
+            serial_number=display_serial,
+            serial_hex=serial_hex,
+            is_active=True,
+            first_seen_at=now,
+            last_seen_at=now,
+            notes="Restored from return-to-inventory for immediate reauthorization.",
+        )
+        db.add(candidate)
+        action = "created"
+    else:
+        candidate.ont_unit_id = ont_unit_id or candidate.ont_unit_id
+        candidate.is_active = True
+        candidate.resolution_reason = None
+        candidate.resolved_at = None
+        candidate.last_seen_at = now
+        if not candidate.serial_hex:
+            candidate.serial_hex = serial_hex
+        candidate.notes = "Restored from return-to-inventory for immediate reauthorization."
+        action = "restored"
+
+    db.flush()
+    return True, f"Returned inventory candidate {action}"
 
 
 def scan_olt_autofind_results_context(
@@ -257,8 +361,7 @@ def sync_olt_autofind_entries(
                 serial_hex,
             )
             continue
-        key = (fsp, entry_serials[0])
-        seen_keys.add(key)
+        seen_keys.update((fsp, serial) for serial in entry_serials)
         candidate = by_exact_key.get((fsp, serial_number))
         if candidate is None:
             candidate = next(
@@ -279,7 +382,10 @@ def sync_olt_autofind_entries(
             candidate.resolution_reason = "duplicate"
             candidate.resolved_at = now
             candidate = collision
-        matched_ont = _find_ont_by_serial(db, serial_number)
+        matched_ont = _find_ont_by_serial(db, serial_number) or _find_ont_by_serial(
+            db,
+            serial_hex,
+        )
         if candidate is None:
             candidate = OltAutofindCandidate(
                 olt_id=olt.id,
@@ -350,12 +456,29 @@ def resolve_candidate_authorized(
     Uses SELECT FOR UPDATE with skip_locked to prevent race conditions
     when multiple authorization workflows target the same candidate.
     """
+    serial_candidates = [
+        normalize_serial(candidate)
+        for candidate in serial_search_candidates(serial_number)
+    ]
+    serial_candidates = [
+        candidate for candidate in dict.fromkeys(serial_candidates) if candidate
+    ]
+    if not serial_candidates:
+        return
+
     candidate = db.scalars(
         select(OltAutofindCandidate)
         .where(
             OltAutofindCandidate.olt_id == olt_id,
             OltAutofindCandidate.fsp == fsp,
-            OltAutofindCandidate.serial_number == serial_number,
+            or_(
+                _normalized_serial_expr(OltAutofindCandidate.serial_number).in_(
+                    serial_candidates
+                ),
+                _normalized_serial_expr(OltAutofindCandidate.serial_hex).in_(
+                    serial_candidates
+                ),
+            ),
             OltAutofindCandidate.is_active.is_(True),  # Only resolve active candidates
         )
         .with_for_update(skip_locked=True)

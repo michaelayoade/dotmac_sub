@@ -12,8 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.models.tr069 import Tr069CpeDevice
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import desired_config
 from app.services.network.serial_utils import search_candidates
 
@@ -49,6 +50,8 @@ def get_device_credentials(
     for candidate in candidates:
         cpe_stmt = select(Tr069CpeDevice).where(
             Tr069CpeDevice.serial_number.ilike(candidate)
+        ).where(
+            Tr069CpeDevice.is_active.is_(True)
         )
         cpe_device = db.scalars(cpe_stmt).first()
         if cpe_device:
@@ -58,8 +61,9 @@ def get_device_credentials(
     ont_unit = None
     if cpe_device and cpe_device.ont_unit_id:
         ont_unit = db.get(OntUnit, cpe_device.ont_unit_id)
-    elif not cpe_device:
-        # Try direct ONT lookup by serial
+    if ont_unit is None:
+        # Try direct ONT lookup by serial. This also handles stale inactive
+        # TR-069 rows that still carry the plain HWTC serial with no ONT link.
         for candidate in candidates:
             ont_stmt = select(OntUnit).where(OntUnit.serial_number.ilike(candidate))
             ont_unit = db.scalars(ont_stmt).first()
@@ -67,12 +71,13 @@ def get_device_credentials(
                 break
 
     if credential_type == "connection_request":
-        return _get_connection_request_credentials(ont_unit, cpe_device)
+        return _get_connection_request_credentials(db, ont_unit, cpe_device)
     else:
-        return _get_cpe_auth_credentials(ont_unit, cpe_device)
+        return _get_cpe_auth_credentials(db, ont_unit, cpe_device)
 
 
 def _get_connection_request_credentials(
+    db: Session,
     ont_unit: OntUnit | None,
     cpe_device: Tr069CpeDevice | None,
 ) -> dict[str, str | None]:
@@ -83,6 +88,23 @@ def _get_connection_request_credentials(
     """
     username = None
     password = None
+
+    if ont_unit:
+        try:
+            effective = resolve_effective_ont_config(db, ont_unit)
+            values = effective.get("values", {})
+            username = values.get("cr_username")
+            encrypted_pass = values.get("cr_password")
+            if encrypted_pass:
+                password = decrypt_credential(str(encrypted_pass))
+        except Exception:
+            logger.warning(
+                "Failed to resolve effective CR credentials for ONT %s",
+                ont_unit.id,
+                exc_info=True,
+            )
+        if username and password:
+            return {"username": str(username), "password": password}
 
     # Check ONT desired config through the ownership helper.
     if ont_unit:
@@ -103,6 +125,7 @@ def _get_connection_request_credentials(
 
 
 def _get_cpe_auth_credentials(
+    db: Session,
     ont_unit: OntUnit | None,
     cpe_device: Tr069CpeDevice | None,
 ) -> dict[str, str | None]:
@@ -113,6 +136,26 @@ def _get_cpe_auth_credentials(
     """
     username = None
     password = None
+
+    if ont_unit:
+        try:
+            effective = resolve_effective_ont_config(db, ont_unit)
+            values = effective.get("values", {})
+            acs_server_id = values.get("tr069_acs_server_id")
+            if acs_server_id:
+                server = db.get(Tr069AcsServer, acs_server_id)
+                if server is not None:
+                    username = server.cwmp_username
+                    if server.cwmp_password:
+                        password = decrypt_credential(server.cwmp_password)
+        except Exception:
+            logger.warning(
+                "Failed to resolve effective CWMP credentials for ONT %s",
+                ont_unit.id,
+                exc_info=True,
+            )
+        if username and password:
+            return {"username": str(username), "password": password}
 
     # Check ONT desired config through the ownership helper.
     if ont_unit:

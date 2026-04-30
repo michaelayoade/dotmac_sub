@@ -30,8 +30,6 @@ celery_app.autodiscover_tasks(["app.tasks"])
 # Route critical OLT authorization and ACS/TR-069 tasks to dedicated queues.
 # This prevents ACS work from being starved by slow SNMP/polling/default tasks.
 celery_app.conf.task_routes = {
-    "app.tasks.ont_authorization.run_post_authorization_follow_up": {"queue": "tr069"},
-    "app.tasks.ont_authorization.ensure_tr069_acs_connectivity": {"queue": "acs"},
     "app.tasks.tr069.sync_all_acs_devices": {"queue": "acs"},
     "app.tasks.tr069.execute_pending_jobs": {"queue": "acs"},
     "app.tasks.tr069.check_device_health": {"queue": "acs"},
@@ -64,7 +62,7 @@ celery_app.conf.task_routes = {
 celery_app.conf.task_queues = (
     Queue("celery"),  # Default queue
     Queue("nin"),  # Dedicated identity verification queue
-    Queue("tr069"),  # Dedicated OLT authorization follow-up queue
+    Queue("tr069"),  # Dedicated OLT/TR-069 operations queue
     Queue("acs"),  # Dedicated GenieACS/TR-069 queue
     Queue("bandwidth"),  # High-volume bandwidth processing
     Queue("ingestion"),  # High-volume data ingestion (Zabbix, usage)

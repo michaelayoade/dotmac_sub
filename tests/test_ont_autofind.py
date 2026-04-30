@@ -282,6 +282,130 @@ def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
     assert item.resolved_at is not None
 
 
+def test_resolve_candidate_authorized_matches_normalized_serial_variant(db_session):
+    olt = OLTDevice(name="OLT-Resolve-Variant", mgmt_ip="198.51.100.211", is_active=True)
+    ont = OntUnit(serial_number="HWTC7D4701C3", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/2",
+        serial_number="485754437D4701C3",
+        serial_hex="485754437D4701C3",
+        is_active=True,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    autofind_service.resolve_candidate_authorized(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/2/2",
+        serial_number="HWTC7D4701C3",
+    )
+
+    db_session.refresh(item)
+    assert item.is_active is False
+    assert item.resolution_reason == "authorized"
+    assert item.ont_unit_id == ont.id
+
+
+def test_ensure_returned_inventory_candidate_restores_authorized_candidate(db_session):
+    olt = OLTDevice(name="OLT-Return-Restore", mgmt_ip="198.51.100.214", is_active=True)
+    ont = OntUnit(serial_number="HWTC600AC29C", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/1",
+        serial_number="HWTC-600AC29C",
+        serial_hex="48575443600AC29C",
+        ont_unit_id=ont.id,
+        is_active=False,
+        resolution_reason="authorized",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    ok, message = autofind_service.ensure_returned_inventory_candidate(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/2/1",
+        serial_number="HWTC600AC29C",
+        ont_unit_id=ont.id,
+    )
+
+    assert ok is True
+    assert "restored" in message
+    db_session.refresh(item)
+    assert item.is_active is True
+    assert item.resolution_reason is None
+    assert item.resolved_at is None
+    assert item.ont_unit_id == ont.id
+
+
+def test_ensure_returned_inventory_candidate_creates_without_prior_autofind(
+    db_session,
+):
+    olt = OLTDevice(name="OLT-Return-Create", mgmt_ip="198.51.100.215", is_active=True)
+    ont = OntUnit(serial_number="HWTC600AC29D", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    ok, message = autofind_service.ensure_returned_inventory_candidate(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/2/2",
+        serial_number="HWTC600AC29D",
+        ont_unit_id=ont.id,
+    )
+
+    assert ok is True
+    assert "created" in message
+    item = db_session.query(OltAutofindCandidate).one()
+    assert item.is_active is True
+    assert item.fsp == "0/2/2"
+    assert item.serial_number == "HWTC600AC29D"
+    assert item.serial_hex == "48575443600AC29D"
+    assert item.ont_unit_id == ont.id
+
+
+def test_sync_olt_autofind_entries_keeps_variant_match_active(db_session):
+    olt = OLTDevice(name="OLT-Autofind-Variant", mgmt_ip="198.51.100.212", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/3",
+        serial_number="485754437D4701C3",
+        serial_hex="485754437D4701C3",
+        is_active=True,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    stats = autofind_service.sync_olt_autofind_entries(
+        db_session,
+        olt_id=str(olt.id),
+        entries=[
+            SimpleNamespace(
+                fsp="0/2/3",
+                serial_number="HWTC7D4701C3",
+                serial_hex="485754437D4701C3",
+            )
+        ],
+    )
+
+    db_session.refresh(item)
+    assert stats["updated"] == 1
+    assert stats["resolved"] == 0
+    assert item.is_active is True
+    assert item.serial_number == "HWTC7D4701C3"
+
+
 def test_restore_candidate_clears_disappeared_state_for_authorization(db_session):
     from app.services.network.ont_authorization import (
         get_autofind_candidate_by_serial,

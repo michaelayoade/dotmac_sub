@@ -22,13 +22,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 from app.services.adapters import adapter_registry
-from app.services.queue_adapter import QueueDispatchResult, QueueMessage, enqueue_task
+from app.services.queue_adapter import QueueDispatchResult, enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +92,7 @@ class StrategyConfig:
 TASK_QUEUE_ROUTING: dict[str, str] = {
     # ACS/TR-069 tasks -> acs queue
     "app.tasks.tr069.": "acs",
-    # Authorization and provisioning -> tr069 queue
-    "app.tasks.ont_authorization.": "tr069",
+    # Provisioning -> tr069 queue
     "app.tasks.ont_provisioning.": "tr069",
     "app.tasks.olt_queue.": "tr069",
     # High-volume tasks -> dedicated queues (to be created)
@@ -106,7 +104,6 @@ TASK_QUEUE_ROUTING: dict[str, str] = {
 # Task priority mapping
 TASK_PRIORITY_MAPPING: dict[str, TaskPriority] = {
     # Critical - never shed
-    "app.tasks.ont_authorization.": TaskPriority.critical,
     "app.tasks.ont_provisioning.": TaskPriority.critical,
     "app.tasks.billing.": TaskPriority.critical,
     "app.tasks.tr069.apply_acs_config": TaskPriority.critical,

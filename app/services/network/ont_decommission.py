@@ -343,7 +343,7 @@ def decommission_ont(
     ont.is_active = False
     ont.authorization_status = None  # type: ignore[assignment]  # Clear status
     ont.provisioning_status = None  # type: ignore[assignment]
-    ont.olt_status = OnuOnlineStatus.unknown
+    ont.olt_status = OnuOnlineStatus.offline
     ont.external_id = None  # Clear OLT registration ID
     # Store decommission metadata in notes
     decommission_note = (

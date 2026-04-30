@@ -558,15 +558,14 @@ services:
     cpus: 2.0
     pids_limit: 384
     logging: *default-logging
-    ports:
-    - 7547:7547
-    - 7557:7557
-    - 7567:7567
-    - 3000:3000
+    # GenieACS must originate connection requests from the host routing
+    # namespace. The CPE management pools are reached via wg0 from 10.10.41.1;
+    # Docker bridge source addresses cannot reliably reach those subnets.
+    network_mode: host
     depends_on:
     - genieacs-mongodb
     environment:
-    - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:${GENIEACS_MONGODB_PASSWORD}@genieacs-mongodb/genieacs?authSource=admin
+    - GENIEACS_MONGODB_CONNECTION_URL=mongodb://genieacs:${GENIEACS_MONGODB_PASSWORD}@127.0.0.1:27017/genieacs?authSource=admin
     - GENIEACS_UI_JWT_SECRET=${GENIEACS_UI_JWT_SECRET}
     - GENIEACS_CWMP_AUTHENTICATION=${GENIEACS_CWMP_USER}:${GENIEACS_CWMP_PASS}
     - GENIEACS_CWMP_CONNECTION_REQUEST_USERNAME=${GENIEACS_CONNECTION_REQUEST_USERNAME:-acs}
@@ -575,7 +574,8 @@ services:
     - GENIEACS_DEBUG_FILE=/var/log/genieacs/debug.yaml
     - GENIEACS_CWMP_LOG_FILE=/var/log/genieacs/cwmp.log
     - NODE_OPTIONS=--enable-source-maps
-    - DOTMAC_WEBHOOK_URL=http://app:8001/api/v1/tr069/inform
+    - DOTMAC_WEBHOOK_URL=http://127.0.0.1:8001/api/v1/tr069/inform
+    - DOTMAC_AUTH_URL=http://127.0.0.1:8001/api/v1/tr069/auth
     volumes:
     - ./docker/genieacs/ext:/opt/genieacs/ext:ro
     - ./docker/genieacs/provisions:/opt/genieacs/provisions:ro

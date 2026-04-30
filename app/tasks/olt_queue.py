@@ -131,7 +131,7 @@ def _execute_queued_operation(
 
     try:
         if op_type == "authorize":
-            return _execute_authorize(db, olt, payload)
+            return False, "ONT authorization runs synchronously and is not deferred"
         elif op_type == "deprovision":
             return _execute_deprovision(db, olt, payload)
         elif op_type == "service_port":
@@ -142,54 +142,6 @@ def _execute_queued_operation(
     except Exception as e:
         logger.exception("Failed to execute queued %s operation", op_type)
         return False, str(e)
-
-
-def _execute_authorize(
-    db,
-    olt,
-    payload: dict,
-) -> tuple[bool, str | None]:
-    """Execute a queued authorization operation."""
-    from app.services.network.olt_batched_auth import (
-        BatchedAuthorizationSpec,
-        MgmtIpConfig,
-        ServicePortSpec,
-    )
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-
-    # Reconstruct spec from payload
-    service_ports = [ServicePortSpec(**sp) for sp in payload.get("service_ports", [])]
-
-    mgmt_config = None
-    if payload.get("mgmt_config"):
-        mgmt_config = MgmtIpConfig(**payload["mgmt_config"])
-
-    spec = BatchedAuthorizationSpec(
-        serial_number=payload["serial_number"],
-        fsp=payload["fsp"],
-        line_profile_id=payload["line_profile_id"],
-        service_profile_id=payload["service_profile_id"],
-        service_ports=service_ports,
-        mgmt_config=mgmt_config,
-        tr069_profile_id=payload.get("tr069_profile_id"),
-        description=payload.get("description"),
-    )
-
-    adapter = get_protocol_adapter(olt)
-    result = adapter.execute_authorization_batch(spec)
-
-    if result.success:
-        # Update DB with ONT-ID if needed
-        if result.ont_id is not None and payload.get("ont_unit_id"):
-            from app.models.network import OntUnit
-
-            ont = db.get(OntUnit, payload["ont_unit_id"])
-            if ont:
-                ont.external_id = str(result.ont_id)
-                ont.authorization_status = "authorized"
-        return True, None
-    else:
-        return False, result.message
 
 
 def _execute_deprovision(

@@ -4,29 +4,25 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import (
+    IpBlock,
+    IpPool,
+    IPv4Address,
+    IPVersion,
+    MgmtIpMode,
+    OLTDevice,
+    OntUnit,
+)
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import encrypt_credential
-from app.services.network import ont_authorization
-from app.tasks import ont_authorization as ont_authorization_tasks
+from app.services.network import acs_foundation, ont_authorization
 
 
-class _SessionProxy:
-    def __init__(self, session):
-        self._session = session
-
-    def __getattr__(self, name):
-        return getattr(self._session, name)
-
-    def close(self) -> None:
-        pass
-
-
-def test_post_authorization_follow_up_queues_acs_connectivity(
+def test_authorization_follow_up_applies_acs_foundation_inline(
     db_session, monkeypatch
 ):
-    """Authorized ONTs must schedule the ACS reachability/bootstrap step."""
-    queued: list[dict] = []
+    """Authorized ONTs apply the OLT-side ACS foundation synchronously."""
+    foundation_calls: list[dict] = []
 
     monkeypatch.setattr(
         ont_authorization,
@@ -39,17 +35,18 @@ def test_post_authorization_follow_up_queues_acs_connectivity(
         lambda *args, **kwargs: (True, "Allocated management IP.", "10.10.10.2"),
     )
 
-    def fake_enqueue_task(*args, **kwargs):
-        queued.append({"args": args, "kwargs": kwargs})
-        return type(
-            "Dispatch",
-            (),
-            {"queued": True, "task_id": "task-acs", "error": None},
-        )()
+    monkeypatch.setattr(
+        acs_foundation,
+        "apply_acs_foundation",
+        lambda db, **kwargs: foundation_calls.append(kwargs)
+        or {
+            "success": True,
+            "message": "ACS foundation applied.",
+            "steps": [],
+        },
+    )
 
-    monkeypatch.setattr("app.services.queue_adapter.enqueue_task", fake_enqueue_task)
-
-    success, message, steps = ont_authorization.run_post_authorization_follow_up(
+    success, message, steps = ont_authorization.apply_authorization_foundation(
         db_session,
         ont_unit_id="ont-1",
         olt_id="olt-1",
@@ -59,29 +56,24 @@ def test_post_authorization_follow_up_queues_acs_connectivity(
     )
 
     assert success is True
-    assert message == "Authorization follow-up completed."
-    assert steps[-1]["name"] == "Queue TR-069 ACS connectivity"
+    assert message == "Authorization foundation completed."
+    assert steps[-1]["name"] == "Apply ACS foundation"
     assert steps[-1]["success"] is True
-    assert queued == [
+    assert steps[-1]["message"] == "ACS foundation applied."
+    assert foundation_calls == [
         {
-            "args": (
-                "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
-            ),
-            "kwargs": {
-                "args": ["ont-1", "olt-1", "0/1/1", 7],
-                "queue": "acs",
-                "correlation_id": "tr069_acs_connect:ont-1",
-                "source": "post_authorization_follow_up",
-                "countdown": 5,
-            },
+            "ont_unit_id": "ont-1",
+            "olt_id": "olt-1",
+            "fsp": "0/1/1",
+            "ont_id_on_olt": 7,
         }
     ]
 
 
-def test_post_authorization_follow_up_fails_when_acs_queue_fails(
+def test_authorization_foundation_fails_when_acs_foundation_fails(
     db_session, monkeypatch
 ):
-    """A failed ACS bootstrap dispatch makes the follow-up operation fail."""
+    """A failed ACS foundation write makes authorization foundation fail."""
     monkeypatch.setattr(
         ont_authorization,
         "ensure_assignment_and_pon_port_for_authorized_ont",
@@ -93,15 +85,16 @@ def test_post_authorization_follow_up_fails_when_acs_queue_fails(
         lambda *args, **kwargs: (True, "Allocated management IP.", "10.10.10.2"),
     )
     monkeypatch.setattr(
-        "app.services.queue_adapter.enqueue_task",
-        lambda *args, **kwargs: SimpleNamespace(
-            queued=False,
-            task_id=None,
-            error="broker unavailable",
-        ),
+        acs_foundation,
+        "apply_acs_foundation",
+        lambda db, **kwargs: {
+            "success": False,
+            "message": "OLT rejected TR-069 profile.",
+            "steps": [],
+        },
     )
 
-    success, message, steps = ont_authorization.run_post_authorization_follow_up(
+    success, message, steps = ont_authorization.apply_authorization_foundation(
         db_session,
         ont_unit_id="ont-1",
         olt_id="olt-1",
@@ -111,18 +104,16 @@ def test_post_authorization_follow_up_fails_when_acs_queue_fails(
     )
 
     assert success is False
-    assert message == "Authorization follow-up failed: ACS connectivity task was not queued."
-    assert steps[-1]["name"] == "Queue TR-069 ACS connectivity"
+    assert message == "Authorization foundation failed: ACS foundation was not applied."
+    assert steps[-1]["name"] == "Apply ACS foundation"
     assert steps[-1]["success"] is False
-    assert "broker unavailable" in steps[-1]["message"]
+    assert "OLT rejected TR-069 profile" in steps[-1]["message"]
 
 
-def test_post_authorization_follow_up_fails_when_management_ip_not_allocated(
+def test_authorization_foundation_fails_when_management_ip_not_allocated(
     db_session, monkeypatch
 ):
-    """ACS bootstrap is not queued if management IP allocation fails."""
-    queued: list[dict] = []
-
+    """ACS foundation is not applied if management IP allocation fails."""
     monkeypatch.setattr(
         ont_authorization,
         "ensure_assignment_and_pon_port_for_authorized_ont",
@@ -134,13 +125,7 @@ def test_post_authorization_follow_up_fails_when_management_ip_not_allocated(
         lambda *args, **kwargs: (False, "Management IP pool exhausted.", None),
     )
 
-    def fake_enqueue_task(*args, **kwargs):
-        queued.append({"args": args, "kwargs": kwargs})
-        return SimpleNamespace(queued=True, task_id="task-acs", error=None)
-
-    monkeypatch.setattr("app.services.queue_adapter.enqueue_task", fake_enqueue_task)
-
-    success, message, steps = ont_authorization.run_post_authorization_follow_up(
+    success, message, steps = ont_authorization.apply_authorization_foundation(
         db_session,
         ont_unit_id="ont-1",
         olt_id="olt-1",
@@ -153,13 +138,407 @@ def test_post_authorization_follow_up_fails_when_management_ip_not_allocated(
     assert message == "Management IP pool exhausted."
     assert steps[-1]["name"] == "Allocate management IP"
     assert steps[-1]["success"] is False
-    assert queued == []
 
 
-def test_authorization_warns_when_post_auth_follow_up_not_queued(
+def test_management_ip_allocation_rejects_released_address_from_different_pool(
+    db_session,
+):
+    """Allocator must not claim an IPv4 row that belongs to another pool."""
+    olt = OLTDevice(name="OLT-Mgmt-Pool-Guard", is_active=True)
+    ont = OntUnit(serial_number="HWTCPOOLGUARD", olt_device=olt, is_active=True)
+    other_pool = IpPool(
+        name="Other Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.201.0/24",
+        gateway="172.16.201.1",
+        is_active=True,
+    )
+    active_pool = IpPool(
+        name="Active Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.201.0/24",
+        gateway="172.16.201.1",
+        is_active=True,
+        olt_device=olt,
+    )
+    db_session.add_all([olt, ont, other_pool, active_pool])
+    db_session.flush()
+    db_session.add(
+        IpBlock(pool_id=active_pool.id, cidr="172.16.201.0/30", is_active=True)
+    )
+    db_session.add(
+        IPv4Address(
+            address="172.16.201.2",
+            pool_id=other_pool.id,
+            is_reserved=False,
+        )
+    )
+    olt.mgmt_ip_pool_id = active_pool.id
+    db_session.commit()
+
+    ok, message, allocated_ip = ont_authorization.allocate_management_ip_for_ont(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+    )
+
+    assert ok is False
+    assert allocated_ip is None
+    assert "different pool" in message
+
+
+def test_management_ip_allocation_fails_without_olt_pool(db_session):
+    """Authorization cannot guarantee ACS reachability without an OLT mgmt pool."""
+    olt = OLTDevice(name="OLT-No-Mgmt-Pool", is_active=True)
+    ont = OntUnit(serial_number="HWTCNOPool01", olt_device=olt, is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    ok, message, allocated_ip = ont_authorization.allocate_management_ip_for_ont(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+    )
+
+    assert ok is False
+    assert allocated_ip is None
+    assert "No management IP pool configured" in message
+
+
+def test_management_ip_allocation_reuses_existing_ip_only_when_in_current_pool(
+    db_session,
+):
+    """Existing management IPs are valid only when they belong to the OLT pool."""
+    olt = OLTDevice(name="OLT-Existing-Mgmt-Pool", is_active=True)
+    ont = OntUnit(serial_number="HWTCVALIDMGMT", olt_device=olt, is_active=True)
+    pool = IpPool(
+        name="Existing Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.202.0/24",
+        gateway="172.16.202.1",
+        is_active=True,
+        olt_device=olt,
+    )
+    db_session.add_all([olt, ont, pool])
+    db_session.flush()
+    db_session.add(IpBlock(pool_id=pool.id, cidr="172.16.202.0/30", is_active=True))
+    assignment = ont_authorization._get_or_create_active_assignment(db_session, ont)
+    assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+    assignment.mgmt_ip_address = "172.16.202.2"
+    olt.mgmt_ip_pool_id = pool.id
+    db_session.commit()
+
+    ok, message, allocated_ip = ont_authorization.allocate_management_ip_for_ont(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+    )
+
+    assert ok is True
+    assert allocated_ip == "172.16.202.2"
+    assert "already has management IP" in message
+    record = db_session.query(IPv4Address).filter_by(address="172.16.202.2").one()
+    assert record.pool_id == pool.id
+    assert record.ont_unit_id == ont.id
+    assert record.allocation_type == "management"
+
+
+def test_management_ip_allocation_uses_valid_cached_next_ip(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="OLT-Cached-Mgmt-Pool", is_active=True)
+    ont = OntUnit(serial_number="HWTCCACHEMGMT", olt_device=olt, is_active=True)
+    pool = IpPool(
+        name="Cached Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.203.0/24",
+        gateway="172.16.203.1",
+        is_active=True,
+        olt_device=olt,
+        next_available_ip="172.16.203.2",
+        available_count=2,
+    )
+    db_session.add_all([olt, ont, pool])
+    db_session.flush()
+    db_session.add(IpBlock(pool_id=pool.id, cidr="172.16.203.0/29", is_active=True))
+    olt.mgmt_ip_pool_id = pool.id
+    db_session.commit()
+
+    def fail_refresh(*args, **kwargs):
+        raise AssertionError("refresh_pool_availability should not run")
+
+    monkeypatch.setattr(ont_authorization, "refresh_pool_availability", fail_refresh)
+
+    ok, message, allocated_ip = ont_authorization.allocate_management_ip_for_ont(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+    )
+
+    assert ok is True
+    assert allocated_ip == "172.16.203.2"
+    assert "Allocated management IP" in message
+    db_session.refresh(pool)
+    assert pool.next_available_ip == "172.16.203.3"
+    assert pool.available_count == 1
+
+
+def test_management_ip_allocation_refreshes_stale_cached_next_ip(
+    db_session,
+):
+    olt = OLTDevice(name="OLT-Stale-Cache-Mgmt-Pool", is_active=True)
+    ont = OntUnit(serial_number="HWTCSTALECACHE", olt_device=olt, is_active=True)
+    pool = IpPool(
+        name="Stale Cache Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.204.0/24",
+        gateway="172.16.204.1",
+        is_active=True,
+        olt_device=olt,
+        next_available_ip="172.16.204.2",
+        available_count=2,
+    )
+    db_session.add_all([olt, ont, pool])
+    db_session.flush()
+    db_session.add(IpBlock(pool_id=pool.id, cidr="172.16.204.0/29", is_active=True))
+    db_session.add(
+        IPv4Address(
+            address="172.16.204.2",
+            pool_id=pool.id,
+            is_reserved=True,
+            notes="held",
+        )
+    )
+    olt.mgmt_ip_pool_id = pool.id
+    db_session.commit()
+
+    ok, _message, allocated_ip = ont_authorization.allocate_management_ip_for_ont(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+    )
+
+    assert ok is True
+    assert allocated_ip == "172.16.204.3"
+    db_session.refresh(pool)
+    assert pool.next_available_ip == "172.16.204.4"
+
+
+def test_management_ip_allocation_replaces_stale_existing_ip_from_wrong_pool(
+    db_session,
+):
+    """Stale assignment IPs do not bypass allocation from the current OLT pool."""
+    olt = OLTDevice(name="OLT-Stale-Mgmt-Pool", is_active=True)
+    ont = OntUnit(serial_number="HWTCSTALEMGMT", olt_device=olt, is_active=True)
+    old_pool = IpPool(
+        name="Old Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.201.0/24",
+        gateway="172.16.201.1",
+        is_active=True,
+    )
+    current_pool = IpPool(
+        name="Current Mgmt Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="172.16.202.0/24",
+        gateway="172.16.202.1",
+        is_active=True,
+        olt_device=olt,
+    )
+    db_session.add_all([olt, ont, old_pool, current_pool])
+    db_session.flush()
+    db_session.add(
+        IpBlock(pool_id=current_pool.id, cidr="172.16.202.0/30", is_active=True)
+    )
+    assignment = ont_authorization._get_or_create_active_assignment(db_session, ont)
+    assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+    assignment.mgmt_ip_address = "172.16.201.2"
+    stale_record = IPv4Address(
+        address="172.16.201.2",
+        pool_id=old_pool.id,
+        is_reserved=True,
+        notes=f"ont:{ont.id}",
+        ont_unit_id=ont.id,
+        allocation_type="management",
+    )
+    db_session.add(stale_record)
+    olt.mgmt_ip_pool_id = current_pool.id
+    db_session.commit()
+
+    ok, message, allocated_ip = ont_authorization.allocate_management_ip_for_ont(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+    )
+
+    assert ok is True
+    assert allocated_ip == "172.16.202.2"
+    assert "Allocated management IP" in message
+    db_session.refresh(assignment)
+    db_session.refresh(stale_record)
+    assert assignment.mgmt_ip_address == "172.16.202.2"
+    assert stale_record.is_reserved is False
+    assert stale_record.ont_unit_id is None
+    assert stale_record.allocation_type is None
+
+
+def test_authorization_cleans_stale_registration_before_retry(
+    db_session,
+    monkeypatch,
+):
+    """Normal authorization handles serial-already-registered on a stale FSP."""
+    olt = OLTDevice(name="OLT-Stale-Registration", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    calls: list[tuple[str, object]] = []
+    existing = SimpleNamespace(fsp="0/1/5", onu_id=3)
+
+    class FakeAdapter:
+        def find_ont_by_serial(self, serial_number):
+            calls.append(("find", serial_number))
+            return SimpleNamespace(
+                success=True,
+                message="Found existing registration.",
+                data={"registration": existing},
+            )
+
+        def deauthorize_ont(self, fsp, ont_id):
+            calls.append(("deauthorize", fsp, ont_id))
+            return SimpleNamespace(success=True, message="Deleted existing registration.")
+
+        def authorize_ont(
+            self,
+            fsp,
+            serial_number,
+            *,
+            line_profile_id=None,
+            service_profile_id=None,
+        ):
+            calls.append(("authorize", fsp, serial_number))
+            if len([call for call in calls if call[0] == "authorize"]) == 1:
+                return SimpleNamespace(
+                    success=False,
+                    message="SN already exists",
+                    ont_id=None,
+                )
+            return SimpleNamespace(
+                success=True,
+                message="Authorized on requested port.",
+                ont_id=7,
+            )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        lambda _olt: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack.validate_config_pack_comprehensive",
+        lambda db, olt_id: SimpleNamespace(is_valid=True),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack.get_validation_summary",
+        lambda validation: "Config pack is complete and ready for provisioning",
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_db",
+        lambda db, olt: (
+            True,
+            "Using OLT authorization profiles.",
+            SimpleNamespace(line_profile_id=10, service_profile_id=20),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_write_reconciliation.verify_ont_absent",
+        lambda *args, **kwargs: SimpleNamespace(
+            success=True,
+            message="Verified ONT registration is absent on the OLT.",
+        ),
+    )
+
+    result = ont_authorization.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/6",
+        "HWTCSTALE123",
+    )
+
+    assert result.success is True
+    assert result.ont_id_on_olt == 7
+    assert result.completed_authorization is True
+    assert ("deauthorize", "0/1/5", 3) in calls
+    assert calls.count(("authorize", "0/1/6", "HWTCSTALE123")) == 2
+    assert "Removed existing ONT registration" in result.steps[-1].message
+
+
+def test_authorization_reports_partial_failure_when_local_record_setup_fails(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="OLT-Partial-Local", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    class FakeAdapter:
+        def authorize_ont(
+            self,
+            fsp,
+            serial_number,
+            *,
+            line_profile_id=None,
+            service_profile_id=None,
+        ):
+            return SimpleNamespace(
+                success=True,
+                message="Authorized.",
+                ont_id=7,
+            )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        lambda _olt: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack.validate_config_pack_comprehensive",
+        lambda db, olt_id: SimpleNamespace(is_valid=True),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack.get_validation_summary",
+        lambda validation: "Config pack is complete and ready for provisioning",
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_db",
+        lambda db, olt: (
+            True,
+            "Using OLT authorization profiles.",
+            SimpleNamespace(line_profile_id=10, service_profile_id=20),
+        ),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "create_or_find_ont_for_authorized_serial",
+        lambda *args, **kwargs: (None, "Failed to create ONT record."),
+    )
+
+    result = ont_authorization.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/6",
+        "HWTCPARTIAL1",
+    )
+
+    assert result.success is False
+    assert result.completed_authorization is True
+    assert result.partial_success is True
+    assert result.status == "error"
+    assert "local inventory record setup failed" in result.message
+
+
+def test_authorization_fails_when_acs_foundation_fails(
     db_session, monkeypatch
 ):
-    """Foreground authorization surfaces missing post-auth ACS follow-up."""
+    """Foreground authorization surfaces failed inline ACS foundation setup."""
     result = ont_authorization.AuthorizationWorkflowResult(
         success=True,
         message="ONT authorization completed.",
@@ -176,10 +555,24 @@ def test_authorization_warns_when_post_auth_follow_up_not_queued(
     )
     monkeypatch.setattr(
         ont_authorization,
-        "queue_post_authorization_follow_up",
-        lambda *args, **kwargs: None,
+        "apply_authorization_foundation",
+        lambda *args, **kwargs: (
+            False,
+            "Authorization foundation failed: ACS foundation was not applied.",
+            [
+                {
+                    "name": "Link ONT to PON port",
+                    "success": True,
+                    "message": "Linked ONT to PON port.",
+                },
+                {
+                    "name": "Apply ACS foundation",
+                    "success": False,
+                    "message": "OLT rejected TR-069 profile.",
+                },
+            ],
+        ),
     )
-
     response = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
         db_session,
         "olt-1",
@@ -187,12 +580,158 @@ def test_authorization_warns_when_post_auth_follow_up_not_queued(
         "HWTCWARNFOLLOWUP",
     )
 
-    assert response.success is True
+    assert response.success is False
     assert response.completed_authorization is True
-    assert response.status == "warning"
+    assert response.partial_success is True
+    assert response.status == "error"
     assert response.message == (
-        "ONT authorized, but post-authorization ACS follow-up was not queued."
+        "ONT authorized, but ACS foundation setup failed: "
+        "Authorization foundation failed: ACS foundation was not applied."
     )
+    assert [step.name for step in response.steps] == [
+        "Bring ONT onto ACS",
+    ]
+    assert response.steps[-1].success is False
+    assert response.steps[-1].message == "OLT rejected TR-069 profile."
+
+
+def test_authorization_duration_includes_foundation_work(
+    db_session, monkeypatch
+):
+    """The synchronous result duration covers authorization and foundation."""
+    result = ont_authorization.AuthorizationWorkflowResult(
+        success=True,
+        message="ONT authorization completed.",
+        status="success",
+        ont_unit_id="ont-1",
+        ont_id_on_olt=7,
+        completed_authorization=True,
+        duration_ms=1,
+    )
+    ticks = iter([10.0, 15.0])
+
+    monkeypatch.setattr(ont_authorization, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        ont_authorization,
+        "authorize_autofind_ont",
+        lambda *args, **kwargs: result,
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "apply_authorization_foundation",
+        lambda *args, **kwargs: (
+            True,
+            "Authorization foundation completed.",
+            [
+                {
+                    "name": "Apply ACS foundation",
+                    "success": True,
+                    "message": "ACS foundation applied.",
+                }
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "verify_authorization_acs_readiness",
+        lambda *args, **kwargs: (
+            True,
+            "ONT is authorized, reachable, and observed in ACS.",
+            [
+                {
+                    "name": "Wait for ACS inform",
+                    "success": True,
+                    "message": "Device registered in ACS",
+                }
+            ],
+        ),
+    )
+
+    response = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
+        db_session,
+        "olt-1",
+        "0/1/1",
+        "HWTCDURATION",
+    )
+
+    assert response.duration_ms == 5000
+    assert [step.name for step in response.steps] == [
+        "Bring ONT onto ACS",
+    ]
+
+
+def test_authorization_fails_when_acs_readiness_fails(
+    db_session, monkeypatch
+):
+    """Clean success requires ACS readiness, not just OLT-side foundation."""
+    result = ont_authorization.AuthorizationWorkflowResult(
+        success=True,
+        message="ONT authorization completed.",
+        status="success",
+        ont_unit_id="ont-1",
+        ont_id_on_olt=7,
+        completed_authorization=True,
+    )
+
+    monkeypatch.setattr(
+        ont_authorization,
+        "authorize_autofind_ont",
+        lambda *args, **kwargs: result,
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "apply_authorization_foundation",
+        lambda *args, **kwargs: (
+            True,
+            "Authorization foundation completed.",
+            [
+                {
+                    "name": "Apply ACS foundation",
+                    "success": True,
+                    "message": "ACS foundation applied.",
+                }
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "verify_authorization_acs_readiness",
+        lambda *args, **kwargs: (
+            False,
+            "Device not found in ACS after 120s",
+            [
+                {
+                    "name": "Verify OLT authorization readback",
+                    "success": True,
+                    "message": "Verified ONT.",
+                },
+                {
+                    "name": "Wait for ACS inform",
+                    "success": False,
+                    "message": "Device not found in ACS after 120s",
+                },
+            ],
+        ),
+    )
+
+    response = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
+        db_session,
+        "olt-1",
+        "0/1/1",
+        "HWTCACSWAIT",
+    )
+
+    assert response.success is False
+    assert response.partial_success is True
+    assert response.status == "error"
+    assert response.message == (
+        "ONT authorized and ACS foundation applied, but "
+        "ACS readiness verification failed: Device not found in ACS after 120s"
+    )
+    assert [step.name for step in response.steps] == [
+        "Bring ONT onto ACS",
+    ]
+    assert response.steps[-1].success is False
 
 
 def test_acs_connectivity_fails_when_acs_has_no_olt_tr069_profile(
@@ -205,16 +744,8 @@ def test_acs_connectivity_fails_when_acs_has_no_olt_tr069_profile(
     db_session.commit()
 
     monkeypatch.setattr(
-        ont_authorization_tasks.db_session_adapter,
-        "create_session",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.task_idempotency.SessionLocal",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        acs_foundation,
+        "resolve_effective_ont_config",
         lambda db, ont: {
             "config_pack": SimpleNamespace(),
             "values": {
@@ -225,11 +756,44 @@ def test_acs_connectivity_fails_when_acs_has_no_olt_tr069_profile(
     )
 
     with pytest.raises(RuntimeError, match="no OLT TR-069 profile ID"):
-        ont_authorization_tasks.ensure_tr069_acs_connectivity.run.__wrapped__(
-            str(ont.id),
-            str(olt.id),
-            "0/1/1",
-            7,
+        acs_foundation.apply_acs_foundation(
+            db_session,
+            ont_unit_id=str(ont.id),
+            olt_id=str(olt.id),
+            fsp="0/1/1",
+            ont_id_on_olt=7,
+        )
+
+
+def test_acs_connectivity_refuses_tr069_without_management_vlan(
+    db_session, monkeypatch
+):
+    """TR-069 binding without a management VLAN creates unreachable ACS devices."""
+    olt = OLTDevice(name="OLT-Missing-Mgmt-VLAN", is_active=True)
+    ont = OntUnit(serial_number="HWTCNOMGMTVLAN", olt_device=olt, is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        acs_foundation,
+        "resolve_effective_ont_config",
+        lambda db, ont: {
+            "config_pack": SimpleNamespace(mgmt_gem_index=2),
+            "values": {
+                "tr069_acs_server_id": "acs-1",
+                "tr069_olt_profile_id": 7,
+                "mgmt_vlan": None,
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="no management VLAN"):
+        acs_foundation.apply_acs_foundation(
+            db_session,
+            ont_unit_id=str(ont.id),
+            olt_id=str(olt.id),
+            fsp="0/1/1",
+            ont_id_on_olt=7,
         )
 
 
@@ -260,70 +824,61 @@ def test_acs_connectivity_does_not_auto_normalize_wan_after_inform(
     )
     db_session.commit()
 
+    captured_specs: list[object] = []
+
     monkeypatch.setattr(
-        ont_authorization_tasks.db_session_adapter,
-        "create_session",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.task_idempotency.SessionLocal",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        acs_foundation,
+        "resolve_effective_ont_config",
         lambda db, ont: {
             "config_pack": SimpleNamespace(mgmt_gem_index=2),
             "values": {
                 "tr069_acs_server_id": str(acs_server.id),
                 "tr069_olt_profile_id": 7,
+                "mgmt_vlan": 201,
+                "internet_config_ip_index": 0,
+                "wan_config_profile_id": 9,
             },
         },
     )
     monkeypatch.setattr(
-        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        acs_foundation,
+        "get_protocol_adapter",
         lambda olt: SimpleNamespace(
-            configure_management_batch=lambda spec: SimpleNamespace(
-                success=True,
-                message="bound tr069",
-                data={},
+            configure_management_batch=lambda spec: (
+                captured_specs.append(spec)
+                or SimpleNamespace(
+                    success=True,
+                    message="bound tr069",
+                    data={},
+                )
             )
         ),
     )
-    monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
-        lambda db, ont_id: SimpleNamespace(
-            success=True,
-            message="Device registered in ACS",
-            duration_ms=10,
-        ),
-    )
-    monkeypatch.setattr(
-        "app.services.network.ont_action_network.set_connection_request_credentials",
-        lambda *args, **kwargs: SimpleNamespace(
-            success=True,
-            message="CR credentials set",
-        ),
-    )
-
-    result = ont_authorization_tasks.ensure_tr069_acs_connectivity.run.__wrapped__(
-        str(ont.id),
-        str(olt.id),
-        "0/1/1",
-        7,
+    result = acs_foundation.apply_acs_foundation(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+        fsp="0/1/1",
+        ont_id_on_olt=7,
     )
 
     assert result["success"] is True
     step_names = [step["name"] for step in result["steps"]]
     assert "Run batched OLT management setup" in step_names
-    assert "Wait for ACS inform" in step_names
-    assert "Apply ACS inform settings" in step_names
+    assert "Wait for ACS inform" not in step_names
+    assert "Apply ACS inform settings" not in step_names
     assert "Normalize WAN structure" not in step_names
+    assert captured_specs
+    assert captured_specs[0].mgmt_vlan_tag == 201
+    assert captured_specs[0].ip_mode == "dhcp"
+    assert captured_specs[0].internet_config_ip_index == 0
+    assert captured_specs[0].wan_config_profile_id is None
 
 
-def test_missing_acs_connection_request_credentials_does_not_retry(
+def test_acs_connection_request_credentials_are_not_required_during_authorization(
     db_session, monkeypatch
 ):
-    """Missing ACS CR credentials is static config, not a retryable bootstrap miss."""
+    """Authorization applies OLT-side ACS reachability only; ACS settings wait for inform."""
     olt = OLTDevice(name="OLT-ACS-No-CR-Credentials", is_active=True)
     ont = OntUnit(serial_number="HWTCNOCRCRED", olt_device=olt, is_active=True)
     acs_server = Tr069AcsServer(
@@ -347,29 +902,21 @@ def test_missing_acs_connection_request_credentials_does_not_retry(
     )
     db_session.commit()
 
-    queued: list[dict] = []
-
     monkeypatch.setattr(
-        ont_authorization_tasks.db_session_adapter,
-        "create_session",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.task_idempotency.SessionLocal",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        acs_foundation,
+        "resolve_effective_ont_config",
         lambda db, ont: {
             "config_pack": SimpleNamespace(mgmt_gem_index=2),
             "values": {
                 "tr069_acs_server_id": str(acs_server.id),
                 "tr069_olt_profile_id": 7,
+                "mgmt_vlan": 201,
             },
         },
     )
     monkeypatch.setattr(
-        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        acs_foundation,
+        "get_protocol_adapter",
         lambda olt: SimpleNamespace(
             configure_management_batch=lambda spec: SimpleNamespace(
                 success=True,
@@ -378,36 +925,21 @@ def test_missing_acs_connection_request_credentials_does_not_retry(
             )
         ),
     )
-    monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
-        lambda db, ont_id: SimpleNamespace(
-            success=True,
-            message="Device registered in ACS",
-            duration_ms=10,
-        ),
+    result = acs_foundation.apply_acs_foundation(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+        fsp="0/1/1",
+        ont_id_on_olt=7,
     )
 
-    def fake_enqueue_task(*args, **kwargs):
-        queued.append({"args": args, "kwargs": kwargs})
-        return SimpleNamespace(queued=True, task_id="retry-task", error=None)
-
-    monkeypatch.setattr("app.services.queue_adapter.enqueue_task", fake_enqueue_task)
-
-    with pytest.raises(RuntimeError, match="connection-request credentials"):
-        ont_authorization_tasks.ensure_tr069_acs_connectivity.run.__wrapped__(
-            str(ont.id),
-            str(olt.id),
-            "0/1/1",
-            7,
-        )
-
-    assert queued == []
+    assert result["success"] is True
 
 
-def test_acs_connectivity_retry_uses_default_backoff(
+def test_acs_connectivity_failure_is_synchronous(
     db_session, monkeypatch
 ):
-    """Transient ACS bootstrap retries use a nonzero default countdown."""
+    """Transient ACS foundation failures return as real synchronous failures."""
     olt = OLTDevice(name="OLT-ACS-Retry-Backoff", is_active=True)
     ont = OntUnit(serial_number="HWTCRETRYWAIT", olt_device=olt, is_active=True)
     acs_server = Tr069AcsServer(
@@ -431,19 +963,9 @@ def test_acs_connectivity_retry_uses_default_backoff(
     )
     db_session.commit()
 
-    queued: list[dict] = []
-
     monkeypatch.setattr(
-        ont_authorization_tasks.db_session_adapter,
-        "create_session",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.task_idempotency.SessionLocal",
-        lambda: _SessionProxy(db_session),
-    )
-    monkeypatch.setattr(
-        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        acs_foundation,
+        "resolve_effective_ont_config",
         lambda db, ont: {
             "config_pack": SimpleNamespace(mgmt_gem_index=2),
             "values": {
@@ -455,7 +977,8 @@ def test_acs_connectivity_retry_uses_default_backoff(
         },
     )
     monkeypatch.setattr(
-        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        acs_foundation,
+        "get_protocol_adapter",
         lambda olt: SimpleNamespace(
             configure_management_batch=lambda spec: SimpleNamespace(
                 success=False,
@@ -465,20 +988,11 @@ def test_acs_connectivity_retry_uses_default_backoff(
         ),
     )
 
-    def fake_enqueue_task(*args, **kwargs):
-        queued.append({"args": args, "kwargs": kwargs})
-        return SimpleNamespace(queued=True, task_id="retry-task", error=None)
-
-    monkeypatch.setattr("app.services.queue_adapter.enqueue_task", fake_enqueue_task)
-
     with pytest.raises(RuntimeError, match="Batched OLT management setup failed"):
-        ont_authorization_tasks.ensure_tr069_acs_connectivity.run.__wrapped__(
-            str(ont.id),
-            str(olt.id),
-            "0/1/1",
-            7,
+        acs_foundation.apply_acs_foundation(
+            db_session,
+            ont_unit_id=str(ont.id),
+            olt_id=str(olt.id),
+            fsp="0/1/1",
+            ont_id_on_olt=7,
         )
-
-    assert queued
-    assert queued[0]["kwargs"]["countdown"] == 60
-    assert queued[0]["kwargs"]["kwargs"]["retry_countdown_seconds"] == 60

@@ -110,74 +110,12 @@ def test_enqueue_celery_task_uses_headers_and_logs(monkeypatch, caplog):
     assert queued_record.correlation_id == "webhook_event:event-1"
 
 
-def test_poll_all_olt_signals_uses_correlated_enqueue(monkeypatch):
+def test_poll_all_olt_signals_returns_noop():
+    """poll_all_olt_signals is now a no-op; status handled by Zabbix ingest."""
     from app.tasks import olt_polling as olt_polling_module
 
-    captured: list[dict[str, object]] = []
-
-    class _FakeScalarResult:
-        def __init__(self, items):
-            self._items = items
-
-        def all(self):
-            return self._items
-
-    class _FakeSession:
-        def execute(self, _stmt):
-            return _FakeScalarResult(
-                [
-                    SimpleNamespace(id="olt-1", name="OLT One"),
-                    SimpleNamespace(id="olt-2", name="OLT Two"),
-                ]
-            )
-
-        def rollback(self):
-            return None
-
-        def close(self):
-            return None
-
-    class _FakeSessionAdapter:
-        def session(self):
-            class _Context:
-                def __enter__(self):
-                    return _FakeSession()
-
-                def __exit__(self, exc_type, exc, tb):
-                    return False
-
-            return _Context()
-
-    def _fake_enqueue(
-        task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
-    ):
-        captured.append(
-            {
-                "task": task,
-                "args": args,
-                "kwargs": kwargs,
-                "correlation_id": correlation_id,
-                "source": source,
-                "extra": extra,
-            }
-        )
-        return SimpleNamespace(id=f"task-{len(captured)}")
-
-    monkeypatch.setattr(olt_polling_module, "db_session_adapter", _FakeSessionAdapter())
-    monkeypatch.setattr(
-        olt_polling_module, "_mark_stale_onts_offline", lambda *_args, **_kwargs: 1
-    )
-    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
-
     result = olt_polling_module.poll_all_olt_signals()
-
-    assert result == {"olts_dispatched": 2, "stale_marked_offline": 1}
-    assert captured[0]["args"] == ["olt-1"]
-    assert captured[0]["kwargs"] is None
-    assert captured[0]["correlation_id"] == "olt_poll:olt-1"
-    assert captured[0]["source"] == "poll_all_olts"
-    assert captured[1]["args"] == ["olt-2"]
-    assert captured[1]["correlation_id"] == "olt_poll:olt-2"
+    assert result == {"olts_dispatched": 0}
 
 
 def test_capture_all_olts_task_uses_correlated_enqueue(monkeypatch):

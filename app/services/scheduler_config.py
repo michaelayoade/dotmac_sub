@@ -25,7 +25,6 @@ TR069_TASK_QUEUE_NAMES = {
     "app.tasks.tr069.wait_for_ont_bootstrap",
     "app.tasks.tr069.apply_saved_ont_service_config",
     "app.tasks.tr069.apply_acs_config",
-    "app.tasks.tr069.heal_online_silent_onts",
 }
 
 
@@ -1081,31 +1080,10 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_runtime_interval,
         )
 
-        # TR-069 online-silent ONT healing is opt-in. A large silent fleet
-        # usually indicates an upstream OLT/management VLAN/ACS routing issue,
-        # so enabling this by default can amplify queue load while masking the
-        # real provisioning problem.
-        tr069_heal_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "tr069_heal_online_silent_enabled",
-            "TR069_HEAL_ONLINE_SILENT_ENABLED",
-            False,
-        )
-        tr069_heal_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "tr069_heal_online_silent_interval_seconds",
-            600,  # 10 minutes
-        )
-        tr069_heal_interval = max(tr069_heal_interval, 300)  # Min: 5 minutes
-        _sync_scheduled_task(
-            session,
-            name="tr069_heal_online_silent",
-            task_name="app.tasks.tr069.heal_online_silent_onts",
-            enabled=tr069_heal_enabled,
-            interval_seconds=tr069_heal_interval,
-        )
+        # ACS foundation is applied during authorization. Online-silent repair
+        # remains a manual/operator recovery task only; do not run it as a
+        # periodic provisioning loop.
+        _retire_scheduled_task(session, "app.tasks.tr069.heal_online_silent_onts")
 
         # Event retry - retries failed event handlers
         event_retry_enabled = _effective_bool(

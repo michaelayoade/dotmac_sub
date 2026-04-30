@@ -286,7 +286,7 @@ def reconcile_snmp_status_with_signal(
     import re
 
     if raw_status is None:
-        return OnuOnlineStatus.unknown, None, False
+        return OnuOnlineStatus.offline, None, False
 
     state_lower = raw_status.lower().strip()
 
@@ -339,4 +339,4 @@ def reconcile_snmp_status_with_signal(
     if "dying" in state_lower:
         return OnuOnlineStatus.offline, OnuOfflineReason.dying_gasp, False
 
-    return OnuOnlineStatus.unknown, None, False
+    return OnuOnlineStatus.offline, None, False

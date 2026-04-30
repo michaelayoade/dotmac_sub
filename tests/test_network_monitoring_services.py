@@ -167,8 +167,8 @@ def test_get_onu_status_summary_uses_effective_status(db_session):
             ),
             OntUnit(
                 serial_number="ONT-SUM-3",
-                olt_status=OnuOnlineStatus.unknown,
-                effective_status=OnuOnlineStatus.unknown,
+                olt_status=OnuOnlineStatus.offline,
+                effective_status=OnuOnlineStatus.offline,
             ),
         ]
     )
@@ -196,7 +196,7 @@ def test_get_onu_olt_status_summary_uses_raw_olt_status(db_session):
             ),
             OntUnit(
                 serial_number="ONT-OLT-SUM-3",
-                olt_status=OnuOnlineStatus.unknown,
+                olt_status=OnuOnlineStatus.offline,
                 effective_status=OnuOnlineStatus.online,
             ),
         ]

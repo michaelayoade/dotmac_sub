@@ -293,6 +293,7 @@ def wait_tr069_bootstrap(
                 delay,
                 reason,
             )
+            db.rollback()
             time.sleep(delay)
 
         # Backoff exhausted (timeout reached)

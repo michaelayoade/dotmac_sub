@@ -1257,6 +1257,9 @@ def unconfigured_onts_scan_now(
             status_code=303,
         )
 
+    olt_ids = [str(row[0]) for row in olts]
+    olt_names = [str(row[1]) for row in olts]
+
     # Create network operation for tracking
     actor = getattr(getattr(request.state, "user", None), "email", None) or "system"
     target_type = (
@@ -1276,7 +1279,7 @@ def unconfigured_onts_scan_now(
             input_payload={
                 "olt_id": olt_id,
                 "olt_count": len(olts),
-                "olt_names": [o.name for o in olts],
+                "olt_names": olt_names,
             },
             initiated_by=actor,
         )
@@ -1296,7 +1299,7 @@ def unconfigured_onts_scan_now(
         )
 
     operation_id = str(operation.id)
-    olt_ids_to_scan = [str(o.id) for o in olts] if olt_id else None
+    olt_ids_to_scan = olt_ids if olt_id else None
 
     # Queue background task
     scan_olts_autofind.delay(operation_id, olt_ids_to_scan)
@@ -1325,7 +1328,7 @@ def unconfigured_onts_scan_now(
             "autofindScanStarted": {
                 "operation_id": operation_id,
                 "olt_count": len(olts),
-                "olts": [{"id": str(o.id), "name": o.name} for o in olts],
+                "olts": [{"id": str(row[0]), "name": str(row[1])} for row in olts],
             },
         }
         return Response(

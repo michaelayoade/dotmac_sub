@@ -91,14 +91,14 @@ class TestRouterRegistration:
 
 
 class TestAuthorizeEndpoint:
-    """Authorization endpoints should enqueue OLT work instead of blocking HTTP."""
+    """Authorization endpoints execute OLT work synchronously."""
 
-    def test_authorize_ont_queues_background_operation(self, monkeypatch):
+    def test_authorize_ont_runs_synchronously(self, monkeypatch):
         from app.api import network_olt_ops
 
         captured = {}
 
-        def fake_queue_authorize_ont(
+        def fake_authorize_ont(
             db,
             olt_id,
             *,
@@ -119,14 +119,14 @@ class TestAuthorizeEndpoint:
             )
             return network_olt_ops.olt_api_operations.OltApiWriteResult(
                 True,
-                "Authorization queued. Track progress in operation history.",
-                {"status": "queued", "operation_id": "op-123"},
+                "ONT authorization completed.",
+                {"status": "success", "ont_unit_id": "ont-123"},
             )
 
         monkeypatch.setattr(
             network_olt_ops.olt_api_operations,
-            "queue_authorize_ont",
-            fake_queue_authorize_ont,
+            "authorize_ont",
+            fake_authorize_ont,
         )
 
         payload = OltAuthorizeOntRequest(
@@ -140,7 +140,7 @@ class TestAuthorizeEndpoint:
         response = network_olt_ops.authorize_ont(request, "olt-123", payload, db=db)
 
         assert response.success is True
-        assert response.data == {"status": "queued", "operation_id": "op-123"}
+        assert response.data == {"status": "success", "ont_unit_id": "ont-123"}
         assert captured == {
             "db": db,
             "olt_id": "olt-123",

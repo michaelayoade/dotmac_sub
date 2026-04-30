@@ -1,7 +1,7 @@
-"""Batched OLT management setup for improved post-authorization performance.
+"""Batched OLT management setup for synchronous authorization performance.
 
 This module provides single-session execution of all management configuration
-commands after ONT authorization, reducing SSH overhead from 5 sessions to 1.
+commands during ONT authorization, reducing SSH overhead from 5 sessions to 1.
 
 Commands executed in batch:
 1. Create management service-port (GEM index + VLAN)
@@ -270,8 +270,11 @@ def execute_batched_management_setup(
                         description,
                     )
 
-        # Success if no failures, or if critical steps succeeded
-        critical_steps = {"configure_iphost", "bind_tr069"}
+        # Success if no failures, or if critical steps succeeded. The management
+        # service-port is required for the ONT to reach ACS over the management
+        # VLAN; accepting that failure can leave IPHOST/TR-069 configured but
+        # unreachable.
+        critical_steps = {"create_mgmt_service_port", "configure_iphost", "bind_tr069"}
         failed_critical = set(result.steps_failed) & critical_steps
 
         if not result.steps_failed:

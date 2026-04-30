@@ -6,11 +6,13 @@ import logging
 import re
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.compensation_failure import CompensationFailure
 from app.models.network import (
+    IPv4Address,
+    MgmtIpMode,
     OLTDevice,
     OntAssignment,
     OntProvisioningStatus,
@@ -295,6 +297,133 @@ def _record_return_to_inventory_compensation(
     db.commit()
 
 
+def _release_management_ip_for_inventory_return(
+    db: Session,
+    *,
+    ont,
+    assignments: list[OntAssignment],
+) -> list[str]:
+    """Release management IP reservations held by the returned ONT."""
+    released: list[str] = []
+    ont_id = str(getattr(ont, "id", "") or "")
+    reservation_notes = {
+        f"ont:{ont_id}",
+        f"Reserved for ONT {ont_id}",
+    }
+    all_assignments = list(
+        db.scalars(
+            select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
+        ).all()
+    )
+    by_id = {assignment.id: assignment for assignment in [*assignments, *all_assignments]}
+    assignments_to_clear = list(by_id.values())
+    assignment_ips = {
+        str(assignment.mgmt_ip_address).strip()
+        for assignment in assignments_to_clear
+        if getattr(assignment, "mgmt_ip_address", None)
+    }
+
+    records = []
+    if assignment_ips:
+        records.extend(
+            db.scalars(
+                select(IPv4Address).where(IPv4Address.address.in_(assignment_ips))
+            ).all()
+        )
+    if ont_id:
+        records.extend(
+            db.scalars(
+                select(IPv4Address).where(
+                    (IPv4Address.ont_unit_id == ont.id)
+                    | (IPv4Address.notes.in_(reservation_notes))
+                )
+            ).all()
+        )
+
+    seen_record_ids = set()
+    for record in records:
+        if record.id in seen_record_ids:
+            continue
+        seen_record_ids.add(record.id)
+        if getattr(record, "assignment", None):
+            continue
+        released.append(record.address)
+        record.is_reserved = False
+        record.notes = None
+        record.ont_unit_id = None
+        record.allocation_type = None
+
+    for assignment in assignments_to_clear:
+        assignment.mgmt_ip_address = None
+        assignment.mgmt_ip_mode = MgmtIpMode.inactive
+        assignment.mgmt_subnet = None
+        assignment.mgmt_gateway = None
+
+    return released
+
+
+def _clear_assignment_links_for_inventory_return(
+    db: Session,
+    *,
+    ont,
+    assignments: list[OntAssignment],
+) -> int:
+    """Detach subscriber, topology, and service config from returned ONT assignments."""
+    all_assignments = list(
+        db.scalars(
+            select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
+        ).all()
+    )
+    by_id = {assignment.id: assignment for assignment in [*assignments, *all_assignments]}
+    assignments_to_clear = list(by_id.values())
+
+    for assignment in assignments_to_clear:
+        assignment.subscriber_id = None
+        assignment.service_address_id = None
+        assignment.pon_port_id = None
+        assignment.wan_mode = None
+        assignment.ip_mode = MgmtIpMode.inactive
+        assignment.static_ip = None
+        assignment.static_gateway = None
+        assignment.static_subnet = None
+        assignment.static_dns = None
+        assignment.pppoe_username = None
+        assignment.pppoe_password = None
+        assignment.wifi_ssid = None
+        assignment.wifi_password = None
+        assignment.lan_ip = None
+        assignment.lan_subnet = None
+        assignment.lan_dhcp_enabled = None
+        assignment.lan_dhcp_start = None
+        assignment.lan_dhcp_end = None
+        assignment.wifi_enabled = None
+        assignment.wifi_security_mode = None
+        assignment.wifi_channel = None
+
+    return len(assignments_to_clear)
+
+
+def _assert_inventory_return_links_cleared(db: Session, *, ont) -> None:
+    """Fail the return if reusable inventory still has subscriber/topology links."""
+    stale_assignment = db.scalars(
+        select(OntAssignment)
+        .where(OntAssignment.ont_unit_id == ont.id)
+        .where(
+            or_(
+                OntAssignment.active.is_(True),
+                OntAssignment.subscriber_id.is_not(None),
+                OntAssignment.service_address_id.is_not(None),
+                OntAssignment.pon_port_id.is_not(None),
+            )
+        )
+        .limit(1)
+    ).first()
+    if stale_assignment is not None:
+        raise RuntimeError(
+            "Return-to-inventory invariant failed: assignment links remain"
+        )
+
+
 def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") -> None:
     """Clear desired-state and runtime cache for a reusable ONT.
 
@@ -352,7 +481,10 @@ def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") 
 
 def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     """Return an ONT to reusable inventory, closing assignments and service state."""
-    from app.services.web_network_ont_autofind import refresh_returned_ont_autofind
+    from app.services.web_network_ont_autofind import (
+        ensure_returned_inventory_candidate,
+        refresh_returned_ont_autofind,
+    )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     previous_olt_db_id = getattr(ont, "olt_device_id", None)
@@ -379,16 +511,9 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
         or ont.external_id
     )
     cpe = None
+    completed: list[str] = []
     acs_completed: list[str] = []
     try:
-        acs_ok, acs_completed, acs_errors = cleanup_acs_state_for_return(db, ont)
-        if not acs_ok:
-            details = ", ".join(acs_completed + acs_errors)
-            return ActionResult(
-                success=False,
-                message=f"Return to inventory stopped before OLT/local cleanup: {details}.",
-            )
-
         with db.begin_nested():
             if needs_olt_cleanup:
                 ok, completed, errors = cleanup_olt_state_for_return(db, ont_id)
@@ -398,13 +523,31 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                         f"Return to inventory stopped before local cleanup: {details}."
                     )
 
+            acs_ok, acs_completed, acs_errors = cleanup_acs_state_for_return(db, ont)
+            if not acs_ok:
+                details = ", ".join(completed + acs_completed + acs_errors)
+                raise _ReturnToInventoryStopped(
+                    f"Return to inventory stopped before local cleanup: {details}."
+                )
+
             for assignment in active_assignments:
                 assignment.active = False
                 assignment.released_at = datetime.now(UTC)
                 assignment.release_reason = "returned_to_inventory"
 
+            released_management_ips = _release_management_ip_for_inventory_return(
+                db,
+                ont=ont,
+                assignments=list(active_assignments),
+            )
+            cleared_assignment_links = _clear_assignment_links_for_inventory_return(
+                db,
+                ont=ont,
+                assignments=list(active_assignments),
+            )
             ont.is_active = True
             ont.olt_device_id = None
+            ont.pon_port_id = None
             ont.board = None
             ont.port = None
             ont.external_id = None
@@ -427,8 +570,9 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                 logger.info(
                     "Moved CPE %s to inventory for returned ONT %s", cpe.id, ont.id
                 )
+            _assert_inventory_return_links_cleared(db, ont=ont)
     except _ReturnToInventoryStopped as exc:
-        if acs_completed:
+        if completed:
             try:
                 _record_return_to_inventory_compensation(
                     db,
@@ -436,8 +580,8 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                     olt_id=previous_olt_db_id,
                     fsp=previous_fsp,
                     description=(
-                        "ACS device state was removed, but return-to-inventory stopped "
-                        "before OLT/local cleanup completed. Operator review is required."
+                        "OLT device state was removed, but return-to-inventory stopped "
+                        "before ACS/local cleanup completed. Operator review is required."
                     ),
                     error_message=str(exc),
                 )
@@ -451,6 +595,24 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
         logger.exception(
             "Failed to update DB state during return-to-inventory for ONT %s", ont_id
         )
+        if completed or acs_completed:
+            try:
+                _record_return_to_inventory_compensation(
+                    db,
+                    ont=ont,
+                    olt_id=previous_olt_db_id,
+                    fsp=previous_fsp,
+                    description=(
+                        "OLT/ACS device state may have been removed, but local "
+                        "inventory cleanup failed. Operator review is required."
+                    ),
+                    error_message=str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to record return-to-inventory compensation for ONT %s",
+                    ont_id,
+                )
         return ActionResult(
             success=False,
             message=(
@@ -473,8 +635,17 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             if assignment_count == 1
             else f"{assignment_count} assignments closed"
         )
+    if "cleared_assignment_links" in locals() and cleared_assignment_links:
+        parts.append("subscriber assignment links cleared")
     if cpe is not None:
         parts.append("CPE moved to inventory")
+    if "released_management_ips" in locals() and released_management_ips:
+        count = len(released_management_ips)
+        parts.append(
+            "management IP released"
+            if count == 1
+            else f"{count} management IPs released"
+        )
     if "acs_completed" in locals() and acs_completed:
         parts.append("ACS device state removed")
     parts.append("identity cleared for rediscovery")
@@ -501,12 +672,35 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     else:
         parts.append(f"autofind refresh failed: {autofind_refresh.get('message')}")
 
+    candidate_ready = False
+    candidate_message = ""
+    if previous_olt_id and previous_fsp:
+        try:
+            candidate_ready, candidate_message = ensure_returned_inventory_candidate(
+                db,
+                olt_id=previous_olt_id,
+                fsp=previous_fsp,
+                serial_number=getattr(ont, "serial_number", None),
+                ont_unit_id=getattr(ont, "id", None),
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            candidate_message = str(exc)
+            logger.warning(
+                "Failed to restore returned ONT inventory candidate: %s", exc
+            )
+
+    if candidate_ready:
+        parts.append("unconfigured candidate ready")
+    elif candidate_message:
+        parts.append(f"unconfigured candidate restore failed: {candidate_message}")
+
     return ActionResult(
         success=True,
         message=(
             f"ONT returned to inventory: {', '.join(parts)}. "
-            "Restart or power-cycle the device for changes to take effect; "
-            "after it comes back up, autofind can discover it again."
+            "The ONT is available in Unconfigured ONTs for reauthorization."
         ),
         data={
             "olt_id": previous_olt_id,
@@ -514,6 +708,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             "serial_number": ont.serial_number,
             "autofind_refreshed": autofind_refresh.get("ok"),
             "autofind_rediscovered": autofind_refresh.get("rediscovered"),
+            "unconfigured_candidate_ready": candidate_ready,
             "unconfigured_url": autofind_refresh.get("url"),
         },
     )

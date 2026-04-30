@@ -30,6 +30,25 @@ const serialNumber = declare(root + ".DeviceInfo.SerialNumber", { value: 1 });
 const manufacturer = declare(root + ".DeviceInfo.Manufacturer", { value: 1 });
 const productClass = declare(root + ".DeviceInfo.ProductClass", { value: 1 });
 const softwareVersion = declare(root + ".DeviceInfo.SoftwareVersion", { value: 1 });
+const deviceId = declare("DeviceID.ID", { value: 1 });
+const serial = serialNumber.value ? serialNumber.value[0] : "";
+const genieDeviceId = deviceId.value ? deviceId.value[0] : "";
+
+try {
+  const crCredentials = ext("auth", "connectionRequest", genieDeviceId, serial);
+  if (crCredentials && crCredentials.username && crCredentials.password) {
+    declare(root + ".ManagementServer.ConnectionRequestUsername", { value: now }, { value: crCredentials.username });
+    declare(root + ".ManagementServer.ConnectionRequestPassword", { value: now }, { value: crCredentials.password });
+  }
+
+  const cpeCredentials = ext("auth", "getCpeCredentials", serial);
+  if (cpeCredentials && cpeCredentials.username && cpeCredentials.password) {
+    declare(root + ".ManagementServer.Username", { value: now }, { value: cpeCredentials.username });
+    declare(root + ".ManagementServer.Password", { value: now }, { value: cpeCredentials.password });
+  }
+} catch (e) {
+  log("ManagementServer credential enforcement error: " + e.message);
+}
 
 // Get current management server settings
 const periodicInformInterval = declare(root + ".ManagementServer.PeriodicInformInterval", { value: 1 });
@@ -48,15 +67,14 @@ if (periodicInformEnable.value === undefined || periodicInformEnable.value[0] !=
 }
 
 // Notify DotMac webhook about bootstrap event
-const deviceId = declare("DeviceID.ID", { value: 1 });
 const oui = declare("DeviceID.OUI", { value: 1 });
 
 try {
   ext(
     "dotmac-webhook",
     "informWebhook",
-    deviceId.value ? deviceId.value[0] : "",
-    serialNumber.value ? serialNumber.value[0] : "",
+    genieDeviceId,
+    serial,
     "bootstrap",
     oui.value ? oui.value[0] : "",
     productClass.value ? productClass.value[0] : "",
@@ -71,4 +89,4 @@ try {
   log("Bootstrap webhook error: " + e.message);
 }
 
-log("Bootstrap provision completed for " + (serialNumber.value ? serialNumber.value[0] : "unknown"));
+log("Bootstrap provision completed for " + (serial || "unknown"));

@@ -193,7 +193,13 @@ class SpeedProfileType(enum.Enum):
 class OnuOnlineStatus(enum.Enum):
     online = "online"
     offline = "offline"
-    unknown = "unknown"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "OnuOnlineStatus":
+        # Treat legacy "unknown" as offline
+        if value == "unknown":
+            return cls.offline
+        return None  # type: ignore[return-value]
 
 
 class OnuOfflineReason(enum.Enum):
@@ -1159,8 +1165,8 @@ class OntUnit(Base):
     signal_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     olt_status: Mapped[OnuOnlineStatus] = mapped_column(
         Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
-        default=OnuOnlineStatus.unknown,
-        server_default="unknown",
+        default=OnuOnlineStatus.offline,
+        server_default="offline",
     )
     olt_status_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1170,8 +1176,8 @@ class OntUnit(Base):
     acs_last_inform_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     effective_status: Mapped[OnuOnlineStatus] = mapped_column(
         Enum(OnuOnlineStatus, name="onteffectivestatus", create_constraint=False),
-        default=OnuOnlineStatus.unknown,
-        server_default="unknown",
+        default=OnuOnlineStatus.offline,
+        server_default="offline",
     )
     effective_status_source: Mapped[OntStatusSource] = mapped_column(
         Enum(OntStatusSource, name="ontstatussource", create_constraint=False),

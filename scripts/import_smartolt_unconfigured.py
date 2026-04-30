@@ -708,7 +708,7 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
                     external_id=row.allocated_onu or None,
                     name=row.name or None,
                     address_or_comment=row.address or None,
-                    olt_status=OnuOnlineStatus.unknown,
+                    olt_status=OnuOnlineStatus.offline,
                     pppoe_username=row.username,
                     pppoe_password=encrypt_credential(row.password),
                 )

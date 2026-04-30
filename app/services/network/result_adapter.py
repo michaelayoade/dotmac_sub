@@ -6,7 +6,7 @@ Provides a consistent response format that can be rendered as:
 - Redirect with flash message (for traditional forms)
 
 Usage:
-    result = OperationResult.success("Authorization queued", data={...})
+    result = OperationResult.success("Authorization complete", data={...})
     return result.to_response(request)  # Auto-detects HTMX vs API vs redirect
 """
 

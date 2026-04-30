@@ -1,9 +1,9 @@
 """SNMP-driven OLT/ONU telemetry sync helpers.
 
 This module owns vendor-aware SNMP walks and ONT row reconciliation logic for
-bulk OLT telemetry sync and targeted post-authorization sync. The active web
-entrypoints live in the split OLT admin routers while the heavy sync
-implementation stays here.
+bulk OLT telemetry sync and targeted ONT readback. The active web entrypoints
+live in the split OLT admin routers while the heavy sync implementation stays
+here.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def _parse_olt_status(
     raw: str | None,
 ) -> tuple[OnuOnlineStatus, OnuOfflineReason | None]:
     if not raw:
-        return OnuOnlineStatus.unknown, None
+        return OnuOnlineStatus.offline, None
     import re
 
     lowered = raw.lower().strip()
@@ -144,7 +144,7 @@ def _parse_olt_status(
         if code == 5:
             return OnuOnlineStatus.offline, OnuOfflineReason.dying_gasp
         return OnuOnlineStatus.offline, OnuOfflineReason.unknown
-    return OnuOnlineStatus.unknown, None
+    return OnuOnlineStatus.offline, None
 
 
 def _split_onu_index(raw_index: str) -> tuple[str, ...] | None:
@@ -757,7 +757,7 @@ def _sync_onts_from_olt_snmp_impl(
                         persist_observed_runtime=False,
                     )
                     if summary.available:
-                        acs_state_reader.persist_observed_runtime(
+                        acs.persist_observed_runtime(
                             db,
                             ont,
                             summary,

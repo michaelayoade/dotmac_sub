@@ -61,7 +61,7 @@ def test_olt_offline_requires_threshold_before_effective_offline() -> None:
         now=now,
     )
 
-    assert resolution.effective_status == OnuOnlineStatus.unknown
+    assert resolution.effective_status == OnuOnlineStatus.offline
     assert resolution.effective_status_source == OntStatusSource.derived
 
 
@@ -81,7 +81,7 @@ def test_snapshot_offline_preserves_poll_threshold() -> None:
         consecutive_offline_polls=3,
     )
 
-    assert below_threshold.effective_status == OnuOnlineStatus.unknown
+    assert below_threshold.effective_status == OnuOnlineStatus.offline
     assert below_threshold.effective_status_source == OntStatusSource.derived
     assert at_threshold.effective_status == OnuOnlineStatus.offline
     assert at_threshold.effective_status_source == OntStatusSource.olt
@@ -125,7 +125,7 @@ def test_apply_observations_persist_source_semantics() -> None:
     apply_olt_status_observation(ont, OnuOnlineStatus.offline, now=now)
     assert ont.olt_status == OnuOnlineStatus.offline
     assert ont.consecutive_offline_polls == 1
-    assert ont.effective_status == OnuOnlineStatus.unknown
+    assert ont.effective_status == OnuOnlineStatus.offline
 
     apply_acs_inform_observation(ont, now=now + timedelta(minutes=1))
     assert ont.acs_last_inform_at == now + timedelta(minutes=1)
@@ -145,7 +145,7 @@ def test_resolve_acs_online_window_minutes_for_model_uses_acs_interval() -> None
 def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
     now = datetime.now(UTC)
     ont = SimpleNamespace(
-        olt_status=OnuOnlineStatus.unknown,
+        olt_status=OnuOnlineStatus.offline,
         olt_status_seen_at=None,
         tr069_acs_server_id=None,
         tr069_acs_server=None,
@@ -160,7 +160,7 @@ def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
     assert ont_has_acs_management(ont) is True
     snapshot = resolve_ont_status_for_model(ont, now=now)
 
-    assert snapshot.effective_status == OnuOnlineStatus.unknown
+    assert snapshot.effective_status == OnuOnlineStatus.offline
     assert snapshot.effective_status_source == OntStatusSource.derived
 
 

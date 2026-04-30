@@ -1,8 +1,9 @@
 """ONT authorization service - OLT serial registration with DB state tracking.
 
-The foreground authorization path stays intentionally lean: it registers the
-autofind serial on the OLT, persists local inventory state, then queues
-post-authorization reconciliation for management IP, TR-069, and assignment work.
+Authorization runs synchronously because the OLT work is OMCI/CLI-driven. The
+workflow registers the autofind serial, persists local inventory state, links the
+PON assignment, allocates management IP, and applies the OLT-side ACS foundation
+before returning.
 """
 
 from __future__ import annotations
@@ -68,10 +69,8 @@ class AuthorizationWorkflowResult:
     ont_id_on_olt: int | None = None
     status: str = "error"
     completed_authorization: bool = False
-    follow_up_operation_id: str | None = None
+    partial_success: bool = False
     duration_ms: int = 0
-    pending_rediscovery: bool = False
-    rediscovery_task_id: str | None = None
 
     @property
     def ont_id(self) -> str | None:
@@ -86,10 +85,8 @@ class AuthorizationWorkflowResult:
             "ont_id_on_olt": self.ont_id_on_olt,
             "status": self.status,
             "completed_authorization": self.completed_authorization,
-            "follow_up_operation_id": self.follow_up_operation_id,
+            "partial_success": self.partial_success,
             "duration_ms": self.duration_ms,
-            "pending_rediscovery": self.pending_rediscovery,
-            "rediscovery_task_id": self.rediscovery_task_id,
             "steps": [
                 {
                     "step": step.step,
@@ -140,19 +137,25 @@ def refresh_pool_availability(
         ).all()
     )
 
-    # Get IPs marked as used in ipv4_addresses table
+    # Get IPs actively held in ipv4_addresses. Released inventory rows can
+    # remain for audit/history, but should not consume pool capacity.
+    address_rows = db.scalars(
+        select(IPv4Address).where(IPv4Address.pool_id == pool.id)
+    ).all()
     used = {
-        str(address)
-        for address in db.scalars(
-            select(IPv4Address.address).where(IPv4Address.pool_id == pool.id)
-        ).all()
+        str(address.address)
+        for address in address_rows
+        if address.is_reserved
+        or address.ont_unit_id is not None
+        or getattr(address, "assignment", None) is not None
     }
 
     # Also get IPs assigned to ONTs (source of truth for management IPs)
     # These may not be tracked in ipv4_addresses yet
     assigned_ips = db.scalars(
         select(OntAssignment.mgmt_ip_address).where(
-            OntAssignment.mgmt_ip_address.isnot(None)
+            OntAssignment.mgmt_ip_address.isnot(None),
+            OntAssignment.active.is_(True),
         )
     ).all()
     for ip in assigned_ips:
@@ -186,6 +189,126 @@ def refresh_pool_availability(
     return next_available, available_count
 
 
+def _pool_contains_ipv4_address(
+    db: Session,
+    *,
+    pool_id: str | uuid.UUID,
+    address: str,
+) -> bool:
+    """Return whether address belongs to an active IPv4 block in the pool."""
+    import ipaddress
+
+    from app.models.network import IpBlock
+
+    try:
+        ip_address = ipaddress.ip_address(str(address))
+    except ValueError:
+        return False
+    if ip_address.version != 4:
+        return False
+
+    blocks = db.scalars(
+        select(IpBlock)
+        .where(IpBlock.pool_id == pool_id)
+        .where(IpBlock.is_active.is_(True))
+    ).all()
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version == 4 and ip_address in network:
+            return True
+    return False
+
+
+def _management_ip_is_available(
+    db: Session,
+    *,
+    pool_id: str | uuid.UUID,
+    address: str | None,
+) -> bool:
+    """Return whether an IPv4 address is currently free for management allocation."""
+    from app.models.network import IPv4Address, OntAssignment
+
+    candidate = str(address or "").strip()
+    if not candidate:
+        return False
+    if not _pool_contains_ipv4_address(db, pool_id=pool_id, address=candidate):
+        return False
+
+    record = db.scalars(
+        select(IPv4Address).where(IPv4Address.address == candidate)
+    ).first()
+    if record is not None and record.pool_id is not None and str(record.pool_id) != str(pool_id):
+        return False
+    if record is not None and (
+        record.is_reserved
+        or record.ont_unit_id is not None
+        or getattr(record, "assignment", None) is not None
+    ):
+        return False
+
+    assigned = db.scalar(
+        select(OntAssignment.id)
+        .where(OntAssignment.mgmt_ip_address == candidate)
+        .where(OntAssignment.active.is_(True))
+        .limit(1)
+    )
+    return assigned is None
+
+
+def _advance_management_pool_cache_after_allocation(
+    db: Session,
+    *,
+    pool,
+    allocated_ip: str,
+) -> None:
+    """Advance cached next IP without recomputing full pool availability."""
+    import ipaddress
+
+    from app.models.network import IpBlock
+
+    try:
+        allocated = ipaddress.ip_address(str(allocated_ip))
+    except ValueError:
+        pool.next_available_ip = None
+        pool.available_count = None
+        return
+
+    next_available: str | None = None
+    blocks = db.scalars(
+        select(IpBlock)
+        .where(IpBlock.pool_id == pool.id)
+        .where(IpBlock.is_active.is_(True))
+        .order_by(IpBlock.cidr.asc())
+    ).all()
+    for block in blocks:
+        try:
+            network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4 or allocated not in network:
+            continue
+        for ip_address in network.hosts():
+            if ip_address <= allocated:
+                continue
+            candidate = str(ip_address)
+            if _management_ip_is_available(
+                db,
+                pool_id=pool.id,
+                address=candidate,
+            ):
+                next_available = candidate
+                break
+        if next_available is not None:
+            break
+
+    pool.next_available_ip = next_available
+    if pool.available_count is not None and pool.available_count > 0:
+        pool.available_count -= 1
+
+
 def allocate_management_ip_for_ont(
     db: Session,
     *,
@@ -206,33 +329,108 @@ def allocate_management_ip_for_ont(
     if ont is None:
         return False, "ONT not found.", None
 
-    # Get or create the active assignment for this ONT
-    assignment = _get_or_create_active_assignment(db, ont)
-
-    # Check if assignment already has a management IP
-    if assignment.mgmt_ip_address:
-        return (
-            True,
-            f"ONT already has management IP {assignment.mgmt_ip_address}.",
-            assignment.mgmt_ip_address,
-        )
-
     olt = db.get(OLTDevice, olt_id)
     if olt is None:
         return False, "OLT not found.", None
 
+    # Get or create the active assignment for this ONT
+    assignment = _get_or_create_active_assignment(db, ont)
+
     # Get management IP pool from OLT config pack
     pool_id = olt.mgmt_ip_pool_id
     if not pool_id:
-        logger.info(
-            "No management IP pool configured for OLT %s, skipping IP allocation for ONT %s",
+        logger.warning(
+            "No management IP pool configured for OLT %s; cannot authorize ONT %s onto ACS",
             olt.name,
             ont.serial_number,
         )
-        return True, "No management IP pool configured on OLT.", None
+        return False, "No management IP pool configured on OLT.", None
 
-    # Get next available IP from pool
-    next_ip, available_count = refresh_pool_availability(db, pool_id)
+    # Serialize allocation for this pool. refresh_pool_availability() recomputes
+    # from current reservations, so concurrent authorizations must not pass that
+    # read before either transaction has reserved its selected address.
+    from app.models.network import IpPool
+
+    locked_pool = db.scalars(
+        select(IpPool).where(IpPool.id == pool_id).with_for_update()
+    ).first()
+    if locked_pool is None:
+        return False, "Management IP pool not found.", None
+
+    # Reuse an existing management IP only if it is valid for this OLT pool.
+    if assignment.mgmt_ip_address:
+        existing_ip = str(assignment.mgmt_ip_address).strip()
+        record = db.scalars(
+            select(IPv4Address).where(IPv4Address.address == existing_ip)
+        ).first()
+        record_pool_id = getattr(record, "pool_id", None)
+        record_ont_id = getattr(record, "ont_unit_id", None)
+        owned_by_other_ont = record_ont_id is not None and str(record_ont_id) != str(ont.id)
+        assigned_elsewhere = getattr(record, "assignment", None) is not None
+        tied_to_other_pool = record_pool_id is not None and str(record_pool_id) != str(pool_id)
+        reserved_for_other = bool(getattr(record, "is_reserved", False)) and str(
+            getattr(record, "notes", "") or ""
+        ) not in {"", f"ont:{ont_unit_id}", f"Reserved for ONT {ont_unit_id}"}
+        in_current_pool = _pool_contains_ipv4_address(
+            db,
+            pool_id=pool_id,
+            address=existing_ip,
+        )
+        if (
+            in_current_pool
+            and not tied_to_other_pool
+            and not owned_by_other_ont
+            and not assigned_elsewhere
+            and not reserved_for_other
+        ):
+            if record is None:
+                record = IPv4Address(
+                    address=existing_ip,
+                    pool_id=pool_id,
+                    is_reserved=True,
+                    notes=f"ont:{ont_unit_id}",
+                )
+                db.add(record)
+            else:
+                record.pool_id = pool_id
+                record.is_reserved = True
+                record.notes = f"ont:{ont_unit_id}"
+            record.ont_unit_id = ont.id
+            record.allocation_type = "management"
+            db.flush()
+            return (
+                True,
+                f"ONT already has management IP {existing_ip}.",
+                existing_ip,
+            )
+
+        logger.warning(
+            "Clearing stale management IP %s for ONT %s before allocating from OLT pool %s",
+            existing_ip,
+            ont.serial_number,
+            pool_id,
+        )
+        if record is not None and str(getattr(record, "ont_unit_id", "")) == str(ont.id):
+            record.is_reserved = False
+            record.notes = None
+            record.ont_unit_id = None
+            record.allocation_type = None
+        assignment.mgmt_ip_address = None
+        assignment.mgmt_ip_mode = MgmtIpMode.inactive
+        assignment.mgmt_subnet = None
+        assignment.mgmt_gateway = None
+        db.flush()
+
+    next_ip = str(getattr(locked_pool, "next_available_ip", "") or "").strip() or None
+    if next_ip and not _management_ip_is_available(
+        db,
+        pool_id=pool_id,
+        address=next_ip,
+    ):
+        next_ip = None
+
+    if next_ip is None:
+        next_ip, _available_count = refresh_pool_availability(db, pool_id)
     if not next_ip:
         logger.warning(
             "Management IP pool %s exhausted for OLT %s, cannot allocate IP for ONT %s",
@@ -256,12 +454,26 @@ def allocate_management_ip_for_ont(
         )
         db.add(record)
     else:
+        if record.pool_id and str(record.pool_id) != str(pool_id):
+            return (
+                False,
+                f"Management IP {next_ip} belongs to a different pool.",
+                None,
+            )
+        record.pool_id = pool_id
         record.is_reserved = True
         record.notes = note
+    record.ont_unit_id = ont.id
+    record.allocation_type = "management"
 
     # Update assignment with allocated IP (source of truth for effective config)
     assignment.mgmt_ip_address = next_ip
     assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+    _advance_management_pool_cache_after_allocation(
+        db,
+        pool=locked_pool,
+        allocated_ip=next_ip,
+    )
 
     db.flush()
     logger.info(
@@ -356,51 +568,6 @@ def _resolve_acs_for_new_ont(db: Session, olt_id: str) -> str | None:
     return tr069_service.resolve_acs_server_for_ont(db, olt_id=olt_id)
 
 
-def _queue_tr069_acs_connectivity(
-    *,
-    ont_unit_id: str,
-    olt_id: str,
-    fsp: str,
-    serial_number: str,
-    ont_id_on_olt: int,
-    countdown: int = 5,
-) -> dict[str, object]:
-    """Queue the ACS wait/bootstrap task after authorization."""
-    from app.services.queue_adapter import enqueue_task
-
-    result = enqueue_task(
-        "app.tasks.ont_authorization.ensure_tr069_acs_connectivity",
-        args=[ont_unit_id, olt_id, fsp, ont_id_on_olt],
-        queue="acs",
-        correlation_id=f"tr069_acs_connect:{ont_unit_id}",
-        source="post_authorization_follow_up",
-        countdown=countdown,
-    )
-    if result.queued:
-        logger.info(
-            "Queued TR-069 ACS connectivity task for ONT %s: task_id=%s",
-            serial_number,
-            result.task_id,
-        )
-        return {
-            "name": "Queue TR-069 ACS connectivity",
-            "success": True,
-            "message": "Queued background task to wait for ACS inform",
-            "task_id": result.task_id,
-        }
-
-    logger.warning(
-        "Failed to queue TR-069 ACS connectivity task for ONT %s: %s",
-        serial_number,
-        result.error,
-    )
-    return {
-        "name": "Queue TR-069 ACS connectivity",
-        "success": False,
-        "message": f"Failed to queue: {result.error}",
-    }
-
-
 def create_or_find_ont_for_authorized_serial(
     db: Session,
     *,
@@ -493,7 +660,7 @@ def create_or_find_ont_for_authorized_serial(
         is_active=True,
         authorization_status=OntAuthorizationStatus.authorized,
         provisioning_status=OntProvisioningStatus.unprovisioned,
-        olt_status=observed_olt_status or OnuOnlineStatus.unknown,
+        olt_status=observed_olt_status or OnuOnlineStatus.offline,
         offline_reason=None,
         last_seen_at=datetime.now(UTC) if observed_olt_status else None,
         last_sync_source="olt_authorization" if observed_olt_status else None,
@@ -545,7 +712,7 @@ def ensure_assignment_and_pon_port_for_authorized_ont(
         return False, f"Failed to link assignment/PON port: {exc}"
 
 
-def run_post_authorization_follow_up(
+def apply_authorization_foundation(
     db: Session,
     *,
     ont_unit_id: str,
@@ -554,7 +721,7 @@ def run_post_authorization_follow_up(
     serial_number: str,
     ont_id_on_olt: int,
 ) -> tuple[bool, str, list[dict[str, object]]]:
-    """Run minimal post-authorization bookkeeping.
+    """Run synchronous ACS foundation setup during ONT authorization.
 
     Args:
         db: Database session.
@@ -578,8 +745,8 @@ def run_post_authorization_follow_up(
     if not assignment_ok:
         return False, assignment_msg, steps
 
-    # Allocate management IP from OLT's pool before scheduling ACS bootstrap.
-    # Without this, the follow-up can report queued while the ONT has no
+    # Allocate management IP from the OLT pool before applying the ACS
+    # foundation. Without this, authorization can finish while the ONT has no
     # management path for TR-069 reachability.
     mgmt_ip_ok, mgmt_ip_msg, allocated_ip = allocate_management_ip_for_ont(
         db,
@@ -601,34 +768,190 @@ def run_post_authorization_follow_up(
         return False, mgmt_ip_msg, steps
 
     try:
-        queue_step = _queue_tr069_acs_connectivity(
+        from app.services.network.acs_foundation import apply_acs_foundation
+
+        foundation_result = apply_acs_foundation(
+            db,
             ont_unit_id=ont_unit_id,
             olt_id=olt_id,
             fsp=fsp,
-            serial_number=serial_number,
             ont_id_on_olt=ont_id_on_olt,
-            countdown=5,
         )
-        steps.append(queue_step)
+        steps.append({
+            "name": "Apply ACS foundation",
+            "success": bool(foundation_result.get("success")),
+            "message": str(foundation_result.get("message") or ""),
+            "data": foundation_result,
+        })
     except Exception as exc:
-        queue_step = {
-            "name": "Queue TR-069 ACS connectivity",
+        foundation_step = {
+            "name": "Apply ACS foundation",
             "success": False,
             "message": str(exc),
         }
-        steps.append(queue_step)
+        steps.append(foundation_step)
         logger.warning(
-            "Error queueing TR-069 ACS connectivity task for ONT %s: %s",
+            "Error applying ACS foundation for ONT %s: %s",
             serial_number,
             exc,
         )
-    if not bool(queue_step.get("success")):
-        message = (
-            "Authorization follow-up failed: ACS connectivity task was not queued."
-        )
+    if not bool(steps[-1].get("success")):
+        message = "Authorization foundation failed: ACS foundation was not applied."
         return False, message, steps
 
-    return True, "Authorization follow-up completed.", steps
+    return True, "Authorization foundation completed.", steps
+
+
+def verify_authorization_acs_readiness(
+    db: Session,
+    *,
+    ont_unit_id: str,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    ont_id_on_olt: int,
+) -> tuple[bool, str, list[dict[str, object]]]:
+    """Synchronously verify OLT readback, management reachability, and ACS inform."""
+    from app.services import ping as ping_service
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+    from app.services.network.olt_write_reconciliation import verify_ont_authorized
+    from app.services.network.ont_provision_steps import wait_tr069_bootstrap
+
+    steps: list[dict[str, object]] = []
+
+    olt = db.get(OLTDevice, olt_id)
+    ont = db.get(OntUnit, ont_unit_id)
+    if olt is None:
+        return False, "OLT not found for ACS readiness verification.", [
+            {
+                "name": "Verify OLT authorization readback",
+                "success": False,
+                "message": "OLT not found.",
+            }
+        ]
+    if ont is None:
+        return False, "ONT not found for ACS readiness verification.", [
+            {
+                "name": "Verify OLT authorization readback",
+                "success": False,
+                "message": "ONT not found.",
+            }
+        ]
+
+    readback = verify_ont_authorized(
+        olt,
+        fsp=fsp,
+        ont_id=ont_id_on_olt,
+        serial_number=serial_number,
+    )
+    steps.append(
+        {
+            "name": "Verify OLT authorization readback",
+            "success": readback.success,
+            "message": readback.message,
+            "data": readback.details,
+        }
+    )
+    if not readback.success:
+        return False, readback.message, steps
+
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {})
+    mgmt_ip = values.get("mgmt_ip_address")
+    if mgmt_ip:
+        ping_ok, latency_ms = ping_service.run_ping(str(mgmt_ip), timeout_seconds=4)
+        ping_message = (
+            f"Management IP {mgmt_ip} is reachable"
+            + (f" ({latency_ms:.1f} ms)." if latency_ms is not None else ".")
+            if ping_ok
+            else f"Management IP {mgmt_ip} is not reachable from the app/ACS network."
+        )
+        steps.append(
+            {
+                "name": "Verify management IP reachability",
+                "success": ping_ok,
+                "message": ping_message,
+                "mgmt_ip": str(mgmt_ip),
+                "latency_ms": latency_ms,
+            }
+        )
+        if not ping_ok:
+            return False, ping_message, steps
+    else:
+        steps.append(
+            {
+                "name": "Verify management IP reachability",
+                "success": True,
+                "message": "No static management IP configured; skipping ping reachability check.",
+                "skipped": True,
+            }
+        )
+
+    acs_configured = bool(
+        values.get("tr069_acs_server_id")
+        or values.get("tr069_olt_profile_id")
+        or getattr(olt, "tr069_acs_server_id", None)
+    )
+    if not acs_configured:
+        steps.append(
+            {
+                "name": "Wait for ACS inform",
+                "success": True,
+                "message": "No ACS/TR-069 configuration resolved; skipping ACS inform wait.",
+                "skipped": True,
+            }
+        )
+        return True, "ACS readiness verification skipped because ACS is not configured.", steps
+
+    wait_result = wait_tr069_bootstrap(db, ont_unit_id, allow_blocking=True)
+    steps.append(
+        {
+            "name": "Wait for ACS inform",
+            "success": wait_result.success,
+            "message": wait_result.message,
+            "duration_ms": wait_result.duration_ms,
+        }
+    )
+    if not wait_result.success:
+        return False, wait_result.message, steps
+
+    return True, "ONT is authorized, reachable, and observed in ACS.", steps
+
+
+def _first_failed_step(steps: list[dict[str, object]]) -> dict[str, object] | None:
+    return next((step for step in steps if not bool(step.get("success"))), None)
+
+
+def _step_message(default: str, steps: list[dict[str, object]]) -> str:
+    failed = _first_failed_step(steps)
+    if failed is not None:
+        return str(failed.get("message") or default)
+    if steps:
+        return "; ".join(
+            str(step.get("message") or "")
+            for step in steps
+            if str(step.get("message") or "")
+        ) or default
+    return default
+
+
+def _append_grouped_step(
+    result: AuthorizationWorkflowResult,
+    *,
+    name: str,
+    success: bool,
+    message: str,
+    duration_ms: int = 0,
+) -> None:
+    result.steps.append(
+        AuthorizationStepResult(
+            step=len(result.steps) + 1,
+            name=name,
+            success=success,
+            message=message,
+            duration_ms=duration_ms,
+        )
+    )
 
 
 def authorize_autofind_ont(
@@ -670,6 +993,7 @@ def authorize_autofind_ont(
         ont_unit_id: str | None = None,
         ont_id_on_olt: int | None = None,
         completed_authorization: bool = False,
+        partial_success: bool = False,
     ) -> AuthorizationWorkflowResult:
         return AuthorizationWorkflowResult(
             success=success,
@@ -679,12 +1003,34 @@ def authorize_autofind_ont(
             ont_id_on_olt=ont_id_on_olt,
             status=status,
             completed_authorization=completed_authorization,
+            partial_success=partial_success,
             duration_ms=max(0, int((monotonic() - started_at) * 1000)),
         )
 
     olt = get_olt_or_none(db, olt_id)
     if olt is None:
         return finish(success=False, message="OLT not found", status="error")
+
+    from app.services.network.olt_config_pack import (
+        get_validation_summary,
+        validate_config_pack_comprehensive,
+    )
+
+    validation_started = monotonic()
+    config_validation = validate_config_pack_comprehensive(db, olt_id)
+    validation_message = get_validation_summary(config_validation)
+    add_step(
+        "Validate OLT config pack",
+        config_validation.is_valid,
+        validation_message,
+        validation_started,
+    )
+    if not config_validation.is_valid:
+        return finish(
+            success=False,
+            message=validation_message,
+            status="error",
+        )
 
     normalized_serial = serial_number.replace("-", "").strip().upper()
     adapter = get_protocol_adapter(olt)
@@ -694,12 +1040,12 @@ def authorize_autofind_ont(
         find_result = adapter.find_ont_by_serial(normalized_serial)
         existing = find_result.data.get("registration") if find_result.success else None
         if not find_result.success:
-            add_step("Find existing ONT registration", False, find_result.message, force_started)
+            add_step("Activate ONT", False, find_result.message, force_started)
             return finish(success=False, message=find_result.message, status="error")
         if existing:
             delete_result = adapter.deauthorize_ont(existing.fsp, existing.onu_id)
             if not delete_result.success:
-                add_step("Delete existing ONT registration", False, delete_result.message, force_started)
+                add_step("Activate ONT", False, delete_result.message, force_started)
                 return finish(success=False, message=delete_result.message, status="error")
             absence = verify_ont_absent(
                 olt,
@@ -707,13 +1053,11 @@ def authorize_autofind_ont(
                 ont_id=existing.onu_id,
                 serial_number=normalized_serial,
             )
-            add_step("Delete existing ONT registration", absence.success, absence.message, force_started)
             if not absence.success:
+                add_step("Activate ONT", False, absence.message, force_started)
                 return finish(success=False, message=absence.message, status="error")
-        else:
-            add_step("Check existing ONT registration", True, "No existing registration found.", force_started)
 
-    profile_started = monotonic()
+    activation_started = monotonic()
     authorization_preset = None
     authorization_profiles: AuthorizationProfileResolution | None = None
     if preset_id:
@@ -741,11 +1085,15 @@ def authorize_autofind_ont(
         profiles_ok, profiles_msg, authorization_profiles = (
             resolve_authorization_profiles_from_db(db, olt)
         )
-    add_step("Resolve OLT authorization profiles", profiles_ok, profiles_msg, profile_started)
     if not profiles_ok or authorization_profiles is None:
+        add_step(
+            "Activate ONT",
+            False,
+            profiles_msg,
+            activation_started,
+        )
         return finish(success=False, message=profiles_msg, status="error")
 
-    auth_started = monotonic()
     auth_result = adapter.authorize_ont(
         fsp,
         normalized_serial,
@@ -761,27 +1109,61 @@ def authorize_autofind_ont(
                 raw_ont_id = getattr(existing, "onu_id", None)
                 ont_id = int(raw_ont_id) if raw_ont_id is not None else None
                 add_step(
-                    "Authorize ONT on OLT",
+                    "Activate ONT",
                     True,
                     "ONT serial was already registered on the OLT; reusing registration.",
-                    auth_started,
+                    activation_started,
                 )
             else:
-                message = (
-                    find_result.message
-                    if not find_result.success
-                    else "ONT serial already exists, but not on the expected port."
+                if not find_result.success:
+                    add_step("Activate ONT", False, find_result.message, activation_started)
+                    return finish(success=False, message=find_result.message, status="error")
+                if existing is None:
+                    message = "ONT serial already exists, but the existing registration could not be found."
+                    add_step("Activate ONT", False, message, activation_started)
+                    return finish(success=False, message=message, status="error")
+
+                delete_result = adapter.deauthorize_ont(existing.fsp, existing.onu_id)
+                if not delete_result.success:
+                    add_step("Activate ONT", False, delete_result.message, activation_started)
+                    return finish(
+                        success=False,
+                        message=delete_result.message,
+                        status="error",
+                    )
+                absence = verify_ont_absent(
+                    olt,
+                    fsp=existing.fsp,
+                    ont_id=existing.onu_id,
+                    serial_number=normalized_serial,
                 )
-                add_step("Authorize ONT on OLT", False, message, auth_started)
-                return finish(success=False, message=message, status="error")
+                if not absence.success:
+                    add_step("Activate ONT", False, absence.message, activation_started)
+                    return finish(success=False, message=absence.message, status="error")
+
+                auth_result = adapter.authorize_ont(
+                    fsp,
+                    normalized_serial,
+                    line_profile_id=authorization_profiles.line_profile_id,
+                    service_profile_id=authorization_profiles.service_profile_id,
+                )
+                ont_id = auth_result.ont_id
+                if not auth_result.success or ont_id is None:
+                    message = (
+                        "Removed existing ONT registration, but authorization on the "
+                        f"requested port failed: {auth_result.message or 'Authorization failed'}"
+                    )
+                    add_step("Activate ONT", False, message, activation_started)
+                    return finish(success=False, message=message, status="error")
+                auth_result.message = (
+                    "Removed existing ONT registration from "
+                    f"{existing.fsp} and authorized on {fsp}. {auth_result.message}"
+                ).strip()
         else:
             message = auth_result.message or "Authorization failed"
-            add_step("Authorize ONT on OLT", False, message, auth_started)
+            add_step("Activate ONT", False, message, activation_started)
             return finish(success=False, message=message, status="error")
-    else:
-        add_step("Authorize ONT on OLT", True, auth_result.message, auth_started)
 
-    record_started = monotonic()
     ont_unit_id, create_msg = create_or_find_ont_for_authorized_serial(
         db,
         olt_id=olt_id,
@@ -789,24 +1171,33 @@ def authorize_autofind_ont(
         serial_number=normalized_serial,
         ont_id_on_olt=ont_id,
     )
-    add_step("Create or find ONT record", ont_unit_id is not None, create_msg, record_started)
     if ont_unit_id is None:
+        add_step("Activate ONT", False, create_msg, activation_started)
         return finish(
-            success=True,
-            message=create_msg,
-            status="warning",
+            success=False,
+            message=(
+                "ONT authorized on OLT, but local inventory record setup failed: "
+                f"{create_msg}"
+            ),
+            status="error",
             ont_id_on_olt=ont_id,
             completed_authorization=True,
+            partial_success=True,
         )
 
-    resolve_started = monotonic()
     resolve_ok, resolve_msg = _resolve_authorized_autofind_candidate(
         db,
         olt_id=olt_id,
         fsp=fsp,
         serial_number=normalized_serial,
     )
-    add_step("Resolve autofind candidate", resolve_ok, resolve_msg, resolve_started)
+    state_msg = create_msg if resolve_ok else f"{create_msg} {resolve_msg}".strip()
+    activation_message = (
+        f"{profiles_msg} {auth_result.message} {state_msg}".strip()
+        if auth_result.success
+        else state_msg
+    )
+    add_step("Activate ONT", True, activation_message, activation_started)
 
     return finish(
         success=True,
@@ -816,76 +1207,6 @@ def authorize_autofind_ont(
         ont_id_on_olt=ont_id,
         completed_authorization=True,
     )
-
-
-def queue_post_authorization_follow_up(
-    db: Session,
-    *,
-    ont_unit_id: str,
-    olt_id: str,
-    fsp: str,
-    serial_number: str,
-    ont_id_on_olt: int,
-) -> str | None:
-    """Queue non-critical reconciliation after foreground OLT authorization."""
-    from app.models.network_operation import (
-        NetworkOperationTargetType,
-        NetworkOperationType,
-    )
-    from app.services.network_operations import network_operations
-    from app.services.queue_adapter import enqueue_task
-
-    operation = network_operations.start(
-        db,
-        NetworkOperationType.ont_provision,
-        NetworkOperationTargetType.ont,
-        ont_unit_id,
-        correlation_key=f"post-authorize:{ont_unit_id}:{fsp}:{ont_id_on_olt}",
-        input_payload={
-            "olt_id": olt_id,
-            "fsp": fsp,
-            "serial_number": serial_number,
-            "ont_id_on_olt": ont_id_on_olt,
-        },
-    )
-    db.commit()
-
-    dispatch = enqueue_task(
-        "app.tasks.ont_authorization.run_post_authorization_follow_up",
-        args=[
-            str(operation.id),
-            ont_unit_id,
-            olt_id,
-            fsp,
-            serial_number,
-            ont_id_on_olt,
-        ],
-        queue="tr069",
-        correlation_id=f"post-authorize:{ont_unit_id}",
-        source="ont_authorization",
-        countdown=2,
-    )
-    if not dispatch.queued:
-        network_operations.mark_failed(
-            db,
-            str(operation.id),
-            dispatch.error or "Failed to queue post-authorization follow-up",
-        )
-        db.commit()
-        logger.warning(
-            "Failed to queue post-authorization follow-up for ONT %s: %s",
-            serial_number,
-            dispatch.error,
-        )
-        return None
-
-    logger.info(
-        "Queued post-authorization follow-up for ONT %s: operation_id=%s task_id=%s",
-        serial_number,
-        operation.id,
-        dispatch.task_id,
-    )
-    return str(operation.id)
 
 
 def authorize_autofind_ont_and_provision_network_audited(
@@ -904,6 +1225,7 @@ def authorize_autofind_ont_and_provision_network_audited(
     """
     from app.services.network.action_logging import log_network_action_result
 
+    started_at = monotonic()
     result = authorize_autofind_ont(
         db,
         olt_id,
@@ -913,36 +1235,99 @@ def authorize_autofind_ont_and_provision_network_audited(
         preset_id=preset_id,
     )
 
-    # Commit on success
     if result.success:
-        db.commit()
         if result.ont_unit_id and result.ont_id_on_olt is not None:
             try:
-                result.follow_up_operation_id = queue_post_authorization_follow_up(
-                    db,
-                    ont_unit_id=result.ont_unit_id,
-                    olt_id=olt_id,
-                    fsp=fsp,
-                    serial_number=serial_number,
-                    ont_id_on_olt=result.ont_id_on_olt,
-                )
-                if result.follow_up_operation_id is None:
-                    result.status = "warning"
-                    result.message = (
-                        "ONT authorized, but post-authorization ACS follow-up was not queued."
+                foundation_ok, foundation_msg, foundation_steps = (
+                    apply_authorization_foundation(
+                        db,
+                        ont_unit_id=result.ont_unit_id,
+                        olt_id=olt_id,
+                        fsp=fsp,
+                        serial_number=serial_number,
+                        ont_id_on_olt=result.ont_id_on_olt,
                     )
+                )
+                foundation_message = _step_message(foundation_msg, foundation_steps)
+                if not foundation_ok:
+                    _append_grouped_step(
+                        result,
+                        name="Bring ONT onto ACS",
+                        success=False,
+                        message=foundation_message,
+                    )
+                    result.success = False
+                    result.partial_success = True
+                    result.status = "error"
+                    result.message = (
+                        "ONT authorized, but ACS foundation setup failed: "
+                        f"{foundation_msg}"
+                    )
+                else:
+                    logger.info(
+                        "Applied ACS foundation for ONT %s: %s (%d steps)",
+                        serial_number,
+                        foundation_msg,
+                        len(foundation_steps),
+                    )
+                    readiness_ok, readiness_msg, readiness_steps = (
+                        verify_authorization_acs_readiness(
+                            db,
+                            ont_unit_id=result.ont_unit_id,
+                            olt_id=olt_id,
+                            fsp=fsp,
+                            serial_number=serial_number,
+                            ont_id_on_olt=result.ont_id_on_olt,
+                        )
+                    )
+                    readiness_message = _step_message(readiness_msg, readiness_steps)
+                    readiness_duration_ms = sum(
+                        int(step.get("duration_ms") or 0)
+                        for step in readiness_steps
+                    )
+                    acs_message = (
+                        readiness_message
+                        if readiness_ok
+                        else f"{foundation_message} {readiness_message}".strip()
+                    )
+                    _append_grouped_step(
+                        result,
+                        name="Bring ONT onto ACS",
+                        success=readiness_ok,
+                        message=acs_message,
+                        duration_ms=readiness_duration_ms,
+                    )
+                    if not readiness_ok:
+                        result.success = False
+                        result.partial_success = True
+                        result.status = "error"
+                        result.message = (
+                            "ONT authorized and ACS foundation applied, but "
+                            f"ACS readiness verification failed: {readiness_msg}"
+                        )
+                    else:
+                        result.message = readiness_msg
             except Exception as exc:
                 db.rollback()
                 logger.warning(
-                    "Authorization succeeded but post-authorization follow-up was not queued for ONT %s: %s",
+                    "Authorization succeeded but ACS foundation setup failed for ONT %s: %s",
                     serial_number,
                     exc,
                 )
-                result.status = "warning"
-                result.message = (
-                    "ONT authorized, but post-authorization ACS follow-up was not queued."
+                result.steps.append(
+                    AuthorizationStepResult(
+                        step=len(result.steps) + 1,
+                        name="Bring ONT onto ACS",
+                        success=False,
+                        message=str(exc),
+                    )
                 )
-
+                result.success = False
+                result.partial_success = True
+                result.status = "error"
+                result.message = "ONT authorized, but ACS foundation setup failed."
+    if not result.success:
+        db.rollback()
     status = getattr(result, "status", "success" if result.success else "error")
     log_olt_audit_event(
         db,
@@ -972,6 +1357,8 @@ def authorize_autofind_ont_and_provision_network_audited(
             "force_reauthorize": force_reauthorize,
         },
     )
+    result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
+    db.commit()
     return result
 
 

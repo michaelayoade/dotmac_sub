@@ -5,15 +5,14 @@ Receives callbacks from GenieACS:
 - Auth webhook: Credential lookups for CPE/CR authentication
 """
 
-from typing import Any, Literal
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services.genieacs_service import genieacs_service
-from app.services import tr069_auth
 
 router = APIRouter(prefix="/tr069", tags=["tr069-webhooks"])
 
@@ -63,22 +62,3 @@ def receive_inform(
         product_class=payload.product_class,
         acs_server_id=payload.acs_server_id,
     )
-
-
-@router.get("/auth")
-def get_device_credentials(
-    serial_number: str = Query(..., description="Device serial number"),
-    type: Literal["connection_request", "cpe_auth"] = Query(
-        ..., description="Credential type: connection_request or cpe_auth"
-    ),
-    db: Session = Depends(get_db),
-) -> dict[str, str | None]:
-    """Get credentials for a device.
-
-    Called by GenieACS auth extension to fetch per-device credentials.
-    Returns username/password for the specified credential type.
-
-    - connection_request: Credentials ACS uses to authenticate to CPE
-    - cpe_auth: Credentials CPE uses to authenticate to ACS
-    """
-    return tr069_auth.get_device_credentials(db, serial_number, type)

@@ -1310,18 +1310,11 @@ def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
         .scalar()
         or 0
     )
-    unknown = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.olt_status == OnuOnlineStatus.unknown)
-        .scalar()
-        or 0
-    )
 
     return {
         "total": total,
         "online": online,
         "offline": offline,
-        "unknown": unknown,
     }
 
 

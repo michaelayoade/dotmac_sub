@@ -22,6 +22,9 @@ from app.services import tr069 as tr069_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.network.acs_reachability import (
+    validate_olt_acs_management_reachability,
+)
 from app.services.network.olt_inventory import get_olt_or_none as get_olt_or_none
 from app.services.network.olt_monitoring_devices import find_linked_network_device
 from app.services.network.olt_web_audit import (
@@ -60,6 +63,75 @@ def _parse_uuid_or_none(raw: str) -> str | None:
     """Parse string to UUID string, returning None for empty values."""
     raw = raw.strip() if raw else ""
     return raw if raw else None
+
+
+def _uuid_to_str(value: object) -> str | None:
+    """Convert UUID to string for JSON storage."""
+    if value is None:
+        return None
+    return str(value)
+
+
+def _build_config_pack(values: Mapping[str, Any]) -> dict[str, object]:
+    """Build config_pack JSON from OLT form values."""
+    cr_password = values.get("default_cr_password")
+    encrypted_cr_password = encrypt_credential(
+        cr_password if isinstance(cr_password, str) else None
+    )
+    return {
+        "line_profile_id": values.get("default_line_profile_id"),
+        "service_profile_id": values.get("default_service_profile_id"),
+        "tr069_olt_profile_id": values.get("default_tr069_olt_profile_id"),
+        "internet_vlan_id": _uuid_to_str(values.get("internet_vlan_id")),
+        "management_vlan_id": _uuid_to_str(values.get("management_vlan_id")),
+        "tr069_vlan_id": _uuid_to_str(values.get("tr069_vlan_id")),
+        "voip_vlan_id": _uuid_to_str(values.get("voip_vlan_id")),
+        "iptv_vlan_id": _uuid_to_str(values.get("iptv_vlan_id")),
+        "internet_config_ip_index": values.get("default_internet_config_ip_index"),
+        "wan_config_profile_id": values.get("default_wan_config_profile_id"),
+        "cr_username": values.get("default_cr_username"),
+        "cr_password": encrypted_cr_password,
+        "internet_gem_index": values.get("default_internet_gem_index"),
+        "mgmt_gem_index": values.get("default_mgmt_gem_index"),
+        "voip_gem_index": values.get("default_voip_gem_index"),
+        "iptv_gem_index": values.get("default_iptv_gem_index"),
+        "pppoe_wcd_index": values.get("pppoe_wcd_index", 2),
+        "mgmt_wcd_index": values.get("mgmt_wcd_index", 1),
+        "voip_wcd_index": values.get("voip_wcd_index"),
+    }
+
+
+def _validate_active_olt_preconfiguration(
+    values: Mapping[str, Any],
+    *,
+    current_olt: OLTDevice | None = None,
+) -> str | None:
+    """Require the OLT information pack before an active OLT can provision ONTs."""
+    is_active = values.get("is_active")
+    if is_active is None and current_olt is not None:
+        is_active = current_olt.is_active
+    if not bool(is_active):
+        return None
+
+    required_fields = [
+        ("default_line_profile_id", "default line profile ID"),
+        ("default_service_profile_id", "default service profile ID"),
+        ("internet_vlan_id", "internet VLAN"),
+        ("management_vlan_id", "management VLAN"),
+        ("tr069_acs_server_id", "TR-069 ACS server"),
+        ("default_tr069_olt_profile_id", "TR-069 OLT profile ID"),
+        ("mgmt_ip_pool_id", "management IP pool"),
+        ("default_internet_gem_index", "internet GEM index"),
+        ("default_mgmt_gem_index", "management GEM index"),
+    ]
+    missing = [label for key, label in required_fields if not values.get(key)]
+    if missing:
+        return (
+            "Active OLTs require a complete authorization and ACS config pack: "
+            + ", ".join(missing)
+            + "."
+        )
+    return None
 
 
 def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
@@ -206,6 +278,18 @@ def validate_values(
         if not acs_server.is_active:
             return f"TR-069 ACS server '{acs_server.name}' is inactive."
 
+    preconfiguration_error = _validate_active_olt_preconfiguration(
+        values, current_olt=current_olt
+    )
+    if preconfiguration_error:
+        return preconfiguration_error
+
+    reachability_error = validate_olt_acs_management_reachability(
+        db, values, current_olt=current_olt
+    )
+    if reachability_error:
+        return reachability_error
+
     return None
 
 
@@ -238,15 +322,10 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
             "status": values.get("status"),
             "notes": values.get("notes"),
             "is_active": values.get("is_active"),
+            "config_pack": _build_config_pack(values),
+            "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
         }
     )
-
-
-def _uuid_to_str(value: object) -> str | None:
-    """Convert UUID to string for JSON storage."""
-    if value is None:
-        return None
-    return str(value)
 
 
 def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
@@ -255,42 +334,6 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
     encrypted_password = encrypt_credential(
         ssh_password if isinstance(ssh_password, str) else None
     )
-    # Encrypt CR password if provided
-    cr_password = values.get("default_cr_password")
-    encrypted_cr_password = encrypt_credential(
-        cr_password if isinstance(cr_password, str) else None
-    )
-
-    # Build config_pack JSON from form values
-    config_pack: dict[str, object] = {
-        # Authorization profiles
-        "line_profile_id": values.get("default_line_profile_id"),
-        "service_profile_id": values.get("default_service_profile_id"),
-        # TR-069 OLT profile
-        "tr069_olt_profile_id": values.get("default_tr069_olt_profile_id"),
-        # VLANs (stored as UUID strings)
-        "internet_vlan_id": _uuid_to_str(values.get("internet_vlan_id")),
-        "management_vlan_id": _uuid_to_str(values.get("management_vlan_id")),
-        "tr069_vlan_id": _uuid_to_str(values.get("tr069_vlan_id")),
-        "voip_vlan_id": _uuid_to_str(values.get("voip_vlan_id")),
-        "iptv_vlan_id": _uuid_to_str(values.get("iptv_vlan_id")),
-        # Provisioning knobs
-        "internet_config_ip_index": values.get("default_internet_config_ip_index"),
-        "wan_config_profile_id": values.get("default_wan_config_profile_id"),
-        # Connection request credentials
-        "cr_username": values.get("default_cr_username"),
-        "cr_password": encrypted_cr_password,
-        # GEM indices
-        "internet_gem_index": values.get("default_internet_gem_index"),
-        "mgmt_gem_index": values.get("default_mgmt_gem_index"),
-        "voip_gem_index": values.get("default_voip_gem_index"),
-        "iptv_gem_index": values.get("default_iptv_gem_index"),
-        # WCD indices (default values if not set)
-        "pppoe_wcd_index": values.get("pppoe_wcd_index", 2),
-        "mgmt_wcd_index": values.get("mgmt_wcd_index", 1),
-        "voip_wcd_index": values.get("voip_wcd_index"),
-    }
-
     data: dict[str, object] = {
         "name": values.get("name"),
         "hostname": values.get("hostname"),
@@ -312,7 +355,7 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "notes": values.get("notes"),
         "is_active": values.get("is_active"),
         # Config Pack JSON (source of truth for ONT provisioning defaults)
-        "config_pack": config_pack,
+        "config_pack": _build_config_pack(values),
         # Management IP pool FK (not in config_pack)
         "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
     }
@@ -602,8 +645,8 @@ def update_olt(
         # Preserve CR password when form doesn't submit new value
         if payload_values.get("default_cr_password") is None:
             payload_values["default_cr_password"] = getattr(
-                current, "default_cr_password", None
-            )
+                current, "config_pack", {}
+            ).get("cr_password")
         # Preserve SNMP fields when form doesn't submit new values
         if payload_values.get("snmp_community") is None:
             payload_values["snmp_community"] = getattr(

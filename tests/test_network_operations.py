@@ -146,12 +146,12 @@ class TestNetworkOperationLifecycle:
         updated = network_operations.mark_warning(
             db_session,
             str(op.id),
-            "ONT authorized, but ACS follow-up was not queued.",
+            "ONT authorized, but ACS foundation setup failed.",
             output_payload=payload,
         )
         assert updated.status == NetworkOperationStatus.warning
         assert updated.completed_at is not None
-        assert updated.error == "ONT authorized, but ACS follow-up was not queued."
+        assert updated.error == "ONT authorized, but ACS foundation setup failed."
         assert updated.output_payload == payload
 
     def test_operation_logs_include_structured_fields(self, db_session, caplog):

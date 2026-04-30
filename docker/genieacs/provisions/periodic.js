@@ -78,12 +78,29 @@ const uptime = vpUptime.value ? vpUptime.value[0] : null;
 const deviceId = declare("DeviceID.ID", { value: 1 });
 const oui = declare("DeviceID.OUI", { value: 1 });
 const productClass = declare("DeviceID.ProductClass", { value: 1 });
+const genieDeviceId = deviceId.value ? deviceId.value[0] : "";
+
+try {
+  const crCredentials = ext("auth", "connectionRequest", genieDeviceId, serial || "");
+  if (crCredentials && crCredentials.username && crCredentials.password) {
+    declare(root + ".ManagementServer.ConnectionRequestUsername", { value: now }, { value: crCredentials.username });
+    declare(root + ".ManagementServer.ConnectionRequestPassword", { value: now }, { value: crCredentials.password });
+  }
+
+  const cpeCredentials = ext("auth", "getCpeCredentials", serial || "");
+  if (cpeCredentials && cpeCredentials.username && cpeCredentials.password) {
+    declare(root + ".ManagementServer.Username", { value: now }, { value: cpeCredentials.username });
+    declare(root + ".ManagementServer.Password", { value: now }, { value: cpeCredentials.password });
+  }
+} catch (e) {
+  log("ManagementServer credential enforcement error: " + e.message);
+}
 
 try {
   ext(
     "dotmac-webhook",
     "informWebhook",
-    deviceId.value ? deviceId.value[0] : "",
+    genieDeviceId,
     serial || "",
     "periodic",
     oui.value ? oui.value[0] : "",

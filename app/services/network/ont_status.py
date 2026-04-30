@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import uuid
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -22,7 +22,6 @@ from app.models.network import (
 
 DEFAULT_ACS_ONLINE_WINDOW_MINUTES = 15
 ACS_INFORM_GRACE_MINUTES = 5
-OFFLINE_POLL_THRESHOLD = 3
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +93,6 @@ class OntStatusInputs:
     olt_seen_at: datetime | None
     acs_last_inform_at: datetime | None
     acs_online_window_minutes: int
-    consecutive_offline_polls: int
 
 
 @dataclass(frozen=True)
@@ -102,7 +100,6 @@ class OntStatusResolution:
     effective_status: OnuOnlineStatus
     effective_status_source: OntStatusSource
     last_seen_at: datetime | None
-    consecutive_offline_polls: int
 
 
 @dataclass(frozen=True)
@@ -113,7 +110,6 @@ class OntStatusSnapshot:
     effective_status: OnuOnlineStatus
     effective_status_source: OntStatusSource
     last_seen_at: datetime | None
-    consecutive_offline_polls: int
 
 
 @dataclass(frozen=True)
@@ -200,8 +196,8 @@ def _normalize_olt_status(value: OnuOnlineStatus | str | None) -> OnuOnlineStatu
         try:
             return OnuOnlineStatus(value)
         except ValueError:
-            return OnuOnlineStatus.unknown
-    return OnuOnlineStatus.unknown
+            return OnuOnlineStatus.offline
+    return OnuOnlineStatus.offline
 
 
 def _coerce_auth_status(
@@ -357,6 +353,12 @@ def resolve_ont_effective_status(
     *,
     now: datetime | None = None,
 ) -> OntStatusResolution:
+    """Resolve effective ONT status from OLT and ACS observations.
+
+    Priority:
+    1. Recent ACS inform → online (ACS is authoritative when recent)
+    2. OLT status (online/offline) → use directly
+    """
     current = now or datetime.now(UTC)
     olt_seen_at = _normalize_timestamp(inputs.olt_seen_at)
     acs_last_inform_at = _normalize_timestamp(inputs.acs_last_inform_at)
@@ -369,18 +371,10 @@ def resolve_ont_effective_status(
     if acs_is_recent:
         status = OnuOnlineStatus.online
         source = OntStatusSource.acs
-    elif inputs.olt_status == OnuOnlineStatus.online:
-        status = OnuOnlineStatus.online
-        source = OntStatusSource.olt
-    elif (
-        inputs.olt_status == OnuOnlineStatus.offline
-        and inputs.consecutive_offline_polls >= OFFLINE_POLL_THRESHOLD
-    ):
-        status = OnuOnlineStatus.offline
-        source = OntStatusSource.olt
     else:
-        status = OnuOnlineStatus.unknown
-        source = OntStatusSource.derived
+        # Trust OLT status directly
+        status = inputs.olt_status
+        source = OntStatusSource.olt
 
     last_seen_candidates = [
         olt_seen_at if inputs.olt_status == OnuOnlineStatus.online else None,
@@ -391,7 +385,6 @@ def resolve_ont_effective_status(
         effective_status=status,
         effective_status_source=source,
         last_seen_at=last_seen,
-        consecutive_offline_polls=inputs.consecutive_offline_polls,
     )
 
 
@@ -416,7 +409,6 @@ def resolve_ont_status_for_model(
             if online_window_minutes is not None
             else resolve_acs_online_window_minutes_for_model(ont)
         ),
-        consecutive_offline_polls=int(getattr(ont, "consecutive_offline_polls", 0) or 0),
     )
     resolution = resolve_ont_effective_status(inputs, now=now)
     return OntStatusSnapshot(
@@ -426,7 +418,6 @@ def resolve_ont_status_for_model(
         effective_status=resolution.effective_status,
         effective_status_source=resolution.effective_status_source,
         last_seen_at=resolution.last_seen_at,
-        consecutive_offline_polls=resolution.consecutive_offline_polls,
     )
 
 
@@ -436,16 +427,14 @@ def resolve_ont_status_snapshot(
     acs_last_inform_at: datetime | None,
     now: datetime | None = None,
     online_window_minutes: int = DEFAULT_ACS_ONLINE_WINDOW_MINUTES,
-    consecutive_offline_polls: int = 0,
 ) -> OntStatusSnapshot:
     current = now or datetime.now(UTC)
     normalized_olt = _normalize_olt_status(olt_status)
     inputs = OntStatusInputs(
         olt_status=normalized_olt,
-        olt_seen_at=current if normalized_olt != OnuOnlineStatus.unknown else None,
+        olt_seen_at=current if normalized_olt == OnuOnlineStatus.online else None,
         acs_last_inform_at=acs_last_inform_at,
         acs_online_window_minutes=online_window_minutes,
-        consecutive_offline_polls=consecutive_offline_polls,
     )
     resolution = resolve_ont_effective_status(inputs, now=current)
     return OntStatusSnapshot(
@@ -455,7 +444,6 @@ def resolve_ont_status_snapshot(
         effective_status=resolution.effective_status,
         effective_status_source=resolution.effective_status_source,
         last_seen_at=resolution.last_seen_at,
-        consecutive_offline_polls=resolution.consecutive_offline_polls,
     )
 
 
@@ -465,22 +453,30 @@ def apply_status_snapshot(ont: OntUnit, snapshot: OntStatusSnapshot) -> OntUnit:
     ont.acs_last_inform_at = snapshot.acs_last_inform_at
     ont.effective_status = snapshot.effective_status
     ont.effective_status_source = snapshot.effective_status_source
-    ont.consecutive_offline_polls = snapshot.consecutive_offline_polls
     if snapshot.last_seen_at is not None:
         ont.last_seen_at = snapshot.last_seen_at
     return ont
 
 
+def apply_resolved_status_for_model(
+    ont: OntUnit,
+    *,
+    now: datetime | None = None,
+) -> OntUnit:
+    """Resolve and persist the effective ONT status from current observations."""
+    snapshot = resolve_ont_status_for_model(ont, now=now)
+    return apply_status_snapshot(ont, snapshot)
+
+
 def reset_status_for_inventory(ont: OntUnit) -> None:
     """Clear persisted status observations for an ONT returned to inventory."""
-    ont.olt_status = OnuOnlineStatus.unknown
+    ont.olt_status = OnuOnlineStatus.offline
     ont.olt_status_seen_at = None
     ont.acs_last_inform_at = None
-    ont.effective_status = OnuOnlineStatus.unknown
-    ont.effective_status_source = OntStatusSource.derived
+    ont.effective_status = OnuOnlineStatus.offline
+    ont.effective_status_source = OntStatusSource.olt
     ont.last_seen_at = None
     ont.offline_reason = None
-    ont.consecutive_offline_polls = 0
 
 
 def apply_olt_status_observation(
@@ -490,6 +486,7 @@ def apply_olt_status_observation(
     *,
     now: datetime | None = None,
 ) -> OntStatusSnapshot:
+    """Apply an OLT status observation to an ONT and update effective status."""
     current = now or datetime.now(UTC)
     normalized_status = _normalize_olt_status(olt_status)
     ont.olt_status = normalized_status
@@ -498,12 +495,8 @@ def apply_olt_status_observation(
     if normalized_status == OnuOnlineStatus.online:
         ont.last_seen_at = current
         ont.offline_reason = None
-        ont.consecutive_offline_polls = 0
-    elif normalized_status == OnuOnlineStatus.offline:
-        ont.offline_reason = offline_reason or OnuOfflineReason.unknown
-        ont.consecutive_offline_polls = (ont.consecutive_offline_polls or 0) + 1
     else:
-        ont.offline_reason = offline_reason
+        ont.offline_reason = offline_reason or OnuOfflineReason.unknown
 
     snapshot = resolve_ont_status_for_model(ont, now=current)
     apply_status_snapshot(ont, snapshot)

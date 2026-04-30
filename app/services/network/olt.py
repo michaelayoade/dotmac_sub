@@ -821,7 +821,7 @@ class OntUnits(CRUDManager[OntUnit]):
         # Filter by OLT status
         from app.models.network import OnuOnlineStatus
 
-        if olt_status and olt_status in ("online", "offline", "unknown"):
+        if olt_status and olt_status in ("online", "offline"):
             stmt = stmt.where(
                 OntUnit.effective_status == OnuOnlineStatus(olt_status)
             )

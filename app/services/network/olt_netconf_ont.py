@@ -172,8 +172,8 @@ def authorize_ont(
 
     # Push configuration via edit-config
     # Note: NETCONF edit-config returns only <ok/>, not the assigned ONT-ID.
-    # The ONT-ID will be populated by the post-authorization SNMP sync task,
-    # which already runs after authorization completes.
+    # Callers should verify/read back the registration synchronously when they
+    # need the assigned ONT-ID.
     try:
         success, message = olt_netconf.edit_config(olt, config_xml)
         if not success:
