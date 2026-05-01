@@ -246,7 +246,7 @@ def build_network_map_context(db: Session) -> dict:
             ont.effective_status.value
             if getattr(getattr(ont, "effective_status", None), "value", None)
             is not None
-            else str(getattr(ont, "effective_status", None) or "unknown")
+            else str(getattr(ont, "effective_status", None) or "offline")
         )
         if status == "online":
             ont_online += 1

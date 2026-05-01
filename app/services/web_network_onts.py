@@ -956,7 +956,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
             "olt_status": getattr(
                 getattr(ont, "effective_status", None),
                 "value",
-                getattr(ont, "olt_status", "unknown"),
+                getattr(ont, "olt_status", "offline"),
             ),
             "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
         },

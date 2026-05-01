@@ -1246,45 +1246,60 @@ class AlertEvents(ListResponseMixin):
 
 
 def get_onu_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate ONT signal and effective service status for monitoring dashboard.
+    """Aggregate binary ONT monitoring status directly from Zabbix.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
     """
     from sqlalchemy import func as sa_func
 
-    from app.models.network import OntUnit, OnuOnlineStatus
-
-    total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
-    online = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.effective_status == OnuOnlineStatus.online)
-        .scalar()
-        or 0
-    )
-    offline = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.effective_status == OnuOnlineStatus.offline)
-        .scalar()
-        or 0
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.zabbix_ont_status import (
+        get_olt_ont_snapshot_from_zabbix,
+        get_olt_ont_summary_from_zabbix,
     )
 
-    # Low signal: ONTs with ONU Rx below warning threshold
-    from app.services.network.signal_thresholds import get_signal_thresholds
+    inventory_total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
+    online = 0
+    offline = 0
+    low_signal = 0
 
-    warn_threshold, _crit = get_signal_thresholds(db)
-    low_signal = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(
-            OntUnit.onu_rx_signal_dbm.isnot(None),
-            OntUnit.onu_rx_signal_dbm < warn_threshold,
+    olts = (
+        db.query(OLTDevice)
+        .filter(OLTDevice.is_active.is_(True))
+        .filter(OLTDevice.zabbix_host_id.isnot(None))
+        .all()
+    )
+    monitored_ont_ids: set[str] = set()
+    for olt in olts:
+        onts = (
+            db.query(OntUnit)
+            .filter(OntUnit.is_active.is_(True))
+            .filter(OntUnit.olt_device_id == olt.id)
+            .all()
         )
-        .scalar()
-        or 0
-    )
+        monitored_ont_ids.update(str(ont.id) for ont in onts)
+        summary = get_olt_ont_summary_from_zabbix(olt, onts)
+        if summary.get("total_count", 0):
+            online += int(summary.get("online_count", 0) or 0)
+            offline += int(summary.get("offline_count", 0) or 0)
+            low_signal += int(summary.get("low_signal_count", 0) or 0)
+            continue
+
+        snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
+        online += sum(1 for item in snapshot.values() if item.online)
+        offline += sum(1 for item in snapshot.values() if not item.online)
+        low_signal += sum(
+            1
+            for item in snapshot.values()
+            if item.olt_rx_dbm is not None and item.olt_rx_dbm < -25
+        )
+
+    unmonitored_total = max(inventory_total - len(monitored_ont_ids), 0)
+    offline += unmonitored_total
 
     return {
-        "total": total,
+        "total": online + offline,
         "online": online,
         "offline": offline,
         "low_signal": low_signal,

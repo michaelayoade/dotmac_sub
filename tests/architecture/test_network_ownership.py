@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import ast
+import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +25,6 @@ APPROVED_STATUS_WRITERS = {
     Path("app/services/network/olt_autofind.py"),
     Path("app/services/network/ont_authorization.py"),
     Path("app/services/network/ont_decommission.py"),
-    Path("app/services/zabbix_data_ingest.py"),
     Path("app/tasks/olt_polling.py"),
 }
 

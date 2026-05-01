@@ -133,14 +133,13 @@ def _get_subscriber_devices(db: Session, subscriber_id: str) -> list:
             status_display = {
                 "online": "Online",
                 "offline": "Offline",
-                "unknown": "Unknown",
-            }.get(ont_info.olt_status or "unknown", "Unknown")
+            }.get(ont_info.olt_status or "offline", "Offline")
 
             devices.append(
                 SimpleNamespace(
                     serial_number=ont_info.serial_number or "Unknown",
                     model=ont_info.model or "ONT Device",
-                    status=ont_info.olt_status or "unknown",
+                    status=ont_info.olt_status or "offline",
                     status_display=status_display,
                     location=ont_info.service_address or "Service address",
                 )

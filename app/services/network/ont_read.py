@@ -34,8 +34,8 @@ def _classify_signal(dbm: float | None) -> str | None:
     return "critical"
 
 
-def _blank_unknown_status(value: str | None) -> str | None:
-    return None if value == "unknown" else value
+def _binary_status(value: str | None) -> str:
+    return "online" if value == "online" else "offline"
 
 
 class OntReadFacade:
@@ -64,8 +64,8 @@ class OntReadFacade:
 
         # Base fields from DB
         status_snapshot = resolve_ont_status_for_model(ont)
-        olt_status = _blank_unknown_status(status_snapshot.olt_status.value)
-        effective_status = _blank_unknown_status(status_snapshot.effective_status.value)
+        olt_status = _binary_status(status_snapshot.olt_status.value)
+        effective_status = _binary_status(status_snapshot.effective_status.value)
         result: dict[str, Any] = {
             "id": ont.id,
             "serial_number": ont.serial_number,
@@ -75,7 +75,6 @@ class OntReadFacade:
             "olt_status": olt_status,
             "effective_status_source": status_snapshot.effective_status_source.value,
             "effective_status": effective_status,
-            "effective_status_source": status_snapshot.effective_status_source.value,
             "acs_last_inform_at": status_snapshot.acs_last_inform_at,
             "last_seen_at": resolve_effective_last_seen_at(
                 ont, acs_last_inform_at=status_snapshot.acs_last_inform_at

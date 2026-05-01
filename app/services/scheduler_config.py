@@ -1325,32 +1325,6 @@ def build_beat_schedule() -> dict:
             interval_seconds=zabbix_device_sync_interval,
         )
 
-        # Zabbix signal ingest - pulls signal data from Zabbix into DB
-        # then pushes to VictoriaMetrics (replaces old SNMP polling)
-        zabbix_signal_ingest_enabled = _effective_bool(
-            session,
-            SettingDomain.network_monitoring,
-            "zabbix_signal_ingest_enabled",
-            "ZABBIX_SIGNAL_INGEST_ENABLED",
-            zabbix_sync_enabled_by_default,
-        )
-        zabbix_signal_ingest_interval = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "zabbix_signal_ingest_interval_seconds",
-            300,  # 5 minutes
-        )
-        zabbix_signal_ingest_interval = max(
-            zabbix_signal_ingest_interval, 60
-        )  # Min: 1 minute
-        _sync_scheduled_task(
-            session,
-            name="zabbix_signal_ingest",
-            task_name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-            enabled=zabbix_signal_ingest_enabled,
-            interval_seconds=zabbix_signal_ingest_interval,
-        )
-
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
         )

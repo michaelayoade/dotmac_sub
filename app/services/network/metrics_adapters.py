@@ -592,9 +592,9 @@ def get_metrics_adapter() -> MetricsReader:
     """Get the configured metrics adapter.
 
     Configuration via METRICS_ADAPTER env var:
-    - "victoriametrics" (default): Use VictoriaMetrics only
-    - "zabbix": Use Zabbix only
-    - "composite": Try VictoriaMetrics first, fall back to Zabbix
+    - "zabbix" (default): Use Zabbix directly
+    - "victoriametrics": Legacy metrics store
+    - "composite": Legacy VictoriaMetrics first, then Zabbix
 
     Returns:
         Configured MetricsReader instance
@@ -604,18 +604,17 @@ def get_metrics_adapter() -> MetricsReader:
     if _adapter_instance is not None:
         return _adapter_instance
 
-    adapter_type = os.getenv("METRICS_ADAPTER", "victoriametrics").lower()
+    adapter_type = os.getenv("METRICS_ADAPTER", "zabbix").lower()
 
-    if adapter_type == "zabbix":
-        _adapter_instance = ZabbixMetricsAdapter()
+    if adapter_type == "victoriametrics":
+        _adapter_instance = VictoriaMetricsAdapter()
     elif adapter_type == "composite":
         _adapter_instance = CompositeMetricsAdapter([
             VictoriaMetricsAdapter(),
             ZabbixMetricsAdapter(),
         ])
     else:
-        # Default to VictoriaMetrics
-        _adapter_instance = VictoriaMetricsAdapter()
+        _adapter_instance = ZabbixMetricsAdapter()
 
     logger.info("Initialized metrics adapter: %s", type(_adapter_instance).__name__)
     return _adapter_instance

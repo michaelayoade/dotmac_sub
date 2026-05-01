@@ -111,7 +111,7 @@ def test_enqueue_celery_task_uses_headers_and_logs(monkeypatch, caplog):
 
 
 def test_poll_all_olt_signals_returns_noop():
-    """poll_all_olt_signals is now a no-op; status handled by Zabbix ingest."""
+    """poll_all_olt_signals is now a no-op; status is read from Zabbix directly."""
     from app.tasks import olt_polling as olt_polling_module
 
     result = olt_polling_module.poll_all_olt_signals()

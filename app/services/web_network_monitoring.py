@@ -86,18 +86,8 @@ def monitoring_page_data(
 
 
 def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """Queue non-blocking Zabbix monitoring ingestion."""
-    try:
-        from app.services.queue_adapter import enqueue_task
-
-        enqueue_task(
-            "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
-            correlation_id="monitoring_refresh:zabbix_signals",
-            source="admin_network_monitoring",
-            request_id=request_id,
-        )
-    except Exception:
-        logger.debug("Could not dispatch monitoring refresh task")
+    """No-op: data is now fetched directly from Zabbix on demand."""
+    pass
 
 
 def monitoring_index_context(
