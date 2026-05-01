@@ -71,6 +71,7 @@ services:
     - ./alembic:/app/alembic
     - ./scripts:/app/scripts
     - ./uploads:/app/uploads
+    - ./tests:/app/tests
     command:
     - /bin/sh
     - -c

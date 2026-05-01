@@ -730,3 +730,107 @@ def build_unconfigured_onts_redirect_url(
 def build_unconfigured_onts_feedback_url(*, status: str, message: str) -> str:
     """Build an unconfigured ONT redirect with a status message."""
     return build_unconfigured_onts_redirect_url(status=status, message=message)
+
+
+def upsert_autofind_from_syslog(
+    db: Session,
+    *,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+) -> bool:
+    """Upsert a single autofind candidate from a syslog event.
+
+    This is the direct-persistence path for syslog-based ONT discovery.
+    No SSH polling, no Celery tasks - just immediate database persistence.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID (string UUID)
+        fsp: Frame/Slot/Port string (e.g., "0/1/2")
+        serial_number: ONT serial number
+
+    Returns:
+        True if candidate was created/updated, False on error
+    """
+    normalized_serial = normalize_serial(serial_number)
+    if not normalized_serial:
+        logger.warning(
+            "syslog_autofind_invalid_serial",
+            extra={
+                "olt_id": olt_id,
+                "fsp": fsp,
+                "serial_number": serial_number,
+            },
+        )
+        return False
+
+    now = datetime.now(UTC)
+
+    # Find existing candidate by OLT + FSP + normalized serial
+    serial_variants = [
+        normalize_serial(candidate)
+        for candidate in serial_search_candidates(serial_number)
+    ]
+    serial_variants = [v for v in dict.fromkeys(serial_variants) if v]
+
+    candidate = db.scalars(
+        select(OltAutofindCandidate)
+        .where(
+            OltAutofindCandidate.olt_id == olt_id,
+            OltAutofindCandidate.fsp == fsp,
+            or_(
+                _normalized_serial_expr(OltAutofindCandidate.serial_number).in_(
+                    serial_variants
+                ),
+                _normalized_serial_expr(OltAutofindCandidate.serial_hex).in_(
+                    serial_variants
+                ),
+            ),
+        )
+        .with_for_update(skip_locked=True)
+    ).first()
+
+    # Find matching ONT unit if exists
+    matched_ont = _find_ont_by_serial(db, serial_number)
+
+    if candidate is None:
+        # Create new candidate
+        candidate = OltAutofindCandidate(
+            olt_id=olt_id,
+            ont_unit_id=matched_ont.id if matched_ont else None,
+            fsp=fsp,
+            serial_number=serial_number,
+            is_active=True,
+            first_seen_at=now,
+            last_seen_at=now,
+            notes="Discovered via syslog",
+        )
+        db.add(candidate)
+        logger.debug(
+            "syslog_autofind_candidate_created",
+            extra={
+                "olt_id": olt_id,
+                "fsp": fsp,
+                "serial_number": serial_number,
+            },
+        )
+    else:
+        # Update existing candidate
+        candidate.ont_unit_id = matched_ont.id if matched_ont else candidate.ont_unit_id
+        candidate.is_active = True
+        candidate.resolution_reason = None
+        candidate.resolved_at = None
+        candidate.last_seen_at = now
+        logger.debug(
+            "syslog_autofind_candidate_updated",
+            extra={
+                "olt_id": olt_id,
+                "fsp": fsp,
+                "serial_number": serial_number,
+                "candidate_id": str(candidate.id),
+            },
+        )
+
+    db.commit()
+    return True

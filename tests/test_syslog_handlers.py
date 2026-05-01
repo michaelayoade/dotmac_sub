@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from app.models.network import OLTDevice
-from app.services.autofind_trigger import AutofindTriggerResult
 from app.syslog.handlers import _handle_autofind_event, handle_ont_event
 from app.syslog.parsers import OntEvent, OntEventType
 
@@ -28,8 +27,8 @@ def sample_olt(db_session):
 class TestHandleOntEvent:
     """Tests for handle_ont_event function."""
 
-    def test_handle_autofind_event_triggers_autofind(self, sample_olt):
-        """Test that autofind event triggers autofind scan."""
+    def test_handle_autofind_event_upserts_candidate(self, sample_olt):
+        """Test that autofind event directly upserts candidate."""
         event = OntEvent(
             event_type=OntEventType.autofind,
             frame=0,
@@ -41,26 +40,25 @@ class TestHandleOntEvent:
             source_ip="10.0.0.50",
         )
 
-        mock_result = AutofindTriggerResult(
-            triggered=True,
-            olt_id=str(sample_olt.id),
-            olt_name="Syslog-Handler-OLT",
-            task_id="task-syslog-123",
-        )
-
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-            return_value=mock_result,
-        ) as mock_trigger:
+            "app.syslog.handlers._find_olt_by_ip",
+            return_value=str(sample_olt.id),
+        ), patch(
+            "app.syslog.handlers.db_session_adapter"
+        ) as mock_adapter, patch(
+            "app.syslog.handlers.upsert_autofind_from_syslog",
+            return_value=True,
+        ) as mock_upsert:
+            # Setup the context manager mock
+            mock_adapter.session.return_value.__enter__ = lambda s: None
+            mock_adapter.session.return_value.__exit__ = lambda s, *args: None
+
             handle_ont_event(event)
 
-            mock_trigger.assert_called_once()
-            call_args = mock_trigger.call_args
-            assert call_args[1]["ip_address"] == "10.0.0.50"
-            assert call_args[1]["source"] == "syslog"
+            mock_upsert.assert_called_once()
 
     def test_handle_online_event_logs_only(self):
-        """Test that online event is logged but doesn't trigger autofind."""
+        """Test that online event is logged but doesn't upsert candidate."""
         event = OntEvent(
             event_type=OntEventType.online,
             frame=0,
@@ -73,15 +71,15 @@ class TestHandleOntEvent:
         )
 
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-        ) as mock_trigger:
+            "app.syslog.handlers.upsert_autofind_from_syslog",
+        ) as mock_upsert:
             handle_ont_event(event)
 
-            # Should not trigger autofind for online events
-            mock_trigger.assert_not_called()
+            # Should not upsert for online events
+            mock_upsert.assert_not_called()
 
     def test_handle_offline_event_logs_only(self):
-        """Test that offline event is logged but doesn't trigger autofind."""
+        """Test that offline event is logged but doesn't upsert candidate."""
         event = OntEvent(
             event_type=OntEventType.offline,
             frame=0,
@@ -94,14 +92,14 @@ class TestHandleOntEvent:
         )
 
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-        ) as mock_trigger:
+            "app.syslog.handlers.upsert_autofind_from_syslog",
+        ) as mock_upsert:
             handle_ont_event(event)
 
-            mock_trigger.assert_not_called()
+            mock_upsert.assert_not_called()
 
     def test_handle_dying_gasp_event_logs_only(self):
-        """Test that dying gasp event is logged but doesn't trigger autofind."""
+        """Test that dying gasp event is logged but doesn't upsert candidate."""
         event = OntEvent(
             event_type=OntEventType.dying_gasp,
             frame=0,
@@ -114,11 +112,11 @@ class TestHandleOntEvent:
         )
 
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-        ) as mock_trigger:
+            "app.syslog.handlers.upsert_autofind_from_syslog",
+        ) as mock_upsert:
             handle_ont_event(event)
 
-            mock_trigger.assert_not_called()
+            mock_upsert.assert_not_called()
 
 
 class TestHandleAutofindEvent:
@@ -138,73 +136,36 @@ class TestHandleAutofindEvent:
         )
 
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-        ) as mock_trigger:
+            "app.syslog.handlers._find_olt_by_ip",
+        ) as mock_find:
             _handle_autofind_event(event)
 
-            # Should not trigger autofind without source IP
-            mock_trigger.assert_not_called()
+            # Should not even try to find OLT without source IP
+            mock_find.assert_not_called()
 
-    def test_autofind_triggers_with_correct_parameters(self, sample_olt):
-        """Test that autofind is triggered with correct parameters."""
-        event = OntEvent(
-            event_type=OntEventType.autofind,
-            frame=0,
-            slot=3,
-            port=7,
-            ont_id=None,
-            serial_number="ABCD98765432",
-            raw_message="<134>Jan 1 00:00:00 OLT ONTAUTOFIND...",
-            source_ip="10.0.0.50",
-        )
-
-        mock_result = AutofindTriggerResult(
-            triggered=True,
-            olt_id=str(sample_olt.id),
-            olt_name="Syslog-Handler-OLT",
-            task_id="task-params-123",
-        )
-
-        with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-            return_value=mock_result,
-        ) as mock_trigger:
-            _handle_autofind_event(event)
-
-            mock_trigger.assert_called_once()
-            call_kwargs = mock_trigger.call_args[1]
-            assert call_kwargs["ip_address"] == "10.0.0.50"
-            assert call_kwargs["source"] == "syslog"
-
-    def test_autofind_skipped_when_in_cooldown(self, sample_olt):
-        """Test that autofind is skipped when OLT is in cooldown."""
+    def test_autofind_without_serial_logs_warning(self):
+        """Test that autofind event without serial logs warning."""
         event = OntEvent(
             event_type=OntEventType.autofind,
             frame=0,
             slot=1,
             port=2,
             ont_id=None,
-            serial_number="HWTC12345678",
+            serial_number=None,  # No serial
             raw_message="test message",
             source_ip="10.0.0.50",
         )
 
-        mock_result = AutofindTriggerResult(
-            triggered=False,
-            olt_id=str(sample_olt.id),
-            olt_name="Syslog-Handler-OLT",
-            reason="OLT is in cooldown period",
-        )
-
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-            return_value=mock_result,
-        ):
-            # Should not raise, just log
+            "app.syslog.handlers._find_olt_by_ip",
+        ) as mock_find:
             _handle_autofind_event(event)
 
-    def test_autofind_olt_not_found(self):
-        """Test handling when OLT is not found for IP."""
+            # Should not try to find OLT without serial
+            mock_find.assert_not_called()
+
+    def test_autofind_olt_not_found_does_not_upsert(self):
+        """Test that autofind for unknown OLT IP doesn't upsert."""
         event = OntEvent(
             event_type=OntEventType.autofind,
             frame=0,
@@ -216,17 +177,16 @@ class TestHandleAutofindEvent:
             source_ip="192.168.99.99",  # Unknown IP
         )
 
-        mock_result = AutofindTriggerResult(
-            triggered=False,
-            reason="No active OLT found with IP 192.168.99.99",
-        )
-
         with patch(
-            "app.syslog.handlers.trigger_autofind_by_ip",
-            return_value=mock_result,
-        ):
-            # Should not raise, just log
+            "app.syslog.handlers._find_olt_by_ip",
+            return_value=None,  # OLT not found
+        ), patch(
+            "app.syslog.handlers.upsert_autofind_from_syslog",
+        ) as mock_upsert:
             _handle_autofind_event(event)
+
+            # Should not upsert when OLT not found
+            mock_upsert.assert_not_called()
 
 
 class TestOntEventFspProperty:

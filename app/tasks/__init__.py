@@ -40,7 +40,6 @@ from app.tasks.nas import (
 from app.tasks.network_operations import cleanup_old_operations
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
-from app.tasks.olt_autofind import scan_olts_autofind
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_health_retry import (
     retry_failed_olt_connections,
@@ -55,7 +54,6 @@ from app.tasks.olt_queue import (
     process_deferred_olt_operations,
     retry_failed_operations,
 )
-from app.tasks.ont_autofind import autofind_single_olt, discover_all_olt_autofind
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_onts
 from app.tasks.ont_provisioning import (
@@ -160,7 +158,6 @@ __all__ = [
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
     "backup_all_olts",
-    "scan_olts_autofind",
     "poll_all_olt_signals",
     "finalize_olt_polling",
     "retry_failed_olt_connections",
@@ -193,8 +190,6 @@ __all__ = [
     "update_subscriber_counts",
     "check_nas_health",
     "execute_ont_bulk_action",
-    "discover_all_olt_autofind",
-    "autofind_single_olt",
     "run_enforcement",
     "evaluate_alert_rules",
     "cleanup_device_metrics",

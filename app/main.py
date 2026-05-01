@@ -107,7 +107,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.defaults", "router", "api", "user"),
     ("app.api.zabbix", "router", "api", "user"),
     ("app.api.zabbix_webhook", "router", "api", "none"),
-    ("app.api.autofind_webhook", "router", "api", "none"),
     ("app.api.wireguard", "public_router", "api", "none"),
     ("app.api.tr069_inform", "router", "api", "none"),
 ]
