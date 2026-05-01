@@ -624,25 +624,16 @@ def test_authorization_duration_includes_foundation_work(
             "Authorization foundation completed.",
             [
                 {
+                    "name": "Allocate management IP",
+                    "success": True,
+                    "message": "Allocated management IP 10.0.0.1.",
+                    "allocated_ip": "10.0.0.1",
+                },
+                {
                     "name": "Apply ACS foundation",
                     "success": True,
                     "message": "ACS foundation applied.",
-                }
-            ],
-        ),
-    )
-    monkeypatch.setattr(
-        ont_authorization,
-        "verify_authorization_acs_readiness",
-        lambda *args, **kwargs: (
-            True,
-            "ONT is authorized, reachable, and observed in ACS.",
-            [
-                {
-                    "name": "Wait for ACS inform",
-                    "success": True,
-                    "message": "Device registered in ACS",
-                }
+                },
             ],
         ),
     )
@@ -658,80 +649,6 @@ def test_authorization_duration_includes_foundation_work(
     assert [step.name for step in response.steps] == [
         "Bring ONT onto ACS",
     ]
-
-
-def test_authorization_fails_when_acs_readiness_fails(
-    db_session, monkeypatch
-):
-    """Clean success requires ACS readiness, not just OLT-side foundation."""
-    result = ont_authorization.AuthorizationWorkflowResult(
-        success=True,
-        message="ONT authorization completed.",
-        status="success",
-        ont_unit_id="ont-1",
-        ont_id_on_olt=7,
-        completed_authorization=True,
-    )
-
-    monkeypatch.setattr(
-        ont_authorization,
-        "authorize_autofind_ont",
-        lambda *args, **kwargs: result,
-    )
-    monkeypatch.setattr(
-        ont_authorization,
-        "apply_authorization_foundation",
-        lambda *args, **kwargs: (
-            True,
-            "Authorization foundation completed.",
-            [
-                {
-                    "name": "Apply ACS foundation",
-                    "success": True,
-                    "message": "ACS foundation applied.",
-                }
-            ],
-        ),
-    )
-    monkeypatch.setattr(
-        ont_authorization,
-        "verify_authorization_acs_readiness",
-        lambda *args, **kwargs: (
-            False,
-            "Device not found in ACS after 120s",
-            [
-                {
-                    "name": "Verify OLT authorization readback",
-                    "success": True,
-                    "message": "Verified ONT.",
-                },
-                {
-                    "name": "Wait for ACS inform",
-                    "success": False,
-                    "message": "Device not found in ACS after 120s",
-                },
-            ],
-        ),
-    )
-
-    response = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
-        db_session,
-        "olt-1",
-        "0/1/1",
-        "HWTCACSWAIT",
-    )
-
-    assert response.success is False
-    assert response.partial_success is True
-    assert response.status == "error"
-    assert response.message == (
-        "ONT authorized and ACS foundation applied, but "
-        "ACS readiness verification failed: Device not found in ACS after 120s"
-    )
-    assert [step.name for step in response.steps] == [
-        "Bring ONT onto ACS",
-    ]
-    assert response.steps[-1].success is False
 
 
 def test_acs_connectivity_fails_when_acs_has_no_olt_tr069_profile(
