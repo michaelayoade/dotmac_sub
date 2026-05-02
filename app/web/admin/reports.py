@@ -108,24 +108,6 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "description": "Time-series subscriber growth trend",
             },
             {
-                "name": "Referrals",
-                "url": "/admin/reports/referrals",
-                "description": "Referral performance and conversion",
-                "coming_soon": True,
-            },
-            {
-                "name": "Voucher Statistics",
-                "url": "/admin/reports/vouchers",
-                "description": "Voucher inventory and redemptions",
-                "coming_soon": True,
-            },
-            {
-                "name": "DNS Threat Archive",
-                "url": "/admin/reports/dns-threats",
-                "description": "Security-related DNS events",
-                "coming_soon": True,
-            },
-            {
                 "name": "Custom Pricing & Discounts",
                 "url": "/admin/reports/custom-pricing",
                 "description": "Custom pricing overrides",
@@ -523,44 +505,6 @@ def reports_new_services(
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/new_services.html", ctx)
-
-
-@router.get("/referrals", response_class=HTMLResponse)
-def reports_referrals(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_referrals_data(db)
-    ctx = _base_context(
-        request, db, "reports-referrals", "Referrals", "Referral program tracking"
-    )
-    ctx.update(data)
-    return templates.TemplateResponse("admin/reports/referrals.html", ctx)
-
-
-@router.get("/vouchers", response_class=HTMLResponse)
-def reports_vouchers(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_vouchers_data(db)
-    ctx = _base_context(
-        request,
-        db,
-        "reports-vouchers",
-        "Voucher Statistics",
-        "Prepaid voucher inventory and redemption",
-    )
-    ctx.update(data)
-    return templates.TemplateResponse("admin/reports/vouchers.html", ctx)
-
-
-@router.get("/dns-threats", response_class=HTMLResponse)
-def reports_dns_threats(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_dns_threats_data(db)
-    ctx = _base_context(
-        request,
-        db,
-        "reports-dns-threats",
-        "DNS Threat Archive",
-        "DNS-based threat detection events",
-    )
-    ctx.update(data)
-    return templates.TemplateResponse("admin/reports/dns_threats.html", ctx)
 
 
 @router.get("/custom-pricing", response_class=HTMLResponse)

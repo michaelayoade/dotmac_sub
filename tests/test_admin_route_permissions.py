@@ -84,7 +84,6 @@ def test_gis_routes_require_network_permissions():
     assert _route_has_permission(
         admin_gis.router, "/gis/locations/new", "POST", "network:write"
     )
-    # Note: /gis/location-corrections/{request_id}/approve route not yet implemented
 
 
 def test_reseller_routes_require_customer_permissions():

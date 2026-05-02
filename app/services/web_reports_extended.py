@@ -730,23 +730,3 @@ def get_custom_pricing_data(db: Session) -> dict:
         addon_count = 0
 
     return {"overrides": overrides, "total": len(overrides), "addon_count": addon_count}
-
-
-# ---------------------------------------------------------------------------
-# Placeholder reports (no backing models yet)
-# ---------------------------------------------------------------------------
-
-
-def get_referrals_data(db: Session) -> dict:
-    """Placeholder — referral tracking not yet implemented."""
-    return {"referrals": [], "total": 0, "coming_soon": True}
-
-
-def get_vouchers_data(db: Session) -> dict:
-    """Placeholder — voucher system not yet implemented."""
-    return {"vouchers": [], "total": 0, "coming_soon": True}
-
-
-def get_dns_threats_data(db: Session) -> dict:
-    """Placeholder — DNS threat monitoring not yet implemented."""
-    return {"threats": [], "total": 0, "coming_soon": True}

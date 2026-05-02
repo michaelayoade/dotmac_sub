@@ -361,16 +361,7 @@ def build_marketplace_data(db) -> dict[str, object]:
         key = str(metadata.get("connector_key") or "").strip().lower()
         if not key:
             name_key = str(connector.name or "").strip().lower()
-            for item in (
-                "quickbooks",
-                "xero",
-                "sage",
-                "whatsapp",
-                "paystack",
-                "flutterwave",
-                "3cx",
-                "freepbx",
-            ):
+            for item in ("whatsapp", "paystack", "flutterwave", "3cx", "freepbx"):
                 if item in name_key:
                     key = item
                     break

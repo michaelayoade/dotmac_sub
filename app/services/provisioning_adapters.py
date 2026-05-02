@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import paramiko
@@ -12,8 +11,8 @@ from ncclient import manager
 
 from app.config import settings
 from app.models.provisioning import ProvisioningVendor
-from app.services.genieacs_client import create_genieacs_client
 from app.services.adapters.base import AdapterResult
+from app.services.genieacs_client import create_genieacs_client
 from app.services.network.ont_action_common import set_and_verify
 from app.services.response import ListResponseMixin
 
@@ -53,20 +52,25 @@ class Provisioner(ABC, ListResponseMixin):
         raise NotImplementedError
 
 
-class StubProvisioner(Provisioner, ListResponseMixin):
+class UnsupportedProvisioner(Provisioner, ListResponseMixin):
     def __init__(self, vendor: ProvisioningVendor) -> None:
         self.vendor = vendor
 
     def assign_ont(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return ProvisioningResult(status="ok", detail="assign_ont stub", payload=config)
+        return self._unsupported("assign_ont")
 
     def push_config(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return ProvisioningResult(
-            status="ok", detail="push_config stub", payload=config
-        )
+        return self._unsupported("push_config")
 
     def confirm_up(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return ProvisioningResult(status="ok", detail="confirm_up stub", payload=config)
+        return self._unsupported("confirm_up")
+
+    def _unsupported(self, step: str) -> ProvisioningResult:
+        return ProvisioningResult(
+            status="failed",
+            detail=f"{self.vendor.value} provisioning step '{step}' is not supported by a registered adapter",
+            payload={"vendor": self.vendor.value, "supported": False},
+        )
 
 
 def _resolve_connection(context: dict) -> dict:
@@ -261,19 +265,19 @@ class ZteProvisioner(Provisioner, ListResponseMixin):
     vendor = ProvisioningVendor.zte
 
     def assign_ont(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return self._not_implemented("assign_ont")
+        return self._unsupported("assign_ont")
 
     def push_config(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return self._not_implemented("push_config")
+        return self._unsupported("push_config")
 
     def confirm_up(self, context: dict, config: dict | None) -> ProvisioningResult:
-        return self._not_implemented("confirm_up")
+        return self._unsupported("confirm_up")
 
-    def _not_implemented(self, step: str) -> ProvisioningResult:
+    def _unsupported(self, step: str) -> ProvisioningResult:
         return ProvisioningResult(
             status="failed",
-            detail=f"ZTE provisioning step '{step}' is not implemented",
-            payload={"vendor": self.vendor.value, "implemented": False},
+            detail=f"ZTE provisioning step '{step}' is not supported by the active provisioning adapters",
+            payload={"vendor": self.vendor.value, "supported": False},
         )
 
 
@@ -443,7 +447,7 @@ def get_provisioner(vendor: ProvisioningVendor) -> Provisioner:
     provisioner = _PROVISIONERS.get(vendor)
     if provisioner:
         return provisioner
-    return StubProvisioner(vendor)
+    return UnsupportedProvisioner(vendor)
 
 
 def register_default_provisioners() -> None:

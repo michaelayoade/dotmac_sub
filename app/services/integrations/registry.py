@@ -21,24 +21,6 @@ class ConnectorRegistryEntry:
 
 
 _STATIC_CATALOG: dict[str, dict[str, str]] = {
-    "quickbooks": {
-        "name": "QuickBooks Online",
-        "version": "1.0.0",
-        "connector_type": "accounting",
-        "description": "Bidirectional invoice/payment/customer sync.",
-    },
-    "xero": {
-        "name": "Xero",
-        "version": "1.0.0",
-        "connector_type": "accounting",
-        "description": "Accounting synchronization for invoices and payments.",
-    },
-    "sage": {
-        "name": "Sage",
-        "version": "1.0.0",
-        "connector_type": "accounting",
-        "description": "Accounting connector for African market deployments.",
-    },
     "whatsapp": {
         "name": "WhatsApp",
         "version": "1.0.0",

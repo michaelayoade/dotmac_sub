@@ -703,102 +703,28 @@ def save_ipv6_config(db: Session, data: Mapping[str, Any]) -> None:
     _save_settings(db, SettingDomain.network, data, IPV6_KEYS)
 
 
-# ---------------------------------------------------------------------------
-# 8.4 Notification Templates (placeholder)
-# ---------------------------------------------------------------------------
-
-DEFAULT_TEMPLATES = [
-    {
-        "name": "Welcome Email",
-        "category": "Onboarding",
-        "channel": "Email",
-        "description": "Sent when a new subscriber account is activated",
-    },
-    {
-        "name": "Welcome SMS",
-        "category": "Onboarding",
-        "channel": "SMS",
-        "description": "Short welcome message for new subscribers",
-    },
-    {
-        "name": "Payment Received",
-        "category": "Billing",
-        "channel": "Email",
-        "description": "Confirmation when payment is recorded",
-    },
-    {
-        "name": "Invoice Generated",
-        "category": "Billing",
-        "channel": "Email",
-        "description": "Sent when a new invoice is created",
-    },
-    {
-        "name": "Payment Overdue",
-        "category": "Billing",
-        "channel": "Both",
-        "description": "Reminder for overdue invoices",
-    },
-    {
-        "name": "Service Suspension Warning",
-        "category": "Billing",
-        "channel": "Both",
-        "description": "Warning before service is suspended",
-    },
-    {
-        "name": "Service Restored",
-        "category": "Service",
-        "channel": "Email",
-        "description": "Notification when service is restored after payment",
-    },
-    {
-        "name": "Maintenance Scheduled",
-        "category": "Network",
-        "channel": "Email",
-        "description": "Advance notice of planned maintenance",
-    },
-    {
-        "name": "Loss of Signal Alert",
-        "category": "Network",
-        "channel": "Email",
-        "description": "Alert when ONT loses signal",
-    },
-    {
-        "name": "Ticket Acknowledged",
-        "category": "Support",
-        "channel": "Email",
-        "description": "Confirmation that a support ticket was received",
-    },
-    {
-        "name": "Ticket Resolved",
-        "category": "Support",
-        "channel": "Email",
-        "description": "Notification that a support ticket was resolved",
-    },
-    {
-        "name": "Installation Progress",
-        "category": "Provisioning",
-        "channel": "Both",
-        "description": "Update on fiber installation status",
-    },
-    {
-        "name": "Password Reset",
-        "category": "Security",
-        "channel": "Email",
-        "description": "Password reset link for portal access",
-    },
-    {
-        "name": "Two-Factor Code",
-        "category": "Security",
-        "channel": "SMS",
-        "description": "2FA verification code",
-    },
-]
-
-
 def get_templates_context(db: Session) -> dict:
-    """Return notification template library context (placeholder data)."""
+    """Return notification template library context from persisted templates."""
+    from app.models.notification import NotificationChannel, NotificationTemplate
+
+    rows = (
+        db.query(NotificationTemplate)
+        .order_by(NotificationTemplate.name.asc(), NotificationTemplate.channel.asc())
+        .all()
+    )
+    templates = [
+        {
+            "name": template.name,
+            "code": template.code,
+            "channel": template.channel.value
+            if hasattr(template.channel, "value")
+            else str(template.channel),
+            "subject": template.subject,
+            "is_active": template.is_active,
+        }
+        for template in rows
+    ]
     return {
-        "templates_list": DEFAULT_TEMPLATES,
-        "categories": sorted({t["category"] for t in DEFAULT_TEMPLATES}),
-        "channels": ["Email", "SMS", "Both"],
+        "templates_list": templates,
+        "channels": [channel.value for channel in NotificationChannel],
     }

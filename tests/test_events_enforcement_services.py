@@ -9,7 +9,7 @@ Covers:
 - Notification handler: template lookup and notification creation
 - Webhook handler: delivery creation and queuing
 - Provisioning handler: auto IP allocation, service order provisioning
-- Provisioning adapters: StubProvisioner, register/get provisioner
+- Provisioning adapters: UnsupportedProvisioner, register/get provisioner
 - Enforcement service helpers: _setting_bool, address list operations
 """
 
@@ -47,7 +47,7 @@ from app.services.events.types import (
 )
 from app.services.provisioning_adapters import (
     ProvisioningResult,
-    StubProvisioner,
+    UnsupportedProvisioner,
     _resolve_connection,
     get_provisioner,
     register_provisioner,
@@ -1221,33 +1221,33 @@ class TestProvisioningHandler:
 
 
 class TestProvisioningAdapters:
-    def test_stub_provisioner_assign_ont(self):
-        stub = StubProvisioner(ProvisioningVendor.other)
-        result = stub.assign_ont({}, {"key": "value"})
+    def test_unsupported_provisioner_assign_ont(self):
+        provisioner = UnsupportedProvisioner(ProvisioningVendor.other)
+        result = provisioner.assign_ont({}, {"key": "value"})
         assert isinstance(result, ProvisioningResult)
-        assert result.status == "ok"
-        assert result.detail == "assign_ont stub"
-        assert result.payload == {"key": "value"}
+        assert result.status == "failed"
+        assert "not supported" in str(result.detail)
+        assert result.payload == {"vendor": "other", "supported": False}
 
-    def test_stub_provisioner_push_config(self):
-        stub = StubProvisioner(ProvisioningVendor.other)
-        result = stub.push_config({}, None)
-        assert result.status == "ok"
-        assert result.detail == "push_config stub"
+    def test_unsupported_provisioner_push_config(self):
+        provisioner = UnsupportedProvisioner(ProvisioningVendor.other)
+        result = provisioner.push_config({}, None)
+        assert result.status == "failed"
+        assert "not supported" in str(result.detail)
 
-    def test_stub_provisioner_confirm_up(self):
-        stub = StubProvisioner(ProvisioningVendor.other)
-        result = stub.confirm_up({"ctx": True}, None)
-        assert result.status == "ok"
-        assert result.detail == "confirm_up stub"
+    def test_unsupported_provisioner_confirm_up(self):
+        provisioner = UnsupportedProvisioner(ProvisioningVendor.other)
+        result = provisioner.confirm_up({"ctx": True}, None)
+        assert result.status == "failed"
+        assert "not supported" in str(result.detail)
 
     def test_get_provisioner_returns_registered(self):
-        stub = StubProvisioner(ProvisioningVendor.nokia)
-        register_provisioner(stub)
+        provisioner = UnsupportedProvisioner(ProvisioningVendor.nokia)
+        register_provisioner(provisioner)
         result = get_provisioner(ProvisioningVendor.nokia)
-        assert result is stub
+        assert result is provisioner
 
-    def test_get_provisioner_returns_stub_for_unknown(self):
+    def test_get_provisioner_returns_unsupported_for_unknown(self):
         # Use a vendor that we intentionally de-register
         from app.services.provisioning_adapters import _PROVISIONERS
 
@@ -1255,7 +1255,7 @@ class TestProvisioningAdapters:
         original = _PROVISIONERS.pop(ProvisioningVendor.other, None)
         try:
             provisioner = get_provisioner(ProvisioningVendor.other)
-            assert isinstance(provisioner, StubProvisioner)
+            assert isinstance(provisioner, UnsupportedProvisioner)
             assert provisioner.vendor == ProvisioningVendor.other
         finally:
             if original is not None:
@@ -1292,7 +1292,7 @@ class TestProvisioningAdapters:
         assert isinstance(provisioner, ZteProvisioner)
         result = provisioner.push_config({}, {})
         assert result.success is False
-        assert "not implemented" in (result.detail or "")
+        assert "not supported" in (result.detail or "")
 
     def test_get_provisioner_genieacs(self):
         from app.services.provisioning_adapters import GenieACSProvisioner

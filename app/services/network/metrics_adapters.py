@@ -522,13 +522,12 @@ class ZabbixMetricsAdapter(MetricsReader):
     ) -> ChartData:
         """Get traffic history from Zabbix.
 
-        Note: Traffic counters require rate calculation. For now, return
-        unavailable as this requires additional implementation.
+        Traffic counters require mapped Zabbix rate items for the ONT.
         """
         return ChartData(
             time_range=time_range,
             available=False,
-            error="Traffic history from Zabbix not yet implemented.",
+            error="Traffic history is unavailable because no Zabbix traffic counters are mapped for this ONT.",
         )
 
 

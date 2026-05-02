@@ -1,12 +1,45 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, empty_state, animation_styles, icon_chart_bar %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card, status_badge, empty_state, animation_styles, icon_chart_bar %}
+
 {% block title %}Custom Pricing & Discounts - Admin{% endblock %}
+
 {% block content %}
 {{ ambient_background("teal", "emerald") }}
 <div class="relative space-y-8">
-    {% call page_header(title="Custom Pricing & Discounts", subtitle="Non-standard pricing overrides and active discounts", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
-    {% call card("Custom Pricing & Discounts", color="teal") %}
-    {{ empty_state("Coming Soon", "Non-standard pricing overrides and active discounts reporting will be available in a future update.") }}
+    {% call page_header(title="Custom Pricing & Discounts", subtitle="Active unit-price overrides and subscription add-ons", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-2">
+        {{ stats_card("Price Overrides", total|default(0), icon_chart_bar(), color="teal", color2="emerald") }}
+        {{ stats_card("Active Add-ons", addon_count|default(0), icon_chart_bar(), color="emerald", color2="teal") }}
+    </div>
+
+    {% call card("Unit Price Overrides", color="teal") %}
+    {% if overrides %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead>
+                <tr class="text-left text-xs font-medium uppercase tracking-wider text-slate-500">
+                    <th class="px-4 py-3">Subscriber</th>
+                    <th class="px-4 py-3">Plan</th>
+                    <th class="px-4 py-3 text-right">Unit Price</th>
+                    <th class="px-4 py-3">Status</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                {% for row in overrides %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ row.subscriber or "Unknown subscriber" }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.plan or "Unlinked plan" }}</td>
+                    <td class="px-4 py-3 text-right text-sm font-mono tabular-nums text-slate-900 dark:text-white">{{ "{:,.2f}".format(row.price|float) }}</td>
+                    <td class="px-4 py-3">{{ status_badge(row.status|replace('_', ' ')|title, row.status, size="sm") }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No custom pricing", "Subscriptions with explicit unit prices will appear here.") }}
+    {% endif %}
     {% endcall %}
 </div>
 {{ animation_styles() }}

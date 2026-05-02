@@ -13,7 +13,6 @@ from app.config import settings
 from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
-from app.services import web_network_ont_assignments as web_network_ont_assignments_service
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_topology as web_network_ont_topology_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
@@ -1825,25 +1824,6 @@ def ont_tr069_status_modal(
     context.update(data)
     return templates.TemplateResponse(
         "admin/network/onts/_tr069_status_modal.html", context
-    )
-
-
-@router.get(
-    "/onts/{ont_id}/logs",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_logs_tab(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    """HTMX partial: Device logs for the Logs tab."""
-    # For now, return a placeholder - actual log fetching would require
-    # TR-069 DeviceLog parameter queries
-    context = _base_context(request, db, active_page="onts")
-    context["ont_id"] = ont_id
-    context["logs"] = []  # Placeholder - would be populated from TR-069
-    return templates.TemplateResponse(
-        "admin/network/onts/_logs_table.html", context
     )
 
 

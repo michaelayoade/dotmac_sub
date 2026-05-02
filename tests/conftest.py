@@ -467,7 +467,7 @@ def region(db_session):
     return rz
 
 
-# Skip test modules that reference models/functions not yet available on this branch
+# Skip test modules outside the active regression suite for this branch.
 collect_ignore_glob = [
     "test_admin_actor_ids.py",
     "test_customer_location_requests.py",

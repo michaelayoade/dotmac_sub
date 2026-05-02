@@ -15,7 +15,6 @@ from app.services import web_integrations as web_integrations_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
 from app.services.auth_dependencies import require_permission
-from app.services.integrations import accounting_sync as accounting_sync_service
 
 router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
 templates = Jinja2Templates(directory="templates")
@@ -359,59 +358,6 @@ def connector_embed(request: Request, connector_id: str, db: Session = Depends(g
     context.update(state)
     return templates.TemplateResponse(
         "admin/integrations/connectors/embed.html", context
-    )
-
-
-# ==================== Integration Targets ====================
-
-
-@router.get("/accounting-sync", response_class=HTMLResponse)
-def accounting_sync_dashboard(request: Request, db: Session = Depends(get_db)):
-    """Accounting sync dashboard for QuickBooks, Xero, and Sage connectors."""
-    state = accounting_sync_service.dashboard_state(db)
-    context = _base_context(request, db, active_page="connectors")
-    context.update(
-        {
-            **state,
-            "sync_success": request.query_params.get("synced") == "1",
-            "mapping_success": request.query_params.get("mapping_saved") == "1",
-        }
-    )
-    return templates.TemplateResponse(
-        "admin/integrations/accounting_sync.html", context
-    )
-
-
-@router.post("/accounting-sync/{connector_id}/sync", response_class=HTMLResponse)
-def accounting_sync_run(connector_id: str, db: Session = Depends(get_db)):
-    accounting_sync_service.run_sync_for_connector(db, connector_id)
-    return RedirectResponse(
-        url="/admin/integrations/accounting-sync?synced=1", status_code=303
-    )
-
-
-@router.post("/accounting-sync/{connector_id}/mapping", response_class=HTMLResponse)
-def accounting_sync_mapping_save(
-    connector_id: str,
-    invoice_number_field: str = Form("invoice_number"),
-    payment_reference_field: str = Form("reference"),
-    customer_name_field: str = Form("display_name"),
-    credit_note_number_field: str = Form("credit_note_number"),
-    db: Session = Depends(get_db),
-):
-    accounting_sync_service.save_field_mapping(
-        db,
-        connector_id,
-        {
-            "invoice_number": invoice_number_field,
-            "payment_reference": payment_reference_field,
-            "customer_name": customer_name_field,
-            "credit_note_number": credit_note_number_field,
-        },
-    )
-    return RedirectResponse(
-        url="/admin/integrations/accounting-sync?mapping_saved=1",
-        status_code=303,
     )
 
 
