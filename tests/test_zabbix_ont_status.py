@@ -71,7 +71,7 @@ def test_snapshot_marks_missing_or_non_one_status_offline(monkeypatch) -> None:
     assert snapshot["missing"].status == "offline"
 
 
-def test_snapshot_uses_valid_rx_signal_as_online(monkeypatch) -> None:
+def test_snapshot_keeps_rx_signal_separate_from_status(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
     walk_output = (
         ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: -2318"
@@ -91,7 +91,8 @@ def test_snapshot_uses_valid_rx_signal_as_online(monkeypatch) -> None:
         ),
     )
 
-    assert snapshot["ont-1"].status == "online"
+    assert snapshot["ont-1"].status == "offline"
+    assert snapshot["ont-1"].error == "ONT status not found in Zabbix"
     assert snapshot["ont-1"].olt_rx_dbm == -23.18
 
 
@@ -115,7 +116,8 @@ def test_snapshot_matches_huawei_encoded_external_id(monkeypatch) -> None:
         ),
     )
 
-    assert snapshot["ont-1"].status == "online"
+    assert snapshot["ont-1"].status == "offline"
+    assert snapshot["ont-1"].error == "ONT status not found in Zabbix"
     assert snapshot["ont-1"].olt_rx_dbm == -21.13
 
 
@@ -139,14 +141,17 @@ def test_snapshot_matches_numeric_external_id_with_board_and_port(monkeypatch) -
         ),
     )
 
-    assert snapshot["ont-1"].status == "online"
+    assert snapshot["ont-1"].status == "offline"
+    assert snapshot["ont-1"].error == "ONT status not found in Zabbix"
     assert snapshot["ont-1"].olt_rx_dbm == -20.6
 
 
 def test_snapshot_matches_huawei_high_pon_port(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
-    walk_output = (
+    status_walk_output = (
         ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194315264.5 = INTEGER: 1\n"
+    )
+    rx_walk_output = (
         ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194315264.5 = INTEGER: -2097"
     )
 
@@ -157,12 +162,12 @@ def test_snapshot_matches_huawei_high_pon_port(monkeypatch) -> None:
             [
                 {
                     "key_": "ont.status.walk",
-                    "lastvalue": walk_output,
+                    "lastvalue": status_walk_output,
                     "lastclock": "1777747023",
                 },
                 {
                     "key_": "opt.rx.walk",
-                    "lastvalue": walk_output,
+                    "lastvalue": rx_walk_output,
                     "lastclock": "1777747025",
                 },
             ]

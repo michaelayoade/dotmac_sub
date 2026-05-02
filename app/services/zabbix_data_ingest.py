@@ -272,7 +272,6 @@ def ingest_olt_signal_data(
     now = datetime.now(UTC)
     updated_count = 0
     offline_count = 0
-    missing_count = 0
 
     for target, metrics in ont_data.items():
         ont = ont_by_target.get(target)
@@ -283,18 +282,14 @@ def ingest_olt_signal_data(
         offline_reason: OnuOfflineReason | None = None
         if "status" in metrics:
             polled_status, offline_reason = _parse_status_code(float(metrics["status"]))
+            apply_olt_status_observation(
+                ont,
+                polled_status,
+                offline_reason,
+                now=now,
+            )
             if polled_status == OnuOnlineStatus.offline:
-                apply_olt_status_observation(
-                    ont,
-                    polled_status,
-                    offline_reason,
-                    now=now,
-                )
-                ont.signal_updated_at = now
-                ont.last_sync_source = "zabbix_data_ingest"
-                ont.last_sync_at = now
                 offline_count += 1
-                continue
 
         if metrics.get("_saw_olt_rx") and "olt_rx" not in metrics:
             ont.olt_rx_signal_dbm = None
@@ -306,30 +301,11 @@ def ingest_olt_signal_data(
         has_signal = any(
             key in metrics for key in ("olt_rx", "onu_rx", "_saw_olt_rx", "_saw_onu_rx")
         )
-        if polled_status == OnuOnlineStatus.online or has_signal:
-            apply_olt_status_observation(ont, OnuOnlineStatus.online, now=now)
+        if polled_status is not None or has_signal:
             ont.signal_updated_at = now
             ont.last_sync_source = "zabbix_data_ingest"
             ont.last_sync_at = now
             updated_count += 1
-
-    poll_targets = set(ont_data)
-    for ont_id, target in target_by_ont_id.items():
-        if target in poll_targets:
-            continue
-        ont = ont_by_target.get(target)
-        if ont is None or ont.olt_status != OnuOnlineStatus.online:
-            continue
-        apply_olt_status_observation(
-            ont,
-            OnuOnlineStatus.offline,
-            OnuOfflineReason.los,
-            now=now,
-        )
-        ont.signal_updated_at = now
-        ont.last_sync_source = "zabbix_data_ingest"
-        ont.last_sync_at = now
-        missing_count += 1
 
     db.flush()
     logger.info(
@@ -338,13 +314,12 @@ def ingest_olt_signal_data(
             "event": "olt_signal_ingest_complete",
             "olt_id": str(olt.id),
             "olt_name": olt.name,
-            "onts_online": updated_count,
+            "onts_updated": updated_count,
             "onts_offline": offline_count,
-            "onts_missing": missing_count,
             "items_processed": len(ont_data),
         },
     )
-    return updated_count + offline_count + missing_count
+    return updated_count
 
 
 def ingest_all_olt_signals(db: Session) -> IngestResult:

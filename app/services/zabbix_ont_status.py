@@ -221,7 +221,8 @@ def get_olt_ont_snapshot_from_zabbix(
 
     by_tuple = {target: ont_id for ont_id, target in targets.items()}
     values: dict[str, dict[str, object]] = {
-        ont_id: {"online": False, "error": None} for ont_id in targets
+        ont_id: {"online": False, "status_seen": False, "error": None}
+        for ont_id in targets
     }
 
     for item, entries in parsed_items:
@@ -245,6 +246,7 @@ def get_olt_ont_snapshot_from_zabbix(
                     current["updated_at"] = timestamp
             if is_status:
                 current["online"] = _parse_status_code(raw_value)
+                current["status_seen"] = True
             if is_rx:
                 dbm = _normalize_signal(raw_value)
                 if dbm is None:
@@ -253,15 +255,17 @@ def get_olt_ont_snapshot_from_zabbix(
                     current["onu_rx_dbm"] = dbm
                 else:
                     current["olt_rx_dbm"] = dbm
-                current["online"] = True
 
     for ont_id, current in values.items():
+        error = current.get("error")
+        if not current.get("status_seen"):
+            error = "ONT status not found in Zabbix"
         result[ont_id] = OntSignalData(
             online=bool(current.get("online")),
             olt_rx_dbm=current.get("olt_rx_dbm"),  # type: ignore[arg-type]
             onu_rx_dbm=current.get("onu_rx_dbm"),  # type: ignore[arg-type]
             updated_at=current.get("updated_at"),  # type: ignore[arg-type]
-            error=current.get("error"),  # type: ignore[arg-type]
+            error=error,  # type: ignore[arg-type]
         )
     return result
 

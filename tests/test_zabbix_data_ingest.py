@@ -52,7 +52,7 @@ def test_ingest_matches_full_fsp_external_id(db_session) -> None:
 
     db_session.refresh(ont)
     assert updated == 1
-    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status == OnuOnlineStatus.offline
     assert ont.olt_rx_signal_dbm == -23.18
     assert ont.last_sync_source == "zabbix_data_ingest"
 
@@ -72,7 +72,7 @@ def test_ingest_matches_huawei_encoded_external_id(db_session) -> None:
 
     db_session.refresh(ont)
     assert updated == 1
-    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status == OnuOnlineStatus.offline
     assert ont.olt_rx_signal_dbm == -21.13
 
 
@@ -97,7 +97,7 @@ def test_ingest_matches_numeric_external_id_with_board_and_port(db_session) -> N
 
     db_session.refresh(ont)
     assert updated == 1
-    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status == OnuOnlineStatus.offline
     assert ont.olt_rx_signal_dbm == -20.6
 
 
@@ -126,8 +126,25 @@ def test_ingest_clears_invalid_olt_rx_without_leaving_stale_signal(db_session) -
 
     db_session.refresh(ont)
     assert updated == 1
-    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status == OnuOnlineStatus.offline
     assert ont.olt_rx_signal_dbm is None
+
+
+def test_ingest_persists_explicit_online_status(db_session) -> None:
+    olt = _olt(db_session)
+    ont = _ont(db_session, olt, "ONT-ONLINE", external_id="0/1/0.5")
+
+    updated = ingest_olt_signal_data(
+        db_session,
+        olt,
+        client=_FakeZabbixClient(
+            [{"key_": "ont.status.walk", "lastvalue": _walk(_ifindex(7, 0), 5, 1)}]
+        ),
+    )
+
+    db_session.refresh(ont)
+    assert updated == 1
+    assert ont.olt_status == OnuOnlineStatus.online
 
 
 def test_ingest_persists_explicit_los_status(db_session) -> None:
@@ -148,7 +165,7 @@ def test_ingest_persists_explicit_los_status(db_session) -> None:
     assert ont.offline_reason == OnuOfflineReason.los
 
 
-def test_ingest_marks_missing_previously_online_mapped_ont_offline(db_session) -> None:
+def test_ingest_does_not_infer_offline_from_missing_signal(db_session) -> None:
     olt = _olt(db_session)
     now = datetime.now(UTC) - timedelta(minutes=5)
     present = _ont(db_session, olt, "ONT-PRESENT", external_id="0/1/0.5")
@@ -172,10 +189,11 @@ def test_ingest_marks_missing_previously_online_mapped_ont_offline(db_session) -
 
     db_session.refresh(present)
     db_session.refresh(missing)
-    assert updated == 2
-    assert present.olt_status == OnuOnlineStatus.online
-    assert missing.olt_status == OnuOnlineStatus.offline
-    assert missing.offline_reason == OnuOfflineReason.los
+    assert updated == 1
+    assert present.olt_status == OnuOnlineStatus.offline
+    assert present.olt_rx_signal_dbm == -23.18
+    assert missing.olt_status == OnuOnlineStatus.online
+    assert missing.offline_reason is None
 
 
 def test_ingest_does_not_force_unmapped_online_ont_offline(db_session) -> None:
@@ -203,5 +221,5 @@ def test_ingest_does_not_force_unmapped_online_ont_offline(db_session) -> None:
     db_session.refresh(mapped)
     db_session.refresh(unmapped)
     assert updated == 1
-    assert mapped.olt_status == OnuOnlineStatus.online
+    assert mapped.olt_status == OnuOnlineStatus.offline
     assert unmapped.olt_status == OnuOnlineStatus.online
