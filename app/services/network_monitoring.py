@@ -1259,7 +1259,12 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
         get_olt_ont_summary_from_zabbix,
     )
 
-    inventory_total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
+    inventory_total = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(OntUnit.is_active.is_(True))
+        .scalar()
+        or 0
+    )
     online = 0
     offline = 0
     low_signal = 0
@@ -1307,30 +1312,8 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
 
 
 def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate raw OLT link status for monitoring dashboards."""
-    from sqlalchemy import func as sa_func
-
-    from app.models.network import OntUnit, OnuOnlineStatus
-
-    total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
-    online = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.olt_status == OnuOnlineStatus.online)
-        .scalar()
-        or 0
-    )
-    offline = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.olt_status == OnuOnlineStatus.offline)
-        .scalar()
-        or 0
-    )
-
-    return {
-        "total": total,
-        "online": online,
-        "offline": offline,
-    }
+    """Aggregate raw ONT link status directly from Zabbix."""
+    return get_onu_status_summary(db)
 
 
 def get_pon_outage_summary(db: Session) -> list[dict]:
@@ -1343,55 +1326,43 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         List of dicts: {pon_port_name, olt_name, offline_count, total_count,
         offline_reasons, last_seen}.
     """
-    from sqlalchemy import func as sa_func
-
     from app.models.network import (
         OLTDevice,
         OntAssignment,
         OntUnit,
-        OnuOnlineStatus,
         PonPort,
     )
+    from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
-    # Get offline ONTs with their assignments
-    offline_onts = (
-        db.query(
-            OntUnit.id,
-            OntUnit.offline_reason,
-            OntUnit.last_seen_at,
-            OntAssignment.pon_port_id,
-        )
-        .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
-        .filter(
-            OntUnit.olt_status == OnuOnlineStatus.offline,
-            OntAssignment.active.is_(True),
-        )
+    assignments = (
+        db.query(OntAssignment)
+        .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+        .filter(OntAssignment.active.is_(True), OntUnit.is_active.is_(True))
         .all()
     )
+    ont_ids = [assignment.ont_unit_id for assignment in assignments]
+    onts = db.query(OntUnit).filter(OntUnit.id.in_(ont_ids)).all() if ont_ids else []
+    ont_by_id = {ont.id: ont for ont in onts}
+    snapshots = get_ont_snapshots_from_zabbix(db, onts)
 
-    # Group by PON port
     port_offline: dict[str, list[dict]] = {}
-    for ont_id, reason, last_seen, pon_port_id in offline_onts:
+    total_per_port: dict[str, int] = {}
+    for assignment in assignments:
+        pon_port_id = assignment.pon_port_id
         port_key = str(pon_port_id) if pon_port_id else ""
         if not port_key:
             continue
+        total_per_port[port_key] = total_per_port.get(port_key, 0) + 1
+        ont = ont_by_id.get(assignment.ont_unit_id)
+        snapshot = snapshots.get(str(assignment.ont_unit_id))
+        if snapshot and snapshot.online:
+            continue
+        reason = getattr(ont, "offline_reason", None)
+        last_seen = getattr(ont, "last_seen_at", None)
         port_offline.setdefault(port_key, []).append(
-            {"reason": reason.value if reason else "unknown", "last_seen": last_seen}
+            {"reason": reason.value if reason else "offline", "last_seen": last_seen}
         )
 
-    # Get total assigned ONTs per port for context
-    total_counts_raw = (
-        db.query(
-            OntAssignment.pon_port_id,
-            sa_func.count(OntAssignment.id),
-        )
-        .filter(OntAssignment.active.is_(True))
-        .group_by(OntAssignment.pon_port_id)
-        .all()
-    )
-    total_per_port = {str(pid): cnt for pid, cnt in total_counts_raw}
-
-    # Filter to ports where every assigned ONT is offline.
     outage_port_ids = [
         pid
         for pid, items in port_offline.items()

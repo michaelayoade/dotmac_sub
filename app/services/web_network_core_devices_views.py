@@ -1320,20 +1320,9 @@ def onts_list_page_data(
     displayed_onts = list(onts) + [
         item for item in diagnostics_onts if item not in onts
     ]
-    from app.services.zabbix_ont_status import get_olt_ont_snapshot_from_zabbix
+    from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
-    zabbix_snapshot = {}
-    onts_by_olt_id: dict[object, list[object]] = {}
-    for ont in displayed_onts:
-        olt_id_for_ont = getattr(ont, "olt_device_id", None)
-        if olt_id_for_ont is not None:
-            onts_by_olt_id.setdefault(olt_id_for_ont, []).append(ont)
-    for olt_id_for_ont, olt_onts in onts_by_olt_id.items():
-        olt_for_onts = db.get(OLTDevice, olt_id_for_ont)
-        if olt_for_onts is not None:
-            zabbix_snapshot.update(
-                get_olt_ont_snapshot_from_zabbix(olt_for_onts, olt_onts)
-            )
+    zabbix_snapshot = get_ont_snapshots_from_zabbix(db, displayed_onts)
     acs_last_inform_by_ont_id = _recent_acs_inform_by_ont_id(
         db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
     )
@@ -1366,6 +1355,9 @@ def onts_list_page_data(
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
         signal_data[str(ont.id)] = {
+            "olt_rx_dbm": zbx.olt_rx_dbm if zbx else None,
+            "onu_rx_dbm": zbx.onu_rx_dbm if zbx else None,
+            "signal_updated_at": zbx.updated_at if zbx else None,
             "quality": quality,
             "quality_class": SIGNAL_QUALITY_CLASSES.get(
                 quality, SIGNAL_QUALITY_CLASSES["unknown"]
@@ -1420,7 +1412,14 @@ def onts_list_page_data(
     if olt_id:
         olt_for_stats = db.get(OLTDevice, olt_id)
         if olt_for_stats and olt_for_stats.zabbix_host_id:
-            zabbix_stats = get_olt_ont_summary_from_zabbix(olt_for_stats)
+            stat_onts = list(
+                db.scalars(
+                    select(OntUnit)
+                    .where(OntUnit.olt_device_id == olt_for_stats.id)
+                    .where(OntUnit.is_active.is_(True))
+                ).all()
+            )
+            zabbix_stats = get_olt_ont_summary_from_zabbix(olt_for_stats, stat_onts)
             online_count = zabbix_stats.get("online_count", 0)
             offline_count = zabbix_stats.get("offline_count", 0)
             all_onts_count = zabbix_stats.get("total_count", 0) or (online_count + offline_count)
@@ -1438,7 +1437,14 @@ def onts_list_page_data(
             .where(OLTDevice.zabbix_host_id.isnot(None))
         ).all()
         for olt_item in olts_with_zabbix:
-            zabbix_stats = get_olt_ont_summary_from_zabbix(olt_item)
+            stat_onts = list(
+                db.scalars(
+                    select(OntUnit)
+                    .where(OntUnit.olt_device_id == olt_item.id)
+                    .where(OntUnit.is_active.is_(True))
+                ).all()
+            )
+            zabbix_stats = get_olt_ont_summary_from_zabbix(olt_item, stat_onts)
             online_count += zabbix_stats.get("online_count", 0)
             offline_count += zabbix_stats.get("offline_count", 0)
             low_signal_count += zabbix_stats.get("low_signal_count", 0)

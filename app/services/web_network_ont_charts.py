@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC
 
 from sqlalchemy.orm import Session
 
@@ -14,11 +14,13 @@ from app.services.network.ont_metrics import (
     get_traffic_history,
 )
 from app.services.network.signal_thresholds import get_signal_thresholds
+from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
 
 
 def _build_signal_fallback_from_ont(ont: OntUnit, time_range: str) -> ChartData:
-    """Build a one-point signal chart from current ONT snapshot fields."""
-    timestamp = getattr(ont, "signal_updated_at", None)
+    """Build a one-point signal chart from the current Zabbix ONT snapshot."""
+    zabbix_signal = get_ont_signal_from_zabbix(ont)
+    timestamp = zabbix_signal.updated_at
     if timestamp is None:
         return ChartData(
             time_range=time_range,
@@ -30,20 +32,20 @@ def _build_signal_fallback_from_ont(ont: OntUnit, time_range: str) -> ChartData:
     ts = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     series = []
-    if getattr(ont, "onu_rx_signal_dbm", None) is not None:
+    if zabbix_signal.onu_rx_dbm is not None:
         series.append(
             ChartSeries(
                 label="ONU Rx (dBm)",
                 timestamps=[ts],
-                values=[float(ont.onu_rx_signal_dbm)],
+                values=[float(zabbix_signal.onu_rx_dbm)],
             )
         )
-    if getattr(ont, "olt_rx_signal_dbm", None) is not None:
+    if zabbix_signal.olt_rx_dbm is not None:
         series.append(
             ChartSeries(
                 label="OLT Rx (dBm)",
                 timestamps=[ts],
-                values=[float(ont.olt_rx_signal_dbm)],
+                values=[float(zabbix_signal.olt_rx_dbm)],
             )
         )
 

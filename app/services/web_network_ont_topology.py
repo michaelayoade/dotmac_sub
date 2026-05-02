@@ -35,7 +35,7 @@ class TopologyNode:
     id: str | None = None
     name: str | None = None
     label: str | None = None
-    status: str = "unknown"  # 'online', 'offline', 'unknown'
+    status: str = "offline"  # 'online' or 'offline'
     url: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
@@ -114,14 +114,11 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
     nodes: list[TopologyNode] = []
     links: list[TopologyLink] = []
 
-    # Start with the ONT node
-    ont_status = "unknown"
-    if hasattr(ont, "olt_status") and ont.olt_status:
-        ont_status = (
-            ont.olt_status.value
-            if hasattr(ont.olt_status, "value")
-            else str(ont.olt_status)
-        )
+    # Start with the ONT node. Zabbix is the source of truth for runtime state.
+    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
+
+    ont_snapshot = get_ont_signal_from_zabbix(ont)
+    ont_status = "online" if ont_snapshot.online else "offline"
 
     ont_node = TopologyNode(
         node_type="ont",
@@ -169,11 +166,7 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
 
     # Add OLT node
     if olt:
-        olt_status = "unknown"
-        if hasattr(olt, "status") and olt.status:
-            olt_status = (
-                olt.status.value if hasattr(olt.status, "value") else str(olt.status)
-            )
+        olt_status = "online" if getattr(olt, "is_active", False) else "offline"
 
         olt_node = TopologyNode(
             node_type="olt",

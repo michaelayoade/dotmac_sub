@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app.models.network import OntStatusSource, OntUnit, OnuOnlineStatus
 from app.services import network as network_service
+from app.services import zabbix_ont_status
 from app.services.network.ont_status import (
     OntStatusInputs,
     apply_acs_inform_observation,
@@ -39,7 +40,6 @@ def test_recent_acs_inform_overrides_olt_offline() -> None:
             olt_seen_at=now,
             acs_last_inform_at=now,
             acs_online_window_minutes=15,
-            consecutive_offline_polls=3,
         ),
         now=now,
     )
@@ -48,7 +48,7 @@ def test_recent_acs_inform_overrides_olt_offline() -> None:
     assert resolution.effective_status_source == OntStatusSource.acs
 
 
-def test_olt_offline_requires_threshold_before_effective_offline() -> None:
+def test_olt_offline_is_trusted_directly() -> None:
     now = datetime.now(UTC)
     resolution = resolve_ont_effective_status(
         OntStatusInputs(
@@ -56,35 +56,25 @@ def test_olt_offline_requires_threshold_before_effective_offline() -> None:
             olt_seen_at=now,
             acs_last_inform_at=None,
             acs_online_window_minutes=15,
-            consecutive_offline_polls=2,
         ),
         now=now,
     )
 
     assert resolution.effective_status == OnuOnlineStatus.offline
-    assert resolution.effective_status_source == OntStatusSource.derived
+    assert resolution.effective_status_source == OntStatusSource.olt
 
 
-def test_snapshot_offline_preserves_poll_threshold() -> None:
+def test_snapshot_offline_uses_olt_source() -> None:
     now = datetime.now(UTC)
 
-    below_threshold = resolve_ont_status_snapshot(
+    snapshot = resolve_ont_status_snapshot(
         olt_status=OnuOnlineStatus.offline,
         acs_last_inform_at=None,
         now=now,
-        consecutive_offline_polls=2,
-    )
-    at_threshold = resolve_ont_status_snapshot(
-        olt_status=OnuOnlineStatus.offline,
-        acs_last_inform_at=None,
-        now=now,
-        consecutive_offline_polls=3,
     )
 
-    assert below_threshold.effective_status == OnuOnlineStatus.offline
-    assert below_threshold.effective_status_source == OntStatusSource.derived
-    assert at_threshold.effective_status == OnuOnlineStatus.offline
-    assert at_threshold.effective_status_source == OntStatusSource.olt
+    assert snapshot.effective_status == OnuOnlineStatus.offline
+    assert snapshot.effective_status_source == OntStatusSource.olt
 
 
 def test_stale_acs_does_not_override_olt_online() -> None:
@@ -124,7 +114,6 @@ def test_apply_observations_persist_source_semantics() -> None:
 
     apply_olt_status_observation(ont, OnuOnlineStatus.offline, now=now)
     assert ont.olt_status == OnuOnlineStatus.offline
-    assert ont.consecutive_offline_polls == 1
     assert ont.effective_status == OnuOnlineStatus.offline
 
     apply_acs_inform_observation(ont, now=now + timedelta(minutes=1))
@@ -161,7 +150,7 @@ def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
     snapshot = resolve_ont_status_for_model(ont, now=now)
 
     assert snapshot.effective_status == OnuOnlineStatus.offline
-    assert snapshot.effective_status_source == OntStatusSource.derived
+    assert snapshot.effective_status_source == OntStatusSource.olt
 
 
 def test_reconcile_ont_state_flags_recent_acs_over_olt_offline() -> None:
@@ -192,7 +181,7 @@ def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:
     assert resolve_effective_last_seen_at(ont) == now - timedelta(minutes=1)
 
 
-def test_list_advanced_filters_by_persisted_effective_status(db_session) -> None:
+def test_list_advanced_filters_by_zabbix_status(db_session, monkeypatch) -> None:
     ont = OntUnit(
         serial_number="ONT-EFFECTIVE-ONLINE",
         is_active=True,
@@ -201,6 +190,15 @@ def test_list_advanced_filters_by_persisted_effective_status(db_session) -> None
     )
     db_session.add(ont)
     db_session.commit()
+
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_ont_snapshots_from_zabbix",
+        lambda db, onts: {
+            str(item.id): zabbix_ont_status.OntSignalData(online=True)
+            for item in onts
+        },
+    )
 
     rows, total = network_service.ont_units.list_advanced(
         db_session,

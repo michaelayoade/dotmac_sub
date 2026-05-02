@@ -33,6 +33,7 @@ from app.schemas.network_monitoring import (
 from app.services import monitoring_metrics as monitoring_metrics_service
 from app.services import network_monitoring as monitoring_service
 from app.services import web_network_monitoring as web_network_monitoring_service
+from app.services import zabbix_ont_status
 from app.services.network import olt_polling_metrics as olt_polling_metrics_service
 from app.tasks import alert_evaluation as alert_evaluation_task
 
@@ -152,66 +153,98 @@ def test_onu_auth_trend_returns_json_safe_series(db_session):
     json.dumps(trend["values"])
 
 
-def test_get_onu_status_summary_uses_effective_status(db_session):
+def test_get_onu_status_summary_uses_zabbix_directly(db_session, monkeypatch):
+    olt = OLTDevice(
+        name="Status Summary OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        zabbix_host_id="10101",
+    )
+    db_session.add(olt)
+    db_session.flush()
     db_session.add_all(
         [
             OntUnit(
                 serial_number="ONT-SUM-1",
-                olt_status=OnuOnlineStatus.offline,
-                effective_status=OnuOnlineStatus.online,
+                olt_device_id=olt.id,
             ),
             OntUnit(
                 serial_number="ONT-SUM-2",
-                olt_status=OnuOnlineStatus.online,
-                effective_status=OnuOnlineStatus.offline,
+                olt_device_id=olt.id,
             ),
             OntUnit(
                 serial_number="ONT-SUM-3",
-                olt_status=OnuOnlineStatus.offline,
-                effective_status=OnuOnlineStatus.offline,
+                olt_device_id=olt.id,
             ),
         ]
     )
     db_session.commit()
+
+    def _fake_zabbix_summary(olt, onts=None):
+        return {
+            "total_count": len(onts or []),
+            "online_count": 2,
+            "offline_count": 1,
+            "low_signal_count": 1,
+        }
+
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_olt_ont_summary_from_zabbix",
+        _fake_zabbix_summary,
+    )
 
     summary = monitoring_service.get_onu_status_summary(db_session)
 
     assert summary["total"] == 3
-    assert summary["online"] == 1
+    assert summary["online"] == 2
     assert summary["offline"] == 1
+    assert summary["low_signal"] == 1
 
 
-def test_get_onu_olt_status_summary_uses_raw_olt_status(db_session):
+def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatch):
+    olt = OLTDevice(
+        name="OLT Link Summary OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        zabbix_host_id="20202",
+    )
+    db_session.add(olt)
+    db_session.flush()
     db_session.add_all(
         [
-            OntUnit(
-                serial_number="ONT-OLT-SUM-1",
-                olt_status=OnuOnlineStatus.online,
-                effective_status=OnuOnlineStatus.offline,
-            ),
-            OntUnit(
-                serial_number="ONT-OLT-SUM-2",
-                olt_status=OnuOnlineStatus.offline,
-                effective_status=OnuOnlineStatus.online,
-            ),
-            OntUnit(
-                serial_number="ONT-OLT-SUM-3",
-                olt_status=OnuOnlineStatus.offline,
-                effective_status=OnuOnlineStatus.online,
-            ),
+            OntUnit(serial_number="ONT-OLT-SUM-1", olt_device_id=olt.id),
+            OntUnit(serial_number="ONT-OLT-SUM-2", olt_device_id=olt.id),
+            OntUnit(serial_number="ONT-OLT-SUM-3", olt_device_id=olt.id),
         ]
     )
     db_session.commit()
+
+    def _fake_zabbix_summary(olt, onts=None):
+        return {
+            "total_count": len(onts or []),
+            "online_count": 1,
+            "offline_count": 2,
+            "low_signal_count": 0,
+        }
+
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_olt_ont_summary_from_zabbix",
+        _fake_zabbix_summary,
+    )
 
     summary = monitoring_service.get_onu_olt_status_summary(db_session)
 
     assert summary["total"] == 3
     assert summary["online"] == 1
-    assert summary["offline"] == 1
-    assert summary["unknown"] == 1
+    assert summary["offline"] == 2
+    assert "unknown" not in summary
 
 
-def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
+def test_get_pon_outage_summary_only_flags_fully_offline_ports(
+    db_session, monkeypatch
+):
     olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
     db_session.add(olt)
     db_session.commit()
@@ -227,6 +260,7 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
     for idx in range(2):
         ont = OntUnit(
             serial_number=f"FULL-{idx}-{uuid.uuid4().hex[:8]}",
+            olt_device_id=olt.id,
             olt_status=OnuOnlineStatus.offline,
             effective_status=OnuOnlineStatus.offline,
         )
@@ -238,11 +272,13 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
 
     offline_partial = OntUnit(
         serial_number=f"PARTIAL-OFFLINE-{uuid.uuid4().hex[:8]}",
+        olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.offline,
         effective_status=OnuOnlineStatus.offline,
     )
     online_partial = OntUnit(
         serial_number=f"PARTIAL-ONLINE-{uuid.uuid4().hex[:8]}",
+        olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.online,
         effective_status=OnuOnlineStatus.online,
     )
@@ -264,6 +300,20 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
     )
     db_session.commit()
 
+    def _fake_snapshots(db, onts):
+        return {
+            str(ont.id): zabbix_ont_status.OntSignalData(
+                online=ont.serial_number.startswith("PARTIAL-ONLINE")
+            )
+            for ont in onts
+        }
+
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_ont_snapshots_from_zabbix",
+        _fake_snapshots,
+    )
+
     summary = monitoring_service.get_pon_outage_summary(db_session)
 
     assert len(summary) == 1
@@ -272,35 +322,25 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
     assert summary[0]["total_count"] == 2
 
 
-def test_get_onu_status_trend_includes_effective_and_raw_olt_series(monkeypatch):
-    def _fake_vm_range_query(query: str, start, end, step):
-        samples = {
-            'onu_status_total{status="online"}': [["1712000000", "5"]],
-            'onu_status_total{status="offline"}': [["1712000000", "2"]],
-            'onu_olt_status_total{status="online"}': [["1712000000", "4"]],
-            'onu_olt_status_total{status="offline"}': [["1712000000", "3"]],
-            "sum(onu_signal_low)": [["1712000000", "1"]],
-        }
-        values = samples.get(query, [])
-        return [{"values": values}] if values else []
-
+def test_get_onu_status_trend_uses_current_zabbix_summary(db_session, monkeypatch):
     monkeypatch.setattr(
-        web_network_monitoring_service,
-        "_vm_range_query",
-        _fake_vm_range_query,
+        monitoring_service,
+        "get_onu_status_summary",
+        lambda db: {"total": 7, "online": 5, "offline": 2, "low_signal": 1},
     )
 
-    trend = web_network_monitoring_service._get_onu_status_trend(hours=24)
+    trend = web_network_monitoring_service._get_onu_status_trend(db_session, hours=24)
 
     assert trend["has_data"] is True
     assert trend["online"] == [5.0]
     assert trend["offline"] == [2.0]
-    assert trend["olt_online"] == [4.0]
-    assert trend["olt_offline"] == [3.0]
+    assert trend["olt_online"] == [5.0]
+    assert trend["olt_offline"] == [2.0]
     assert trend["low_signal"] == [1.0]
+    assert trend["source"] == "zabbix"
 
 
-def test_push_signal_metrics_uses_effective_status_and_separate_olt_counts(
+def test_push_signal_metrics_does_not_emit_ont_status_counts(
     db_session, monkeypatch
 ):
     captured: dict[str, str] = {}
@@ -332,14 +372,24 @@ def test_push_signal_metrics_uses_effective_status_and_separate_olt_counts(
             OntUnit(
                 serial_number="ONT-METRIC-1",
                 is_active=True,
-                signal_updated_at=datetime.now(UTC),
+                tr069_last_snapshot_at=datetime.now(UTC),
+                tr069_last_snapshot={
+                    "ethernet_ports": [
+                        {"bytes_sent": "1000", "bytes_received": "2000"}
+                    ]
+                },
                 olt_status=OnuOnlineStatus.offline,
                 effective_status=OnuOnlineStatus.online,
             ),
             OntUnit(
                 serial_number="ONT-METRIC-2",
                 is_active=True,
-                signal_updated_at=datetime.now(UTC),
+                tr069_last_snapshot_at=datetime.now(UTC),
+                tr069_last_snapshot={
+                    "ethernet_ports": [
+                        {"bytes_sent": "3000", "bytes_received": "4000"}
+                    ]
+                },
                 olt_status=OnuOnlineStatus.online,
                 effective_status=OnuOnlineStatus.offline,
             ),
@@ -351,10 +401,11 @@ def test_push_signal_metrics_uses_effective_status_and_separate_olt_counts(
     payload = captured["content"]
 
     assert lines_written > 0
-    assert 'onu_status_total{status="online"} 1 ' in payload
-    assert 'onu_status_total{status="offline"} 1 ' in payload
-    assert 'onu_olt_status_total{status="online"} 1 ' in payload
-    assert 'onu_olt_status_total{status="offline"} 1 ' in payload
+    assert "ont_tx_bytes_total" in payload
+    assert "ont_rx_bytes_total" in payload
+    assert "onu_status_total" not in payload
+    assert "onu_olt_status_total" not in payload
+    assert "onu_signal_low" not in payload
 
 
 def test_create_device_interface(db_session, network_device):
@@ -899,9 +950,12 @@ def test_poll_onu_signal_strength_delegates_to_olt_inventory(
         "app.services.network.olt_polling.poll_olt_ont_signals",
         lambda db, olt, community=None: {"polled": 12, "updated": 9, "errors": 1},
     )
+    def _unexpected_metrics_push(db):
+        raise AssertionError("ONT signal/status metrics must not be pushed")
+
     monkeypatch.setattr(
         "app.services.network.olt_polling.push_signal_metrics_to_victoriametrics",
-        lambda db: 5,
+        _unexpected_metrics_push,
     )
     monkeypatch.setattr(
         "app.services.network.olt_polling.get_signal_thresholds",

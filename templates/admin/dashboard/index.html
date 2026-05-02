@@ -19,7 +19,6 @@
 {% set ont_low_signal = ont_service_summary.low_signal if ont_service_summary else 0 %}
 {% set ont_olt_on = ont_olt_link_summary.online if ont_olt_link_summary else 0 %}
 {% set ont_olt_off = ont_olt_link_summary.offline if ont_olt_link_summary else 0 %}
-{% set ont_olt_unknown = ont_olt_link_summary.unknown if ont_olt_link_summary else 0 %}
 {% set pon_up = pon_interface_summary.up if pon_interface_summary else 0 %}
 {% set pon_down = pon_interface_summary.down if pon_interface_summary else 0 %}
 {% set pon_unknown = pon_interface_summary.unknown if pon_interface_summary else 0 %}
@@ -117,7 +116,7 @@
             "%d / %d" | format(ont_on, ont_total),
             "/admin/network/onts",
             "violet",
-            "%d low signal · PON %d/%d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off, ont_olt_unknown)
+            "%d low signal · PON %d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off)
                 if ont_total else
             "Service status with raw PON overlay",
             progress=ont_pct

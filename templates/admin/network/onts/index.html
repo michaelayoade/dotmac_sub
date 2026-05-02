@@ -505,9 +505,9 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if ont.olt_rx_signal_dbm is not none %}
+                                {% if sd.get("olt_rx_dbm") is not none %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium font-mono tabular-nums {{ sd.get('quality_class', 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300') }}">
-                                    {{ "%.1f"|format(ont.olt_rx_signal_dbm) }} dBm
+                                    {{ "%.1f"|format(sd.get("olt_rx_dbm")) }} dBm
                                 </span>
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>
@@ -662,9 +662,9 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if ont.olt_rx_signal_dbm is not none %}
+                                {% if sd.get("olt_rx_dbm") is not none %}
                                 <span class="font-mono text-sm tabular-nums {{ sd.get('quality_class', 'text-slate-600 dark:text-slate-300') }} inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium">
-                                    {{ "%.1f"|format(ont.olt_rx_signal_dbm) }} dBm
+                                    {{ "%.1f"|format(sd.get("olt_rx_dbm")) }} dBm
                                 </span>
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>

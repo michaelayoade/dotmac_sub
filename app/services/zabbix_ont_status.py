@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -11,6 +12,8 @@ from typing import TYPE_CHECKING
 from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from app.models.network import OLTDevice, OntUnit
 
 logger = logging.getLogger(__name__)
@@ -238,6 +241,34 @@ def get_ont_signal_from_zabbix(ont: OntUnit) -> OntSignalData:
     if olt is None:
         return _offline("OLT not linked to ONT")
     return get_olt_ont_snapshot_from_zabbix(olt, [ont]).get(str(ont.id), _offline())
+
+
+def get_ont_snapshots_from_zabbix(
+    db: Session,
+    onts: Sequence[OntUnit],
+) -> dict[str, OntSignalData]:
+    """Return Zabbix snapshots for ONTs grouped by their OLT."""
+    from app.models.network import OLTDevice
+
+    result: dict[str, OntSignalData] = {
+        str(getattr(ont, "id", "")): _offline("OLT not linked to ONT") for ont in onts
+    }
+    onts_by_olt_id: dict[object, list[OntUnit]] = {}
+    for ont in onts:
+        ont_id = str(getattr(ont, "id", ""))
+        if not ont_id:
+            continue
+        olt_id = getattr(ont, "olt_device_id", None)
+        if olt_id is None:
+            continue
+        onts_by_olt_id.setdefault(olt_id, []).append(ont)
+
+    for olt_id, olt_onts in onts_by_olt_id.items():
+        olt = db.get(OLTDevice, olt_id)
+        if olt is None:
+            continue
+        result.update(get_olt_ont_snapshot_from_zabbix(olt, olt_onts))
+    return result
 
 
 def get_olt_ont_summary_from_zabbix(

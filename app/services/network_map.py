@@ -22,6 +22,11 @@ from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
+from app.services.network.signal_thresholds import (
+    classify_signal,
+    get_signal_thresholds,
+)
+from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
 logger = logging.getLogger(__name__)
 
@@ -241,29 +246,26 @@ def build_network_map_context(db: Session) -> dict:
     ont_online = 0
     ont_offline = 0
     ont_warning = 0
+    warn_threshold, crit_threshold = get_signal_thresholds(db)
+    zabbix_snapshots = get_ont_snapshots_from_zabbix(db, ont_units)
     for ont in ont_units:
-        status = (
-            ont.effective_status.value
-            if getattr(getattr(ont, "effective_status", None), "value", None)
-            is not None
-            else str(getattr(ont, "effective_status", None) or "offline")
-        )
+        zabbix_snapshot = zabbix_snapshots.get(str(ont.id))
+        status = zabbix_snapshot.status if zabbix_snapshot else "offline"
         if status == "online":
             ont_online += 1
         else:
             ont_offline += 1
         if ont.gps_longitude is None or ont.gps_latitude is None:
             continue
-        # Classify signal quality for marker color
-        signal_quality = "unknown"
-        if ont.olt_rx_signal_dbm is not None:
-            if ont.olt_rx_signal_dbm >= -25:
-                signal_quality = "good"
-            elif ont.olt_rx_signal_dbm >= -28:
-                signal_quality = "warning"
-                ont_warning += 1
-            else:
-                signal_quality = "critical"
+        olt_rx_dbm = zabbix_snapshot.olt_rx_dbm if zabbix_snapshot else None
+        onu_rx_dbm = zabbix_snapshot.onu_rx_dbm if zabbix_snapshot else None
+        signal_quality = classify_signal(
+            olt_rx_dbm,
+            warn_threshold=warn_threshold,
+            crit_threshold=crit_threshold,
+        )
+        if signal_quality == "warning":
+            ont_warning += 1
         features.append(
             {
                 "type": "Feature",
@@ -278,8 +280,8 @@ def build_network_map_context(db: Session) -> dict:
                     "serial_number": ont.serial_number,
                     "status": status,
                     "signal_quality": signal_quality,
-                    "olt_rx_dbm": ont.olt_rx_signal_dbm,
-                    "onu_rx_dbm": ont.onu_rx_signal_dbm,
+                    "olt_rx_dbm": olt_rx_dbm,
+                    "onu_rx_dbm": onu_rx_dbm,
                     "vendor": ont.vendor,
                     "model": ont.model,
                 },

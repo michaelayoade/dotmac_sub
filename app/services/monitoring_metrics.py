@@ -285,16 +285,6 @@ def push_device_health_metrics(
     push_metrics_to_victoriametrics(lines)
 
 
-def push_onu_status_metrics(online: int, offline: int, low_signal: int) -> None:
-    """Push ONU status counts to VictoriaMetrics."""
-    lines = [
-        f'onu_status_total{{status="online"}} {online}',
-        f'onu_status_total{{status="offline"}} {offline}',
-        f"onu_signal_low {low_signal}",
-    ]
-    push_metrics_to_victoriametrics(lines)
-
-
 # ── Subscriber Impact ────────────────────────────────────────────────────
 
 
@@ -711,7 +701,6 @@ def poll_onu_signal_strength(
         decrypt_credential(olt.snmp_ro_community) if olt.snmp_ro_community else None
     )
     result = olt_polling_service.poll_olt_ont_signals(db, olt, community=community)
-    olt_polling_service.push_signal_metrics_to_victoriametrics(db)
 
     return {
         "polled": int(result.get("polled", 0)),

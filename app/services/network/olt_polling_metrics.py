@@ -1,4 +1,4 @@
-"""Push ONT signal, traffic, and OLT health metrics to VictoriaMetrics."""
+"""Push ONT traffic and OLT health metrics to VictoriaMetrics."""
 
 from __future__ import annotations
 
@@ -76,28 +76,20 @@ def _extract_traffic_bytes(snapshot: dict[str, Any] | None) -> tuple[int | None,
 
 
 def _push_signal_metrics(db: Session) -> int:
-    """Push per-ONT signal and traffic metrics to VictoriaMetrics.
+    """Push per-ONT traffic metrics to VictoriaMetrics.
 
-    Reads current signal data and TR-069 traffic snapshots from the database
-    and writes Prometheus line protocol to VictoriaMetrics' import endpoint.
+    ONT online/offline and optical signal monitoring is read directly from
+    Zabbix elsewhere. This helper only exports recent TR-069 traffic counters
+    so dashboard status cannot drift through a secondary metrics system.
 
     Returns:
         Number of metric lines written.
     """
-    # Import here to avoid circular imports at module level
-    from app.services.network.signal_thresholds import get_signal_thresholds
-
-    # Collect ONTs with signal or traffic data and their OLT/PON info
+    # Collect ONTs with traffic data and their OLT/PON info.
     stmt = (
         select(
             OntUnit.id.label("ont_id"),
             OntUnit.serial_number,
-            OntUnit.olt_rx_signal_dbm,
-            OntUnit.onu_rx_signal_dbm,
-            OntUnit.onu_tx_signal_dbm,
-            OntUnit.ont_temperature_c,
-            OntUnit.ont_voltage_v,
-            OntUnit.ont_bias_current_ma,
             OntUnit.tr069_last_snapshot,
             OntUnit.tr069_last_snapshot_at,
             OLTDevice.name.label("olt_name"),
@@ -116,9 +108,7 @@ def _push_signal_metrics(db: Session) -> int:
         )
         .where(
             OntUnit.is_active.is_(True),
-            # Include ONTs with signal data OR traffic snapshots
-            (OntUnit.signal_updated_at.is_not(None))
-            | (OntUnit.tr069_last_snapshot_at.is_not(None)),
+            OntUnit.tr069_last_snapshot_at.is_not(None),
         )
     )
     rows = db.execute(stmt).all()
@@ -145,24 +135,6 @@ def _push_signal_metrics(db: Session) -> int:
             f'olt_name="{olt_name}",pon_port="{pon_port}"'
         )
 
-        # Signal metrics
-        if row.olt_rx_signal_dbm is not None:
-            lines.append(f"ont_olt_rx_dbm{{{labels}}} {row.olt_rx_signal_dbm} {now_ms}")
-        if row.onu_rx_signal_dbm is not None:
-            lines.append(f"ont_onu_rx_dbm{{{labels}}} {row.onu_rx_signal_dbm} {now_ms}")
-        if row.onu_tx_signal_dbm is not None:
-            lines.append(f"ont_onu_tx_dbm{{{labels}}} {row.onu_tx_signal_dbm} {now_ms}")
-        if row.ont_temperature_c is not None:
-            lines.append(
-                f"ont_temperature_c{{{labels}}} {row.ont_temperature_c} {now_ms}"
-            )
-        if row.ont_voltage_v is not None:
-            lines.append(f"ont_voltage_v{{{labels}}} {row.ont_voltage_v} {now_ms}")
-        if row.ont_bias_current_ma is not None:
-            lines.append(
-                f"ont_bias_current_ma{{{labels}}} {row.ont_bias_current_ma} {now_ms}"
-            )
-
         # Traffic metrics from TR-069 snapshot (if recent enough)
         snapshot_at = row.tr069_last_snapshot_at
         if snapshot_at is not None:
@@ -184,62 +156,6 @@ def _push_signal_metrics(db: Session) -> int:
                         f"ont_rx_bytes_total{{{labels}}} {bytes_received} {snapshot_ms}"
                     )
 
-    # Aggregate effective service status counts for dashboards.
-    status_counts = db.execute(
-        select(OntUnit.effective_status, func.count())
-        .where(OntUnit.is_active.is_(True))
-        .group_by(OntUnit.effective_status)
-    ).all()
-
-    for status_val, count in status_counts:
-        status_str = (
-            status_val.value if hasattr(status_val, "value") else str(status_val)
-        )
-        lines.append(f'onu_status_total{{status="{status_str}"}} {count} {now_ms}')
-
-    # Expose raw OLT link counts separately so physical state remains visible.
-    olt_status_counts = db.execute(
-        select(OntUnit.olt_status, func.count())
-        .where(OntUnit.is_active.is_(True))
-        .group_by(OntUnit.olt_status)
-    ).all()
-
-    for status_val, count in olt_status_counts:
-        status_str = (
-            status_val.value if hasattr(status_val, "value") else str(status_val)
-        )
-        lines.append(f'onu_olt_status_total{{status="{status_str}"}} {count} {now_ms}')
-
-    # Signal quality counts
-    warn_thresh, crit_thresh = get_signal_thresholds(db)
-    warning_count = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(
-                OntUnit.is_active.is_(True),
-                OntUnit.olt_rx_signal_dbm.is_not(None),
-                OntUnit.olt_rx_signal_dbm < warn_thresh,
-                OntUnit.olt_rx_signal_dbm >= crit_thresh,
-            )
-        )
-        or 0
-    )
-    critical_count = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(
-                OntUnit.is_active.is_(True),
-                OntUnit.olt_rx_signal_dbm.is_not(None),
-                OntUnit.olt_rx_signal_dbm < crit_thresh,
-            )
-        )
-        or 0
-    )
-    lines.append(f'onu_signal_low{{severity="warning"}} {warning_count} {now_ms}')
-    lines.append(f'onu_signal_low{{severity="critical"}} {critical_count} {now_ms}')
-
     if not lines:
         return 0
 
@@ -252,7 +168,7 @@ def _push_signal_metrics(db: Session) -> int:
                 headers={"Content-Type": "text/plain"},
             )
             resp.raise_for_status()
-        logger.info("Pushed %d ONT signal metric lines to VictoriaMetrics", len(lines))
+        logger.info("Pushed %d ONT traffic metric lines to VictoriaMetrics", len(lines))
     except httpx.HTTPError as e:
         logger.error("Failed to push signal metrics to VictoriaMetrics: %s", e)
 
@@ -260,7 +176,7 @@ def _push_signal_metrics(db: Session) -> int:
 
 
 def push_signal_metrics_to_victoriametrics(db: Session) -> int:
-    """Public wrapper for pushing current ONT signal metrics to VictoriaMetrics."""
+    """Compatibility wrapper for pushing ONT traffic metrics to VictoriaMetrics."""
     return _push_signal_metrics(db)
 
 

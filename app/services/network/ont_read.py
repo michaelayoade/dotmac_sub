@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -11,10 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.ont_action_common import get_ont_strict_or_error
-from app.services.network.ont_status import (
-    resolve_effective_last_seen_at,
-    resolve_ont_status_for_model,
-)
+from app.services.network.ont_status import resolve_effective_last_seen_at
+from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +35,14 @@ def _classify_signal(dbm: float | None) -> str | None:
 
 def _binary_status(value: str | None) -> str:
     return "online" if value == "online" else "offline"
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class OntReadFacade:
@@ -62,30 +69,30 @@ class OntReadFacade:
 
             raise HTTPException(status_code=404, detail="ONT not found.")
 
-        # Base fields from DB
-        status_snapshot = resolve_ont_status_for_model(ont)
-        olt_status = _binary_status(status_snapshot.olt_status.value)
-        effective_status = _binary_status(status_snapshot.effective_status.value)
+        # Runtime status and signal come directly from Zabbix.
+        zabbix_snapshot = get_ont_signal_from_zabbix(ont)
+        zabbix_status = _binary_status(zabbix_snapshot.status)
+        acs_last_inform_at = _as_utc(getattr(ont, "acs_last_inform_at", None))
         result: dict[str, Any] = {
             "id": ont.id,
             "serial_number": ont.serial_number,
             "vendor": ont.vendor,
             "model": ont.model,
             "firmware_version": ont.firmware_version,
-            "olt_status": olt_status,
-            "effective_status_source": status_snapshot.effective_status_source.value,
-            "effective_status": effective_status,
-            "acs_last_inform_at": status_snapshot.acs_last_inform_at,
+            "olt_status": zabbix_status,
+            "effective_status_source": "zabbix",
+            "effective_status": zabbix_status,
+            "acs_last_inform_at": acs_last_inform_at,
             "last_seen_at": resolve_effective_last_seen_at(
-                ont, acs_last_inform_at=status_snapshot.acs_last_inform_at
+                ont, acs_last_inform_at=acs_last_inform_at
             ),
             "name": ont.name,
             # Signal
-            "olt_rx_signal_dbm": ont.olt_rx_signal_dbm,
-            "onu_rx_signal_dbm": ont.onu_rx_signal_dbm,
-            "signal_quality": _classify_signal(ont.olt_rx_signal_dbm),
+            "olt_rx_signal_dbm": zabbix_snapshot.olt_rx_dbm,
+            "onu_rx_signal_dbm": zabbix_snapshot.onu_rx_dbm,
+            "signal_quality": _classify_signal(zabbix_snapshot.olt_rx_dbm),
             "distance_meters": ont.distance_meters,
-            "signal_updated_at": ont.signal_updated_at,
+            "signal_updated_at": zabbix_snapshot.updated_at,
             # Observed runtime
             "observed_wan_ip": ont.observed_wan_ip,
             "observed_pppoe_status": ont.observed_pppoe_status,

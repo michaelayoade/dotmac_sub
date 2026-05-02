@@ -67,7 +67,7 @@ def monitoring_page_data(
     data["pon_outages"] = get_pon_outage_summary(db)
 
     # ONT status trend chart (Phase 4 — 24h time-series)
-    data["ont_service_trend"] = _get_onu_status_trend(hours=24)
+    data["ont_service_trend"] = _get_onu_status_trend(db, hours=24)
 
     # ONU authorization trend (Phase 6D — new registrations per day, 30 days)
     data["onu_auth_trend"] = _get_onu_auth_trend(db, days=30)
@@ -334,72 +334,26 @@ def _vm_range_query(
     return []
 
 
-def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
-    """Query ONT service and OLT-link status time-series from VictoriaMetrics.
+def _get_onu_status_trend(db: Session, hours: int = 24) -> dict[str, Any]:
+    """Return current Zabbix ONT state in the chart-compatible shape."""
+    from app.services.network_monitoring import get_onu_status_summary
 
-    Returns dict with timestamps plus effective service status, raw OLT link
-    status, and low-signal ONT counts over the given time period.
-    """
     now = datetime.now(UTC)
-    start = now - timedelta(hours=hours)
-    step = "5m" if hours <= 24 else "30m"
-
-    online_results = _vm_range_query(
-        'onu_status_total{status="online"}', start, now, step
-    )
-    offline_results = _vm_range_query(
-        'onu_status_total{status="offline"}', start, now, step
-    )
-    olt_online_results = _vm_range_query(
-        'onu_olt_status_total{status="online"}', start, now, step
-    )
-    olt_offline_results = _vm_range_query(
-        'onu_olt_status_total{status="offline"}', start, now, step
-    )
-    low_signal_results = _vm_range_query("sum(onu_signal_low)", start, now, step)
-
-    def _extract_series(results: list[dict[str, Any]]) -> dict[str, list]:
-        """Extract timestamps and values from a range query result."""
-        if not results:
-            return {"timestamps": [], "values": []}
-        values_raw = results[0].get("values", [])
-        timestamps: list[str] = []
-        values: list[float] = []
-        for ts, val in values_raw:
-            dt = datetime.fromtimestamp(float(ts), tz=UTC)
-            timestamps.append(dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            try:
-                values.append(float(val))
-            except (ValueError, TypeError):
-                values.append(0.0)
-        return {"timestamps": timestamps, "values": values}
-
-    online = _extract_series(online_results)
-    offline = _extract_series(offline_results)
-    olt_online = _extract_series(olt_online_results)
-    olt_offline = _extract_series(olt_offline_results)
-    low_signal = _extract_series(low_signal_results)
-
-    has_data = bool(
-        online["values"]
-        or offline["values"]
-        or olt_online["values"]
-        or olt_offline["values"]
-        or low_signal["values"]
-    )
+    summary = get_onu_status_summary(db)
+    timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    online = float(summary["online"])
+    offline = float(summary["offline"])
 
     return {
-        "timestamps": online["timestamps"]
-        or offline["timestamps"]
-        or olt_online["timestamps"]
-        or olt_offline["timestamps"]
-        or low_signal["timestamps"],
-        "online": online["values"],
-        "offline": offline["values"],
-        "olt_online": olt_online["values"],
-        "olt_offline": olt_offline["values"],
-        "low_signal": low_signal["values"],
-        "has_data": has_data,
+        "timestamps": [timestamp],
+        "online": [online],
+        "offline": [offline],
+        "olt_online": [online],
+        "olt_offline": [offline],
+        "low_signal": [float(summary["low_signal"])],
+        "has_data": bool(summary["total"]),
+        "source": "zabbix",
+        "hours": hours,
     }
 
 

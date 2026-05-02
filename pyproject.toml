@@ -209,7 +209,6 @@ module = [
     "app.api.network_ont_ops",
     "app.services.customer_portal_flow_payments",
     "app.services.infrastructure_health",
-    "app.services.zabbix_data_ingest",
     "app.web.admin.billing_accounts",
     "app.web.admin.integrations",
     "app.web.admin.network_core_devices",

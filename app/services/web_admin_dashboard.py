@@ -533,7 +533,7 @@ def dashboard(request: Request, db: Session):
     except Exception:
         logger.debug("Failed to load ONT summary for dashboard", exc_info=True)
         ont_service_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
-        ont_olt_link_summary = {"online": 0, "offline": 0, "unknown": 0, "total": 0}
+        ont_olt_link_summary = {"online": 0, "offline": 0, "total": 0}
 
     # --- Unconfigured ONTs (autofind candidates) ---
     unconfigured_ont_count = 0
