@@ -1,4 +1,4 @@
-"""OLT operational API — SSH discovery, authorization, service-ports, profiles, CLI."""
+"""OLT operational API — authorization, service-ports, profiles, CLI."""
 
 from __future__ import annotations
 
@@ -20,23 +20,7 @@ from app.services.network import olt_api_operations
 router = APIRouter(tags=["network-olt-operations"])
 
 
-# ── ONT Discovery & Authorization ─────────────────────────────────────
-
-
-@router.post(
-    "/olt-devices/{olt_id}/discover-onts",
-    response_model=OltOperationResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def discover_onts(olt_id: str, db: Session = Depends(get_db)) -> OltOperationResponse:
-    result = olt_api_operations.discover_onts(db, olt_id)
-    if not result.success:
-        raise HTTPException(status_code=422, detail=result.message)
-    return OltOperationResponse(
-        success=True,
-        message=result.message,
-        data=(result.data or {}).get("entries", []),
-    )
+# ── ONT Authorization ─────────────────────────────────────────────────
 
 
 @router.post(

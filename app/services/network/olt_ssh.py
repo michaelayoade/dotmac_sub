@@ -33,7 +33,6 @@ _SSH_CONNECTION_ERRORS = (
 from app.config import settings
 from app.models.network import OLTDevice
 from app.services.credential_crypto import decrypt_credential
-from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.olt_command_gen import build_service_port_command
 from app.services.network.olt_ssh_ont._common import _safe_profile_name
 from app.services.network.olt_ssh_ont.tr069 import bind_tr069_server_profile
@@ -52,7 +51,6 @@ from app.services.network.olt_vendor_adapters import (
 
 # TextFSM-based parsers (preferred)
 try:
-    from app.services.network.parsers import parse_autofind as _textfsm_parse_autofind
     from app.services.network.parsers import (
         parse_service_port_table as _textfsm_parse_service_port_table,
     )
@@ -312,21 +310,6 @@ def _validate_serial(serial_number: str) -> tuple[bool, str]:
     return True, ""
 
 
-@dataclass
-class AutofindEntry:
-    """A single ONT discovered via Huawei autofind."""
-
-    fsp: str  # Frame/Slot/Port e.g. "0/2/1"
-    serial_number: str  # e.g. "HWTC-7D4733C3"
-    serial_hex: str  # e.g. "485754437D4733C3"
-    vendor_id: str
-    model: str  # EquipmentID e.g. "EG8145V5"
-    software_version: str
-    mac: str
-    equipment_sn: str
-    autofind_time: str
-
-
 def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     """Open an SSH shell session to an OLT. Caller must close transport."""
     host = (olt.mgmt_ip or olt.hostname or "").strip()
@@ -364,155 +347,6 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     return transport, channel, policy
 
 
-def _parse_huawei_autofind_legacy(output: str) -> list[AutofindEntry]:
-    """Legacy regex parser for ``display ont autofind all`` output.
-
-    Used as fallback when TextFSM parsing fails.
-    """
-    entries: list[AutofindEntry] = []
-    blocks = re.split(r"-{10,}", output)
-    current: dict[str, str] = {}
-    for block in blocks:
-        lines = block.strip().splitlines()
-        for line in lines:
-            if ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            current[key.strip()] = value.strip()
-        sn_raw = current.get("Ont SN", "")
-        if not sn_raw:
-            continue
-        # Extract "HWTC-7D4733C3" from "485754437D4733C3 (HWTC-7D4733C3)"
-        sn_match = re.search(r"\(([^)]+)\)", sn_raw)
-        serial_display = sn_match.group(1) if sn_match else sn_raw.split()[0]
-        serial_hex = sn_raw.split()[0] if " " in sn_raw else sn_raw
-        entries.append(
-            AutofindEntry(
-                fsp=current.get("F/S/P", ""),
-                serial_number=serial_display,
-                serial_hex=serial_hex,
-                vendor_id=current.get("VendorID", ""),
-                model=current.get("Ont EquipmentID", ""),
-                software_version=current.get("Ont SoftwareVersion", ""),
-                mac=current.get("Ont MAC", ""),
-                equipment_sn=current.get("Ont Equipment SN", ""),
-                autofind_time=current.get("Ont autofind time", ""),
-            )
-        )
-        current = {}
-    return entries
-
-
-def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
-    """Parse the output of ``display ont autofind all``.
-
-    Uses TextFSM template for robust parsing with fallback to legacy regex.
-    """
-    if _TEXTFSM_AVAILABLE:
-        try:
-            result = _textfsm_parse_autofind(output)
-            if result.success and result.data:
-                # Convert from parser dataclass to local dataclass
-                return [
-                    AutofindEntry(
-                        fsp=e.fsp,
-                        serial_number=e.serial_number
-                        or decode_huawei_hex_serial(e.serial_hex)
-                        or e.serial_hex,
-                        serial_hex=e.serial_hex,
-                        vendor_id=e.vendor_id,
-                        model=e.model,
-                        software_version=e.software_version,
-                        mac=e.mac,
-                        equipment_sn=e.equipment_sn,
-                        autofind_time=e.autofind_time,
-                    )
-                    for e in result.data
-                ]
-            if result.warnings:
-                logger.debug("TextFSM autofind warnings: %s", result.warnings)
-        except (ValueError, KeyError, IndexError, AttributeError) as e:
-            logger.debug("TextFSM autofind parse failed, using legacy: %s", e)
-
-    # Fallback to legacy regex parsing
-    return _parse_huawei_autofind_legacy(output)
-
-
-def _cached_autofind_entries(olt: OLTDevice) -> list[AutofindEntry] | None:
-    from app.services.network.olt_read_cache import olt_cache
-
-    cached = olt_cache.get_autofind(str(olt.id))
-    if cached is None:
-        return None
-    try:
-        return [AutofindEntry(**entry) for entry in cached]
-    except (TypeError, ValueError) as exc:
-        logger.debug(
-            "Ignoring invalid cached autofind entries for OLT %s: %s",
-            olt.id,
-            exc,
-        )
-        olt_cache.invalidate(str(olt.id), "autofind")
-        return None
-
-
-def _cache_autofind_entries(olt: OLTDevice, entries: list[AutofindEntry]) -> None:
-    from app.services.network.olt_read_cache import olt_cache
-
-    olt_cache.set_autofind(str(olt.id), [asdict(entry) for entry in entries])
-
-
-def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
-    """SSH into OLT and retrieve unregistered ONTs from autofind table.
-
-    Returns:
-        Tuple of (success, message, list of autofind entries).
-    """
-    cached_entries = _cached_autofind_entries(olt)
-    if cached_entries is not None:
-        count = len(cached_entries)
-        msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''} (cached)"
-        return True, msg, cached_entries
-
-    try:
-        from app.services.network.olt_ssh_pool import pooled_ssh_connection
-
-        ssh_context = pooled_ssh_connection(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", []
-
-    try:
-        with ssh_context as (channel, policy):
-            # Enter enable mode and set terminal length
-            channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-            channel.send("screen-length 0 temporary\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-
-            channel.send("display ont autofind all\n")
-            # Huawei prompts "{ <cr>||<K> }:" — send CR to confirm
-            initial = _read_until_prompt(
-                channel, rf"{policy.prompt_regex}|<cr>", timeout_sec=10
-            )
-            if "<cr>" in initial:
-                channel.send("\n")
-                output = _read_until_prompt(
-                    channel, policy.prompt_regex, timeout_sec=15
-                )
-            else:
-                output = initial
-            entries = _parse_huawei_autofind(output)
-            _cache_autofind_entries(olt, entries)
-            count = len(entries)
-            msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
-            return True, msg, entries
-    except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
-        logger.error(
-            "Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True
-        )
-        return False, f"Error reading autofind: {exc}", []
-
-
 def _cached_service_ports(olt: OLTDevice, fsp: str) -> list[ServicePortEntry] | None:
     from app.services.network.olt_read_cache import olt_cache
 
@@ -548,41 +382,6 @@ def _invalidate_olt_read_cache(
 
     for operation in operations:
         olt_cache.invalidate(str(olt.id), operation)
-
-
-def _legacy_get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
-    """Compatibility path retained for tests that monkeypatch _open_shell directly."""
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", []
-
-    try:
-        # Enter enable mode and set terminal length
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        channel.send("display ont autofind all\n")
-        # Huawei prompts "{ <cr>||<K> }:" — send CR to confirm
-        initial = _read_until_prompt(channel, r"#\s*$|<cr>", timeout_sec=10)
-        if "<cr>" in initial:
-            channel.send("\n")
-            output = _read_until_prompt(channel, r"#\s*$", timeout_sec=15)
-        else:
-            output = initial
-        entries = _parse_huawei_autofind(output)
-        count = len(entries)
-        msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
-        return True, msg, entries
-    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error(
-            "Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True
-        )
-        return False, f"Error reading autofind: {exc}", []
-    finally:
-        transport.close()
 
 
 @dataclass

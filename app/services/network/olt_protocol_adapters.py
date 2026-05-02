@@ -699,25 +699,6 @@ class OltProtocolAdapter:
                 data={"service_ports": []},
             )
 
-    def get_autofind_onts(self) -> OltOperationResult:
-        """Get unregistered ONTs from autofind table."""
-        from app.services.network import olt_ssh as core
-
-        try:
-            ok, message, entries = core.get_autofind_onts(self._olt)
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                data={"autofind_entries": entries},
-            )
-        except Exception as exc:
-            logger.exception("SSH get_autofind_onts failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH get autofind ONTs failed: {exc}",
-                data={"autofind_entries": []},
-            )
-
     def get_line_profiles(self) -> OltOperationResult:
         """Get line profiles via SSH CLI."""
         from app.services.network.olt_ssh_profiles import get_line_profiles

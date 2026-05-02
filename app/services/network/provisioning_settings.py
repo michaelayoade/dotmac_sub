@@ -40,11 +40,6 @@ class ProvisioningDefaults:
     pppoe_push_max_attempts: int = 3
     pppoe_push_retry_delay_sec: int = 10
 
-    # OLT autofind
-    autofind_candidate_freshness_sec: int = 300
-    force_reauthorize_autofind_attempts: int = 3
-    force_reauthorize_retry_delay_sec: float = 2.0
-
     # Enforcement
     stale_runtime_hours: int = 24
     olt_write_mode_enabled: bool = False
@@ -79,9 +74,6 @@ SETTING_KEYS = {
     "tr069_task_ready_poll_interval_sec": DEFAULTS.tr069_task_ready_poll_interval_sec,
     "pppoe_push_max_attempts": DEFAULTS.pppoe_push_max_attempts,
     "pppoe_push_retry_delay_sec": DEFAULTS.pppoe_push_retry_delay_sec,
-    "autofind_candidate_freshness_sec": DEFAULTS.autofind_candidate_freshness_sec,
-    "force_reauthorize_autofind_attempts": DEFAULTS.force_reauthorize_autofind_attempts,
-    "force_reauthorize_retry_delay_sec": DEFAULTS.force_reauthorize_retry_delay_sec,
     "stale_runtime_hours": DEFAULTS.stale_runtime_hours,
     "olt_write_mode_enabled": DEFAULTS.olt_write_mode_enabled,
     "pppoe_provisioning_method": DEFAULTS.pppoe_provisioning_method,
@@ -210,21 +202,6 @@ def get_pppoe_push_max_attempts(db: Session | None = None) -> int:
 def get_pppoe_push_retry_delay(db: Session | None = None) -> int:
     """Get PPPoE push retry delay in seconds."""
     return get_int_setting(db, "pppoe_push_retry_delay_sec")
-
-
-def get_autofind_freshness_sec(db: Session | None = None) -> int:
-    """Get autofind candidate freshness threshold in seconds."""
-    return get_int_setting(db, "autofind_candidate_freshness_sec")
-
-
-def get_force_reauthorize_attempts(db: Session | None = None) -> int:
-    """Get force reauthorize retry attempts."""
-    return get_int_setting(db, "force_reauthorize_autofind_attempts")
-
-
-def get_force_reauthorize_retry_delay(db: Session | None = None) -> float:
-    """Get force reauthorize retry delay in seconds."""
-    return get_float_setting(db, "force_reauthorize_retry_delay_sec")
 
 
 def get_stale_runtime_hours(db: Session | None = None) -> int:

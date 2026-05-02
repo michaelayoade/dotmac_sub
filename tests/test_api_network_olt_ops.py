@@ -83,7 +83,7 @@ class TestRouterRegistration:
         from app.main import app
 
         paths = [r.path for r in app.routes]
-        assert any("/olt-devices/{olt_id}/discover-onts" in p for p in paths)
+        assert not any("/olt-devices/{olt_id}/discover-onts" in p for p in paths)
         assert any("/olt-devices/{olt_id}/test-connection" in p for p in paths)
         assert any("/olt-devices/{olt_id}/cli-command" in p for p in paths)
         assert any("/olt-devices/{olt_id}/profiles/line" in p for p in paths)

@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from starlette.requests import Request
 
 from app.models.network import (
     GponChannel,
@@ -18,8 +17,6 @@ from app.models.network import (
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services import tr069 as tr069_service
-from app.services.network.olt_inventory import get_olt_or_none
-from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
@@ -116,35 +113,3 @@ def persist_authorized_ont_inventory(
         candidate.resolved_at = now
 
     db.flush()
-
-
-def get_autofind_onts(db: Session, olt_id: str) -> tuple[bool, str, list[object]]:
-    """Retrieve unregistered ONTs from an OLT's autofind table via SSH."""
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-
-    olt = get_olt_or_none(db, olt_id)
-    if not olt:
-        return False, "OLT not found", []
-    result = get_protocol_adapter(olt).get_autofind_onts()
-    entries = result.data.get("autofind_entries", [])
-    return result.success, result.message, list(entries)
-
-
-def get_autofind_onts_audited(
-    db: Session, olt_id: str, *, request: Request | None = None
-) -> tuple[bool, str, list[object]]:
-    ok, message, entries = get_autofind_onts(db, olt_id)
-    log_olt_audit_event(
-        db,
-        request=request,
-        action="autofind_scan",
-        entity_id=olt_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-            "count": len(entries),
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
-    return ok, message, entries

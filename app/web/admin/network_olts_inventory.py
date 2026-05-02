@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -26,16 +25,14 @@ from app.services import (
 )
 from app.services.auth_dependencies import require_permission
 from app.services.ipam_adapter import ipam_adapter
-from app.services.network import olt_autofind as olt_autofind_service
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import log_network_action_result
-from app.services.network.olt_inventory import active_olt_scan_targets, get_olt_or_none
+from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
-from app.services.network.olt_read_cache import olt_cache
 from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.olt_detail_adapter import olt_detail_adapter
 from app.web.request_parsing import parse_form_data_sync
@@ -44,17 +41,6 @@ logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-olt-inventory"])
-
-
-def _format_autofind_time(raw: str | None) -> str:
-    """Format raw OLT autofind timestamp into a clean display string."""
-    if not raw:
-        return ""
-    try:
-        dt = datetime.fromisoformat(raw)
-        return dt.strftime("%Y-%m-%d %H:%M")
-    except (ValueError, TypeError):
-        return raw
 
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
@@ -1087,264 +1073,6 @@ def olt_discover_hardware(
     )
 
 
-@router.post(
-    "/olts/{olt_id}/autofind",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def olt_autofind_scan(
-    request: Request,
-    olt_id: str,
-    auto_authorize: bool = Form(False),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """Scan OLT for unregistered ONTs via SSH autofind.
-
-    If auto_authorize=True, automatically authorize all discovered ONTs.
-    """
-    # Invalidate cache to ensure fresh scan when user explicitly clicks "Scan Now"
-    olt_cache.invalidate(olt_id, "autofind")
-
-    ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
-        db, olt_id, request=request
-    )
-    _log_olt_action_result(
-        request=request,
-        olt_id=olt_id,
-        action="Scan Autofind ONTs",
-        ok=ok,
-        message=message,
-    )
-
-    auth_results: list[dict] = []
-    if ok:
-        web_network_ont_autofind_service.sync_olt_autofind_entries(
-            db,
-            olt_id=olt_id,
-            entries=entries,
-        )
-        # sync_olt_autofind_entries commits internally
-
-        # Auto-authorize if requested
-        if auto_authorize and entries:
-            actor = getattr(getattr(request.state, "user", None), "email", None)
-            for entry in entries:
-                try:
-                    auth_ok, auth_msg, ont_unit_id = olt_operations_service.authorize_ont(
-                        db,
-                        olt_id=olt_id,
-                        fsp=entry.fsp,
-                        serial_number=entry.serial_number,
-                        force_reauthorize=False,
-                        request=request,
-                    )
-                    auth_results.append({
-                        "serial_number": entry.serial_number,
-                        "fsp": entry.fsp,
-                        "success": auth_ok,
-                        "message": auth_msg,
-                        "ont_id": ont_unit_id,
-                    })
-                    # olt_operations_service.authorize_ont commits on success
-                except Exception as exc:
-                    auth_results.append({
-                        "serial_number": entry.serial_number,
-                        "fsp": entry.fsp,
-                        "success": False,
-                        "message": str(exc),
-                    })
-            # Update message with auth results
-            success_count = sum(1 for r in auth_results if r["success"])
-            fail_count = len(auth_results) - success_count
-            if success_count > 0 or fail_count > 0:
-                message = f"{message}. Auto-authorized: {success_count} succeeded, {fail_count} failed."
-
-    autofind_data = [
-        {
-            "fsp": e.fsp,
-            "serial_number": e.serial_number,
-            "serial_hex": e.serial_hex,
-            "vendor_id": e.vendor_id,
-            "model": e.model,
-            "software_version": e.software_version,
-            "mac": e.mac,
-            "equipment_sn": e.equipment_sn,
-            "autofind_time": _format_autofind_time(e.autofind_time),
-            "auth_result": next(
-                (r for r in auth_results if r["serial_number"] == e.serial_number),
-                None,
-            ),
-        }
-        for e in entries
-    ]
-    # Load authorization presets for this OLT (includes global presets)
-    from app.services.network.authorization_presets import authorization_presets
-
-    presets = authorization_presets.list(
-        db,
-        is_active=True,
-        olt_device_id=olt_id,
-        include_global=True,
-        order_by="priority",
-        order_dir="desc",
-    )
-    return templates.TemplateResponse(
-        "admin/network/olts/_autofind_results.html",
-        {
-            "request": request,
-            "olt_id": olt_id,
-            "autofind_ok": ok,
-            "autofind_message": message,
-            "autofind_entries": autofind_data,
-            "authorization_presets": presets,
-            "auto_authorized": auto_authorize and len(auth_results) > 0,
-        },
-    )
-
-
-@router.get(
-    "/olts/{olt_id}/autofind",
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def olt_autofind_scan_redirect(olt_id: str) -> RedirectResponse:
-    """Redirect accidental GETs back to the OLT autofind tab.
-
-    This primarily covers expired POST flows that were redirected through the
-    auth refresh endpoint and then replayed as GET requests by the browser.
-    """
-    return RedirectResponse(
-        url=f"/admin/network/olts/{olt_id}?tab=provisioning",
-        status_code=303,
-    )
-
-
-@router.post(
-    "/unconfigured-onts/scan",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def unconfigured_onts_scan_now(
-    request: Request,
-    olt_id: str | None = Form(None),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Start background autofind scan with per-OLT progress tracking.
-
-    Returns immediately with an operation ID for WebSocket progress updates.
-    The UI shows a progress modal with per-OLT status.
-    """
-    from uuid import uuid4
-
-    from app.models.network_operation import (
-        NetworkOperationTargetType,
-        NetworkOperationType,
-    )
-    from app.services.network_operations import network_operations
-    from app.tasks.olt_autofind import scan_olts_autofind
-
-    is_htmx = request.headers.get("HX-Request") == "true"
-
-    # Get OLT IDs to scan
-    olts = active_olt_scan_targets(db, olt_id=olt_id)
-
-    if not olts:
-        message = "No active OLTs found to scan"
-        if is_htmx:
-            return Response(
-                status_code=200,
-                headers=_toast_headers(message, "warning"),
-            )
-        return RedirectResponse(
-            f"/admin/network/onts?view=unconfigured&status=warning&message={quote_plus(message)}",
-            status_code=303,
-        )
-
-    olt_ids = [str(row[0]) for row in olts]
-    olt_names = [str(row[1]) for row in olts]
-
-    # Create network operation for tracking
-    actor = getattr(getattr(request.state, "user", None), "email", None) or "system"
-    target_type = (
-        NetworkOperationTargetType.olt
-        if olt_id
-        else NetworkOperationTargetType.system
-    )
-    target_id = olt_id or str(uuid4())  # Use placeholder UUID for "all OLTs" scan
-
-    try:
-        operation = network_operations.start(
-            db,
-            NetworkOperationType.autofind_scan,
-            target_type,
-            target_id,
-            correlation_key=f"autofind_scan:{olt_id or 'all'}",
-            input_payload={
-                "olt_id": olt_id,
-                "olt_count": len(olts),
-                "olt_names": olt_names,
-            },
-            initiated_by=actor,
-        )
-        # Commit required: Celery task needs operation visible before it runs
-        db.commit()
-    except Exception as exc:
-        # Likely duplicate operation in progress
-        error_msg = str(exc.detail) if hasattr(exc, "detail") else str(exc)
-        if is_htmx:
-            return Response(
-                status_code=200,
-                headers=_toast_headers(error_msg, "warning"),
-            )
-        return RedirectResponse(
-            f"/admin/network/onts?view=unconfigured&status=warning&message={quote_plus(error_msg)}",
-            status_code=303,
-        )
-
-    operation_id = str(operation.id)
-    olt_ids_to_scan = olt_ids if olt_id else None
-
-    # Queue background task
-    scan_olts_autofind.delay(operation_id, olt_ids_to_scan)
-
-    log_network_action_result(
-        request=request,
-        resource_type="ont_autofind_candidate",
-        resource_id=olt_id or "all",
-        action="Start Autofind Scan",
-        success=True,
-        message=f"Started background scan of {len(olts)} OLT(s)",
-        metadata={
-            "operation_id": operation_id,
-            "olt_id": olt_id,
-            "olt_count": len(olts),
-        },
-    )
-
-    # For HTMX requests, return headers to trigger modal and track operation
-    if is_htmx:
-        trigger_data = {
-            "showToast": {
-                "message": f"Scanning {len(olts)} OLT(s)...",
-                "type": "info",
-            },
-            "autofindScanStarted": {
-                "operation_id": operation_id,
-                "olt_count": len(olts),
-                "olts": [{"id": str(row[0]), "name": str(row[1])} for row in olts],
-            },
-        }
-        return Response(
-            status_code=200,
-            headers={
-                "HX-Trigger": json.dumps(trigger_data, ensure_ascii=True),
-            },
-        )
-
-    # For non-HTMX, redirect with operation ID for tracking
-    return RedirectResponse(
-        f"/admin/network/onts?view=unconfigured&scan_operation_id={operation_id}",
-        status_code=303,
-    )
-
-
 @router.get(
     "/unconfigured-onts",
     dependencies=[Depends(require_permission("network:read"))],
@@ -1580,4 +1308,7 @@ def olt_authorize_ont(
 )
 def olt_authorize_ont_redirect(olt_id: str) -> RedirectResponse:
     """Redirect accidental GET replays back to the OLT autofind tab."""
-    return olt_autofind_scan_redirect(olt_id)
+    return RedirectResponse(
+        url=f"/admin/network/olts/{olt_id}?tab=provisioning",
+        status_code=303,
+    )

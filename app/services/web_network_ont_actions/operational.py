@@ -587,17 +587,6 @@ def reconcile_operational_state(
     else:
         messages.append("Skipped targeted SNMP sync: F/S/P or OLT ONT-ID missing.")
 
-    try:
-        from app.services import web_network_ont_autofind as autofind_service
-
-        ok, msg, stats = autofind_service.sync_olt_autofind_candidates(db, str(olt.id))
-        discovered = stats.get("discovered", 0) if stats else 0
-        messages.append(f"{msg} ({discovered} autofind entries)")
-        success = success or ok
-    except Exception as exc:
-        logger.exception("Failed to refresh autofind during ONT reconcile %s", ont_id)
-        messages.append(f"Autofind refresh failed: {exc}")
-
     if getattr(ont, "tr069_acs_server_id", None) or getattr(
         olt, "tr069_acs_server_id", None
     ):

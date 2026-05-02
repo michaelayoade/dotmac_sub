@@ -207,10 +207,6 @@ def test_return_to_inventory_releases_management_ip_for_reauthorization(
             "app.services.network.olt_protocol_adapters.get_protocol_adapter",
             return_value=mock_adapter,
         ),
-        patch(
-            "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-            return_value={"ok": True, "rediscovered": False},
-        ),
     ):
         result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -268,10 +264,6 @@ def test_return_to_inventory_clears_historical_assignment_management_ips(
             "app.services.network.olt_protocol_adapters.get_protocol_adapter",
             return_value=mock_adapter,
         ),
-        patch(
-            "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-            return_value={"ok": True, "rediscovered": False},
-        ),
     ):
         result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -303,10 +295,6 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -334,10 +322,6 @@ class TestReturnOntToInventory:
             patch(
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
-            ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
             ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
@@ -376,10 +360,6 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -413,10 +393,6 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -441,10 +417,6 @@ class TestReturnOntToInventory:
             patch(
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
-            ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
             ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
@@ -474,10 +446,6 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": True},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -485,13 +453,13 @@ class TestReturnOntToInventory:
         assert result.data is not None
         assert result.data["olt_id"] == str(sample_olt.id)
         assert result.data["serial_number"] == "HWTC12345678"
-        assert result.data["autofind_refreshed"] is True
-        assert result.data["autofind_rediscovered"] is True
+        assert result.data["unconfigured_candidate_ready"] is True
+        assert "view=unconfigured" in result.data["unconfigured_url"]
 
-    def test_autofind_refresh_failure_is_nonfatal(
+    def test_return_creates_unconfigured_candidate_without_autofind_refresh(
         self, db_session, sample_ont, sample_olt, sample_assignment
     ):
-        """Return remains successful when post-return autofind refresh fails."""
+        """Return creates a reusable candidate without polling the OLT."""
         mock_adapter = MagicMock()
         mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
             success=True,
@@ -508,15 +476,11 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                side_effect=RuntimeError("autofind unavailable"),
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
         assert result.success is True
-        assert "autofind refresh failed" in result.message.lower()
+        assert "unconfigured candidate ready" in result.message.lower()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         assert sample_ont.olt_device_id is None
@@ -546,15 +510,11 @@ class TestReturnOntToInventory:
                 "app.services.network.ont_inventory.ensure_cpe_for_ont",
                 side_effect=RuntimeError("inventory subscriber missing"),
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-            ) as mock_autofind,
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
         assert result.success is False
         assert "db inventory update failed" in result.message.lower()
-        mock_autofind.assert_not_called()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         assert sample_ont.olt_device_id == sample_olt.id
@@ -621,10 +581,6 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -672,10 +628,6 @@ class TestReturnOntToInventory:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -717,10 +669,6 @@ class TestReturnToInventoryWebAction:
             patch(
                 "app.services.network.ont_inventory.emit_event"
             ) as mock_emit,
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -775,10 +723,6 @@ class TestReturnToInventoryWebAction:
             patch(
                 "app.services.network.ont_inventory.emit_event"
             ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -831,10 +775,6 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_client,
             ) as create_client,
             patch("app.services.network.ont_inventory.emit_event"),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -890,9 +830,6 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_client,
             ),
             patch("app.services.network.ont_inventory.emit_event"),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind"
-            ) as mock_autofind,
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -900,7 +837,6 @@ class TestReturnToInventoryWebAction:
         assert "acs device" in result.message.lower()
         mock_adapter.get_service_ports_for_ont.assert_called_once()
         mock_adapter.deauthorize_ont.assert_called_once()
-        mock_autofind.assert_not_called()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         db_session.refresh(tr069_device)
@@ -946,10 +882,6 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_client,
             ),
             patch("app.services.network.ont_inventory.emit_event"),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -998,16 +930,12 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_client,
             ),
             patch("app.services.network.ont_inventory.emit_event"),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind"
-            ) as mock_autofind,
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
         assert result.success is False
         assert "local cleanup" in result.message.lower()
         mock_client.delete_device.assert_not_called()
-        mock_autofind.assert_not_called()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         db_session.refresh(tr069_device)
@@ -1064,9 +992,6 @@ class TestReturnToInventoryWebAction:
                 return_value=mock_client,
             ),
             patch("app.services.network.ont_inventory.emit_event"),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind"
-            ) as mock_autofind,
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -1074,7 +999,6 @@ class TestReturnToInventoryWebAction:
         assert "acs device" in result.message.lower()
         mock_adapter.deauthorize_ont.assert_called_once()
         mock_client.delete_device.assert_called_once_with("ABC-ONT-HWTC12345678")
-        mock_autofind.assert_not_called()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         db_session.refresh(tr069_device)
@@ -1118,10 +1042,6 @@ class TestReturnToInventoryWebAction:
                 "app.services.network.service_port_allocator.release_all_for_ont",
                 return_value=2,
             ) as mock_release,
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
-            ),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -1170,10 +1090,6 @@ class TestReturnToInventoryForWeb:
             ),
             patch(
                 "app.services.network.ont_inventory.emit_event"
-            ),
-            patch(
-                "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-                return_value={"ok": True, "rediscovered": False},
             ),
             patch(
                 "app.services.web_network_ont_actions.inventory._log_action_audit"
@@ -1380,11 +1296,7 @@ class TestOntWithoutOltBinding:
         db_session.add(assignment)
         db_session.commit()
 
-        with patch(
-            "app.services.web_network_ont_autofind.refresh_returned_ont_autofind",
-            return_value={"ok": False, "message": "No OLT"},
-        ):
-            result = return_ont_to_inventory(db_session, str(ont.id))
+        result = return_ont_to_inventory(db_session, str(ont.id))
 
         assert result.success is True
         db_session.refresh(ont)

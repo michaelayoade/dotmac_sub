@@ -2,17 +2,11 @@
 
 Caches frequently accessed OLT data to reduce SSH/SNMP round trips:
 - Service ports: 60s TTL (changes infrequently)
-- Autofind results: 30s TTL (updates on periodic scan)
 - OLT profiles: 120s TTL (rarely changes)
 - Running config: 300s TTL (manual changes only)
 
 Usage:
     from app.services.network.olt_read_cache import olt_cache
-
-    # With automatic caching
-    @olt_cache.cached("autofind", ttl=30)
-    def get_autofind_onts(olt: OLTDevice) -> list[dict]:
-        # ... SSH to OLT and get autofind ...
 
     # Manual cache operations
     olt_cache.set_service_ports(olt_id, fsp, ports, ttl=60)
@@ -42,7 +36,6 @@ F = TypeVar("F", bound=Callable[..., Any])
 # Default TTLs for different data types (seconds)
 DEFAULT_TTLS = {
     "service_ports": 60,
-    "autofind": 30,
     "profiles": 120,
     "running_config": 300,
     "ont_info": 30,
@@ -64,7 +57,6 @@ class OltReadCache:
 
     Example:
         olt:550e8400-e29b-41d4-a716-446655440000:service_ports:0/2/1
-        olt:550e8400-e29b-41d4-a716-446655440000:autofind
     """
 
     def __init__(self, redis_url: str | None = None):
@@ -267,14 +259,6 @@ class OltReadCache:
         """Cache service ports for a PON port."""
         return self.set(olt_id, "service_ports", ports, fsp, ttl)
 
-    def get_autofind(self, olt_id: str) -> list[dict] | None:
-        """Get cached autofind results."""
-        return self.get(olt_id, "autofind")
-
-    def set_autofind(self, olt_id: str, entries: list[dict], ttl: int = 30) -> bool:
-        """Cache autofind results."""
-        return self.set(olt_id, "autofind", entries, "", ttl)
-
     def get_profiles(self, olt_id: str, profile_type: str) -> list[dict] | None:
         """Get cached OLT profiles."""
         return self.get(olt_id, "profiles", profile_type)
@@ -301,10 +285,6 @@ class OltReadCache:
             param_extractor: Function to extract cache params from args/kwargs.
 
         Example:
-            @olt_cache.cached("autofind", ttl=30)
-            def get_autofind_onts(olt: OLTDevice) -> list[dict]:
-                # ... expensive operation ...
-
             @olt_cache.cached("service_ports", ttl=60, param_extractor=lambda olt, fsp: fsp)
             def get_service_ports(olt: OLTDevice, fsp: str) -> list[dict]:
                 # ... expensive operation ...

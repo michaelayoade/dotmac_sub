@@ -10,7 +10,6 @@ from app.services import snmp_discovery as snmp_discovery_service
 from app.services.network import ont_metrics
 from app.services.network.olt_ssh import _run_huawei_cmd
 from app.web.admin.network_olts_inventory import olt_authorize_ont
-from app.web.admin.network_olts_inventory import router as olts_inventory_router
 
 
 class _DummyChannel:
@@ -76,30 +75,17 @@ def test_huawei_command_accepts_brace_optional_prompt(monkeypatch) -> None:
     ]
 
 
-def test_olt_autofind_get_route_exists_for_auth_redirect_recovery() -> None:
-    route = next(
-        r
-        for r in olts_inventory_router.routes
-        if getattr(r, "path", None) == "/network/olts/{olt_id}/autofind"
-        and "GET" in getattr(r, "methods", set())
-    )
-    assert "GET" in route.methods
-
-
 def test_inventory_authorize_route_accepts_force_reauthorize_flag() -> None:
     signature = inspect.signature(olt_authorize_ont)
 
     assert "force_reauthorize" in signature.parameters
 
 
-def test_olt_detail_autofind_partial_has_single_authorize_action() -> None:
-    template = Path("templates/admin/network/olts/_autofind_results.html").read_text()
+def test_olt_detail_template_has_no_manual_autofind_scan_action() -> None:
+    template = Path("templates/admin/network/olts/detail.html").read_text()
 
-    assert 'name="force_reauthorize"' not in template
-    assert 'x-data="{ submitting: false }"' in template
-    assert "Force re-authorize" not in template
-    assert "stale OLT registration will be cleaned up automatically" in template
-    assert "Authorizing..." in template
+    assert "/autofind" not in template
+    assert "Autofind ONTs" not in template
 
 
 def test_force_authorize_route_runs_synchronously(

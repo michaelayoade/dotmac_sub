@@ -1,64 +1,31 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from app.models.network import OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services import web_network_ont_autofind as autofind_service
 
 
-def test_sync_olt_autofind_candidates_creates_and_expires(db_session, monkeypatch):
+def test_upsert_autofind_from_syslog_creates_candidate(db_session):
     olt = OLTDevice(name="OLT-Autofind", mgmt_ip="198.51.100.200", is_active=True)
     db_session.add(olt)
     db_session.commit()
 
-    entries_round1 = [
-        SimpleNamespace(
-            fsp="0/2/1",
-            serial_number="HWTC7D4806C3",
-            serial_hex="485754437D4806C3",
-            vendor_id="HWTC",
-            model="EG8145V5",
-            software_version="V1",
-            mac="E0:37:68:80:50:11",
-            equipment_sn="EQ-1",
-            autofind_time="2026-03-23 12:00",
-        )
-    ]
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh.get_autofind_onts",
-        lambda _olt: (True, "Found 1 unregistered ONT", entries_round1),
+    ok = autofind_service.upsert_autofind_from_syslog(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/2/1",
+        serial_number="HWTC7D4806C3",
     )
 
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
-        db_session, str(olt.id)
-    )
     assert ok is True
-    assert stats["created"] == 1
-
     item = db_session.query(OltAutofindCandidate).one()
     assert item.is_active is True
+    assert item.fsp == "0/2/1"
     assert item.serial_number == "HWTC7D4806C3"
-
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh.get_autofind_onts",
-        lambda _olt: (True, "Found 0 unregistered ONTs", []),
-    )
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
-        db_session, str(olt.id)
-    )
-    assert ok is True
-    assert stats["resolved"] == 1
-
-    db_session.refresh(item)
-    assert item.is_active is False
-    assert item.resolution_reason == "disappeared"
-    assert item.resolved_at is not None
+    assert item.notes == "Discovered via syslog"
 
 
-def test_sync_olt_autofind_candidates_reactivates_disappeared_entry(
-    db_session, monkeypatch
-):
+def test_upsert_autofind_from_syslog_reactivates_disappeared_entry(db_session):
     olt = OLTDevice(name="OLT-Reappeared", mgmt_ip="198.51.100.203", is_active=True)
     db_session.add(olt)
     db_session.commit()
@@ -73,42 +40,22 @@ def test_sync_olt_autofind_candidates_reactivates_disappeared_entry(
     db_session.add(item)
     db_session.commit()
 
-    entries = [
-        SimpleNamespace(
-            fsp="0/2/1",
-            serial_number="HWTC7D4806C3",
-            serial_hex="485754437D4806C3",
-            vendor_id="HWTC",
-            model="EG8145V5",
-            software_version="V1",
-            mac="E0:37:68:80:50:11",
-            equipment_sn="EQ-1",
-            autofind_time="2026-03-23 12:05",
-        )
-    ]
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh.get_autofind_onts",
-        lambda _olt: (True, "Found 1 unregistered ONT", entries),
-    )
-
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
-        db_session, str(olt.id)
+    ok = autofind_service.upsert_autofind_from_syslog(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/2/1",
+        serial_number="HWTC7D4806C3",
     )
 
     assert ok is True
-    assert stats["created"] == 0
-    assert stats["updated"] == 1
     assert db_session.query(OltAutofindCandidate).count() == 1
     db_session.refresh(item)
     assert item.is_active is True
     assert item.resolution_reason is None
     assert item.resolved_at is None
-    assert item.serial_number == "HWTC7D4806C3"
 
 
-def test_sync_olt_autofind_candidates_uses_hex_when_display_serial_blank(
-    db_session, monkeypatch
-):
+def test_upsert_autofind_from_syslog_links_existing_ont_by_hex_variant(db_session):
     olt = OLTDevice(name="OLT-Hex-Reappeared", mgmt_ip="198.51.100.205", is_active=True)
     ont = OntUnit(serial_number="48575443348F8A84", is_active=True)
     db_session.add_all([olt, ont])
@@ -126,43 +73,24 @@ def test_sync_olt_autofind_candidates_uses_hex_when_display_serial_blank(
     db_session.add(item)
     db_session.commit()
 
-    entries = [
-        SimpleNamespace(
-            fsp="0/1/13",
-            serial_number="",
-            serial_hex="48575443348F8A84",
-            vendor_id="HWTC",
-            model="EG8145V5",
-            software_version="V5R019C00S050",
-            mac="",
-            equipment_sn="",
-            autofind_time="",
-        )
-    ]
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh.get_autofind_onts",
-        lambda _olt: (True, "Found 1 unregistered ONT", entries),
-    )
-
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
-        db_session, str(olt.id)
+    ok = autofind_service.upsert_autofind_from_syslog(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/1/13",
+        serial_number="48575443348F8A84",
     )
 
     assert ok is True
-    assert stats["created"] == 0
-    assert stats["updated"] == 1
     assert db_session.query(OltAutofindCandidate).count() == 1
     db_session.refresh(item)
     assert item.is_active is True
     assert item.resolution_reason is None
     assert item.resolved_at is None
-    assert item.serial_number == "48575443348F8A84"
-    assert item.serial_hex == "48575443348F8A84"
     assert item.ont_unit_id == ont.id
 
 
-def test_sync_olt_autofind_candidates_prefers_exact_serial_on_duplicate_variants(
-    db_session, monkeypatch
+def test_upsert_autofind_from_syslog_prefers_exact_serial_on_duplicate_variants(
+    db_session,
 ):
     olt = OLTDevice(
         name="OLT-Duplicate-Serials", mgmt_ip="198.51.100.207", is_active=True
@@ -189,31 +117,14 @@ def test_sync_olt_autofind_candidates_prefers_exact_serial_on_duplicate_variants
     db_session.add_all([hyphenated, compact])
     db_session.commit()
 
-    entries = [
-        SimpleNamespace(
-            fsp="0/2/11",
-            serial_number="HWTC-0EB23F9B",
-            serial_hex="485754430EB23F9B",
-            vendor_id="HWTC",
-            model="HG8546M",
-            software_version="V1",
-            mac="-",
-            equipment_sn="-",
-            autofind_time="2026-04-17 11:27",
-        )
-    ]
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh.get_autofind_onts",
-        lambda _olt: (True, "Found 1 unregistered ONT", entries),
-    )
-
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
-        db_session, str(olt.id)
+    ok = autofind_service.upsert_autofind_from_syslog(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/2/11",
+        serial_number="HWTC-0EB23F9B",
     )
 
     assert ok is True
-    assert stats["created"] == 0
-    assert stats["updated"] == 1
     db_session.refresh(hyphenated)
     db_session.refresh(compact)
     assert hyphenated.is_active is True
@@ -222,36 +133,19 @@ def test_sync_olt_autofind_candidates_prefers_exact_serial_on_duplicate_variants
     assert db_session.query(OltAutofindCandidate).count() == 2
 
 
-def test_sync_olt_autofind_candidates_skips_unmatchable_serial(db_session, monkeypatch):
+def test_upsert_autofind_from_syslog_skips_unmatchable_serial(db_session):
     olt = OLTDevice(name="OLT-Malformed", mgmt_ip="198.51.100.206", is_active=True)
     db_session.add(olt)
     db_session.commit()
 
-    entries = [
-        SimpleNamespace(
-            fsp="0/1/1",
-            serial_number="---",
-            serial_hex="",
-            vendor_id="",
-            model="",
-            software_version="",
-            mac="",
-            equipment_sn="",
-            autofind_time="",
-        )
-    ]
-    monkeypatch.setattr(
-        "app.services.network.olt_ssh.get_autofind_onts",
-        lambda _olt: (True, "Found 1 unregistered ONT", entries),
+    ok = autofind_service.upsert_autofind_from_syslog(
+        db_session,
+        olt_id=str(olt.id),
+        fsp="0/1/1",
+        serial_number="---",
     )
 
-    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
-        db_session, str(olt.id)
-    )
-
-    assert ok is True
-    assert stats["discovered"] == 1
-    assert stats["created"] == 0
+    assert ok is False
     assert db_session.query(OltAutofindCandidate).count() == 0
 
 
@@ -370,40 +264,6 @@ def test_ensure_returned_inventory_candidate_creates_without_prior_autofind(
     assert item.serial_number == "HWTC600AC29D"
     assert item.serial_hex == "48575443600AC29D"
     assert item.ont_unit_id == ont.id
-
-
-def test_sync_olt_autofind_entries_keeps_variant_match_active(db_session):
-    olt = OLTDevice(name="OLT-Autofind-Variant", mgmt_ip="198.51.100.212", is_active=True)
-    db_session.add(olt)
-    db_session.commit()
-
-    item = OltAutofindCandidate(
-        olt_id=olt.id,
-        fsp="0/2/3",
-        serial_number="485754437D4701C3",
-        serial_hex="485754437D4701C3",
-        is_active=True,
-    )
-    db_session.add(item)
-    db_session.commit()
-
-    stats = autofind_service.sync_olt_autofind_entries(
-        db_session,
-        olt_id=str(olt.id),
-        entries=[
-            SimpleNamespace(
-                fsp="0/2/3",
-                serial_number="HWTC7D4701C3",
-                serial_hex="485754437D4701C3",
-            )
-        ],
-    )
-
-    db_session.refresh(item)
-    assert stats["updated"] == 1
-    assert stats["resolved"] == 0
-    assert item.is_active is True
-    assert item.serial_number == "HWTC7D4701C3"
 
 
 def test_restore_candidate_clears_disappeared_state_for_authorization(db_session):

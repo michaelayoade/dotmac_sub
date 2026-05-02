@@ -78,18 +78,6 @@ def _serialize_authorization_result(
     }
 
 
-def _serialize_autofind_entry(entry: object) -> dict[str, object]:
-    return {
-        "fsp": getattr(entry, "fsp", ""),
-        "serial_number": getattr(entry, "serial_number", ""),
-        "serial_hex": getattr(entry, "serial_hex", None),
-        "vendor_id": getattr(entry, "vendor_id", None),
-        "model": getattr(entry, "model", None),
-        "software_version": getattr(entry, "software_version", None),
-        "mac": getattr(entry, "mac", None),
-    }
-
-
 def _serialize_service_port(entry: object) -> dict[str, object]:
     return {
         "index": getattr(entry, "index", None),
@@ -115,16 +103,6 @@ def _serialize_tr069_profile(entry: object) -> dict[str, object]:
         "acs_url": getattr(entry, "acs_url", None),
         "username": getattr(entry, "acs_username", None),
     }
-
-
-def discover_onts(db: Session, olt_id: str) -> OltApiWriteResult:
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
-
-    olt = load_olt(db, olt_id)
-    result = get_protocol_adapter(olt).get_autofind_onts()
-    entries = result.data.get("autofind_entries", [])
-    data = [_serialize_autofind_entry(entry) for entry in entries]
-    return OltApiWriteResult(result.success, result.message, {"entries": data})
 
 
 def list_service_ports(db: Session, olt_id: str, *, fsp: str) -> OltApiWriteResult:

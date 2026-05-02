@@ -483,7 +483,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     """Return an ONT to reusable inventory, closing assignments and service state."""
     from app.services.web_network_ont_autofind import (
         ensure_returned_inventory_candidate,
-        refresh_returned_ont_autofind,
+        build_unconfigured_onts_redirect_url,
     )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -653,25 +653,6 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
 
     db.refresh(ont)
 
-    try:
-        autofind_refresh = refresh_returned_ont_autofind(
-            db,
-            olt_id=previous_olt_id,
-            serial_number=getattr(ont, "serial_number", None),
-            fsp=previous_fsp,
-        )
-    except Exception as exc:
-        logger.warning("Failed to refresh returned ONT autofind: %s", exc)
-        autofind_refresh = {"ok": False, "message": str(exc)}
-
-    if autofind_refresh.get("ok"):
-        if autofind_refresh.get("rediscovered"):
-            parts.append("autofind refreshed and device rediscovered")
-        else:
-            parts.append("autofind refreshed; device not yet rediscovered")
-    else:
-        parts.append(f"autofind refresh failed: {autofind_refresh.get('message')}")
-
     candidate_ready = False
     candidate_message = ""
     if previous_olt_id and previous_fsp:
@@ -706,9 +687,10 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             "olt_id": previous_olt_id,
             "fsp": previous_fsp,
             "serial_number": ont.serial_number,
-            "autofind_refreshed": autofind_refresh.get("ok"),
-            "autofind_rediscovered": autofind_refresh.get("rediscovered"),
             "unconfigured_candidate_ready": candidate_ready,
-            "unconfigured_url": autofind_refresh.get("url"),
+            "unconfigured_url": build_unconfigured_onts_redirect_url(
+                search=getattr(ont, "serial_number", None),
+                olt_id=previous_olt_id,
+            ),
         },
     )
