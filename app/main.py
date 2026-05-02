@@ -50,6 +50,7 @@ _DEFERRED_ROUTER_TASK = None
 _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
     ("app.api.tr069_auth", "router", "api", "none"),
+    ("app.api.tr069_inform", "router", "api", "none"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
     ("app.web.auth", "router", "web", "none"),
@@ -108,7 +109,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.zabbix", "router", "api", "user"),
     ("app.api.zabbix_webhook", "router", "api", "none"),
     ("app.api.wireguard", "public_router", "api", "none"),
-    ("app.api.tr069_inform", "router", "api", "none"),
 ]
 
 

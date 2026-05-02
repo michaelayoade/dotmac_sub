@@ -1350,6 +1350,28 @@ class TestAcsPropagation:
 
         assert preset["events"]["2 PERIODIC"] is True
 
+    def test_acs_enforcement_script_sets_both_credential_pairs(self) -> None:
+        from app.services.tr069 import _build_acs_provision_script
+
+        script = _build_acs_provision_script(
+            cwmp_url="http://acs.example/cwmp",
+            cwmp_username="cwmp-user",
+            cwmp_password="cwmp-pass",
+            connection_request_username="cr-user",
+            connection_request_password="cr-pass",
+            periodic_inform_interval=300,
+        )
+
+        assert "ManagementServer.Username" in script
+        assert "cwmp-user" in script
+        assert "ManagementServer.Password" in script
+        assert "cwmp-pass" in script
+        assert "ManagementServer.ConnectionRequestUsername" in script
+        assert "cr-user" in script
+        assert "ManagementServer.ConnectionRequestPassword" in script
+        assert "cr-pass" in script
+        assert "ext(" not in script
+
     def test_auto_bind_uses_olt_linked_acs_profile_without_hardcoded_match(
         self, monkeypatch
     ) -> None:

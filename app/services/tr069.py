@@ -1739,6 +1739,8 @@ def _build_acs_provision_script(
     cwmp_url: str,
     cwmp_username: str | None = None,
     cwmp_password: str | None = None,
+    connection_request_username: str | None = None,
+    connection_request_password: str | None = None,
     periodic_inform_interval: int = settings.tr069_periodic_inform_interval,
 ) -> str:
     """Build GenieACS provision script that enforces ACS URL on every inform.
@@ -1751,6 +1753,8 @@ def _build_acs_provision_script(
         cwmp_url: The ACS CWMP URL to enforce
         cwmp_username: Optional CWMP username
         cwmp_password: Optional CWMP password
+        connection_request_username: Optional Connection Request username
+        connection_request_password: Optional Connection Request password
         periodic_inform_interval: Inform interval in seconds (default 300)
 
     Returns:
@@ -1783,8 +1787,8 @@ def _build_acs_provision_script(
         "",
         "// Set ManagementServer parameters",
         f'declare(root + ".ManagementServer.URL", {{value: now}}, {{value: {js_string(cwmp_url)}}});',
-        'declare(root + ".ManagementServer.PeriodicInformEnable", {value: now}, {value: "true"});',
-        f'declare(root + ".ManagementServer.PeriodicInformInterval", {{value: now}}, {{value: "{periodic_inform_interval}"}});',
+        'declare(root + ".ManagementServer.PeriodicInformEnable", {value: now}, {value: true});',
+        f'declare(root + ".ManagementServer.PeriodicInformInterval", {{value: now}}, {{value: {periodic_inform_interval}}});',
     ]
 
     if cwmp_username:
@@ -1797,28 +1801,15 @@ def _build_acs_provision_script(
             f'declare(root + ".ManagementServer.Password", {{value: now}}, {{value: {js_string(cwmp_password)}}});'
         )
 
-    script_lines.extend(
-        [
-            "",
-            "// Mirror each inform into DotMac so local ACS timestamps stay current.",
-            "function dotmacRead(path) {",
-            "  try {",
-            "    const result = declare(path, {value: 1});",
-            "    return result.value && result.value[0] !== undefined ? result.value[0] : null;",
-            "  } catch (e) {",
-            "    return null;",
-            "  }",
-            "}",
-            "try {",
-            '  const serial = dotmacRead(root + ".DeviceInfo.SerialNumber");',
-            '  const oui = dotmacRead(root + ".DeviceInfo.ManufacturerOUI");',
-            '  const productClass = dotmacRead(root + ".DeviceInfo.ProductClass");',
-            '  ext("dotmac-webhook", "informWebhook", null, serial, "periodic", oui, productClass);',
-            "} catch (e) {",
-            '  log("DotMac inform webhook skipped: " + e.message);',
-            "}",
-        ]
-    )
+    if connection_request_username:
+        script_lines.append(
+            f'declare(root + ".ManagementServer.ConnectionRequestUsername", {{value: now}}, {{value: {js_string(connection_request_username)}}});'
+        )
+
+    if connection_request_password:
+        script_lines.append(
+            f'declare(root + ".ManagementServer.ConnectionRequestPassword", {{value: now}}, {{value: {js_string(connection_request_password)}}});'
+        )
 
     return "\n".join(script_lines)
 
@@ -1913,16 +1904,23 @@ def push_acs_enforcement_preset(
     provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
     preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
 
-    # Decrypt password if set
+    # Decrypt passwords if set
     cwmp_password = None
     if server.cwmp_password:
         cwmp_password = decrypt_credential(server.cwmp_password)
+    connection_request_password = None
+    if server.connection_request_password:
+        connection_request_password = decrypt_credential(
+            server.connection_request_password
+        )
 
     # Build provision script using server's configured interval
     provision_script = _build_acs_provision_script(
         cwmp_url=server.cwmp_url,
         cwmp_username=server.cwmp_username,
         cwmp_password=cwmp_password,
+        connection_request_username=server.connection_request_username,
+        connection_request_password=connection_request_password,
         periodic_inform_interval=server.periodic_inform_interval or settings.tr069_periodic_inform_interval,
     )
 

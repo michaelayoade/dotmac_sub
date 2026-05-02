@@ -18,7 +18,7 @@ from app.services import tr069_auth
 from app.services.credential_crypto import encrypt_credential
 
 
-def test_tr069_auth_reads_credentials_through_desired_config_helper(db_session) -> None:
+def test_tr069_auth_does_not_use_ont_desired_config_credentials(db_session) -> None:
     ont = OntUnit(
         serial_number="AUTH-DESIRED-001",
         is_active=True,
@@ -45,15 +45,11 @@ def test_tr069_auth_reads_credentials_through_desired_config_helper(db_session) 
         "cpe_auth",
     )
 
-    assert cr == {"username": "cr-user", "password": "cr-pass", "authorized": True}
-    assert cpe == {
-        "username": "cwmp-user",
-        "password": "cwmp-pass",
-        "authorized": True,
-    }
+    assert cr == {"username": None, "password": None, "authorized": True}
+    assert cpe == {"username": None, "password": None, "authorized": True}
 
 
-def test_tr069_auth_reads_effective_olt_config_pack_credentials(db_session) -> None:
+def test_tr069_auth_reads_bound_acs_server_credentials(db_session) -> None:
     region = RegionZone(name="Auth Effective Region", code="auth-effective")
     acs = Tr069AcsServer(
         name="Effective ACS",
@@ -61,6 +57,8 @@ def test_tr069_auth_reads_effective_olt_config_pack_credentials(db_session) -> N
         is_active=True,
         cwmp_username="cwmp-effective",
         cwmp_password=encrypt_credential("cwmp-pass"),
+        connection_request_username="cr-effective",
+        connection_request_password=encrypt_credential("cr-pass"),
     )
     olt = OLTDevice(name="Auth Effective OLT")
     ont = OntUnit(
@@ -84,8 +82,8 @@ def test_tr069_auth_reads_effective_olt_config_pack_credentials(db_session) -> N
     olt.config_pack = {
         "management_vlan_id": str(vlan.id),
         "tr069_olt_profile_id": 2,
-        "cr_username": "cr-effective",
-        "cr_password": encrypt_credential("cr-pass"),
+        "cr_username": "ignored-cr-user",
+        "cr_password": encrypt_credential("ignored-cr-pass"),
     }
     db_session.commit()
 
@@ -118,6 +116,10 @@ def test_tr069_auth_ignores_inactive_unlinked_cpe_rows(db_session) -> None:
         name="Stale ACS",
         base_url="http://genieacs.example:7557",
         is_active=True,
+        cwmp_username="cwmp-effective",
+        cwmp_password=encrypt_credential("cwmp-pass"),
+        connection_request_username="cr-effective",
+        connection_request_password=encrypt_credential("cr-pass"),
     )
     olt = OLTDevice(name="Auth Stale OLT")
     ont = OntUnit(
@@ -164,6 +166,67 @@ def test_tr069_auth_ignores_inactive_unlinked_cpe_rows(db_session) -> None:
         "password": "cr-pass",
         "authorized": True,
     }
+
+
+def test_tr069_auth_fails_closed_when_bound_acs_missing_credentials(
+    db_session,
+) -> None:
+    region = RegionZone(name="Auth Missing Credentials Region", code="auth-missing")
+    acs = Tr069AcsServer(
+        name="Missing Credential ACS",
+        base_url="http://genieacs.example:7557",
+        is_active=True,
+        cwmp_username=None,
+        cwmp_password=None,
+        connection_request_username=None,
+        connection_request_password=None,
+    )
+    olt = OLTDevice(name="Auth Missing Credential OLT")
+    ont = OntUnit(
+        serial_number="AUTH-MISSING-001",
+        olt_device=olt,
+        is_active=True,
+        authorization_status=OntAuthorizationStatus.authorized,
+        desired_config={
+            "connection_request_username": "desired-cr-user",
+            "connection_request_password": "plain:desired-cr-pass",
+            "cwmp_username": "desired-cwmp-user",
+            "cwmp_password": "plain:desired-cwmp-pass",
+        },
+    )
+    db_session.add_all([region, acs, olt, ont])
+    db_session.flush()
+    olt.tr069_acs_server_id = acs.id
+    vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        tag=202,
+        name="Management Missing",
+        purpose=VlanPurpose.management,
+    )
+    db_session.add(vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "management_vlan_id": str(vlan.id),
+        "tr069_olt_profile_id": 2,
+        "cr_username": "pack-cr-user",
+        "cr_password": encrypt_credential("pack-cr-pass"),
+    }
+    db_session.commit()
+
+    cr = tr069_auth.get_device_credentials(
+        db_session,
+        "AUTH-MISSING-001",
+        "connection_request",
+    )
+    cpe = tr069_auth.get_device_credentials(
+        db_session,
+        "AUTH-MISSING-001",
+        "cpe_auth",
+    )
+
+    assert cr == {"username": None, "password": None, "authorized": True}
+    assert cpe == {"username": None, "password": None, "authorized": True}
 
 
 def test_tr069_auth_marks_unknown_serial_unauthorized(db_session) -> None:

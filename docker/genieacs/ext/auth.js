@@ -5,16 +5,12 @@
  * 1. CPE devices connecting to the ACS (inbound authentication)
  * 2. Connection requests from ACS to CPE (outbound authentication)
  *
- * Both support per-device credentials via DotMac API lookup with
- * fallback to environment variable defaults.
+ * Both use credentials returned by DotMac. Missing, incomplete, or
+ * unauthorized credential lookups fail closed.
  *
  * Environment variables:
  *   DOTMAC_AUTH_URL - DotMac API base URL for credential lookups
  *   TR069_AUTH_SHARED_SECRET - Shared secret sent to DotMac auth endpoint
- *   GENIEACS_CWMP_CONNECTION_REQUEST_USERNAME - Default CR username
- *   GENIEACS_CWMP_CONNECTION_REQUEST_PASSWORD - Default CR password
- *   GENIEACS_CPE_AUTH_USERNAME - Bootstrap/default CPE auth username
- *   GENIEACS_CPE_AUTH_PASSWORD - Bootstrap/default CPE auth password
  */
 
 const http = require("http");
@@ -23,10 +19,6 @@ const https = require("https");
 // Configuration from environment
 const DOTMAC_AUTH_URL = process.env.DOTMAC_AUTH_URL || "http://app:8001/api/v1/tr069/auth";
 const TR069_AUTH_SHARED_SECRET = process.env.TR069_AUTH_SHARED_SECRET || "";
-const DEFAULT_CR_USERNAME = process.env.GENIEACS_CWMP_CONNECTION_REQUEST_USERNAME || "acs";
-const DEFAULT_CR_PASSWORD = process.env.GENIEACS_CWMP_CONNECTION_REQUEST_PASSWORD || "acs123";
-const DEFAULT_CPE_USERNAME = process.env.GENIEACS_CPE_AUTH_USERNAME || "";
-const DEFAULT_CPE_PASSWORD = process.env.GENIEACS_CPE_AUTH_PASSWORD || "";
 
 // Cache for credentials (TTL: 5 minutes)
 const credentialCache = new Map();
@@ -97,7 +89,6 @@ function fetchCredentials(serialNumber, credentialType, callback) {
             callback(new Error("Invalid JSON response"));
           }
         } else if (res.statusCode === 404) {
-          // Device not found - use defaults
           callback(null, null);
         } else {
           callback(new Error(`HTTP ${res.statusCode}`));
@@ -130,7 +121,6 @@ exports.connectionRequest = function (args, callback) {
   const deviceId = args[0] || "";
   const serialNumber = args[1] || "";
 
-  // If serial provided, try per-device lookup
   if (serialNumber) {
     fetchCredentials(serialNumber, "connection_request", (err, creds) => {
       if (err) {
@@ -140,19 +130,11 @@ exports.connectionRequest = function (args, callback) {
       if (creds && creds.authorized && creds.username && creds.password) {
         callback(null, creds);
       } else {
-        // Fallback to defaults
-        callback(null, {
-          username: DEFAULT_CR_USERNAME,
-          password: DEFAULT_CR_PASSWORD,
-        });
+        callback(null, { username: null, password: null });
       }
     });
   } else {
-    // No serial, use defaults
-    callback(null, {
-      username: DEFAULT_CR_USERNAME,
-      password: DEFAULT_CR_PASSWORD,
-    });
+    callback(null, { username: null, password: null });
   }
 };
 
@@ -186,27 +168,26 @@ exports.authenticateCpe = function (args, callback) {
     );
   }
 
-  // Prefer per-device credentials. Fall back only to explicit bootstrap/default
-  // credentials; blank defaults must fail closed.
   if (serialNumber) {
     fetchCredentials(serialNumber, "cpe_auth", (err, creds) => {
       if (err) {
         console.error(`CPE auth lookup failed for ${serialNumber}: ${err.message}`);
       }
 
-      if (creds && creds.username && creds.password) {
+      if (creds && creds.authorized && creds.username && creds.password) {
         checkCredentials(creds.username, creds.password);
         return;
       }
 
-      if (creds && creds.authorized) {
-        checkCredentials(DEFAULT_CPE_USERNAME, DEFAULT_CPE_PASSWORD);
-        return;
-      }
-
+      console.error(
+        `CPE auth rejected serial=${serialNumber || "<missing>"} provided_username=${providedUsername || "<missing>"} authorized=${Boolean(creds && creds.authorized)} expected_username=${creds && creds.username ? creds.username : "<missing>"} has_password=${Boolean(creds && creds.password)}`
+      );
       callback(null, false);
     });
   } else {
+    console.error(
+      `CPE auth rejected serial=<missing> provided_username=${providedUsername || "<missing>"} reason=missing_serial`
+    );
     callback(null, false);
   }
 };
@@ -231,11 +212,6 @@ exports.getCpeCredentials = function (args, callback) {
 
       if (creds && creds.authorized && creds.username && creds.password) {
         callback(null, creds);
-      } else if (creds && creds.authorized) {
-        callback(null, {
-          username: DEFAULT_CPE_USERNAME,
-          password: DEFAULT_CPE_PASSWORD,
-        });
       } else {
         callback(null, { username: null, password: null });
       }
