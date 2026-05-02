@@ -17,7 +17,6 @@ from app.models.network import (
     OntUnit,
     PonPort,
 )
-from app.services.network.olt_polling_parsers import OltHealthReading
 
 logger = logging.getLogger(__name__)
 
@@ -175,56 +174,6 @@ def _push_signal_metrics(db: Session) -> int:
     return len(lines)
 
 
-def push_signal_metrics_to_victoriametrics(db: Session) -> int:
-    """Compatibility wrapper for pushing ONT traffic metrics to VictoriaMetrics."""
+def push_ont_traffic_metrics_to_victoriametrics(db: Session) -> int:
+    """Push recent TR-069 ONT traffic metrics to VictoriaMetrics."""
     return _push_signal_metrics(db)
-
-
-def _push_olt_health_metrics(health_map: dict[str, OltHealthReading]) -> int:
-    """Push OLT health metrics to VictoriaMetrics.
-
-    Args:
-        health_map: Dict of OLT name -> OltHealthReading.
-
-    Returns:
-        Number of metric lines written.
-    """
-    if not health_map:
-        return 0
-
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
-    lines: list[str] = []
-
-    for olt_name, reading in health_map.items():
-        labels = f'olt_name="{olt_name}"'
-        if reading.cpu_percent is not None:
-            lines.append(f"olt_cpu_percent{{{labels}}} {reading.cpu_percent} {now_ms}")
-        if reading.temperature_c is not None:
-            lines.append(
-                f"olt_temperature_celsius{{{labels}}} {reading.temperature_c} {now_ms}"
-            )
-        if reading.memory_percent is not None:
-            lines.append(
-                f"olt_memory_percent{{{labels}}} {reading.memory_percent} {now_ms}"
-            )
-        if reading.uptime_seconds is not None:
-            lines.append(
-                f"olt_uptime_seconds{{{labels}}} {reading.uptime_seconds} {now_ms}"
-            )
-
-    if not lines:
-        return 0
-
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            resp = client.post(
-                f"{_VM_URL}/api/v1/import/prometheus",
-                content="\n".join(lines),
-                headers={"Content-Type": "text/plain"},
-            )
-            resp.raise_for_status()
-        logger.info("Pushed %d OLT health metric lines to VictoriaMetrics", len(lines))
-    except httpx.HTTPError as e:
-        logger.error("Failed to push OLT health metrics to VictoriaMetrics: %s", e)
-
-    return len(lines)

@@ -257,3 +257,83 @@ def sync_devices_to_zabbix() -> dict[str, Any]:
         return {"error": str(exc)}
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
+    soft_time_limit=240,
+    time_limit=300,
+)
+def ingest_olt_signals_from_zabbix() -> dict[str, Any]:
+    """Persist ONT signal/status observations from Zabbix walk items."""
+    if not _zabbix_enabled():
+        return {"skipped": "zabbix_token_missing"}
+
+    db = db_session_adapter.create_session()
+    try:
+        from app.services.network.olt_polling_metrics import (
+            push_ont_traffic_metrics_to_victoriametrics,
+        )
+        from app.services.zabbix_data_ingest import ingest_all_olt_signals
+
+        result = ingest_all_olt_signals(db)
+        metrics_pushed = push_ont_traffic_metrics_to_victoriametrics(db)
+        return {
+            "olts_processed": result.olts_processed,
+            "onts_updated": result.onts_updated,
+            "metrics_pushed": metrics_pushed,
+            "errors": result.errors,
+        }
+    except ZabbixClientError as exc:
+        db.rollback()
+        logger.warning("zabbix_signal_ingest_failed: %s", exc)
+        return {"error": "zabbix_unavailable", "message": str(exc)}
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        logger.warning("zabbix_signal_ingest_timed_out")
+        return {"error": "zabbix_signal_ingest_timed_out"}
+    except Exception as exc:
+        db.rollback()
+        logger.exception("zabbix_signal_ingest_failed")
+        return {"error": str(exc)}
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest",
+    soft_time_limit=180,
+    time_limit=240,
+)
+def repair_stale_olt_signal_ingest() -> dict[str, Any]:
+    """Run Zabbix ONT signal ingest when persisted status observations are stale."""
+    db = db_session_adapter.create_session()
+    try:
+        from sqlalchemy import func
+
+        from app.models.network import OntUnit
+
+        newest_seen = db.scalar(
+            select(func.max(OntUnit.last_sync_at)).where(
+                OntUnit.is_active.is_(True),
+                OntUnit.last_sync_source == "zabbix_data_ingest",
+            )
+        )
+        stale_after = datetime.now(UTC) - timedelta(minutes=10)
+        if newest_seen is not None and newest_seen.tzinfo is None:
+            newest_seen = newest_seen.replace(tzinfo=UTC)
+        if newest_seen is not None and newest_seen > stale_after:
+            return {"checked": 1, "repaired": 0, "newest_seen": newest_seen.isoformat()}
+
+        result = ingest_olt_signals_from_zabbix()
+        return {
+            "checked": 1,
+            "repaired": 1,
+            "newest_seen": newest_seen.isoformat() if newest_seen else None,
+            "ingest": result,
+        }
+    except Exception as exc:
+        logger.exception("zabbix_signal_watchdog_failed")
+        return {"error": str(exc)}
+    finally:
+        db.close()

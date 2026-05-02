@@ -26,7 +26,6 @@ from app.services import (
 from app.services.auth_dependencies import require_permission
 from app.services.ipam_adapter import ipam_adapter
 from app.services.network import olt_operations as olt_operations_service
-from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
@@ -35,6 +34,7 @@ from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
 from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.olt_detail_adapter import olt_detail_adapter
+from app.services.queue_adapter import enqueue_task
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -835,30 +835,6 @@ def olt_test_ssh_connection(
 
 
 @router.post(
-    "/olts/{olt_id}/test-snmp",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def olt_test_snmp_connection(
-    request: Request, olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
-    ok, message = olt_operations_service.test_olt_snmp_connection(
-        db, olt_id, request=request
-    )
-    _log_olt_action_result(
-        request=request,
-        olt_id=olt_id,
-        action="Test SNMP Connection",
-        ok=ok,
-        message=message,
-    )
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?snmp_test_status={status}&snmp_test_message={quote_plus(message)}",
-        status_code=303,
-    )
-
-
-@router.post(
     "/olts/{olt_id}/test-netconf",
     dependencies=[Depends(require_permission("network:write"))],
 )
@@ -954,19 +930,27 @@ def olt_ssh_get_config(
 
 
 @router.post(
-    "/olts/{olt_id}/sync-onts",
+    "/olts/{olt_id}/refresh-telemetry",
     dependencies=[Depends(require_permission("network:write"))],
 )
-def olt_sync_onts(
+def olt_refresh_ont_telemetry(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    ok, message, _stats = olt_snmp_sync_service.sync_onts_from_olt_snmp_tracked(
-        db, olt_id, request=request
+    dispatch = enqueue_task(
+        "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
+        correlation_id=f"ont_signal_ingest:{olt_id}",
+        source="olt_refresh_ont_telemetry",
+    )
+    ok = dispatch.queued
+    message = (
+        "Queued ONU telemetry refresh from monitoring data."
+        if ok
+        else f"Failed to queue ONU telemetry refresh: {dispatch.error}"
     )
     _log_olt_action_result(
         request=request,
         olt_id=olt_id,
-        action="Sync ONU Telemetry",
+        action="Refresh ONU Telemetry",
         ok=ok,
         message=message,
     )
@@ -978,13 +962,13 @@ def olt_sync_onts(
 
 
 @router.get(
-    "/olts/{olt_id}/sync-onts",
+    "/olts/{olt_id}/refresh-telemetry",
     dependencies=[Depends(require_permission("network:write"))],
 )
-def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
-    """GET fallback for auth-refresh redirects targeting the sync POST endpoint."""
+def olt_refresh_ont_telemetry_get_fallback(olt_id: str) -> RedirectResponse:
+    """GET fallback for auth-refresh redirects targeting the telemetry POST endpoint."""
     message = quote_plus(
-        "Sync ONU telemetry uses POST. Please click Sync ONU Telemetry again."
+        "Telemetry refresh uses POST. Please click Refresh Telemetry again."
     )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
@@ -1225,15 +1209,20 @@ def olt_authorize_ont(
     effective_preset_id = preset_id.strip() if preset_id else None
     try:
         # Run authorization synchronously - immediate success or failure
-        auth_ok, auth_msg, ont_unit_id = olt_operations_service.authorize_ont(
+        from app.services.network.ont_authorization import authorize_ont
+
+        auth_result = authorize_ont(
             db,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
+            olt_id,
+            fsp,
+            serial_number,
             force_reauthorize=force,
             preset_id=effective_preset_id,
             request=request,
         )
+        auth_ok = auth_result.success
+        auth_msg = auth_result.message
+        ont_unit_id = str(auth_result.ont_unit_id) if auth_result.ont_unit_id else None
     except Exception as exc:
         db.rollback()
         logger.error(

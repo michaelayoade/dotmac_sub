@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
-from app.services.network.olt_protocol_adapters import get_protocol_adapter
+from app.services.network.olt_protocol_adapters import (
+    OltOperationResult,
+    get_protocol_adapter,
+)
 from app.services.network.olt_ssh import ServicePortEntry
 from app.services.network.olt_ssh_ont import ServicePortDiagnostics
 from app.services.network.ont_olt_context import resolve_ont_olt_write_context
-
-if TYPE_CHECKING:
-    pass  # ServicePortEntry already imported above
+from app.services.network.provisioning_events import (
+    current_provisioning_correlation_key,
+)
 from app.services.network.service_port_allocator import (
     AllocationError,
     build_service_port_correlation_key,
@@ -24,7 +27,6 @@ from app.services.network.service_port_allocator import (
     release_service_port,
     with_allocated_service_port,
 )
-from app.services.network.provisioning_events import current_provisioning_correlation_key
 from app.services.network.vlan_chain import validate_chain
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
@@ -220,6 +222,147 @@ def coerce_user_vlan(value: str) -> tuple[int | str | None, str | None]:
         return None, "User VLAN must be a number or 'untagged'"
 
 
+def _service_port_matches(
+    port: ServicePortEntry,
+    *,
+    index: int | None = None,
+    vlan_id: int | None = None,
+    gem_index: int | None = None,
+    tag_transform: str | None = None,
+) -> bool:
+    if index is not None and port.index != index:
+        return False
+    if vlan_id is not None and port.vlan_id != vlan_id:
+        return False
+    if gem_index is not None and port.gem_index != gem_index:
+        return False
+    observed_tag_transform = getattr(port, "tag_transform", None)
+    if tag_transform and observed_tag_transform and observed_tag_transform != tag_transform:
+        return False
+    return True
+
+
+def _read_service_ports_for_target(
+    adapter: object,
+    fsp: str,
+    olt_ont_id: int,
+) -> tuple[bool, str, list[ServicePortEntry]]:
+    result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
+    if not result.success:
+        return False, result.message, []
+    ports_data = result.data.get("service_ports", [])
+    ports: list[ServicePortEntry] = ports_data if isinstance(ports_data, list) else []
+    return True, result.message, ports
+
+
+def _create_allocated_service_port(
+    db: Session,
+    *,
+    olt: OLTDevice,
+    ont_id: str,
+    fsp: str,
+    olt_ont_id: int,
+    vlan_id: int,
+    gem_index: int,
+    user_vlan: int | str | None = None,
+    tag_transform: str = "translate",
+    service_type: str | None = None,
+) -> tuple[bool, str]:
+    """Create one service-port with allocator tracking and OLT readback.
+
+    If the OLT accepts the write but readback fails, keep the allocation active
+    so the pre-allocated index is not reused while the live OLT state is
+    uncertain.
+    """
+
+    def _write_allocated_port(allocation):
+        port_index = allocation.port_index
+        logger.info(
+            "Pre-allocated service-port index %d for ONT %s VLAN %d",
+            port_index,
+            ont_id,
+            vlan_id,
+        )
+        adapter = get_protocol_adapter(olt)
+        result: OltOperationResult = adapter.create_service_port(
+            fsp,
+            olt_ont_id,
+            gem_index=gem_index,
+            vlan_id=vlan_id,
+            user_vlan=user_vlan,
+            tag_transform=tag_transform,
+            port_index=port_index,
+        )
+        if not result.success:
+            return False, result.message, False
+
+        ok, read_msg, ports = _read_service_ports_for_target(adapter, fsp, olt_ont_id)
+        if not ok:
+            return (
+                False,
+                "Service-port command was accepted, but OLT readback failed: "
+                f"{read_msg}",
+                True,
+            )
+        matching_port = next(
+            (
+                port
+                for port in ports
+                if _service_port_matches(
+                    port,
+                    index=port_index,
+                    vlan_id=vlan_id,
+                    gem_index=gem_index,
+                    tag_transform=tag_transform,
+                )
+            ),
+            None,
+        )
+        if matching_port is None:
+            return (
+                False,
+                "Service-port command was accepted, but OLT readback did not "
+                f"show index {port_index} VLAN {vlan_id} GEM {gem_index} "
+                "for this ONT.",
+                True,
+            )
+        return (
+            True,
+            f"Service-port {port_index} created (VLAN {vlan_id}, GEM {gem_index})",
+            True,
+        )
+
+    result = with_allocated_service_port(
+        db,
+        olt.id,
+        ont_id,
+        _write_allocated_port,
+        vlan_id=vlan_id,
+        gem_index=gem_index,
+        service_type=service_type,
+        correlation_key=build_service_port_correlation_key(
+            current_provisioning_correlation_key(),
+            ont_id=ont_id,
+            vlan_id=vlan_id,
+            gem_index=gem_index,
+            tag_transform=tag_transform,
+            user_vlan=user_vlan,
+        ),
+        provisioned=lambda write_result: bool(write_result[2]),
+        serialize_result=lambda write_result: {
+            "success": bool(write_result[0]),
+            "message": str(write_result[1]),
+            "command_accepted": bool(write_result[2]),
+        },
+        deserialize_result=lambda payload: (
+            bool(payload.get("success")),
+            str(payload.get("message") or ""),
+            bool(payload.get("command_accepted")),
+        ),
+    )
+    return bool(result[0]), str(result[1])
+
+
 def handle_create(
     db: Session,
     ont_id: str,
@@ -279,56 +422,17 @@ def handle_create(
         )
 
     try:
-        def _write_allocated_port(allocation):
-            port_index = allocation.port_index
-            logger.info(
-                "Pre-allocated service-port index %d for ONT %s VLAN %d",
-                port_index,
-                ont_id,
-                vlan_id,
-            )
-            adapter = get_protocol_adapter(olt)
-            result = adapter.create_service_port(
-                fsp,
-                olt_ont_id,
-                gem_index=gem_index,
-                vlan_id=vlan_id,
-                user_vlan=user_vlan,
-                tag_transform=tag_transform,
-                port_index=port_index,
-            )
-            if not result.success:
-                return False, result.message
-            return (
-                True,
-                f"Service-port {port_index} created (VLAN {vlan_id}, GEM {gem_index})",
-            )
-
-        return with_allocated_service_port(
+        return _create_allocated_service_port(
             db,
-            olt.id,
-            ont_id,
-            _write_allocated_port,
+            olt=olt,
+            ont_id=ont_id,
+            fsp=fsp,
+            olt_ont_id=olt_ont_id,
             vlan_id=vlan_id,
             gem_index=gem_index,
             service_type="internet" if vlan_id in (203,) else "management",
-            correlation_key=build_service_port_correlation_key(
-                current_provisioning_correlation_key(),
-                ont_id=ont_id,
-                vlan_id=vlan_id,
-                gem_index=gem_index,
-                tag_transform=tag_transform,
-                user_vlan=user_vlan,
-            ),
-            provisioned=lambda result: bool(result[0]),
-            serialize_result=lambda result: {
-                "success": bool(result[0]),
-                "message": str(result[1]),
-            },
-            deserialize_result=lambda payload: (
-                bool(payload.get("success")),
-                str(payload.get("message") or ""),
-            ),
+            user_vlan=user_vlan,
+            tag_transform=tag_transform,
         )
     except AllocationError as exc:
         logger.error("Failed to allocate service-port index: %s", exc)
@@ -353,27 +457,58 @@ def handle_delete(
     Returns:
         (success, message).
     """
-    ont, olt, fsp, _olt_ont_id = _resolve_ont_olt_context(db, ont_id)
-    if not olt:
-        return False, "Cannot resolve OLT for this ONT"
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not ont or not olt or not fsp or olt_ont_id is None:
+        return False, "Cannot resolve OLT context for this ONT"
 
-    # Delete from OLT
     adapter = get_protocol_adapter(olt)
+    ok, read_msg, ports = _read_service_ports_for_target(adapter, fsp, olt_ont_id)
+    if not ok:
+        return False, f"Cannot verify target service-port before delete: {read_msg}"
+
+    target_port = next(
+        (port for port in ports if _service_port_matches(port, index=index)),
+        None,
+    )
+    if target_port is None:
+        return False, f"Service-port {index} does not belong to this ONT"
+
     result = adapter.delete_service_port(index)
     ok = result.success
     msg = result.message
 
     if ok:
-        # Release DB allocation if exists
+        verify_ok, verify_msg, remaining_ports = _read_service_ports_for_target(
+            adapter, fsp, olt_ont_id
+        )
+        if verify_ok and any(
+            _service_port_matches(port, index=index) for port in remaining_ports
+        ):
+            return False, f"OLT accepted delete but service-port {index} is still present"
+        if not verify_ok:
+            return (
+                False,
+                f"{msg}; delete readback failed: {verify_msg}. "
+                "Keeping service-port allocation reserved until removal is confirmed.",
+            )
+
         allocation = find_allocation_by_index(db, str(olt.id), index)
         if allocation:
-            release_service_port(db, str(allocation.id))
-            db.commit()
-            logger.info(
-                "Released service-port allocation %d for ONT %s",
-                index,
-                ont_id,
-            )
+            if str(allocation.ont_unit_id) != str(ont.id):
+                logger.warning(
+                    "Deleted service-port %d for ONT %s but allocation belongs to ONT %s",
+                    index,
+                    ont_id,
+                    allocation.ont_unit_id,
+                )
+            else:
+                release_service_port(db, str(allocation.id))
+                db.commit()
+                logger.info(
+                    "Released service-port allocation %d for ONT %s",
+                    index,
+                    ont_id,
+                )
 
     return ok, msg
 
@@ -420,7 +555,6 @@ def handle_clone(
     if not ref_ports:
         return False, f"Could not get reference ports: {result.message}"
 
-    target_adapter = get_protocol_adapter(olt)
     created = 0
     for ref_port in ref_ports:
         user_vlan: int | str | None = None
@@ -431,16 +565,20 @@ def handle_clone(
             user_vlan = flow_para
 
         tag_transform = getattr(ref_port, "tag_transform", None) or "translate"
-        result = target_adapter.create_service_port(
-            fsp,
-            olt_ont_id,
+        ok, message = _create_allocated_service_port(
+            db,
+            olt=olt,
+            ont_id=ont_id,
+            fsp=fsp,
+            olt_ont_id=olt_ont_id,
             gem_index=ref_port.gem_index,
             vlan_id=ref_port.vlan_id,
             user_vlan=user_vlan,
             tag_transform=tag_transform,
+            service_type="internet" if ref_port.vlan_id in (203,) else "management",
         )
-        if not result.success:
-            return False, result.message
+        if not ok:
+            return False, message
         created += 1
 
     return True, f"Created {created} service-port(s) from reference ONT"

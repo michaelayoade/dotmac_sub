@@ -11,6 +11,7 @@ from app.models.network import (
     OntAuthorizationStatus,
     OntUnit,
 )
+from app.models.tr069 import Tr069CpeDevice
 from app.services.common import coerce_uuid
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_provisioning.optical_budget import (
@@ -21,9 +22,7 @@ from app.services.network.serial_utils import parse_ont_id_on_olt
 _AUTHORIZED_SYNC_SOURCES = {
     "olt_ssh_authorize",
     "olt_ssh_readback",
-    "olt_snmp_sync",
-    "olt_snmp_targeted",
-    "olt_polling",
+    "zabbix_data_ingest",
 }
 
 _AUTHORIZATION_BLOCKER_NAMES = {
@@ -33,6 +32,7 @@ _AUTHORIZATION_BLOCKER_NAMES = {
     "Authorization profiles",
     "OLT SSH credentials",
     "Active PON assignment",
+    "ACS configuration",
     "OLT config pack",
 }
 
@@ -51,7 +51,7 @@ def _active_assignment(db: Session, ont: OntUnit) -> OntAssignment | None:
 
 
 def _has_authorized_inventory_evidence(ont: OntUnit) -> bool:
-    """Return True when legacy inventory strongly indicates OLT authorization."""
+    """Return True when inventory strongly indicates OLT authorization."""
     if parse_ont_id_on_olt(getattr(ont, "external_id", None)) is None:
         return False
     if not getattr(ont, "board", None) or getattr(ont, "port", None) is None:
@@ -69,7 +69,7 @@ def ont_authorization_ready(ont: OntUnit) -> tuple[bool, str, str]:
     if status == OntAuthorizationStatus.authorized:
         return True, "ok", "Authorized on OLT"
     if _has_authorized_inventory_evidence(ont):
-        return True, "warn", "Authorization inferred from OLT inventory sync"
+        return True, "warn", "Authorization inferred from OLT inventory"
     if status in {
         OntAuthorizationStatus.pending,
         OntAuthorizationStatus.deauthorized,
@@ -81,6 +81,24 @@ def ont_authorization_ready(ont: OntUnit) -> tuple[bool, str, str]:
             f"Authorization status is {_enum_value(status).replace('_', ' ') or 'not authorized'}",
         )
     return False, "fail", "Authorize the ONT on the OLT before provisioning"
+
+
+def _has_acs_inform(db: Session, ont: OntUnit, acs_server_id: object | None) -> bool:
+    if getattr(ont, "acs_last_inform_at", None) is not None:
+        return True
+    query = (
+        select(Tr069CpeDevice.id)
+        .where(Tr069CpeDevice.ont_unit_id == ont.id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .where(Tr069CpeDevice.genieacs_device_id.isnot(None))
+        .where(Tr069CpeDevice.last_inform_at.isnot(None))
+    )
+    if acs_server_id:
+        try:
+            query = query.where(Tr069CpeDevice.acs_server_id == coerce_uuid(acs_server_id))
+        except (TypeError, ValueError):
+            query = query.where(Tr069CpeDevice.acs_server_id == acs_server_id)
+    return db.scalars(query).first() is not None
 
 
 def validate_prerequisites(
@@ -184,6 +202,63 @@ def validate_prerequisites(
 
     resolved_config = resolve_effective_ont_config(db, ont, olt=olt)
     resolved_values = resolved_config.get("values", {})
+    acs_server_id = resolved_values.get("tr069_acs_server_id")
+    tr069_profile_id = resolved_values.get("tr069_olt_profile_id")
+    mgmt_vlan = resolved_values.get("mgmt_vlan")
+    missing_acs_config: list[str] = []
+    if not acs_server_id:
+        missing_acs_config.append("ACS server")
+    if tr069_profile_id in (None, ""):
+        missing_acs_config.append("OLT TR-069 profile")
+    if mgmt_vlan in (None, ""):
+        missing_acs_config.append("management VLAN")
+    if missing_acs_config:
+        checks.append(
+            {
+                "name": "ACS configuration",
+                "status": "fail",
+                "message": f"Missing {', '.join(missing_acs_config)}",
+                "can_auto_fix": False,
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "ACS configuration",
+                "status": "ok",
+                "message": f"ACS server {acs_server_id}, TR-069 profile {tr069_profile_id}, management VLAN {mgmt_vlan}",
+                "can_auto_fix": False,
+            }
+        )
+
+    if missing_acs_config:
+        checks.append(
+            {
+                "name": "ACS connection",
+                "status": "fail",
+                "message": "Complete ACS configuration before provisioning",
+                "can_auto_fix": False,
+            }
+        )
+    elif _has_acs_inform(db, ont, acs_server_id):
+        checks.append(
+            {
+                "name": "ACS connection",
+                "status": "ok",
+                "message": "ONT has informed ACS",
+                "can_auto_fix": False,
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "ACS connection",
+                "status": "fail",
+                "message": "Authorize the ONT and wait for ACS inform before provisioning",
+                "can_auto_fix": False,
+            }
+        )
+
     line_profile_id = resolved_values.get("authorization_line_profile_id")
     service_profile_id = resolved_values.get("authorization_service_profile_id")
     if line_profile_id is not None and service_profile_id is not None:

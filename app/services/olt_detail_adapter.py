@@ -175,18 +175,13 @@ class OltDetailAdapter:
                     "method": "POST",
                     "visible": True,
                 },
-                "test_snmp": {
-                    "url": f"{base}/test-snmp",
-                    "method": "POST",
-                    "visible": True,
-                },
                 "test_netconf": {
                     "url": f"{base}/test-netconf",
                     "method": "POST",
                     "visible": bool(getattr(olt, "netconf_enabled", False)),
                 },
-                "sync_onts": {
-                    "url": f"{base}/sync-onts",
+                "refresh_telemetry": {
+                    "url": f"{base}/refresh-telemetry",
                     "method": "POST",
                     "visible": True,
                 },

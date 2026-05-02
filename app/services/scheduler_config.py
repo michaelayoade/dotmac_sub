@@ -763,56 +763,7 @@ def build_beat_schedule() -> dict:
                 interval_seconds=max(trim_interval, 60),
             )
 
-        # Direct SNMP interface polling/discovery is disabled. Zabbix is the
-        # monitoring source; keep these rows disabled if they already exist.
-        snmp_walk_interval = _resolve_int(
-            session, SettingDomain.snmp, "interface_walk_interval_seconds", 300
-        )
-        snmp_discovery_interval = _resolve_int(
-            session, SettingDomain.snmp, "interface_discovery_interval_seconds", 3600
-        )
-        _sync_scheduled_task(
-            session,
-            name="snmp_interface_walk",
-            task_name="app.tasks.snmp.walk_interfaces",
-            enabled=False,
-            interval_seconds=max(snmp_walk_interval, 30),
-        )
-        _sync_scheduled_task(
-            session,
-            name="snmp_interface_discovery",
-            task_name="app.tasks.snmp.discover_interfaces",
-            enabled=False,
-            interval_seconds=max(snmp_discovery_interval, 60),
-        )
-
-        # Legacy bulk OLT signal polling.
-        # Disabled because continuous monitoring is handled by Zabbix/vmagent.
-        # ONT discovery below still performs inventory/topology reconciliation
-        # and may refresh per-ONT telemetry from authoritative OLT observations.
-        olt_poll_minutes = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "olt_polling_interval_minutes",
-            5,
-        )
-        _sync_scheduled_task(
-            session,
-            name="olt_signal_polling",
-            task_name="app.tasks.olt_polling.poll_all_olt_signals",
-            enabled=False,  # Disabled - Zabbix monitors OLT signals now
-            interval_seconds=max(olt_poll_minutes * 60, 60),
-        )
-        # Finalize OLT polling - push aggregated metrics (runs 90s after poll dispatch)
-        _sync_scheduled_task(
-            session,
-            name="olt_polling_finalize",
-            task_name="app.tasks.olt_polling.finalize_olt_polling",
-            enabled=False,  # Disabled - Zabbix monitors OLT signals now
-            interval_seconds=max(olt_poll_minutes * 60, 60),
-        )
-
-        # OLT health retry - auto-retry failed ping/SNMP connections
+        # OLT health retry - auto-retry failed ping connections
         olt_health_retry_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -827,20 +778,30 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_health_retry_minutes * 60, 60),
         )
 
-        # ONT discovery/reconciliation (SNMP walk → match existing OntUnit rows,
-        # repair topology, and skip unlinked observations).
-        ont_discovery_minutes = _resolve_int(
+        # ONT telemetry ingest from centralized monitoring data.
+        ont_signal_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
-            "ont_discovery_interval_minutes",
+            "ont_signal_ingest_interval_minutes",
             15,
         )
         _sync_scheduled_task(
             session,
-            name="ont_discovery",
-            task_name="app.tasks.ont_discovery.discover_all_olt_onts",
+            name="ont_signal_ingest",
+            task_name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
             enabled=True,
-            interval_seconds=max(ont_discovery_minutes * 60, 120),
+            interval_seconds=max(ont_signal_minutes * 60, 120),
+        )
+        _sync_scheduled_task(
+            session,
+            name="ont_signal_ingest_watchdog",
+            task_name="app.tasks.zabbix_ingestion.repair_stale_olt_signal_ingest",
+            enabled=True,
+            interval_seconds=600,
+        )
+        _retire_scheduled_task(
+            session,
+            "app.tasks.ont_discovery.discover_all_olt_onts",
         )
         # Periodic SSH autofind polling has been replaced by syslog-based discovery.
         # Retire any existing scheduled task to disable it.
@@ -863,6 +824,14 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(olt_backup_hours * 3600, 3600),
         )
+
+        for removed_task_name in (
+            "app.tasks.olt_capture.capture_olt_samples_task",
+            "app.tasks.olt_capture.validate_all_parsers_task",
+            "app.tasks.olt_capture.capture_all_olts_task",
+            "app.tasks.provisioning_enforcement.run_enforcement",
+        ):
+            _retire_scheduled_task(session, removed_task_name)
 
         _retire_scheduled_task(session, "app.tasks.workflow.detect_sla_breaches")
 

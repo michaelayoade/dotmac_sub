@@ -64,25 +64,41 @@ def test_create_olt_device(db_session):
         OLTDeviceCreate(
             name="OLT-001",
             hostname="olt-001.fiber.local",
+            is_active=False,
         ),
     )
     assert olt.name == "OLT-001"
+
+
+def test_create_active_olt_requires_authorization_ready_data(db_session):
+    """Active OLTs must carry the full ACS/authorization data contract."""
+    with pytest.raises(HTTPException) as exc_info:
+        network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="OLT-Incomplete",
+                hostname="olt-incomplete.fiber.local",
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "authorization-ready" in str(exc_info.value.detail)
 
 
 def test_list_olt_devices(db_session):
     """Test listing OLT devices."""
     network_service.olt_devices.create(
         db_session,
-        OLTDeviceCreate(name="OLT 1", hostname="olt1.local"),
+        OLTDeviceCreate(name="OLT 1", hostname="olt1.local", is_active=False),
     )
     network_service.olt_devices.create(
         db_session,
-        OLTDeviceCreate(name="OLT 2", hostname="olt2.local"),
+        OLTDeviceCreate(name="OLT 2", hostname="olt2.local", is_active=False),
     )
 
     olts = network_service.olt_devices.list(
         db_session,
-        is_active=None,
+        is_active=False,
         order_by="created_at",
         order_dir="asc",
         limit=10,

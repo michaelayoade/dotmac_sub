@@ -98,8 +98,6 @@ class GenieACSSetup:
             response.raise_for_status()
             return response
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
             logger.error("HTTP error %d: %s", e.response.status_code, e.response.text)
             raise
         except httpx.RequestError as e:

@@ -562,8 +562,8 @@ def reconcile_operational_state(
     *,
     request: Request | None = None,
 ) -> ActionResult:
-    """Run the safest available ONT rediscovery/reconciliation path."""
-    ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
+    """Queue monitoring refresh and ACS reconciliation for an ONT."""
+    ont, olt, _fsp, _ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
     if not ont:
         return ActionResult(success=False, message="ONT not found")
     if not olt:
@@ -571,21 +571,22 @@ def reconcile_operational_state(
 
     messages: list[str] = []
     success = False
-    if fsp and ont_id_on_olt is not None:
-        from app.services.network.olt_snmp_sync import sync_authorized_ont_from_olt_snmp
+    try:
+        from app.services.queue_adapter import enqueue_task
 
-        ok, msg, _stats = sync_authorized_ont_from_olt_snmp(
-            db,
-            olt_id=str(olt.id),
-            ont_unit_id=str(ont.id),
-            fsp=fsp,
-            ont_id_on_olt=ont_id_on_olt,
-            serial_number=ont.serial_number,
+        dispatch = enqueue_task(
+            "app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
+            correlation_id=f"ont_signal_ingest:{ont_id}",
+            source="reconcile_operational_state",
         )
-        messages.append(msg)
-        success = ok
-    else:
-        messages.append("Skipped targeted SNMP sync: F/S/P or OLT ONT-ID missing.")
+        if dispatch.queued:
+            messages.append("Queued ONT telemetry refresh from monitoring data.")
+            success = True
+        else:
+            messages.append(f"Failed to queue ONT telemetry refresh: {dispatch.error}")
+    except Exception as exc:
+        logger.exception("Failed to queue ONT telemetry refresh for ONT %s", ont_id)
+        messages.append(f"Telemetry refresh queue failed: {exc}")
 
     if getattr(ont, "tr069_acs_server_id", None) or getattr(
         olt, "tr069_acs_server_id", None
@@ -617,7 +618,7 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     """Fetch ONT config/state from OLT side via SSH-backed services.
 
     Uses the ont_status for unified status resolution (combining
-    SNMP polling data and TR-069 status), with live SSH queries for
+    monitoring data and TR-069 status), with live SSH queries for
     detailed OLT-side configuration.
     """
     ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)

@@ -1,17 +1,15 @@
-"""OLT hardware auto-discovery via SNMP Entity MIB.
+"""OLT hardware auto-discovery from Zabbix-collected SNMP Entity MIB data.
 
-Walks the standard Entity MIB (RFC 6933) to discover shelves, line cards,
-card ports, power supplies, and fan units.  Updates the OLT device record
-with firmware/software versions from sysDescr.
+Reads standard Entity MIB (RFC 6933) items from the OLT's linked Zabbix host to
+discover shelves, line cards, card ports, power supplies, and fan units. Updates
+the OLT device record with firmware/software versions from sysDescr.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import subprocess  # nosec
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -27,8 +25,8 @@ from app.models.network import (
     OltPowerUnit,
     OltShelf,
 )
-from app.services.credential_crypto import decrypt_credential
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -55,6 +53,7 @@ _CLASS_PORT = "10"
 
 # Huawei board temperature OID
 _HW_BOARD_TEMP = ".1.3.6.1.4.1.2011.6.128.1.1.1.2.1.5"
+_SYS_DESCR = ".1.3.6.1.2.1.1.1.0"
 
 # ── Slot/port parsing ────────────────────────────────────────────────
 _FSP_RE = re.compile(r"(\d+)/(\d+)(?:/(\d+))?")
@@ -110,69 +109,11 @@ class _DiscoveryStats:
         }
 
 
-# ── SNMP helpers ─────────────────────────────────────────────────────
-
-
-def _build_snmp_target(olt: OLTDevice) -> SimpleNamespace | None:
-    """Build a SimpleNamespace with SNMP credentials from the OLT record."""
-    host = olt.mgmt_ip or olt.hostname
-    if not host:
-        return None
-    raw_ro = olt.snmp_ro_community
-    if not raw_ro or not raw_ro.strip():
-        return None
-    return SimpleNamespace(
-        mgmt_ip=olt.mgmt_ip,
-        hostname=olt.hostname,
-        snmp_enabled=True,
-        snmp_community=raw_ro.strip(),
-        snmp_version=olt.snmp_version or "v2c",
-        snmp_port=olt.snmp_port,
-        vendor=olt.vendor,
-    )
-
-
-def _run_snmp_walk(
-    target: SimpleNamespace,
-    oid: str,
-    *,
-    timeout: int = 30,
-    bulk: bool = True,
-) -> list[str]:
-    """Run an SNMP walk/bulkwalk and return raw output lines."""
-    host = target.mgmt_ip or target.hostname
-    if not host:
-        raise RuntimeError("Missing SNMP host")
-    if target.snmp_port:
-        host = f"{host}:{target.snmp_port}"
-
-    version = (target.snmp_version or "v2c").lower()
-    if version not in {"v2c", "2c"}:
-        raise RuntimeError(f"Only SNMP v2c supported, got {version}")
-
-    community = (
-        decrypt_credential(target.snmp_community) if target.snmp_community else ""
-    )
-    if not community:
-        raise RuntimeError("SNMP community not configured")
-
-    cmd = "snmpbulkwalk" if bulk else "snmpwalk"
-    args = [cmd, "-v2c", "-c", community, "-OQn", host, oid]
-    result = subprocess.run(  # noqa: S603
-        args,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "SNMP walk failed").strip()
-        raise RuntimeError(f"{oid}: {err}")
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+# ── Zabbix SNMP item helpers ────────────────────────────────────────
 
 
 def _parse_entity_walk(lines: list[str], base_oid: str) -> dict[str, str]:
-    """Parse SNMP walk output into {entity_index: value} dict.
+    """Parse Zabbix walk item output into {entity_index: value} dict.
 
     Uses -OQn output format: .full.oid.index = value
     """
@@ -198,19 +139,128 @@ def _parse_entity_walk(lines: list[str], base_oid: str) -> dict[str, str]:
     return parsed
 
 
-def _walk_entity_table(
-    target: SimpleNamespace,
+def _parse_scalar_value(value: object) -> str:
+    """Normalize a Zabbix item value or SNMP-formatted line to the value text."""
+    text = str(value or "").strip()
+    if " = " in text:
+        return text.split(" = ", 1)[1].strip().strip('"')
+    if ": " in text:
+        return text.split(": ", 1)[1].strip().strip('"')
+    return text.strip('"')
+
+
+def _index_from_snmp_oid(snmp_oid: str, base_oid: str) -> str | None:
+    prefix = base_oid.rstrip(".")
+    oid = str(snmp_oid or "").strip()
+    if not oid.startswith(prefix):
+        return None
+    suffix = oid[len(prefix) :]
+    if suffix.startswith("."):
+        suffix = suffix[1:]
+    return suffix or None
+
+
+def _zabbix_oid_items(
+    olt: OLTDevice,
     oid: str,
     *,
-    timeout: int = 30,
-) -> dict[str, str]:
-    """Walk a single Entity MIB column and return parsed results."""
+    client: ZabbixClient | None = None,
+) -> list[dict[str, object]]:
+    """Return Zabbix items for an OLT SNMP OID.
+
+    DotMac does not run OLT SNMP walks directly. Zabbix owns SNMP collection;
+    inventory discovery consumes the latest values from the linked Zabbix host.
+    """
+    host_id = str(getattr(olt, "zabbix_host_id", "") or "").strip()
+    if not host_id:
+        raise RuntimeError("OLT is not linked to a Zabbix host")
+    if not zabbix_configured():
+        raise RuntimeError("Zabbix API is not configured")
+
+    zbx = client or ZabbixClient.from_env()
     try:
-        lines = _run_snmp_walk(target, oid, timeout=timeout, bulk=True)
-        return _parse_entity_walk(lines, oid)
+        items = zbx.get_snmp_items(host_ids=[host_id], oid=oid)
+    except AttributeError:
+        items = []
+    if items:
+        return items
+
+    # Some templates put the OID in key/name instead of snmp_oid, or expose a
+    # single walk item containing many OID lines.
+    fallback: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for metric in (oid, oid.lstrip("."), "entPhysical", "entity", "walk"):
+        try:
+            candidates = zbx.get_items(host_ids=[host_id], metric=metric, limit=100000)
+        except ZabbixClientError:
+            continue
+        for item in candidates:
+            item_id = str(item.get("itemid") or id(item))
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            haystack = " ".join(
+                str(item.get(key) or "")
+                for key in ("snmp_oid", "key_", "name", "lastvalue")
+            )
+            if oid in haystack or oid.lstrip(".") in haystack:
+                fallback.append(item)
+    return fallback
+
+
+def _zabbix_oid_table(
+    olt: OLTDevice,
+    oid: str,
+    *,
+    client: ZabbixClient | None = None,
+) -> dict[str, str]:
+    """Read an SNMP table column from Zabbix item values."""
+    try:
+        items = _zabbix_oid_items(olt, oid, client=client)
     except RuntimeError as exc:
-        logger.warning("Entity MIB walk failed for %s: %s", oid, exc)
+        logger.warning("Zabbix SNMP item lookup failed for %s: %s", oid, exc)
         return {}
+
+    parsed: dict[str, str] = {}
+    for item in items:
+        lastvalue = str(item.get("lastvalue") or "")
+        if "\n" in lastvalue or oid in lastvalue:
+            parsed.update(_parse_entity_walk(lastvalue.splitlines(), oid))
+
+        index = _index_from_snmp_oid(str(item.get("snmp_oid") or ""), oid)
+        if index is not None:
+            parsed[index] = _parse_scalar_value(lastvalue)
+
+    return parsed
+
+
+def _zabbix_oid_scalar(
+    olt: OLTDevice,
+    oid: str,
+    *,
+    client: ZabbixClient | None = None,
+) -> str | None:
+    """Read a scalar SNMP value from Zabbix."""
+    try:
+        items = _zabbix_oid_items(olt, oid, client=client)
+    except RuntimeError as exc:
+        logger.warning("Zabbix SNMP scalar lookup failed for %s: %s", oid, exc)
+        return None
+    for item in items:
+        value = _parse_scalar_value(item.get("lastvalue"))
+        if value:
+            return value
+    return None
+
+
+def _walk_entity_table(
+    olt: OLTDevice,
+    oid: str,
+    *,
+    client: ZabbixClient | None = None,
+) -> dict[str, str]:
+    """Read a single Entity MIB column from Zabbix and return parsed results."""
+    return _zabbix_oid_table(olt, oid, client=client)
 
 
 def _extract_int(value: str) -> int | None:
@@ -227,19 +277,24 @@ def _extract_int(value: str) -> int | None:
 # ── Entity tree building ─────────────────────────────────────────────
 
 
-def _build_entity_tree(target: SimpleNamespace) -> list[_PhysEntity]:
-    """Walk all Entity MIB columns and merge into a list of entities."""
-    descr = _walk_entity_table(target, _ENT_DESCR)
-    contained_in = _walk_entity_table(target, _ENT_CONTAINED_IN)
-    phys_class = _walk_entity_table(target, _ENT_CLASS)
-    name = _walk_entity_table(target, _ENT_NAME)
-    hw_rev = _walk_entity_table(target, _ENT_HW_REV)
-    fw_rev = _walk_entity_table(target, _ENT_FW_REV)
-    serial = _walk_entity_table(target, _ENT_SERIAL)
-    model = _walk_entity_table(target, _ENT_MODEL)
+def _build_entity_tree(
+    olt: OLTDevice, *, client: ZabbixClient | None = None
+) -> list[_PhysEntity]:
+    """Read all Entity MIB columns from Zabbix and merge into entities."""
+    descr = _walk_entity_table(olt, _ENT_DESCR, client=client)
+    contained_in = _walk_entity_table(olt, _ENT_CONTAINED_IN, client=client)
+    phys_class = _walk_entity_table(olt, _ENT_CLASS, client=client)
+    name = _walk_entity_table(olt, _ENT_NAME, client=client)
+    hw_rev = _walk_entity_table(olt, _ENT_HW_REV, client=client)
+    fw_rev = _walk_entity_table(olt, _ENT_FW_REV, client=client)
+    serial = _walk_entity_table(olt, _ENT_SERIAL, client=client)
+    model = _walk_entity_table(olt, _ENT_MODEL, client=client)
 
     if not phys_class:
-        logger.info("Entity MIB not supported or empty — no entPhysicalClass data")
+        logger.info(
+            "Entity MIB not available in Zabbix for OLT %s — no entPhysicalClass data",
+            olt.name,
+        )
         return []
 
     all_indexes = set(phys_class.keys())
@@ -343,7 +398,7 @@ def discover_olt_hardware(
     db: Session,
     olt: OLTDevice,
 ) -> tuple[bool, str, dict[str, object]]:
-    """Discover hardware inventory from an OLT via SNMP Entity MIB.
+    """Discover hardware inventory from Zabbix-collected OLT SNMP Entity MIB.
 
     Args:
         db: Database session.
@@ -352,26 +407,27 @@ def discover_olt_hardware(
     Returns:
         Tuple of (success, message, stats_dict).
     """
-    target = _build_snmp_target(olt)
-    if not target:
-        return False, "No SNMP credentials configured", {}
+    if not getattr(olt, "zabbix_host_id", None):
+        return False, "OLT is not linked to a Zabbix host", {}
+    if not zabbix_configured():
+        return False, "Zabbix API is not configured", {}
 
     stats = _DiscoveryStats()
-
-    # Probe reachability with sysDescr
     try:
-        sys_lines = _run_snmp_walk(target, ".1.3.6.1.2.1.1.1.0", bulk=False, timeout=10)
-    except RuntimeError as exc:
-        return False, f"OLT unreachable via SNMP: {exc}", {}
+        client = ZabbixClient.from_env()
+    except Exception as exc:
+        return False, f"Zabbix API is not available: {exc}", {}
 
-    # Update OLT system info from sysDescr
-    _update_olt_system_info(db, olt, sys_lines)
-    stats.olt_updated = True
+    # Update OLT system info from Zabbix's latest sysDescr value.
+    sys_descr = _zabbix_oid_scalar(olt, _SYS_DESCR, client=client)
+    if sys_descr:
+        _update_olt_system_info(db, olt, sys_descr)
+        stats.olt_updated = True
 
-    # Walk Entity MIB
-    entities = _build_entity_tree(target)
+    # Read Entity MIB columns from Zabbix items.
+    entities = _build_entity_tree(olt, client=client)
     if not entities:
-        return True, "Entity MIB empty or unsupported", stats.to_dict()
+        return True, "Entity MIB empty or unsupported in Zabbix", stats.to_dict()
 
     # Build parent→children map for hierarchy resolution
     parent_map: dict[str, _PhysEntity] = {e.index: e for e in entities}
@@ -417,7 +473,7 @@ def discover_olt_hardware(
     # Optional: Huawei board temperature
     vendor_text = (olt.vendor or "").lower()
     if "huawei" in vendor_text:
-        _update_huawei_temperatures(db, olt, target, card_by_key)
+        _update_huawei_temperatures(db, olt, card_by_key, client=client)
 
     db.commit()
 
@@ -462,15 +518,9 @@ def discover_olt_hardware_audited(
     return ok, message, stats
 
 
-def _update_olt_system_info(db: Session, olt: OLTDevice, sys_lines: list[str]) -> None:
+def _update_olt_system_info(db: Session, olt: OLTDevice, sys_descr: str) -> None:
     """Update OLT firmware/software version from sysDescr."""
-    if not sys_lines:
-        return
-    sys_descr = ""
-    for line in sys_lines:
-        if " = " in line:
-            sys_descr = line.split(" = ", 1)[1].strip().strip('"')
-            break
+    sys_descr = _parse_scalar_value(sys_descr)
     if not sys_descr:
         return
 
@@ -823,15 +873,12 @@ def _upsert_fan_units(
 def _update_huawei_temperatures(
     db: Session,
     olt: OLTDevice,
-    target: SimpleNamespace,
     card_by_key: dict[tuple[int, int], OltCard],
+    *,
+    client: ZabbixClient | None = None,
 ) -> None:
-    """Read Huawei board temperature OIDs and update card records."""
-    try:
-        temp_data = _walk_entity_table(target, _HW_BOARD_TEMP)
-    except Exception as exc:
-        logger.warning("Huawei temperature walk failed for OLT %s: %s", olt.name, exc)
-        return
+    """Read Huawei board temperature OIDs from Zabbix and update card records."""
+    temp_data = _walk_entity_table(olt, _HW_BOARD_TEMP, client=client)
 
     if not temp_data:
         return

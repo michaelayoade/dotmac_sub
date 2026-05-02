@@ -551,7 +551,7 @@ def reconcile_ont_state(ont: OntUnit, *, now: datetime | None = None) -> OntStat
         conflict=conflict,
         reason="recent_acs_inform_overrides_olt_offline" if conflict else "resolved",
         authoritative_source=snapshot.effective_status_source,
-        recommended_action="check_olt_polling_freshness" if conflict else None,
+        recommended_action="check_monitoring_freshness" if conflict else None,
     )
 
 

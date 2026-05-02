@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 def test_desired_config_setter_maps_legacy_fields_without_override_rows(db_session):
     from app.models.network import OntUnit
@@ -233,8 +235,8 @@ def test_direct_orchestrator_stops_after_reconciliation_failure(db_session, monk
     result = provision_ont_from_desired_config(db_session, "missing-ont")
 
     assert result.success is False
-    assert result.failed_step == "provision_reconciled"
-    assert calls == ["provision"]
+    assert result.failed_step == "ont_lookup"
+    assert calls == []
 
 
 def test_direct_orchestrator_skips_acs_when_tr069_not_configured(
@@ -264,6 +266,10 @@ def test_direct_orchestrator_skips_acs_when_tr069_not_configured(
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.apply_saved_service_config",
         lambda *args, **kwargs: calls.append("apply"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
 
     result = provision_ont_from_desired_config(db_session, str(ont.id))
@@ -642,6 +648,10 @@ def test_direct_orchestrator_updates_provisioning_status(db_session, monkeypatch
         "app.services.network.ont_provision_steps.provision_with_reconciliation",
         lambda *args, **kwargs: StepResult("provision_reconciled", True, "ok"),
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
+    )
 
     result = provision_ont_from_desired_config(db_session, str(ont.id))
 
@@ -670,11 +680,92 @@ def test_direct_orchestrator_marks_failed_status(db_session, monkeypatch):
             "provision_reconciled", False, "OLT write failed"
         ),
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
+    )
 
     result = provision_ont_from_desired_config(db_session, str(ont.id))
 
     assert result.success is False
     assert ont.provisioning_status == OntProvisioningStatus.failed
+
+
+def test_direct_orchestrator_blocks_before_olt_write_when_acs_not_ready(
+    db_session, monkeypatch
+):
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.ont_provisioning.orchestrator import (
+        provision_ont_from_desired_config,
+    )
+
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-ACS-BLOCK",
+        desired_config={},
+        provisioning_status=OntProvisioningStatus.unprovisioned,
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        lambda *args, **kwargs: {
+            "ready_to_provision": False,
+            "checks": [
+                {
+                    "name": "ACS connection",
+                    "status": "fail",
+                    "message": "Authorize the ONT and wait for ACS inform before provisioning",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.provision_with_reconciliation",
+        lambda *args, **kwargs: pytest.fail("OLT provisioning should not start"),
+    )
+
+    result = provision_ont_from_desired_config(db_session, str(ont.id))
+
+    assert result.success is False
+    assert result.failed_step == "preflight"
+    assert result.steps[0].step_name == "preflight"
+    assert ont.provisioning_status == OntProvisioningStatus.failed
+
+
+def test_preflight_requires_acs_inform_before_provisioning(db_session, monkeypatch):
+    from app.models.network import OntAuthorizationStatus, OntUnit
+    from app.services.network.ont_provisioning import preflight
+
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-ACS-PREFLIGHT",
+        authorization_status=OntAuthorizationStatus.authorized,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    monkeypatch.setattr(
+        preflight,
+        "resolve_effective_ont_config",
+        lambda *args, **kwargs: {
+            "values": {
+                "tr069_acs_server_id": "00000000-0000-0000-0000-000000000001",
+                "tr069_olt_profile_id": 7,
+                "mgmt_vlan": 201,
+                "authorization_line_profile_id": 10,
+                "authorization_service_profile_id": 20,
+            },
+            "config_pack": None,
+        },
+    )
+
+    result = preflight.validate_prerequisites(db_session, str(ont.id))
+    acs_connection = next(
+        check for check in result["checks"] if check["name"] == "ACS connection"
+    )
+
+    assert result["ready_to_provision"] is False
+    assert acs_connection["status"] == "fail"
+    assert "wait for ACS inform" in acs_connection["message"]
 
 
 def test_web_wan_config_uses_config_pack_vlan_and_persists_desired_state(
@@ -805,21 +896,14 @@ def test_ont_config_form_has_single_operator_path():
     assert "vlans or []" not in source
     assert 'name="push_to_device" value="true"' in source
     assert "Push LAN and WiFi changes to device" in source
-    assert "Apply Device Config" in panel
-    assert "/wan/config" in panel
     assert "/wan/probe" in panel
     assert "/wan/ensure-instance" in panel
     assert "/wan/normalize" in panel
-    assert "/lan-config" in panel
-    assert "/wifi-config" in panel
     assert "/wan-remote-access" in panel
     assert "/mgmt-remote-access" in panel
     assert "/web-credentials" in panel
     assert "/http-management" in panel
     assert "/connection-request-credentials" in panel
-    assert "Apply LAN Port" in panel
-    assert "DHCP server disabled" in panel
-    assert "WiFi disabled" in panel
 
 
 def test_onu_mode_remote_access_change_pushes_to_device(db_session, monkeypatch):

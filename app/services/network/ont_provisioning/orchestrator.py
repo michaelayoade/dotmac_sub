@@ -85,6 +85,7 @@ def provision_ont_from_desired_config(
         provision_with_reconciliation,
         wait_tr069_bootstrap,
     )
+    from app.services.network.ont_provisioning.preflight import validate_prerequisites
     from app.services.network.ont_status import set_provisioning_status
 
     t0 = time.monotonic()
@@ -96,6 +97,16 @@ def provision_ont_from_desired_config(
     effective_values = (
         resolve_effective_ont_config(db, ont).get("values", {}) if ont else {}
     )
+    if ont is None:
+        steps.append(StepResult("ont_lookup", False, "ONT not found"))
+        return _finish(
+            ont_id=ont_id,
+            t0=t0,
+            steps=steps,
+            success=False,
+            message="ONT not found",
+            failed_step="ont_lookup",
+        )
     has_tr069 = bool(
         effective_values.get("tr069_acs_server_id")
         and effective_values.get("tr069_olt_profile_id")
@@ -106,6 +117,40 @@ def provision_ont_from_desired_config(
             return
         set_provisioning_status(ont, status, strict=False)
         db.flush()
+
+    if not dry_run:
+        preflight_started = time.monotonic()
+        preflight = validate_prerequisites(db, ont_id)
+        if not bool(preflight.get("ready_to_provision", preflight.get("ready"))):
+            failed_checks = [
+                check
+                for check in preflight.get("checks", [])
+                if check.get("status") == "fail"
+            ]
+            message = "Provisioning blocked: authorization and ACS prerequisites are incomplete."
+            if failed_checks:
+                message = f"{message} {failed_checks[0].get('message') or ''}".strip()
+            steps.append(
+                StepResult(
+                    "preflight",
+                    False,
+                    message,
+                    duration_ms=int((time.monotonic() - preflight_started) * 1000),
+                    data={
+                        "checks": preflight.get("checks", []),
+                        "failed_checks": failed_checks,
+                    },
+                )
+            )
+            _set_status(OntProvisioningStatus.failed)
+            return _finish(
+                ont_id=ont_id,
+                t0=t0,
+                steps=steps,
+                success=False,
+                message=message,
+                failed_step="preflight",
+            )
 
     _set_status(OntProvisioningStatus.partial)
 

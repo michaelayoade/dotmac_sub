@@ -22,6 +22,7 @@ _WALK_ENTRY_RE = re.compile(
     r"\.(\d+)\.(\d+)\s*=\s*(?:INTEGER|Gauge32|Counter32|Opaque):\s*([-\d.]+)"
 )
 _EXTERNAL_ID_RE = re.compile(r"0/(\d+)/(\d+)\.(\d+)")
+_HUAWEI_EXTERNAL_ID_RE = re.compile(r"huawei:(\d+)\.(\d+)", re.IGNORECASE)
 _HUAWEI_IFINDEX_BASE = 4194304000
 
 
@@ -70,10 +71,40 @@ def _decode_huawei_ifindex(encoded: int) -> tuple[int, int] | None:
 
 
 def _parse_external_id(value: str | None) -> tuple[int, int, int] | None:
-    match = _EXTERNAL_ID_RE.fullmatch(str(value or "").strip())
+    normalized = str(value or "").strip()
+    huawei_match = _HUAWEI_EXTERNAL_ID_RE.fullmatch(normalized)
+    if huawei_match:
+        decoded = _decode_huawei_ifindex(int(huawei_match.group(1)))
+        if decoded is None:
+            return None
+        snmp_slot, port = decoded
+        return snmp_slot, port, int(huawei_match.group(2))
+
+    match = _EXTERNAL_ID_RE.fullmatch(normalized)
     if not match:
         return None
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def _parse_ont_target(ont: OntUnit) -> tuple[int, int, int] | None:
+    parsed = _parse_external_id(getattr(ont, "external_id", None))
+    if parsed is not None:
+        return parsed
+
+    external_id = str(getattr(ont, "external_id", "") or "").strip()
+    if not external_id.isdigit():
+        return None
+
+    board = str(getattr(ont, "board", "") or "").strip()
+    port = str(getattr(ont, "port", "") or "").strip()
+    if not port.isdigit():
+        return None
+
+    board_parts = [part for part in board.split("/") if part != ""]
+    if not board_parts or not board_parts[-1].isdigit():
+        return None
+
+    return int(board_parts[-1]), int(port), int(external_id)
 
 
 def _parse_walk_entries(walk_data: str) -> list[tuple[int, int, int, float]]:
@@ -155,7 +186,7 @@ def get_olt_ont_snapshot_from_zabbix(
         str(ont.id): parsed
         for ont in onts
         if getattr(ont, "id", None)
-        for parsed in [_parse_external_id(getattr(ont, "external_id", None))]
+        for parsed in [_parse_ont_target(ont)]
         if parsed is not None
     }
     result = {str(getattr(ont, "id", "")): _offline("not in Zabbix") for ont in onts}

@@ -89,7 +89,6 @@ from app.services import network as network_service
 from app.services import network_map as network_map_service
 from app.services import network_monitoring as monitoring_service
 from app.services import network_topology as network_topology_service
-from app.services import snmp_discovery as snmp_discovery_service
 from app.services import tr069 as tr069_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_core_devices_forms as core_devices_forms
@@ -346,111 +345,6 @@ def test_get_ping_status_unreachable(monkeypatch):
     assert status == {"state": "unreachable", "label": "Unreachable"}
 
 
-def test_collect_interface_snapshot_uses_ifdescr_suffix_when_alias_missing(monkeypatch):
-    device = NetworkDevice(name="SNMP Core", mgmt_ip="192.0.2.200", snmp_enabled=True)
-
-    def _fake_bulk_walk(_device, oid, timeout=20):
-        data = {
-            ".1.3.6.1.2.1.2.2.1.2": [
-                'IF-MIB::ifDescr.7 = STRING: "ether7 => AP-Tower-01"',
-            ],
-            ".1.3.6.1.2.1.31.1.1.1.1": [
-                'IF-MIB::ifName.7 = STRING: "ether7"',
-            ],
-            ".1.3.6.1.2.1.31.1.1.1.18": [],
-            ".1.3.6.1.2.1.2.2.1.8": [
-                "IF-MIB::ifOperStatus.7 = INTEGER: up(1)",
-            ],
-            ".1.3.6.1.2.1.31.1.1.1.15": [
-                "IF-MIB::ifHighSpeed.7 = Gauge32: 1000",
-            ],
-            ".1.3.6.1.2.1.2.2.1.6": [],
-        }
-        return data[oid]
-
-    monkeypatch.setattr(snmp_discovery_service, "_run_snmpbulkwalk", _fake_bulk_walk)
-
-    snapshots = snmp_discovery_service.collect_interface_snapshot(device)
-
-    assert len(snapshots) == 1
-    assert snapshots[0].name == "ether7"
-    assert snapshots[0].description == "AP-Tower-01"
-    assert snapshots[0].status.value == "up"
-    assert snapshots[0].speed_mbps == 1000
-
-
-def test_apply_interface_snapshot_removes_stale_interfaces():
-    device = SimpleNamespace(id="device-1")
-    stale = SimpleNamespace(id="iface-stale", name="ether9", description="Old AP")
-    current = SimpleNamespace(
-        id="iface-current",
-        name="ether1",
-        description="Existing Uplink",
-        status=InterfaceStatus.down,
-        speed_mbps=100,
-    )
-
-    class _Query:
-        def __init__(self, rows):
-            self.rows = rows
-
-        def filter(self, *_args, **_kwargs):
-            return self
-
-        def all(self):
-            return list(self.rows)
-
-    class _Session:
-        def __init__(self):
-            self.executed = []
-            self.deleted = []
-            self.added = []
-            self.committed = False
-
-        def query(self, _model):
-            return _Query([stale, current])
-
-        def execute(self, statement):
-            self.executed.append(statement)
-
-        def delete(self, iface):
-            self.deleted.append(iface)
-
-        def add(self, iface):
-            self.added.append(iface)
-
-        def commit(self):
-            self.committed = True
-
-        def flush(self):
-            self.committed = True
-
-    session = _Session()
-    created, updated = snmp_discovery_service.apply_interface_snapshot(
-        session,
-        device,
-        [
-            snmp_discovery_service.InterfaceSnapshot(
-                index="1",
-                name="ether1",
-                description="Existing Uplink",
-                status=InterfaceStatus.up,
-                speed_mbps=1000,
-                mac_address=None,
-            )
-        ],
-        create_missing=True,
-    )
-
-    assert created == 0
-    assert updated == 1
-    assert current.status == InterfaceStatus.up
-    assert current.speed_mbps == 1000
-    assert session.deleted == [stale]
-    assert len(session.executed) == 5
-    assert session.committed is True
-
-
 def test_get_mikrotik_api_status_success(db_session, monkeypatch):
     device = nas_service.NasDevices.create(
         db_session,
@@ -684,45 +578,6 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
     assert payload["backup_map"][key]["status"] == "success"
 
 
-def test_create_snmp_oid_for_device_and_poll_success(db_session):
-    device = NetworkDevice(
-        name="SNMP Core", mgmt_ip="192.0.2.90", snmp_enabled=True, is_active=True
-    )
-    db_session.add(device)
-    db_session.commit()
-
-    ok, msg = core_devices_forms.create_snmp_oid_for_device(
-        db_session,
-        device_id=str(device.id),
-        title="ifIn",
-        oid="1.3.6.1.2.1.31.1.1.1.6.1",
-        check_interval_seconds=60,
-        rrd_data_source_type="counter",
-        is_enabled=True,
-    )
-    assert ok is True
-    assert "added" in msg.lower()
-
-    oid = db_session.query(NetworkDeviceSnmpOid).filter_by(device_id=device.id).first()
-    assert oid is not None
-
-    def _fake_walk(*_args, **_kwargs):
-        return ["SNMPv2-SMI::mib-2.2.2.1.10.1 = Counter32: 100"]
-
-    from app.services import snmp_discovery as snmp_discovery_service
-
-    original = snmp_discovery_service._run_snmpwalk
-    snmp_discovery_service._run_snmpwalk = _fake_walk
-    try:
-        ok, msg = core_devices_forms.poll_snmp_oid_for_device(
-            db_session, device_id=str(device.id), snmp_oid_id=str(oid.id)
-        )
-    finally:
-        snmp_discovery_service._run_snmpwalk = original
-    assert ok is True
-    assert "succeeded" in msg.lower()
-
-
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
     device = NetworkDevice(
         name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True
@@ -805,62 +660,6 @@ def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
         db_session, token=graph.public_token
     )
     assert public_graph is not None
-
-
-def test_bandwidth_graph_preview_snapshot_uses_snmp_values(db_session):
-    device = NetworkDevice(
-        name="Preview Device", mgmt_ip="192.0.2.121", snmp_enabled=True, is_active=True
-    )
-    db_session.add(device)
-    db_session.flush()
-
-    oid = NetworkDeviceSnmpOid(
-        device_id=device.id,
-        title="ifInOctets",
-        oid="1.3.6.1.2.1.31.1.1.1.6.7",
-        is_enabled=True,
-    )
-    graph = NetworkDeviceBandwidthGraph(
-        device_id=device.id,
-        title="Preview Graph",
-        vertical_axis_title="Bandwidth",
-        height_px=150,
-    )
-    db_session.add_all([oid, graph])
-    db_session.flush()
-    db_session.add(
-        NetworkDeviceBandwidthGraphSource(
-            graph_id=graph.id,
-            source_device_id=device.id,
-            snmp_oid_id=oid.id,
-            factor=2.0,
-            color_hex="#ef4444",
-            draw_type="LINE1",
-            value_unit="Bps",
-            sort_order=1,
-        )
-    )
-    db_session.commit()
-
-    from app.services import snmp_discovery as snmp_discovery_service
-
-    def _fake_walk(*_args, **_kwargs):
-        return ["SNMPv2-SMI::mib-2.2.2.1.10.7 = Counter32: 123"]
-
-    original = snmp_discovery_service._run_snmpwalk
-    snmp_discovery_service._run_snmpwalk = _fake_walk
-    try:
-        payload = core_devices_forms.bandwidth_graphs_page_data(
-            db_session,
-            str(device.id),
-            preview_graph_id=str(graph.id),
-        )
-    finally:
-        snmp_discovery_service._run_snmpwalk = original
-
-    assert payload is not None
-    assert payload["preview_rows"]
-    assert payload["preview_rows"][0]["last"] == 246.0
 
 
 def test_core_backup_settings_history_filter_and_compare(db_session):
@@ -2007,39 +1806,6 @@ def test_ping_device_respects_notification_delay_before_offline(
     assert ok2 is False
     assert updated2 is not None
     assert updated2.status.value == "offline"
-
-
-def test_snmp_check_sets_degraded_after_delay(db_session, pop_site, monkeypatch):
-    device = monitoring_service.network_devices.create(
-        db_session,
-        NetworkDeviceCreate(
-            name="Delay SNMP Device",
-            pop_site_id=pop_site.id,
-            mgmt_ip="192.0.2.81",
-            snmp_enabled=True,
-            ping_enabled=False,
-            notification_delay_minutes=5,
-            status="online",
-        ),
-    )
-
-    def _fake_walk(*_args, **_kwargs):
-        raise RuntimeError("snmp fail")
-
-    monkeypatch.setattr("app.services.snmp_discovery._run_snmpwalk", _fake_walk)
-
-    updated, err = core_runtime.snmp_check_device(db_session, str(device.id))
-    assert err is None
-    assert updated is not None
-    assert updated.status.value == "online"
-    assert updated.snmp_down_since is not None
-
-    updated.snmp_down_since = datetime.now(UTC) - timedelta(minutes=6)
-    db_session.flush()
-    updated2, err2 = core_runtime.snmp_check_device(db_session, str(device.id))
-    assert err2 is None
-    assert updated2 is not None
-    assert updated2.status.value == "degraded"
 
 
 def test_parent_status_rollup_from_child_ping_failure_and_recovery(

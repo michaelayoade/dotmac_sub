@@ -46,16 +46,11 @@ from app.tasks.olt_health_retry import (
     retry_single_olt,
     trigger_immediate_retry,
 )
-from app.tasks.olt_polling import (
-    finalize_olt_polling,
-    poll_all_olt_signals,
-)
 from app.tasks.olt_queue import (
     process_deferred_olt_operations,
     retry_failed_operations,
 )
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
-from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_onts
 from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
@@ -65,10 +60,7 @@ from app.tasks.provisioning import (
     run_bulk_activation_job,
     run_service_migration_job,
 )
-from app.tasks.provisioning_enforcement import run_enforcement
 from app.tasks.radius import run_radius_sync_job
-from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
-from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
 from app.tasks.splynx_sync import (
     run_customer_accounts_details_sync,
     run_incremental_sync,
@@ -116,8 +108,10 @@ from app.tasks.wireguard import (
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
 from app.tasks.zabbix_ingestion import (
     dispatch_portal_usage_ingestion,
+    ingest_olt_signals_from_zabbix,
     ingest_portal_usage,
     ingest_portal_usage_chunk,
+    repair_stale_olt_signal_ingest,
 )
 from app.tasks.zabbix_sync import (
     remove_device_from_zabbix_task,
@@ -158,20 +152,14 @@ __all__ = [
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
     "backup_all_olts",
-    "poll_all_olt_signals",
-    "finalize_olt_polling",
     "retry_failed_olt_connections",
     "retry_single_olt",
     "trigger_immediate_retry",
-    "discover_all_olt_onts",
-    "discover_single_olt_onts",
     "run_bulk_activation_job",
     "run_service_migration_job",
     "retry_pending_compensation_failures",
     "run_incremental_sync",
     "run_customer_accounts_details_sync",
-    "discover_snmp_interfaces",
-    "walk_snmp_interfaces",
     "run_vpn_control_job",
     "run_vpn_health_scan",
     "deliver_webhook",
@@ -190,15 +178,16 @@ __all__ = [
     "update_subscriber_counts",
     "check_nas_health",
     "execute_ont_bulk_action",
-    "run_enforcement",
     "evaluate_alert_rules",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
     "dispatch_portal_usage_ingestion",
+    "ingest_olt_signals_from_zabbix",
     "ingest_portal_usage",
     "ingest_portal_usage_chunk",
+    "repair_stale_olt_signal_ingest",
     "sync_devices_to_zabbix",
     "sync_single_olt_to_zabbix",
     "sync_single_nas_to_zabbix",

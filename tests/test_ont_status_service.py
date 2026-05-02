@@ -167,7 +167,7 @@ def test_reconcile_ont_state_flags_recent_acs_over_olt_offline() -> None:
 
     assert result.conflict is True
     assert result.authoritative_source == OntStatusSource.acs
-    assert result.recommended_action == "check_olt_polling_freshness"
+    assert result.recommended_action == "check_monitoring_freshness"
 
 
 def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:

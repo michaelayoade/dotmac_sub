@@ -21,6 +21,8 @@ yarn-error.log
 *.swp
 *.swo
 *~
+*.bak-*
+CLAUDE.md
 
 # OS
 .DS_Store
