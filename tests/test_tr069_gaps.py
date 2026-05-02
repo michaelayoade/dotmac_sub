@@ -1342,6 +1342,9 @@ class TestAcsPropagation:
             "0 BOOTSTRAP": True,
             "1 BOOT": True,
         }
+        assert preset["configurations"] == [
+            {"type": "provision", "name": "provision", "args": []}
+        ]
 
     def test_acs_enforcement_preset_can_opt_into_periodic(self) -> None:
         from app.services.tr069 import _build_acs_preset

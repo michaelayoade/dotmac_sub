@@ -1786,29 +1786,29 @@ def _build_acs_provision_script(
         "}",
         "",
         "// Set ManagementServer parameters",
-        f'declare(root + ".ManagementServer.URL", {{value: now}}, {{value: {js_string(cwmp_url)}}});',
-        'declare(root + ".ManagementServer.PeriodicInformEnable", {value: now}, {value: true});',
-        f'declare(root + ".ManagementServer.PeriodicInformInterval", {{value: now}}, {{value: {periodic_inform_interval}}});',
+        f'declare(root + ".ManagementServer.URL", null, {{value: {js_string(cwmp_url)}}});',
+        'declare(root + ".ManagementServer.PeriodicInformEnable", null, {value: true});',
+        f'declare(root + ".ManagementServer.PeriodicInformInterval", null, {{value: {periodic_inform_interval}}});',
     ]
 
     if cwmp_username:
         script_lines.append(
-            f'declare(root + ".ManagementServer.Username", {{value: now}}, {{value: {js_string(cwmp_username)}}});'
+            f'declare(root + ".ManagementServer.Username", null, {{value: {js_string(cwmp_username)}}});'
         )
 
     if cwmp_password:
         script_lines.append(
-            f'declare(root + ".ManagementServer.Password", {{value: now}}, {{value: {js_string(cwmp_password)}}});'
+            f'declare(root + ".ManagementServer.Password", null, {{value: {js_string(cwmp_password)}}});'
         )
 
     if connection_request_username:
         script_lines.append(
-            f'declare(root + ".ManagementServer.ConnectionRequestUsername", {{value: now}}, {{value: {js_string(connection_request_username)}}});'
+            f'declare(root + ".ManagementServer.ConnectionRequestUsername", null, {{value: {js_string(connection_request_username)}}});'
         )
 
     if connection_request_password:
         script_lines.append(
-            f'declare(root + ".ManagementServer.ConnectionRequestPassword", {{value: now}}, {{value: {js_string(connection_request_password)}}});'
+            f'declare(root + ".ManagementServer.ConnectionRequestPassword", null, {{value: {js_string(connection_request_password)}}});'
         )
 
     return "\n".join(script_lines)
@@ -1848,12 +1848,10 @@ def _build_acs_preset(
 
     return {
         "_id": preset_id,
-        "channel": "default",
         "weight": weight,
-        "schedule": "",
         "events": events,
         "precondition": precondition,
-        "configurations": [{"type": "provision", "name": provision_name}],
+        "configurations": [{"type": "provision", "name": provision_name, "args": []}],
     }
 
 
