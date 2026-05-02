@@ -603,6 +603,24 @@ class ZabbixClient:
         result = self._submit_write_payload(payload, method)
         return bool(result.get("hostids"))
 
+    def update_host_interface(
+        self,
+        interface_id: str,
+        **updates: Any,
+    ) -> bool:
+        """Update an existing Zabbix host interface."""
+        method = "hostinterface.update"
+        params: dict[str, Any] = {"interfaceid": interface_id}
+        params.update(updates)
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": next(self._request_ids),
+        }
+        result = self._submit_write_payload(payload, method)
+        return bool(result.get("interfaceids"))
+
     def delete_host(self, host_id: str) -> bool:
         """Delete a Zabbix host by ID."""
         method = "host.delete"
@@ -755,7 +773,16 @@ class ZabbixClient:
         params: dict[str, Any] = {
             "output": ["hostid", "host", "name", "status", "available"],
             "selectGroups": ["groupid", "name"],
-            "selectInterfaces": ["ip", "dns", "port", "type", "main", "useip"],
+            "selectInterfaces": [
+                "interfaceid",
+                "ip",
+                "dns",
+                "port",
+                "type",
+                "main",
+                "useip",
+                "details",
+            ],
             "selectTags": ["tag", "value"],
             "selectInventory": "extend",
             "sortfield": "name",

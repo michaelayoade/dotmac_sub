@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice, NasDeviceStatus
 from app.models.network import DeviceStatus, OLTDevice
+from app.services.credential_crypto import decrypt_credential
 from app.services.zabbix import ZabbixClient, ZabbixClientError
 
 if TYPE_CHECKING:
@@ -106,6 +107,75 @@ def _build_olt_inventory(olt: OLTDevice) -> dict[str, str]:
     if olt.firmware_version:
         inventory["os_full"] = olt.firmware_version
     return inventory
+
+
+def _zabbix_snmp_version(value: str | None) -> str:
+    normalized = str(value or "v2c").strip().lower()
+    if normalized in {"1", "v1", "snmpv1"}:
+        return "1"
+    if normalized in {"3", "v3", "snmpv3"}:
+        return "3"
+    return "2"
+
+
+def _sync_olt_snmp_interface(client: ZabbixClient, olt: OLTDevice) -> bool:
+    """Update the existing Zabbix SNMP interface to match OLT SNMP settings."""
+    host_id = str(getattr(olt, "zabbix_host_id", "") or "").strip()
+    if not host_id:
+        return False
+
+    hosts = client.get_hosts(host_id=host_id)
+    host = hosts[0] if hosts else None
+    interfaces = list((host or {}).get("interfaces") or [])
+    snmp_interface = next(
+        (
+            interface
+            for interface in interfaces
+            if str(interface.get("type")) == "2" and str(interface.get("main")) == "1"
+        ),
+        None,
+    ) or next(
+        (interface for interface in interfaces if str(interface.get("type")) == "2"),
+        None,
+    )
+    if not snmp_interface or not snmp_interface.get("interfaceid"):
+        return False
+
+    details = dict(snmp_interface.get("details") or {})
+    community = str(details.get("community") or "{$SNMP_COMMUNITY}")
+    raw_community = getattr(olt, "snmp_ro_community", None)
+    if raw_community:
+        try:
+            community = decrypt_credential(raw_community) or str(raw_community)
+        except Exception:
+            logger.warning(
+                "zabbix_olt_snmp_community_unreadable",
+                extra={"olt_id": str(getattr(olt, "id", ""))},
+            )
+
+    details.update(
+        {
+            "version": _zabbix_snmp_version(getattr(olt, "snmp_version", None)),
+            "bulk": "1" if bool(getattr(olt, "snmp_bulk_enabled", True)) else "0",
+            "community": community,
+        }
+    )
+    max_repetitions = getattr(olt, "snmp_bulk_max_repetitions", None)
+    if max_repetitions is not None:
+        details["max_repetitions"] = str(max_repetitions)
+
+    return bool(
+        client.update_host_interface(
+            str(snmp_interface["interfaceid"]),
+            ip=str(getattr(olt, "mgmt_ip", "") or snmp_interface.get("ip") or ""),
+            dns=str(snmp_interface.get("dns") or ""),
+            port=str(
+                getattr(olt, "snmp_port", None) or snmp_interface.get("port") or "161"
+            ),
+            useip=1,
+            details=details,
+        )
+    )
 
 
 def _build_nas_tags(nas: NasDevice) -> list[dict[str, str]]:
@@ -204,6 +274,7 @@ def sync_olt_to_zabbix(
                 extra={"olt_id": str(olt.id), "zabbix_host_id": zabbix_host_id},
             )
 
+        _sync_olt_snmp_interface(client, olt)
         olt.zabbix_last_sync_at = datetime.now(UTC)
         db.flush()
         return olt.zabbix_host_id
