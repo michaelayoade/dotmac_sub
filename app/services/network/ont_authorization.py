@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -30,7 +30,12 @@ from app.models.network import (
 )
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
-from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import (
+    normalize as normalize_serial,
+)
+from app.services.network.serial_utils import (
+    normalized_serial_sql,
+)
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
 )
@@ -321,7 +326,8 @@ def allocate_management_ip_for_ont(
 
     Returns:
         Tuple of (success, message, allocated_ip).
-        If no pool is configured, returns (True, "No pool configured", None) — not a failure.
+        If no pool is configured, returns a failure because ACS reachability cannot
+        be established without a management address.
     """
     from app.models.network import IpPool, IPv4Address
 
@@ -337,8 +343,7 @@ def allocate_management_ip_for_ont(
 
     pool_id = olt.mgmt_ip_pool_id
     if not pool_id:
-        # No pool configured — not a failure, just skip
-        return True, "No management IP pool configured on OLT.", None
+        return False, "No management IP pool configured on OLT.", None
 
     # Serialize allocation for this pool
     locked_pool = db.scalars(
@@ -550,7 +555,7 @@ def create_or_find_ont_for_authorized_serial(
 
     existing = db.scalars(
         select(OntUnit).where(
-            func.upper(func.replace(OntUnit.serial_number, "-", "")).in_(clean_serials),
+            normalized_serial_sql(OntUnit.serial_number).in_(clean_serials),
         )
     ).first()
     if existing:
@@ -726,24 +731,28 @@ def apply_authorization_foundation(
         ont_unit_id=ont_unit_id,
         olt_id=olt_id,
     )
-    steps.append({
-        "name": "Allocate management IP",
-        "success": ip_ok,
-        "message": ip_msg,
-        "allocated_ip": allocated_ip,
-    })
+    steps.append(
+        {
+            "name": "Allocate management IP",
+            "success": ip_ok,
+            "message": ip_msg,
+            "allocated_ip": allocated_ip,
+        }
+    )
     if not ip_ok:
         return False, ip_msg, steps
 
     # Apply ACS foundation if we have management IP
     if not allocated_ip:
         # No pool configured - skip ACS foundation
-        steps.append({
-            "name": "Apply ACS foundation",
-            "success": True,
-            "message": "Skipped - no management IP allocated.",
-            "skipped": True,
-        })
+        steps.append(
+            {
+                "name": "Apply ACS foundation",
+                "success": True,
+                "message": "Skipped - no management IP allocated.",
+                "skipped": True,
+            }
+        )
         return True, "Authorization foundation completed (no ACS).", steps
 
     try:
@@ -767,12 +776,14 @@ def apply_authorization_foundation(
         )
         acs_ok = bool(acs_result.get("success"))
         acs_msg = str(acs_result.get("message") or "")
-        steps.append({
-            "name": "Apply ACS foundation",
-            "success": acs_ok,
-            "message": acs_msg,
-            "data": acs_result,
-        })
+        steps.append(
+            {
+                "name": "Apply ACS foundation",
+                "success": acs_ok,
+                "message": acs_msg,
+                "data": acs_result,
+            }
+        )
         if not acs_ok:
             return (
                 False,
@@ -780,11 +791,13 @@ def apply_authorization_foundation(
                 steps,
             )
     except Exception as exc:
-        steps.append({
-            "name": "Apply ACS foundation",
-            "success": False,
-            "message": str(exc),
-        })
+        steps.append(
+            {
+                "name": "Apply ACS foundation",
+                "success": False,
+                "message": str(exc),
+            }
+        )
         logger.warning(
             "Error applying ACS foundation for ONT %s: %s", serial_number, exc
         )
@@ -890,11 +903,14 @@ def authorize_autofind_ont(
     if preset_id:
         from app.models.network import AuthorizationPreset
 
+        preset_msg = "Selected authorization preset is not valid for this OLT."
         try:
             preset = db.get(AuthorizationPreset, uuid.UUID(str(preset_id)))
+            scoped_olt_id = getattr(preset, "olt_device_id", None) if preset else None
             if (
                 preset is not None
                 and getattr(preset, "is_active", True)
+                and (scoped_olt_id is None or str(scoped_olt_id) == str(olt_id))
                 and preset.line_profile_id is not None
                 and preset.service_profile_id is not None
             ):
@@ -904,7 +920,10 @@ def authorize_autofind_ont(
                     message=f"Using authorization preset '{preset.name}'.",
                 )
         except (TypeError, ValueError):
-            pass
+            preset_msg = "Selected authorization preset is invalid."
+        if authorization_profiles is None:
+            add_step("Activate ONT", False, preset_msg, activation_started)
+            return finish(success=False, message=preset_msg, status="error")
 
     if authorization_profiles is None:
         profiles_ok, profiles_msg, authorization_profiles = (
@@ -982,7 +1001,10 @@ def authorize_autofind_ont(
                     msg = f"Removed old registration, but authorization failed: {auth_result.message}"
                     add_step("Activate ONT", False, msg, activation_started)
                     return finish(success=False, message=msg, status="error")
-                auth_result.message = f"Moved ONT from {existing.fsp} to {fsp}."
+                auth_result.message = (
+                    f"Removed existing ONT registration on {existing.fsp}; "
+                    f"authorized on {fsp}."
+                )
         else:
             message = auth_result.message or "Authorization failed"
             add_step("Activate ONT", False, message, activation_started)
@@ -1000,7 +1022,10 @@ def authorize_autofind_ont(
         add_step("Activate ONT", False, create_msg, activation_started)
         return finish(
             success=False,
-            message=f"ONT authorized on OLT, but inventory setup failed: {create_msg}",
+            message=(
+                "ONT authorized on OLT, but local inventory record setup failed: "
+                f"{create_msg}"
+            ),
             status="error",
             ont_id_on_olt=ont_id,
             completed_authorization=True,
@@ -1013,7 +1038,8 @@ def authorize_autofind_ont(
     )
 
     activation_message = (
-        f"{authorization_profiles.message} {auth_result.message} {create_msg}".strip()
+        f"{getattr(authorization_profiles, 'message', '')} "
+        f"{auth_result.message} {create_msg}".strip()
     )
     add_step("Activate ONT", True, activation_message, activation_started)
 
@@ -1070,13 +1096,27 @@ def authorize_ont(
 
     # Step 2-4: Link PON port, allocate IP, apply ACS foundation
     if result.ont_unit_id and result.ont_id_on_olt is not None:
-        foundation_ok, foundation_msg, foundation_steps = apply_authorization_foundation(
-            db,
-            ont_unit_id=result.ont_unit_id,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
-            ont_id_on_olt=result.ont_id_on_olt,
+        foundation_ok, foundation_msg, foundation_steps = (
+            apply_authorization_foundation(
+                db,
+                ont_unit_id=result.ont_unit_id,
+                olt_id=olt_id,
+                fsp=fsp,
+                serial_number=serial_number,
+                ont_id_on_olt=result.ont_id_on_olt,
+            )
+        )
+
+        failed_foundation_message = next(
+            (
+                str(step.get("message") or "")
+                for step in foundation_steps
+                if not bool(step.get("success")) and step.get("message")
+            ),
+            foundation_msg,
+        )
+        foundation_step_message = (
+            failed_foundation_message if not foundation_ok else foundation_msg
         )
 
         # Add a summary step for the foundation work
@@ -1085,11 +1125,13 @@ def authorize_ont(
                 step=len(result.steps) + 1,
                 name="Bring ONT onto ACS",
                 success=foundation_ok,
-                message=foundation_msg,
+                message=foundation_step_message,
             )
         )
 
         if not foundation_ok:
+            result.success = False
+            result.status = "error"
             result.partial_success = True
             result.message = (
                 f"ONT authorized, but ACS foundation setup failed: {foundation_msg}"

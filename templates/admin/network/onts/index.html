@@ -311,6 +311,15 @@
                                     <input type="hidden" name="fsp" value="{{ entry.fsp }}">
                                     <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
                                     <input type="hidden" name="return_to" value="/admin/network/onts?view=unconfigured">
+                                    {% if entry.authorization_presets %}
+                                    <label for="preset-{{ entry.id }}" class="sr-only">Authorization preset</label>
+                                    <select id="preset-{{ entry.id }}" name="preset_id" class="min-w-[11rem] rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                                        <option value="">OLT default</option>
+                                        {% for preset in entry.authorization_presets %}
+                                        <option value="{{ preset.id }}">{{ preset.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    {% endif %}
                                     <button type="submit" :disabled="submitting" onclick="return confirm('Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}? Existing stale OLT registration will be cleaned up automatically if needed.')" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:shadow-md focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2" :class="submitting && 'opacity-75 cursor-wait'">
                                         {# Spinner - shown when submitting #}
                                         <svg x-show="submitting" x-cloak class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">

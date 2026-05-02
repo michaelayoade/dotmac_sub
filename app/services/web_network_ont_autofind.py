@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import SQLColumnExpression
 from starlette.requests import Request
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import AuthorizationPreset, OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import normalize as normalize_serial
@@ -148,7 +148,9 @@ def ensure_returned_inventory_candidate(
         candidate.last_seen_at = now
         if not candidate.serial_hex:
             candidate.serial_hex = serial_hex
-        candidate.notes = "Restored from return-to-inventory for immediate reauthorization."
+        candidate.notes = (
+            "Restored from return-to-inventory for immediate reauthorization."
+        )
         action = "restored"
 
     db.flush()
@@ -292,18 +294,15 @@ def build_unconfigured_onts_page_data(
         selected_resolution = ""
 
     # Build query using SQLAlchemy 2.0 select() pattern
-    stmt = (
-        select(OltAutofindCandidate, OLTDevice)
-        .join(OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id)
+    stmt = select(OltAutofindCandidate, OLTDevice).join(
+        OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id
     )
     if selected_view == "active":
         stmt = stmt.where(OltAutofindCandidate.is_active.is_(True))
     elif selected_view == "history":
         stmt = stmt.where(OltAutofindCandidate.is_active.is_(False))
     if selected_resolution:
-        stmt = stmt.where(
-            OltAutofindCandidate.resolution_reason == selected_resolution
-        )
+        stmt = stmt.where(OltAutofindCandidate.resolution_reason == selected_resolution)
     if olt_id:
         stmt = stmt.where(OltAutofindCandidate.olt_id == olt_id)
     if search:
@@ -338,6 +337,42 @@ def build_unconfigured_onts_page_data(
         OltAutofindCandidate.fsp.asc(),
     )
     rows = db.execute(stmt).all()
+    presets = list(
+        db.scalars(
+            select(AuthorizationPreset)
+            .where(
+                AuthorizationPreset.is_active.is_(True),
+                AuthorizationPreset.line_profile_id.is_not(None),
+                AuthorizationPreset.service_profile_id.is_not(None),
+            )
+            .order_by(
+                AuthorizationPreset.is_default.desc(),
+                AuthorizationPreset.priority.desc(),
+                AuthorizationPreset.name.asc(),
+            )
+        ).all()
+    )
+
+    def preset_options_for_olt(olt_device_id: object) -> list[dict[str, object]]:
+        olt_key = str(olt_device_id)
+        options: list[dict[str, object]] = []
+        for preset in presets:
+            scoped_olt_id = getattr(preset, "olt_device_id", None)
+            if scoped_olt_id is not None and str(scoped_olt_id) != olt_key:
+                continue
+            label = preset.name
+            if scoped_olt_id is not None:
+                label = f"{label} (OLT)"
+            options.append(
+                {
+                    "id": str(preset.id),
+                    "name": preset.name,
+                    "label": label,
+                    "is_default": bool(getattr(preset, "is_default", False)),
+                }
+            )
+        return options
+
     entries = [
         {
             "id": str(candidate.id),
@@ -357,6 +392,7 @@ def build_unconfigured_onts_page_data(
             "resolution_reason": candidate.resolution_reason,
             "resolved_at": candidate.resolved_at,
             "notes": candidate.notes,
+            "authorization_presets": preset_options_for_olt(olt.id),
         }
         for candidate, olt in rows
     ]

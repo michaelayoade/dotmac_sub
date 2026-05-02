@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import AuthorizationPreset, OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services import web_network_ont_autofind as autofind_service
 
@@ -177,7 +177,9 @@ def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
 
 
 def test_resolve_candidate_authorized_matches_normalized_serial_variant(db_session):
-    olt = OLTDevice(name="OLT-Resolve-Variant", mgmt_ip="198.51.100.211", is_active=True)
+    olt = OLTDevice(
+        name="OLT-Resolve-Variant", mgmt_ip="198.51.100.211", is_active=True
+    )
     ont = OntUnit(serial_number="HWTC7D4701C3", is_active=True)
     db_session.add_all([olt, ont])
     db_session.commit()
@@ -388,3 +390,53 @@ def test_build_unconfigured_onts_page_data_searches_hex_serial_variants(db_sessi
     assert [entry["serial_number"] for entry in display_data["entries"]] == [
         "HWTC-C044CD9A"
     ]
+
+
+def test_build_unconfigured_onts_page_data_scopes_authorization_presets(db_session):
+    olt = OLTDevice(name="OLT-Preset-Scope", mgmt_ip="198.51.100.209", is_active=True)
+    other_olt = OLTDevice(
+        name="OLT-Other-Preset-Scope", mgmt_ip="198.51.100.210", is_active=True
+    )
+    db_session.add_all([olt, other_olt])
+    db_session.flush()
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/16",
+        serial_number="HWTCPRESET01",
+        is_active=True,
+    )
+    global_preset = AuthorizationPreset(
+        name="Global preset",
+        line_profile_id=10,
+        service_profile_id=20,
+        is_active=True,
+    )
+    olt_preset = AuthorizationPreset(
+        name="OLT preset",
+        line_profile_id=11,
+        service_profile_id=21,
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    other_preset = AuthorizationPreset(
+        name="Other OLT preset",
+        line_profile_id=12,
+        service_profile_id=22,
+        olt_device_id=other_olt.id,
+        is_active=True,
+    )
+    incomplete_preset = AuthorizationPreset(
+        name="Incomplete preset",
+        line_profile_id=None,
+        service_profile_id=23,
+        is_active=True,
+    )
+    db_session.add_all(
+        [candidate, global_preset, olt_preset, other_preset, incomplete_preset]
+    )
+    db_session.commit()
+
+    data = autofind_service.build_unconfigured_onts_page_data(db_session)
+
+    options = data["entries"][0]["authorization_presets"]
+    assert [option["name"] for option in options] == ["Global preset", "OLT preset"]
