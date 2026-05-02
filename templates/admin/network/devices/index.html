@@ -26,15 +26,6 @@
         color2="blue",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Network Devices"}]
     ) %}
-        <button type="button"
-                hx-post="/admin/network/devices/discover"
-                hx-target="#discovery-status"
-                class="group inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 hover:border-slate-300 hover:shadow-md dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
-            <svg class="h-4 w-4 transition-transform group-hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-            </svg>
-            Discover
-        </button>
         {{ action_button("Add Device", "/admin/network/devices/create", icon_plus(), "primary", "cyan", "blue") }}
     {% endcall %}
 

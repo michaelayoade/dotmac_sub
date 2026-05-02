@@ -111,7 +111,6 @@ TASK_PRIORITY_MAPPING: dict[str, TaskPriority] = {
     # High priority
     "app.tasks.tr069.execute_pending_jobs": TaskPriority.high,
     "app.tasks.tr069.sync_all_acs_devices": TaskPriority.high,
-    "app.tasks.olt_polling.": TaskPriority.high,
     # Normal priority (default)
     "app.tasks.tr069.check_device_health": TaskPriority.normal,
     # Low priority - can be shed

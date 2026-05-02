@@ -10,10 +10,11 @@
  *
  * Environment variables:
  *   DOTMAC_AUTH_URL - DotMac API base URL for credential lookups
+ *   TR069_AUTH_SHARED_SECRET - Shared secret sent to DotMac auth endpoint
  *   GENIEACS_CWMP_CONNECTION_REQUEST_USERNAME - Default CR username
  *   GENIEACS_CWMP_CONNECTION_REQUEST_PASSWORD - Default CR password
- *   GENIEACS_CPE_AUTH_USERNAME - Default CPE auth username
- *   GENIEACS_CPE_AUTH_PASSWORD - Default CPE auth password
+ *   GENIEACS_CPE_AUTH_USERNAME - Bootstrap/default CPE auth username
+ *   GENIEACS_CPE_AUTH_PASSWORD - Bootstrap/default CPE auth password
  */
 
 const http = require("http");
@@ -21,6 +22,7 @@ const https = require("https");
 
 // Configuration from environment
 const DOTMAC_AUTH_URL = process.env.DOTMAC_AUTH_URL || "http://app:8001/api/v1/tr069/auth";
+const TR069_AUTH_SHARED_SECRET = process.env.TR069_AUTH_SHARED_SECRET || "";
 const DEFAULT_CR_USERNAME = process.env.GENIEACS_CWMP_CONNECTION_REQUEST_USERNAME || "acs";
 const DEFAULT_CR_PASSWORD = process.env.GENIEACS_CWMP_CONNECTION_REQUEST_PASSWORD || "acs123";
 const DEFAULT_CPE_USERNAME = process.env.GENIEACS_CPE_AUTH_USERNAME || "";
@@ -68,6 +70,7 @@ function fetchCredentials(serialNumber, credentialType, callback) {
       headers: {
         "Accept": "application/json",
         "User-Agent": "GenieACS-Auth-Extension/1.0",
+        "X-DotMac-TR069-Auth": TR069_AUTH_SHARED_SECRET,
       },
     },
     (res) => {
@@ -82,6 +85,7 @@ function fetchCredentials(serialNumber, credentialType, callback) {
             const credentials = {
               username: data.username || null,
               password: data.password || null,
+              authorized: data.authorized === true,
             };
             // Cache successful lookups
             credentialCache.set(cacheKey, {
@@ -133,7 +137,7 @@ exports.connectionRequest = function (args, callback) {
         console.error(`CR credential lookup failed for ${serialNumber}: ${err.message}`);
       }
 
-      if (creds && creds.username && creds.password) {
+      if (creds && creds.authorized && creds.username && creds.password) {
         callback(null, creds);
       } else {
         // Fallback to defaults
@@ -170,39 +174,40 @@ exports.authenticateCpe = function (args, callback) {
   const deviceId = args[2] || "";
   const serialNumber = args[3] || "";
 
-  // If no default credentials configured, allow all (backward compatible)
-  if (!DEFAULT_CPE_USERNAME && !DEFAULT_CPE_PASSWORD) {
-    callback(null, true);
-    return;
+  function checkCredentials(expectedUsername, expectedPassword) {
+    if (!expectedUsername || !expectedPassword) {
+      callback(null, false);
+      return;
+    }
+
+    callback(
+      null,
+      providedUsername === expectedUsername && providedPassword === expectedPassword
+    );
   }
 
-  // Try per-device lookup if serial available
+  // Prefer per-device credentials. Fall back only to explicit bootstrap/default
+  // credentials; blank defaults must fail closed.
   if (serialNumber) {
     fetchCredentials(serialNumber, "cpe_auth", (err, creds) => {
       if (err) {
         console.error(`CPE auth lookup failed for ${serialNumber}: ${err.message}`);
       }
 
-      let expectedUsername = DEFAULT_CPE_USERNAME;
-      let expectedPassword = DEFAULT_CPE_PASSWORD;
-
       if (creds && creds.username && creds.password) {
-        expectedUsername = creds.username;
-        expectedPassword = creds.password;
+        checkCredentials(creds.username, creds.password);
+        return;
       }
 
-      const isValid =
-        providedUsername === expectedUsername && providedPassword === expectedPassword;
+      if (creds && creds.authorized) {
+        checkCredentials(DEFAULT_CPE_USERNAME, DEFAULT_CPE_PASSWORD);
+        return;
+      }
 
-      callback(null, isValid);
+      callback(null, false);
     });
   } else {
-    // No serial, check against defaults
-    const isValid =
-      providedUsername === DEFAULT_CPE_USERNAME &&
-      providedPassword === DEFAULT_CPE_PASSWORD;
-
-    callback(null, isValid);
+    callback(null, false);
   }
 };
 
@@ -224,20 +229,19 @@ exports.getCpeCredentials = function (args, callback) {
         console.error(`CPE credential lookup failed for ${serialNumber}: ${err.message}`);
       }
 
-      if (creds && creds.username && creds.password) {
+      if (creds && creds.authorized && creds.username && creds.password) {
         callback(null, creds);
-      } else {
+      } else if (creds && creds.authorized) {
         callback(null, {
           username: DEFAULT_CPE_USERNAME,
           password: DEFAULT_CPE_PASSWORD,
         });
+      } else {
+        callback(null, { username: null, password: null });
       }
     });
   } else {
-    callback(null, {
-      username: DEFAULT_CPE_USERNAME,
-      password: DEFAULT_CPE_PASSWORD,
-    });
+    callback(null, { username: null, password: null });
   }
 };
 

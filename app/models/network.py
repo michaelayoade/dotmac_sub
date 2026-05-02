@@ -49,7 +49,7 @@ class DeviceStatus(enum.Enum):
 
 
 class PollStatus(enum.Enum):
-    """Status of the last SNMP polling attempt."""
+    """Status of the last monitoring attempt."""
 
     success = "success"
     failed = "failed"
@@ -212,6 +212,7 @@ class OnuOfflineReason(enum.Enum):
 class OntStatusSource(enum.Enum):
     olt = "olt"
     acs = "acs"
+    zabbix = "zabbix"
     derived = "derived"
 
 
@@ -1174,20 +1175,6 @@ class OntUnit(Base):
         Enum(OnuOfflineReason, name="onuofflinereason", create_constraint=False),
     )
     acs_last_inform_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    effective_status: Mapped[OnuOnlineStatus] = mapped_column(
-        Enum(OnuOnlineStatus, name="onteffectivestatus", create_constraint=False),
-        default=OnuOnlineStatus.offline,
-        server_default="offline",
-    )
-    effective_status_source: Mapped[OntStatusSource] = mapped_column(
-        Enum(OntStatusSource, name="ontstatussource", create_constraint=False),
-        default=OntStatusSource.derived,
-        server_default="derived",
-    )
-    # Flap protection: count consecutive offline polls before emitting event
-    consecutive_offline_polls: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0"
-    )
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("network_zones.id")
     )

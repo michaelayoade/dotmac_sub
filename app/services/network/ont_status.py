@@ -1,11 +1,15 @@
-"""Pure ONT status resolution and persistence helpers."""
+"""ONT state helpers.
+
+Zabbix is the monitoring authority for ONT online/offline state. OLT and ACS
+values are raw diagnostics/metadata only.
+"""
 
 from __future__ import annotations
 
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import Enum
 from math import ceil
 
@@ -88,27 +92,10 @@ _PROVISIONING_TRANSITIONS: dict[
 
 
 @dataclass(frozen=True)
-class OntStatusInputs:
-    olt_status: OnuOnlineStatus
-    olt_seen_at: datetime | None
-    acs_last_inform_at: datetime | None
-    acs_online_window_minutes: int
-
-
-@dataclass(frozen=True)
-class OntStatusResolution:
-    effective_status: OnuOnlineStatus
-    effective_status_source: OntStatusSource
-    last_seen_at: datetime | None
-
-
-@dataclass(frozen=True)
 class OntStatusSnapshot:
     olt_status: OnuOnlineStatus
     olt_status_seen_at: datetime | None
     acs_last_inform_at: datetime | None
-    effective_status: OnuOnlineStatus
-    effective_status_source: OntStatusSource
     last_seen_at: datetime | None
 
 
@@ -165,7 +152,7 @@ class OpticalMetrics:
 
 @dataclass(frozen=True)
 class OntStatusResult:
-    effective_status: OnuOnlineStatus
+    status: OnuOnlineStatus
     status_source: OntStatusSource
     acs_last_inform_at: datetime | None = None
     resolved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -174,7 +161,7 @@ class OntStatusResult:
 
     @property
     def is_online(self) -> bool:
-        return self.effective_status == OnuOnlineStatus.online
+        return self.status == OnuOnlineStatus.online
 
     @property
     def success(self) -> bool:
@@ -348,46 +335,6 @@ def resolve_effective_last_seen_at(
     return max(present) if present else None
 
 
-def resolve_ont_effective_status(
-    inputs: OntStatusInputs,
-    *,
-    now: datetime | None = None,
-) -> OntStatusResolution:
-    """Resolve effective ONT status from OLT and ACS observations.
-
-    Priority:
-    1. Recent ACS inform → online (ACS is authoritative when recent)
-    2. OLT status (online/offline) → use directly
-    """
-    current = now or datetime.now(UTC)
-    olt_seen_at = _normalize_timestamp(inputs.olt_seen_at)
-    acs_last_inform_at = _normalize_timestamp(inputs.acs_last_inform_at)
-    acs_is_recent = (
-        acs_last_inform_at is not None
-        and acs_last_inform_at
-        >= current - timedelta(minutes=inputs.acs_online_window_minutes)
-    )
-
-    if acs_is_recent:
-        status = OnuOnlineStatus.online
-        source = OntStatusSource.acs
-    else:
-        # Trust OLT status directly
-        status = inputs.olt_status
-        source = OntStatusSource.olt
-
-    last_seen_candidates = [
-        olt_seen_at if inputs.olt_status == OnuOnlineStatus.online else None,
-        acs_last_inform_at,
-    ]
-    last_seen = max([value for value in last_seen_candidates if value is not None], default=None)
-    return OntStatusResolution(
-        effective_status=status,
-        effective_status_source=source,
-        last_seen_at=last_seen,
-    )
-
-
 def resolve_ont_status_for_model(
     ont: OntUnit,
     *,
@@ -400,24 +347,26 @@ def resolve_ont_status_for_model(
         if acs_last_inform_at is not None
         else getattr(ont, "acs_last_inform_at", None)
     )
-    inputs = OntStatusInputs(
-        olt_status=_normalize_olt_status(getattr(ont, "olt_status", None)),
-        olt_seen_at=getattr(ont, "olt_status_seen_at", None),
-        acs_last_inform_at=effective_inform,
-        acs_online_window_minutes=(
-            online_window_minutes
-            if online_window_minutes is not None
-            else resolve_acs_online_window_minutes_for_model(ont)
-        ),
+    _ = now, online_window_minutes
+    olt_status = _normalize_olt_status(getattr(ont, "olt_status", None))
+    olt_seen_at = _normalize_timestamp(getattr(ont, "olt_status_seen_at", None))
+    acs_seen_at = _normalize_timestamp(effective_inform)
+    last_seen = max(
+        [
+            value
+            for value in [
+                olt_seen_at if olt_status == OnuOnlineStatus.online else None,
+                acs_seen_at,
+            ]
+            if value is not None
+        ],
+        default=None,
     )
-    resolution = resolve_ont_effective_status(inputs, now=now)
     return OntStatusSnapshot(
-        olt_status=inputs.olt_status,
-        olt_status_seen_at=_normalize_timestamp(inputs.olt_seen_at),
-        acs_last_inform_at=_normalize_timestamp(effective_inform),
-        effective_status=resolution.effective_status,
-        effective_status_source=resolution.effective_status_source,
-        last_seen_at=resolution.last_seen_at,
+        olt_status=olt_status,
+        olt_status_seen_at=olt_seen_at,
+        acs_last_inform_at=acs_seen_at,
+        last_seen_at=last_seen,
     )
 
 
@@ -429,30 +378,27 @@ def resolve_ont_status_snapshot(
     online_window_minutes: int = DEFAULT_ACS_ONLINE_WINDOW_MINUTES,
 ) -> OntStatusSnapshot:
     current = now or datetime.now(UTC)
+    _ = online_window_minutes
     normalized_olt = _normalize_olt_status(olt_status)
-    inputs = OntStatusInputs(
-        olt_status=normalized_olt,
-        olt_seen_at=current if normalized_olt == OnuOnlineStatus.online else None,
-        acs_last_inform_at=acs_last_inform_at,
-        acs_online_window_minutes=online_window_minutes,
+    olt_seen_at = current if normalized_olt == OnuOnlineStatus.online else None
+    acs_seen_at = _normalize_timestamp(acs_last_inform_at)
+    last_seen = max(
+        [value for value in [olt_seen_at, acs_seen_at] if value is not None],
+        default=None,
     )
-    resolution = resolve_ont_effective_status(inputs, now=current)
     return OntStatusSnapshot(
         olt_status=normalized_olt,
-        olt_status_seen_at=inputs.olt_seen_at,
-        acs_last_inform_at=_normalize_timestamp(acs_last_inform_at),
-        effective_status=resolution.effective_status,
-        effective_status_source=resolution.effective_status_source,
-        last_seen_at=resolution.last_seen_at,
+        olt_status_seen_at=olt_seen_at,
+        acs_last_inform_at=acs_seen_at,
+        last_seen_at=last_seen,
     )
 
 
 def apply_status_snapshot(ont: OntUnit, snapshot: OntStatusSnapshot) -> OntUnit:
+    """Persist raw OLT/ACS observation timestamps without combined status writes."""
     ont.olt_status = snapshot.olt_status
     ont.olt_status_seen_at = snapshot.olt_status_seen_at
     ont.acs_last_inform_at = snapshot.acs_last_inform_at
-    ont.effective_status = snapshot.effective_status
-    ont.effective_status_source = snapshot.effective_status_source
     if snapshot.last_seen_at is not None:
         ont.last_seen_at = snapshot.last_seen_at
     return ont
@@ -463,7 +409,7 @@ def apply_resolved_status_for_model(
     *,
     now: datetime | None = None,
 ) -> OntUnit:
-    """Resolve and persist the effective ONT status from current observations."""
+    """Persist raw status timestamps from current observations."""
     snapshot = resolve_ont_status_for_model(ont, now=now)
     return apply_status_snapshot(ont, snapshot)
 
@@ -473,8 +419,6 @@ def reset_status_for_inventory(ont: OntUnit) -> None:
     ont.olt_status = OnuOnlineStatus.offline
     ont.olt_status_seen_at = None
     ont.acs_last_inform_at = None
-    ont.effective_status = OnuOnlineStatus.offline
-    ont.effective_status_source = OntStatusSource.olt
     ont.last_seen_at = None
     ont.offline_reason = None
 
@@ -486,7 +430,7 @@ def apply_olt_status_observation(
     *,
     now: datetime | None = None,
 ) -> OntStatusSnapshot:
-    """Apply an OLT status observation to an ONT and update effective status."""
+    """Apply a raw OLT diagnostic/status observation to an ONT."""
     current = now or datetime.now(UTC)
     normalized_status = _normalize_olt_status(olt_status)
     ont.olt_status = normalized_status
@@ -498,9 +442,11 @@ def apply_olt_status_observation(
     else:
         ont.offline_reason = offline_reason or OnuOfflineReason.unknown
 
-    snapshot = resolve_ont_status_for_model(ont, now=current)
-    apply_status_snapshot(ont, snapshot)
-    return snapshot
+    return resolve_ont_status_snapshot(
+        olt_status=normalized_status,
+        acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
+        now=current,
+    )
 
 
 def apply_status_with_hysteresis(
@@ -521,9 +467,13 @@ def apply_acs_inform_observation(
 ) -> OntStatusSnapshot:
     current = now or datetime.now(UTC)
     ont.acs_last_inform_at = _normalize_timestamp(acs_last_inform_at) or current
-    snapshot = resolve_ont_status_for_model(ont, now=current)
-    apply_status_snapshot(ont, snapshot)
-    return snapshot
+    if ont.acs_last_inform_at is not None:
+        ont.last_seen_at = ont.acs_last_inform_at
+    return resolve_ont_status_snapshot(
+        olt_status=getattr(ont, "olt_status", None),
+        acs_last_inform_at=ont.acs_last_inform_at,
+        now=current,
+    )
 
 
 def update_ont_acs_status_from_inform(
@@ -541,17 +491,14 @@ def update_ont_acs_status_from_inform(
 
 def reconcile_ont_state(ont: OntUnit, *, now: datetime | None = None) -> OntStateReconciliationResult:
     snapshot = resolve_ont_status_for_model(ont, now=now)
-    conflict = (
-        snapshot.olt_status == OnuOnlineStatus.offline
-        and snapshot.effective_status_source == OntStatusSource.acs
-    )
+    conflict = False
     return OntStateReconciliationResult(
         ont_id=ont.id,
         snapshot=snapshot,
         conflict=conflict,
-        reason="recent_acs_inform_overrides_olt_offline" if conflict else "resolved",
-        authoritative_source=snapshot.effective_status_source,
-        recommended_action="check_monitoring_freshness" if conflict else None,
+        reason="zabbix_is_monitoring_authority",
+        authoritative_source=OntStatusSource.zabbix,
+        recommended_action=None,
     )
 
 
@@ -576,13 +523,17 @@ def get_ont_status(
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> OntStatusResult:
     _ = db, mode
-    snapshot = resolve_ont_status_for_model(ont)
+    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
+
+    zabbix_status = get_ont_signal_from_zabbix(ont)
+    status = OnuOnlineStatus.online if zabbix_status.online else OnuOnlineStatus.offline
     return OntStatusResult(
-        effective_status=snapshot.effective_status,
-        status_source=snapshot.effective_status_source,
-        acs_last_inform_at=snapshot.acs_last_inform_at,
+        status=status,
+        status_source=OntStatusSource.zabbix,
+        acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
         resolved_at=datetime.now(UTC),
         optical_metrics=_optical_metrics_from_ont(ont) if include_optical else None,
+        error=zabbix_status.error,
     )
 
 
@@ -603,12 +554,21 @@ def refresh_ont_status(
     mode: StatusProviderMode | str = StatusProviderMode.auto,
 ) -> OntStatusResult:
     _ = mode
-    snapshot = resolve_ont_status_for_model(ont)
-    apply_status_snapshot(ont, snapshot)
+    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
+
+    zabbix_status = get_ont_signal_from_zabbix(ont)
+    status = OnuOnlineStatus.online if zabbix_status.online else OnuOnlineStatus.offline
+    if zabbix_status.updated_at is not None:
+        ont.last_seen_at = zabbix_status.updated_at
+    ont.olt_rx_signal_dbm = zabbix_status.olt_rx_dbm
+    ont.onu_rx_signal_dbm = zabbix_status.onu_rx_dbm
+    ont.signal_updated_at = zabbix_status.updated_at
+    ont.last_sync_source = "zabbix"
     db.flush()
     return OntStatusResult(
-        effective_status=snapshot.effective_status,
-        status_source=snapshot.effective_status_source,
-        acs_last_inform_at=snapshot.acs_last_inform_at,
+        status=status,
+        status_source=OntStatusSource.zabbix,
+        acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
         resolved_at=datetime.now(UTC),
+        error=zabbix_status.error,
     )

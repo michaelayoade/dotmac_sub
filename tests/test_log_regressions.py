@@ -5,8 +5,6 @@ from uuid import uuid4
 
 from starlette.requests import Request
 
-from app.services import monitoring_metrics as monitoring_metrics_service
-from app.services import snmp_discovery as snmp_discovery_service
 from app.services.network import ont_metrics
 from app.services.network.olt_ssh import _run_huawei_cmd
 from app.web.admin.network_olts_inventory import olt_authorize_ont
@@ -282,35 +280,3 @@ def test_olt_detail_template_uses_operator_focused_tabs() -> None:
         )
     ]
     assert "Profiles" not in nav_section
-
-
-def test_snmp_v1_bulk_walk_uses_plain_walk(monkeypatch) -> None:
-    calls: list[list[str]] = []
-
-    def _fake_run_snmp_command(args: list[str], timeout: int) -> list[str]:
-        calls.append(args)
-        return []
-
-    monkeypatch.setattr(
-        snmp_discovery_service, "_run_snmp_command", _fake_run_snmp_command
-    )
-    device = SimpleNamespace(
-        mgmt_ip="192.0.2.10",
-        hostname=None,
-        snmp_version="v1",
-        snmp_community=None,
-        snmp_port=None,
-    )
-
-    snmp_discovery_service._run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.2")
-
-    assert calls
-    assert calls[0][0] == "snmpwalk"
-    assert "-v1" in calls[0]
-    assert "-Cr25" not in calls[0]
-
-
-def test_device_metric_unit_is_limited_to_column_size() -> None:
-    value = "Huawei-MA5800-V100R019-GPON_UNI 0/2/9 out"
-
-    assert monitoring_metrics_service._device_metric_unit(value) == value[:40]

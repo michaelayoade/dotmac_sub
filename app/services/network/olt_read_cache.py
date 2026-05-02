@@ -1,6 +1,6 @@
 """Redis-based caching layer for OLT read operations.
 
-Caches frequently accessed OLT data to reduce SSH/SNMP round trips:
+Caches frequently accessed OLT data to reduce device round trips:
 - Service ports: 60s TTL (changes infrequently)
 - OLT profiles: 120s TTL (rarely changes)
 - Running config: 300s TTL (manual changes only)
@@ -46,7 +46,7 @@ DEFAULT_TTLS = {
 class OltReadCache:
     """Redis-backed cache for OLT read operations.
 
-    Provides caching for expensive SSH/SNMP operations with automatic
+    Provides caching for expensive device operations with automatic
     serialization, TTL management, and cache invalidation.
 
     Thread Safety:

@@ -23,7 +23,7 @@ def _ont(ont_id: str, external_id: str, **kwargs):
 def test_snapshot_marks_status_code_one_online(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
     walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194318336.5 = INTEGER: 1"
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: 1"
     )
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
@@ -47,7 +47,7 @@ def test_snapshot_marks_status_code_one_online(monkeypatch) -> None:
 def test_snapshot_marks_missing_or_non_one_status_offline(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
     walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194318336.5 = INTEGER: 2"
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: 2"
     )
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
@@ -74,7 +74,7 @@ def test_snapshot_marks_missing_or_non_one_status_offline(monkeypatch) -> None:
 def test_snapshot_uses_valid_rx_signal_as_online(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
     walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194318336.5 = INTEGER: -2318"
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: -2318"
     )
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
@@ -141,3 +141,33 @@ def test_snapshot_matches_numeric_external_id_with_board_and_port(monkeypatch) -
 
     assert snapshot["ont-1"].status == "online"
     assert snapshot["ont-1"].olt_rx_dbm == -20.6
+
+
+def test_snapshot_matches_huawei_high_pon_port(monkeypatch) -> None:
+    monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
+    walk_output = (
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194315264.5 = INTEGER: 1\n"
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194315264.5 = INTEGER: -2097"
+    )
+
+    snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
+        _olt(),
+        [_ont("ont-1", "0/1/12.5")],
+        client=_FakeZabbixClient(
+            [
+                {
+                    "key_": "ont.status.walk",
+                    "lastvalue": walk_output,
+                    "lastclock": "1777747023",
+                },
+                {
+                    "key_": "opt.rx.walk",
+                    "lastvalue": walk_output,
+                    "lastclock": "1777747025",
+                },
+            ]
+        ),
+    )
+
+    assert snapshot["ont-1"].status == "online"
+    assert snapshot["ont-1"].olt_rx_dbm == -20.97

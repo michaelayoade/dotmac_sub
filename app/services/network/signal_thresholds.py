@@ -34,7 +34,7 @@ OPTICAL_SIGNAL_MAX_DBM = 10.0
 def normalize_optical_signal_dbm(dbm: float | None) -> float | None:
     """Return a sane optical signal value or ``None``.
 
-    Some legacy ingest paths persisted sentinel or overflow values such as
+    Older ingest paths persisted sentinel or overflow values such as
     ``21474836.47`` into the DB. Treat anything outside the physically
     plausible range as missing data.
     """

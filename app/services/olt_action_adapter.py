@@ -50,7 +50,7 @@ class OltActionAdapter:
     ) -> tuple[bool, str, str | None]:
         from app.services.network import ont_authorization
 
-        result = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
+        result = ont_authorization.authorize_ont(
             db,
             olt_id,
             fsp,

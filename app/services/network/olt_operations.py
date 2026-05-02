@@ -18,11 +18,9 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice, OntUnit
-from app.services.credential_crypto import decrypt_credential
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network import olt_ssh_config as olt_ssh_config_service
 from app.services.network.olt_inventory import get_olt_or_none
-from app.services.network.olt_monitoring_devices import find_linked_network_device
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_status import (
     get_ont_status as get_adapter_status,
@@ -78,38 +76,6 @@ def olt_backup_base_dir() -> Path:
     if candidate.exists():
         return candidate
     return _FALLBACK_OLT_BACKUP_DIR
-
-
-def authorize_ont(
-    db: Session,
-    olt_id: str,
-    *,
-    fsp: str,
-    serial_number: str,
-    force_reauthorize: bool = False,
-    preset_id: str | None = None,
-    request: Request | None = None,
-) -> tuple[bool, str, str | None]:
-    """Legacy OLT authorization entry point.
-
-    The audited workflow lives in ``ont_authorization``; this wrapper preserves
-    the historical ``olt_operations.authorize_ont`` patch/import boundary.
-    """
-    from app.services.network.ont_authorization import (
-        authorize_autofind_ont_and_provision_network_audited,
-    )
-
-    result = authorize_autofind_ont_and_provision_network_audited(
-        db,
-        olt_id,
-        fsp,
-        serial_number,
-        force_reauthorize=force_reauthorize,
-        preset_id=preset_id,
-        request=request,
-    )
-    ont_unit_id = str(result.ont_unit_id) if result.ont_unit_id else None
-    return result.success, result.message, ont_unit_id
 
 
 def resolve_backup_file(file_path: str) -> Path:
@@ -247,11 +213,8 @@ def compare_olt_backups(
 
 
 def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | None:
-    """Fetch an OLT running-config through the protocol adapter.
-
-    Falls back to a lightweight SNMP snapshot when full CLI config capture is
-    unavailable.
-    """
+    """Fetch an OLT running-config through the protocol adapter over SSH."""
+    del db
     if not olt.mgmt_ip:
         return None
 
@@ -269,74 +232,7 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
         )
     except Exception as exc:
         logger.warning("Adapter running-config fetch errored for OLT %s: %s", olt.name, exc)
-
-    try:
-        from pysnmp.hlapi import (
-            CommunityData,
-            ContextData,
-            ObjectIdentity,
-            ObjectType,
-            SnmpEngine,
-            UdpTransportTarget,
-            getCmd,
-        )
-    except ImportError:
-        return None
-
-    community_str = "public"
-    if db is not None:
-        linked = find_linked_network_device(
-            db, mgmt_ip=olt.mgmt_ip, hostname=olt.hostname, name=olt.name
-        )
-        if linked and linked.snmp_community:
-            try:
-                decrypted = decrypt_credential(linked.snmp_community)
-                if decrypted:
-                    community_str = decrypted
-            except ValueError as exc:
-                logger.warning(
-                    "Skipping linked SNMP community for OLT %s: %s",
-                    olt.name,
-                    exc,
-                )
-
-    try:
-        engine = SnmpEngine()
-        community = CommunityData(community_str, mpModel=1)  # nosec  # noqa: S508
-        target = UdpTransportTarget((olt.mgmt_ip, 161), timeout=6, retries=0)
-        oids = [
-            "1.3.6.1.2.1.1.5.0",
-            "1.3.6.1.2.1.1.1.0",
-            "1.3.6.1.2.1.1.3.0",
-        ]
-        lines = [
-            f"# OLT Config Snapshot: {olt.name}",
-            f"# IP: {olt.mgmt_ip}",
-            f"# Captured: {datetime.now(UTC).isoformat()}",
-            "",
-        ]
-        for oid in oids:
-            error_indication, error_status, _error_index, var_binds = next(
-                getCmd(
-                    engine,
-                    community,
-                    target,
-                    ContextData(),
-                    ObjectType(ObjectIdentity(oid)),
-                )
-            )
-            if error_indication or error_status:
-                continue
-            for var_bind in var_binds:
-                lines.append(
-                    f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}"
-                )
-        if len(lines) <= 4:
-            return None
-        return "\n".join(lines) + "\n"
-    except Exception as exc:
-        logger.warning("SNMP config fetch failed for OLT %s: %s", olt.name, exc)
-        return None
+    return None
 
 
 def test_olt_connection(db: Session, olt_id: str) -> tuple[bool, str]:
@@ -347,67 +243,8 @@ def test_olt_connection(db: Session, olt_id: str) -> tuple[bool, str]:
         return False, "Management IP is required"
     config = fetch_running_config(olt)
     if not config:
-        return False, "Connection test failed: unable to fetch SNMP data"
+        return False, "Connection test failed: unable to fetch device data"
     return True, "Connection test successful"
-
-
-def test_olt_snmp_connection(
-    db: Session, olt_id: str, *, request: Request | None = None
-) -> tuple[bool, str]:
-    """Run an on-demand SNMP test for an OLT via its linked monitoring device."""
-    olt = get_olt_or_none(db, olt_id)
-    if not olt:
-        return False, "OLT not found"
-
-    linked = find_linked_network_device(
-        db,
-        mgmt_ip=olt.mgmt_ip,
-        hostname=olt.hostname,
-        name=olt.name,
-    )
-    if not linked:
-        return False, "No linked monitoring device found for this OLT"
-    if not linked.snmp_enabled:
-        return False, "SNMP is disabled on the linked monitoring device"
-
-    try:
-        from app.services import web_network_core_runtime as core_runtime_service
-
-        device, error = core_runtime_service.snmp_check_device(db, str(linked.id))
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Manual SNMP test failed for OLT %s", olt_id)
-        message = f"SNMP test failed: {exc!s}"
-        log_olt_audit_event(
-            db,
-            request=request,
-            action="test_snmp_connection",
-            entity_id=olt_id,
-            metadata={"result": "error", "message": message},
-            status_code=500,
-            is_success=False,
-        )
-        return False, message
-
-    if error:
-        ok, message = False, f"SNMP test failed: {error}"
-    elif not device:
-        ok, message = False, "SNMP test failed: linked device not found"
-    elif device.last_snmp_ok:
-        ok, message = True, "SNMP test successful"
-    else:
-        ok, message = False, "SNMP test failed: no response from device"
-    log_olt_audit_event(
-        db,
-        request=request,
-        action="test_snmp_connection",
-        entity_id=olt_id,
-        metadata={"result": "success" if ok else "error", "message": message},
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
-    return ok, message
 
 
 def extract_firmware_version(version_output: str) -> str | None:
@@ -809,9 +646,8 @@ def get_ont_status_by_serial(
     ont_record = _find_ont_by_serial_in_db(db, normalized_serial, olt.id)
     if ont_record:
         adapter_status = get_adapter_status(db, ont_record, include_optical=True)
-        payload["effective_status"] = adapter_status.effective_status.value
+        payload["status"] = adapter_status.status.value
         payload["status_source"] = adapter_status.status_source.value
-        payload["effective_status_source"] = adapter_status.status_source.value
         if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
             metrics = adapter_status.optical_metrics
             payload["olt_rx_signal_dbm"] = metrics.olt_rx_dbm

@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from app.models.catalog import RegionZone
-from app.models.network import IpPool, IPVersion, OLTDevice, Vlan, VlanPurpose
+from app.models.network import (
+    IpBlock,
+    IpPool,
+    IPv4Address,
+    IPVersion,
+    OLTDevice,
+    Vlan,
+    VlanPurpose,
+)
 from app.models.tr069 import Tr069AcsServer
 from app.services.network import olt_web_forms
 from app.services.network.acs_reachability import (
@@ -57,6 +65,42 @@ def test_acs_reachability_accepts_routable_management_pool(db_session):
     )
 
     assert error is None
+    block = (
+        db_session.query(IpBlock)
+        .filter(IpBlock.pool_id == pool.id, IpBlock.is_active.is_(True))
+        .one()
+    )
+    assert block.cidr == pool.cidr
+    assert pool.next_available_ip is not None
+    assert pool.available_count and pool.available_count > 0
+
+
+def test_acs_reachability_rejects_exhausted_management_pool(db_session):
+    olt, acs, vlan, pool = _acs_ready_olt(db_session, pool_cidr="172.16.202.0/30")
+    db_session.add(
+        IpBlock(pool_id=pool.id, cidr="172.16.202.0/30", is_active=True)
+    )
+    db_session.add(
+        IPv4Address(
+            address="172.16.202.2",
+            pool_id=pool.id,
+            is_reserved=True,
+        )
+    )
+    db_session.flush()
+
+    error = validate_olt_acs_management_reachability(
+        db_session,
+        {
+            "tr069_acs_server_id": acs.id,
+            "default_tr069_olt_profile_id": 2,
+            "management_vlan_id": vlan.id,
+            "mgmt_ip_pool_id": pool.id,
+        },
+        current_olt=olt,
+    )
+
+    assert error == "Management IP pool must have at least one available address."
 
 
 def test_acs_reachability_rejects_unroutable_management_pool(db_session):

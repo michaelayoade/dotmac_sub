@@ -140,6 +140,67 @@ def _send_slow(
     channel.send("\n")
 
 
+def _run_ont_config_command(
+    olt,
+    fsp: str,
+    command: str,
+    *,
+    success_message: str,
+    timeout_sec: int = 12,
+) -> tuple[bool, str]:
+    """Run a single ONT-scoped config command on a GPON interface."""
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    parts = fsp.split("/")
+    frame_slot = f"{parts[0]}/{parts[1]}"
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
+
+        _send_slow(channel, f"interface gpon {frame_slot}")
+        core._read_until_prompt(channel, config_prompt, timeout_sec=8)
+
+        _send_slow(channel, command)
+        output = core._read_until_prompt(
+            channel, config_prompt, timeout_sec=timeout_sec
+        )
+
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
+        if core.is_error_output(output):
+            logger.warning(
+                "ONT config command failed on OLT %s: %s",
+                olt.name,
+                output.strip()[-150:],
+            )
+            return False, f"OLT rejected: {output.strip()[-150:]}"
+        return True, success_message
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error running ONT config command on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
 def _validate_fsp(fsp: str, *, allow_normalize: bool = True) -> tuple[bool, str]:
     """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1').
 

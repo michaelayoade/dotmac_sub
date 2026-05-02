@@ -38,10 +38,6 @@ from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
-from app.services.network.ont_status import (
-    resolve_effective_last_seen_at,
-    resolve_ont_status_for_model,
-)
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
@@ -242,9 +238,9 @@ def _display_ont_serial(value: object) -> str:
 def _ont_display_serial(ont: object) -> str:
     """Return the best real ONT serial for UI tables.
 
-    SNMP sync may create synthetic serial numbers before a vendor serial is
-    known. Those are useful as internal unique keys, but should not be shown
-    to operators as the ONT serial.
+    Imported or legacy rows may contain synthetic serial numbers before a vendor
+    serial is known. Those are useful as internal unique keys, but should not be
+    shown to operators as the ONT serial.
     """
     vendor_serial = _display_ont_serial(getattr(ont, "vendor_serial_number", None))
     if vendor_serial:
@@ -1170,6 +1166,7 @@ ACS_STATUS_CLASSES: dict[str, str] = {
     "online": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
     "stale": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
     "unmanaged": "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+    "zabbix": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     "unknown": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
 }
 
@@ -1229,7 +1226,7 @@ def onts_list_page_data(
     pon_port_id: str | None = None,
     pon_hint: str | None = None,
     zone_id: str | None = None,
-    olt_status: str | None = None,
+    online_status: str | None = None,
     authorization: str | None = None,
     offline_reason: str | None = None,
     signal_quality: str | None = None,
@@ -1282,7 +1279,7 @@ def onts_list_page_data(
         pon_hint=pon_hint,
         zone_id=zone_id,
         signal_quality=signal_quality,
-        olt_status=olt_status,
+        olt_status=online_status,
         authorization_status=query_authorization,
         vendor=vendor,
         search=search,
@@ -1303,7 +1300,7 @@ def onts_list_page_data(
             pon_hint=pon_hint,
             zone_id=zone_id,
             signal_quality=signal_quality,
-            olt_status=olt_status,
+            olt_status=online_status,
             authorization_status=query_authorization,
             vendor=vendor,
             search=search,
@@ -1323,13 +1320,9 @@ def onts_list_page_data(
     from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
     zabbix_snapshot = get_ont_snapshots_from_zabbix(db, displayed_onts)
-    acs_last_inform_by_ont_id = _recent_acs_inform_by_ont_id(
-        db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
-    )
     connection_request_by_ont_id = _connection_request_state_by_ont_id(
         db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
     )
-    now = datetime.now(UTC)
     for ont in displayed_onts:
         zbx = zabbix_snapshot.get(str(ont.id))
         quality = classify_signal(
@@ -1337,21 +1330,11 @@ def onts_list_page_data(
             warn_threshold=warn,
             crit_threshold=crit,
         )
-        acs_last_inform_at = acs_last_inform_by_ont_id.get(str(ont.id)) or getattr(
-            ont, "acs_last_inform_at", None
-        )
         connection_request_info = connection_request_by_ont_id.get(str(ont.id), {})
-        status_snapshot = resolve_ont_status_for_model(
-            ont, acs_last_inform_at=acs_last_inform_at, now=now
-        )
         status_val = zbx.status if zbx else "offline"
         status_display_val = status_val
         status_source = "zabbix"
-        olt_status_display_val = status_val
-        effective_status_source_val = status_snapshot.effective_status_source.value
-        effective_last_seen_at = resolve_effective_last_seen_at(
-            ont, acs_last_inform_at=status_snapshot.acs_last_inform_at
-        )
+        effective_last_seen_at = zbx.updated_at if zbx else None
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
         signal_data[str(ont.id)] = {
@@ -1372,22 +1355,19 @@ def onts_list_page_data(
                 else ""
             ),
             "status_source": status_source,
-            "olt_status": olt_status_display_val,
+            "olt_status": status_val,
             "olt_status_display": (
-                olt_status_display_val.replace("_", " ").title()
-                if olt_status_display_val
-                else ""
+                status_val.replace("_", " ").title() if status_val else ""
             ),
             "olt_status_class": ONLINE_STATUS_CLASSES.get(
-                olt_status_display_val,
+                status_val,
                 ONLINE_STATUS_CLASSES["offline"],
             ),
-            "effective_status_source": effective_status_source_val,
-            "effective_status_source_display": effective_status_source_val.replace("_", " ").title(),
-            "effective_status_source_class": ACS_STATUS_CLASSES.get(
-                effective_status_source_val, ACS_STATUS_CLASSES["unknown"]
+            "status_source_display": "Zabbix",
+            "status_source_class": ACS_STATUS_CLASSES.get(
+                status_source, ACS_STATUS_CLASSES["unknown"]
             ),
-            "acs_last_inform_at": acs_last_inform_at,
+            "acs_last_inform_at": getattr(ont, "acs_last_inform_at", None),
             "last_seen_at": effective_last_seen_at,
             "connection_request_status": connection_request_info.get(
                 "connection_request_status", "unavailable"
@@ -1648,7 +1628,7 @@ def onts_list_page_data(
             "pon_port_id": pon_port_id or "",
             "pon_hint": pon_hint or "",
             "zone_id": zone_id or "",
-            "olt_status": olt_status or "",
+            "online_status": online_status or "",
             "authorization": authorization_filter,
             "signal_quality": signal_quality or "",
             "search": search or "",
@@ -1718,26 +1698,16 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     warn, crit = get_signal_thresholds(db)
     olt_quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
     onu_quality = classify_signal(onu_rx, warn_threshold=warn, crit_threshold=crit)
-    acs_last_inform_at = _recent_acs_inform_by_ont_id(db, [ont.id]).get(
-        str(ont.id)
-    ) or getattr(ont, "acs_last_inform_at", None)
     connection_request_info = _connection_request_state_by_ont_id(db, [ont.id]).get(
         str(ont.id), {}
-    )
-    status_snapshot = resolve_ont_status_for_model(
-        ont, acs_last_inform_at=acs_last_inform_at
     )
     status_val = zabbix_signal.status
     status_display_val = status_val
     status_source = "zabbix"
-    olt_status_display_val = status_val
-    effective_status_source_val = status_snapshot.effective_status_source.value
-    normalized_acs_last_inform_at = status_snapshot.acs_last_inform_at
+    normalized_acs_last_inform_at = getattr(ont, "acs_last_inform_at", None)
     reason = getattr(ont, "offline_reason", None)
     reason_val = reason.value if reason else None
-    effective_last_seen_at = resolve_effective_last_seen_at(
-        ont, acs_last_inform_at=normalized_acs_last_inform_at
-    )
+    effective_last_seen_at = zabbix_signal.updated_at
 
     signal_info = {
         "olt_rx_dbm": olt_rx,
@@ -1753,19 +1723,16 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "distance_meters": getattr(ont, "distance_meters", None),
         "signal_updated_at": signal_updated_at,
         "signal_source": "zabbix",
-        "olt_status": olt_status_display_val,
+        "olt_status": status_val,
         "olt_status_display": (
-            olt_status_display_val.replace("_", " ").title()
-            if olt_status_display_val
-            else ""
+            status_val.replace("_", " ").title() if status_val else ""
         ),
         "olt_status_class": ONLINE_STATUS_CLASSES.get(
-            olt_status_display_val, ONLINE_STATUS_CLASSES["offline"]
+            status_val, ONLINE_STATUS_CLASSES["offline"]
         ),
         "olt_status_source": status_source,
-        "effective_status_source": effective_status_source_val,
-        "effective_status_source_class": ACS_STATUS_CLASSES.get(
-            effective_status_source_val, ACS_STATUS_CLASSES["unknown"]
+        "status_source_class": ACS_STATUS_CLASSES.get(
+            status_source, ACS_STATUS_CLASSES["unknown"]
         ),
         "last_seen_at": effective_last_seen_at,
         "acs_last_inform_at": normalized_acs_last_inform_at,

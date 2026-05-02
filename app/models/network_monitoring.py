@@ -313,7 +313,7 @@ class DeviceInterface(Base):
     snmp_index: Mapped[int | None] = mapped_column(BigInteger)
     monitored: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Counter state for bps delta calculation (updated by SNMP polling)
+    # Counter state retained for historical bps data.
     last_in_octets: Mapped[float | None] = mapped_column(Float)
     last_out_octets: Mapped[float | None] = mapped_column(Float)
     last_counter_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

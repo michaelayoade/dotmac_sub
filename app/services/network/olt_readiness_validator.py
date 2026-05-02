@@ -110,7 +110,7 @@ def validate_olt_readiness(
     Args:
         db: Database session.
         olt_id: OLT device ID.
-        test_connectivity: If True, test SSH/SNMP connectivity.
+        test_connectivity: If True, test SSH connectivity.
 
     Returns:
         OltReadinessReport with validation results.
@@ -194,7 +194,7 @@ def validate_olt_readiness(
     if test_connectivity:
         report.connectivity_tested = True
         report.ssh_ok = _test_ssh_connectivity(olt)
-        report.snmp_ok = _test_snmp_connectivity(olt)
+        report.snmp_ok = None
 
         if report.ssh_ok is False:
             report.issues.append(
@@ -290,21 +290,6 @@ def _test_ssh_connectivity(olt: object) -> bool | None:
         return False
 
 
-def _test_snmp_connectivity(olt: object) -> bool | None:
-    """Test SNMP connectivity to OLT."""
-    try:
-        from app.services.network.olt_snmp import test_snmp_connection
-
-        mgmt_ip = getattr(olt, "mgmt_ip", None) or getattr(olt, "hostname", None)
-        community = getattr(olt, "snmp_community", "public")
-        if not mgmt_ip:
-            return None
-        return test_snmp_connection(mgmt_ip, community)
-    except Exception as exc:
-        logger.warning("SNMP connectivity test failed for OLT %s: %s", getattr(olt, "name", "?"), exc)
-        return False
-
-
 def validate_all_olts_readiness(
     db: Session,
     *,
@@ -314,7 +299,7 @@ def validate_all_olts_readiness(
 
     Args:
         db: Database session.
-        test_connectivity: If True, test SSH/SNMP connectivity for each OLT.
+        test_connectivity: If True, test SSH connectivity for each OLT.
 
     Returns:
         List of OltReadinessReport for each OLT.

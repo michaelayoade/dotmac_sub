@@ -18,7 +18,6 @@ from app.models.network_monitoring import (
     DeviceStatus,
     MetricType,
     NetworkDevice,
-    NetworkDeviceSnmpOid,
 )
 from app.services import ping as ping_service
 from app.services.db_session_adapter import db_session_adapter
@@ -113,7 +112,7 @@ def refresh_devices_health(
     include_snmp: bool = False,
     max_workers: int = 12,
 ) -> dict[str, int]:
-    """Refresh ping/SNMP health for a list of devices.
+    """Refresh ping and vendor-backed monitoring health for a list of devices.
 
     Runs lightweight reachability checks for the provided devices and returns
     summary counters.
@@ -160,7 +159,7 @@ def refresh_stale_devices_health(
     force: bool = False,
     max_workers: int = 12,
 ) -> dict[str, int]:
-    """Refresh only devices whose ping/SNMP checks are stale.
+    """Refresh only devices whose ping or vendor-backed monitoring checks are stale.
 
     `force=True` refreshes all eligible devices regardless of recency.
     """
@@ -225,9 +224,7 @@ def _refresh_device_health_worker(device_id: str, do_ping: bool, do_snmp: bool) 
                 refresh_device_from_vendor_api,
             )
 
-            handled, success = refresh_device_from_vendor_api(db, device)
-            if not handled or not success:
-                snmp_check_device(db, device_id)
+            refresh_device_from_vendor_api(db, device)
         db.commit()
     except Exception:
         db.rollback()
@@ -316,124 +313,6 @@ def _record_ping_metric(
             recorded_at=now,
         )
     )
-
-
-def snmp_check_device(
-    db: Session, device_id: str
-) -> tuple[NetworkDevice | None, str | None]:
-    """Run SNMP uptime check against a core device and persist the result.
-
-    Returns (device, error_message).
-    """
-    device = get_device(db, device_id)
-    if not device:
-        return None, "Device not found."
-
-    now = datetime.now(UTC)
-    delay_minutes = max(0, int(device.notification_delay_minutes or 0))
-    if not device.snmp_enabled:
-        return device, None
-
-    # Track if this is a new failure for immediate retry trigger
-    was_healthy = device.snmp_down_since is None
-
-    if not device.mgmt_ip and not device.hostname:
-        device.last_snmp_at = now
-        device.last_snmp_ok = False
-        if device.snmp_down_since is None:
-            device.snmp_down_since = now
-        if _delay_elapsed(device.snmp_down_since, now, delay_minutes):
-            if device.ping_enabled and device.last_ping_ok is False:
-                device.status = DeviceStatus.offline
-            elif device.status != DeviceStatus.offline:
-                device.status = DeviceStatus.degraded
-        # Trigger immediate retry if this is a new failure
-        if was_healthy:
-            _maybe_trigger_olt_retry(db, device, "snmp")
-        db.flush()
-        _recompute_parent_rollup(db, device)
-        db.flush()
-        return device, None
-
-    try:
-        from app.services.snmp_discovery import _run_snmpwalk
-
-        _run_snmpwalk(device, ".1.3.6.1.2.1.1.3.0", timeout=8)
-        device.last_snmp_at = now
-        device.last_snmp_ok = True
-        device.snmp_down_since = None
-        if device.status == DeviceStatus.degraded and (
-            not device.ping_enabled or device.last_ping_ok is not False
-        ):
-            device.status = DeviceStatus.online
-        db.flush()
-        _recompute_parent_rollup(db, device)
-        db.flush()
-    except Exception:
-        device.last_snmp_at = now
-        device.last_snmp_ok = False
-        if device.snmp_down_since is None:
-            device.snmp_down_since = now
-        if _delay_elapsed(device.snmp_down_since, now, delay_minutes):
-            if device.ping_enabled and device.last_ping_ok is False:
-                device.status = DeviceStatus.offline
-            elif device.status != DeviceStatus.offline:
-                device.status = DeviceStatus.degraded
-        # Trigger immediate retry if this is a new failure
-        if was_healthy:
-            _maybe_trigger_olt_retry(db, device, "snmp")
-        db.flush()
-        _recompute_parent_rollup(db, device)
-        db.flush()
-
-    return device, None
-
-
-@dataclass
-class SnmpDebugResult:
-    """Result of SNMP debug walk."""
-
-    device: NetworkDevice
-    error: str | None = None
-    output: str | None = None
-
-
-def snmp_debug_device(db: Session, device_id: str) -> SnmpDebugResult:
-    """Run SNMP debug walk and return interface data."""
-    device = get_device(db, device_id)
-    if not device:
-        return SnmpDebugResult(device=NetworkDevice(), error="Device not found.")
-
-    if not device.snmp_enabled:
-        return SnmpDebugResult(device=device, error="SNMP is disabled for this device.")
-
-    if not device.mgmt_ip and not device.hostname:
-        return SnmpDebugResult(
-            device=device, error="Management IP or hostname is required for SNMP."
-        )
-
-    try:
-        from app.services.snmp_discovery import _run_snmpbulkwalk
-
-        descr_lines = _run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.2")[:20]
-        status_lines = _run_snmpbulkwalk(device, ".1.3.6.1.2.1.2.2.1.8")[:20]
-        alias_lines = _run_snmpbulkwalk(device, ".1.3.6.1.2.1.31.1.1.1.18")[:20]
-    except Exception as exc:
-        return SnmpDebugResult(device=device, error=f"SNMP debug failed: {exc!s}")
-
-    output = "\n".join(
-        [
-            "ifDescr:",
-            *descr_lines,
-            "",
-            "ifOperStatus:",
-            *status_lines,
-            "",
-            "ifAlias:",
-            *alias_lines,
-        ]
-    ).strip()
-    return SnmpDebugResult(device=device, output=output)
 
 
 def mark_discovery_failure(db: Session, device: NetworkDevice) -> None:
@@ -607,125 +486,9 @@ def compute_health(
 def discover_interfaces_and_health(
     db: Session, device: NetworkDevice
 ) -> tuple[int, int]:
-    """Run SNMP discovery, persist interfaces + health metrics."""
-    from app.services.snmp_discovery import (
-        apply_interface_snapshot,
-        collect_device_health,
-        collect_interface_snapshot,
-    )
-
-    snapshots = collect_interface_snapshot(device)
-    created, updated = apply_interface_snapshot(
-        db, device, snapshots, create_missing=True
-    )
-    _ensure_interface_traffic_oids(db, device, snapshots)
-    health = collect_device_health(device)
-    recorded_at = datetime.now(UTC)
-    cpu_percent = health.get("cpu_percent")
-    if cpu_percent is not None:
-        db.add(
-            DeviceMetric(
-                device_id=device.id,
-                metric_type=MetricType.cpu,
-                value=int(cpu_percent),
-                unit="percent",
-                recorded_at=recorded_at,
-            )
-        )
-    memory_percent = health.get("memory_percent")
-    if memory_percent is not None:
-        db.add(
-            DeviceMetric(
-                device_id=device.id,
-                metric_type=MetricType.memory,
-                value=int(memory_percent),
-                unit="percent",
-                recorded_at=recorded_at,
-            )
-        )
-    uptime_seconds = health.get("uptime_seconds")
-    if uptime_seconds is not None:
-        db.add(
-            DeviceMetric(
-                device_id=device.id,
-                metric_type=MetricType.uptime,
-                value=int(uptime_seconds),
-                unit="seconds",
-                recorded_at=recorded_at,
-            )
-        )
-    rx_bps = health.get("rx_bps")
-    if rx_bps is not None:
-        db.add(
-            DeviceMetric(
-                device_id=device.id,
-                metric_type=MetricType.rx_bps,
-                value=int(rx_bps),
-                unit="bps",
-                recorded_at=recorded_at,
-            )
-        )
-    tx_bps = health.get("tx_bps")
-    if tx_bps is not None:
-        db.add(
-            DeviceMetric(
-                device_id=device.id,
-                metric_type=MetricType.tx_bps,
-                value=int(tx_bps),
-                unit="bps",
-                recorded_at=recorded_at,
-            )
-        )
-    device.last_snmp_at = datetime.now(UTC)
-    device.last_snmp_ok = True
+    """Direct interface discovery is disabled; monitoring ingestion owns this data."""
     db.flush()
-    return created, updated
-
-
-def _ensure_interface_traffic_oids(
-    db: Session, device: NetworkDevice, snapshots: list[object]
-) -> None:
-    """Ensure interface-level in/out traffic OIDs exist for discovered interfaces."""
-    if device.id is None:
-        return
-    existing = set(
-        db.scalars(
-            select(NetworkDeviceSnmpOid.oid).where(
-                NetworkDeviceSnmpOid.device_id == device.id
-            )
-        ).all()
-    )
-    for snapshot in snapshots:
-        idx = getattr(snapshot, "index", None)
-        name = getattr(snapshot, "name", None) or "if"
-        if not idx:
-            continue
-        in_oid = f"1.3.6.1.2.1.31.1.1.1.6.{idx}"
-        out_oid = f"1.3.6.1.2.1.31.1.1.1.10.{idx}"
-        if in_oid not in existing:
-            db.add(
-                NetworkDeviceSnmpOid(
-                    device_id=device.id,
-                    title=f"{name} in",
-                    oid=in_oid,
-                    check_interval_seconds=60,
-                    rrd_data_source_type="counter",
-                    is_enabled=True,
-                )
-            )
-            existing.add(in_oid)
-        if out_oid not in existing:
-            db.add(
-                NetworkDeviceSnmpOid(
-                    device_id=device.id,
-                    title=f"{name} out",
-                    oid=out_oid,
-                    check_interval_seconds=60,
-                    rrd_data_source_type="counter",
-                    is_enabled=True,
-                )
-            )
-            existing.add(out_oid)
+    return 0, 0
 
 
 def render_device_status_badge(status_value: str) -> str:

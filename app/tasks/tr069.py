@@ -1290,7 +1290,10 @@ def setup_genieacs(
                 }
                 for key, value in config_entries.items():
                     try:
-                        client.put(f"/config/{key}", json={"_id": key, "value": value})
+                        response = client.put(
+                            f"/config/{key}", json={"_id": key, "value": value}
+                        )
+                        response.raise_for_status()
                         results["config"][key] = "deployed"
                         logger.info("Deployed config: %s", key)
                     except Exception as e:
@@ -1529,4 +1532,3 @@ def heal_online_silent_onts(
         raise
     finally:
         db.close()
-

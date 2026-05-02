@@ -13,7 +13,7 @@ from app.services.network.olt_ssh_ont._common import (
     _SSH_CONNECTION_ERRORS,
     OntIphostConfig,
     OntIphostResult,
-    _send_slow,
+    _run_ont_config_command,
 )
 from app.services.network.olt_validators import (
     ValidationError,
@@ -24,65 +24,6 @@ from app.services.network.olt_validators import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _run_ont_config_command(
-    olt: OLTDevice,
-    fsp: str,
-    command: str,
-    *,
-    success_message: str,
-) -> tuple[bool, str]:
-    """Run a single ONT-scoped config command on a GPON interface."""
-    from app.services.network import olt_ssh as core
-
-    ok, err = core._validate_fsp(fsp)
-    if not ok:
-        return False, err
-
-    parts = fsp.split("/")
-    frame_slot = f"{parts[0]}/{parts[1]}"
-
-    try:
-        transport, channel, _policy = core._open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
-
-    try:
-        channel.send("enable\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        config_prompt = r"[#)]\s*$"
-        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-
-        # Use slow send for interface and command to avoid MA5608T terminal corruption
-        _send_slow(channel, f"interface gpon {frame_slot}")
-        core._read_until_prompt(channel, config_prompt, timeout_sec=8)
-
-        _send_slow(channel, command)
-        output = core._read_until_prompt(channel, config_prompt, timeout_sec=12)
-
-        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-
-        if core.is_error_output(output):
-            logger.warning(
-                "ONT config command failed on OLT %s: %s",
-                olt.name,
-                output.strip()[-150:],
-            )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
-        return True, success_message
-    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error(
-            "Error running ONT config command on OLT %s: %s",
-            olt.name,
-            exc,
-            exc_info=True,
-        )
-        return False, f"Error: {exc}"
-    finally:
-        transport.close()
 
 
 def _verify_iphost_applied(

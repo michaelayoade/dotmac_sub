@@ -65,9 +65,6 @@ from app.services import (
     settings_api as settings_api_service,
 )
 from app.services import (
-    snmp as snmp_service,
-)
-from app.services import (
     subscriber as subscriber_service,
 )
 from app.services import (
@@ -211,20 +208,6 @@ def tr069_home(request: Request, db: Session = Depends(get_db)):
         offset=0,
     )
     return _render(request, "TR-069", items)
-
-
-@router.get("/snmp", response_class=HTMLResponse)
-def snmp_home(request: Request, db: Session = Depends(get_db)):
-    items = snmp_service.snmp_targets.list(
-        db=db,
-        device_id=None,
-        is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=25,
-        offset=0,
-    )
-    return _render(request, "SNMP", items)
 
 
 @router.get("/bandwidth", response_class=HTMLResponse)

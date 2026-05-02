@@ -142,7 +142,7 @@ class TestResetOntServiceState:
         db_session.flush()
 
         assert sample_ont.olt_status == OnuOnlineStatus.offline
-        assert sample_ont.effective_status == OnuOnlineStatus.offline
+        assert sample_ont.last_seen_at is None
 
     def test_deletes_wan_service_instances(self, db_session, sample_ont, sample_wan_service):
         """Test that WAN service instances are deleted."""

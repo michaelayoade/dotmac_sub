@@ -205,11 +205,10 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         # No ACS available - return just the cached status
         return ActionResult(
             success=True,
-            message=f"Status updated from cache: {status_result.effective_status.value}",
+            message=f"Status updated from Zabbix: {status_result.status.value}",
             data={
-                "status": status_result.effective_status.value,
+                "status": status_result.status.value,
                 "source": status_result.status_source.value,
-                "effective_status_source": status_result.status_source.value,
             },
         )
 
@@ -236,7 +235,7 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
             success=True,
             message=f"Status refresh completed for {ont.serial_number}.",
             data={
-                "status": status_result.effective_status.value,
+                "status": status_result.status.value,
                 "source": status_result.status_source.value,
                 "tr069_task": result,
             },
@@ -247,7 +246,7 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
             success=False,
             message=f"TR-069 status refresh failed: {exc}",
             data={
-                "status": status_result.effective_status.value,
+                "status": status_result.status.value,
                 "source": status_result.status_source.value,
             },
         )

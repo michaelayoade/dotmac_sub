@@ -32,12 +32,14 @@ def apply_acs_foundation(
     fsp: str,
     ont_id_on_olt: int,
     olt_config_already_applied: bool = False,
+    wait_for_acs_bootstrap: bool = False,
 ) -> dict[str, Any]:
     """Apply the minimum OLT-side foundation required for ACS connectivity.
 
-    This does not wait for ACS inform and does not apply subscriber WAN/PPPoE
-    configuration. The ONT should inform asynchronously once it boots, gets a
-    management IP, and reaches the configured ACS URL.
+    By default this does not wait for ACS inform and does not apply subscriber
+    WAN/PPPoE configuration. Foreground authorization passes
+    ``wait_for_acs_bootstrap=True`` so the user-facing result only succeeds once
+    the ONT is resolvable in ACS.
     """
     steps: list[dict[str, Any]] = []
 
@@ -194,11 +196,39 @@ def apply_acs_foundation(
                 f"Batched OLT management setup failed: {batch_result.message}"
             )
 
+    if tr069_profile_id and wait_for_acs_bootstrap:
+        from app.services.network.ont_provision_steps import wait_tr069_bootstrap
+
+        logger.info(
+            "ACS foundation: Waiting for ONT %s to register with ACS",
+            ont_serial,
+        )
+        bootstrap_result = wait_tr069_bootstrap(db, ont_unit_id, allow_blocking=True)
+        steps.append({
+            "name": "Wait for ACS inform",
+            "success": bootstrap_result.success,
+            "message": bootstrap_result.message,
+            "duration_ms": bootstrap_result.duration_ms,
+        })
+        if not bootstrap_result.success:
+            logger.warning(
+                "ACS foundation: ONT %s did not register with ACS: %s",
+                ont_serial,
+                bootstrap_result.message,
+            )
+            raise RuntimeError(
+                f"Device did not register with ACS: {bootstrap_result.message}"
+            )
+
     return {
         "success": True,
         "message": (
-            "OLT management and TR-069 profile setup completed; "
-            "ACS inform will be handled asynchronously."
+            "ONT connected to ACS."
+            if tr069_profile_id and wait_for_acs_bootstrap
+            else (
+                "OLT management and TR-069 profile setup completed; "
+                "ACS inform will be handled asynchronously."
+            )
         ),
         "steps": steps,
     }

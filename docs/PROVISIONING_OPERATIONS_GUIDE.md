@@ -25,6 +25,20 @@
 
 Navigate to `/admin` and log in with your admin credentials.
 
+### Provisioning Flow Overview
+
+Provisioning is intentionally staged. Do not authorize ONTs on a new OLT until the foundation objects, protocol access, and config-pack readiness checks are complete.
+
+| Phase | Purpose | Operator Entry Points | Main Code Modules |
+|-------|---------|-----------------------|-------------------|
+| 1. Foundation setup | Create shared network primitives before touching live OLTs. | VLANs, speed profiles, ONU types, zones, IP pools, TR-069 ACS servers, optional WireGuard. | `app/web/admin/network_tr069.py`, `app/web/admin/wireguard.py`, `app/services/web_network_tr069.py`, `app/services/web_network_vlans.py`, `app/services/network/speed_profiles.py`, `app/services/network/onu_types.py`, `app/services/network/zones.py`, `app/services/wireguard.py` |
+| 2. OLT onboarding | Create the OLT record and attach the defaults it will use for ONT work. | OLT create/edit form, ACS assignment, VLAN/IP-pool scoping, config-pack defaults, backup settings. | `app/web/admin/network_olts_inventory.py`, `app/services/web_network_olts.py`, `app/services/network/olt.py`, `app/services/network/olt_web_forms.py`, `app/services/network/olt_config_pack.py` |
+| 3. Connectivity validation | Prove the app can reach the OLT before any write operation. | Test SSH, NETCONF, running-config reads, and Zabbix host linkage for SNMP collection; REST only where the adapter supports it. | `app/services/network/olt_protocol_adapters.py`, `app/services/network/olt_ssh.py`, `app/services/network/olt_ssh_session.py`, `app/services/network/olt_ssh_pool.py`, `app/services/network/olt_netconf.py`, `app/services/network/olt_rest_client.py`, `app/services/network/olt_vendor_adapters.py` |
+| 4. Config-pack readiness | Verify authorization and ACS prerequisites are complete. | Config-pack validation badge/details on the OLT page. | `app/services/network/olt_config_pack.py`, `app/services/network/olt_readiness_validator.py`, `app/services/network/acs_reachability.py`, `app/services/network/olt_profile_resolution.py` |
+| 5. Inventory and topology sync | Populate operational state from the OLT. | ONT sync, autofind scan, PON repair, Zabbix-backed hardware discovery, monitoring links. | `app/services/network/olt_inventory.py`, `app/services/network/olt_hardware_discovery.py`, `app/services/network/olt_web_topology.py`, `app/web/admin/network_pon_interfaces.py`, `app/web/admin/network_olts_profiles.py`, `app/tasks/olt_hardware_discovery.py` |
+| 6. ONT authorization/provisioning | Register ONTs and apply service configuration only after readiness passes. | Autofind authorization, ONT provisioning tab, subscriber assignment. | `app/services/network/ont_authorization.py`, `app/services/network/acs_foundation.py`, `app/services/network/ont_provision_steps.py`, `app/services/network/ont_provisioning/orchestrator.py` |
+| 7. Backup, config audit, and drift checks | Keep read-only evidence that live OLT state matches intended state. | Scheduled SSH running-config backups, backup audits, live config-pack audits, compensation retry watchdog. | `app/tasks/olt_config_backup.py`, `app/services/network/olt_config_audit.py`, `app/services/network/olt_config_pack_live_audit.py`, `app/tasks/provisioning.py` |
+
 ### Verify System Configuration
 
 Before any network operations, confirm these are configured:
@@ -47,6 +61,17 @@ Go to `/admin/network/vlans`. You need VLANs for:
 - **Internet** — subscriber data (e.g., VLAN 203)
 - **Management** — ONT management (e.g., VLAN 450)
 - **TR-069** — ACS communication (e.g., VLAN 455)
+
+### Verify TR-069 ACS Server Exists
+
+Go to `/admin/network/tr069`. Create or confirm an active ACS server with:
+- CWMP URL reachable by ONTs over the management/TR-069 path
+- GenieACS NBI URL reachable by the app
+- Connection request credentials, if the ACS will push changes after inform
+
+### Verify Optional WireGuard Access
+
+If the app reaches OLTs over VPN, go to `/admin/vpn` and confirm the WireGuard server and peer are active before testing OLT SSH or SNMP.
 
 ---
 
@@ -72,7 +97,7 @@ Go to `/admin/network/vlans`. You need VLANs for:
 On the OLT detail page (`/admin/network/olts/{olt_id}`):
 
 1. Click **"Test SSH"** — should show "Connection successful"
-2. Click **"Test SNMP"** — should show device info (sysName, sysDescr)
+2. Confirm the linked Zabbix host has recent SNMP items
 3. If NETCONF is available, click **"Test NETCONF"**
 
 > **Troubleshooting:** If SSH fails, check that the OLT management IP is reachable from the app server. If using WireGuard, verify the tunnel is up first (see Section 7).
@@ -84,32 +109,52 @@ On the OLT detail page, go to the **VLANs** tab:
 2. Select the internet, management, and TR-069 VLANs
 3. Save
 
-### Step 4: Assign TR-069 ACS Server
+### Step 4: Assign IP Pool and TR-069 ACS Server
 
 On the OLT detail page:
-1. Find the **TR-069** section
-2. Select your GenieACS server from the dropdown
-3. Save
+1. Assign the management IP pool used for ONT ACS reachability
+2. Find the **TR-069** section
+3. Select your GenieACS server from the dropdown
+4. Save
 
-### Step 5: Discover ONTs
+### Step 5: Set Config Pack Defaults
 
-1. Click **"Sync ONTs"** — triggers SNMP discovery
-2. Wait for the scan to complete (30-120 seconds depending on ONT count)
-3. Discovered ONTs appear in the ONT list
+On the OLT edit form, complete the config pack defaults:
 
-### Step 6: Run Autofind (Optional)
+- **Line Profile ID** and **Service Profile ID** — required for ONT authorization
+- **Internet VLAN** — required for service ports
+- **Management VLAN** — required for ACS connectivity
+- **Management IP Pool** — required for managed ONT ACS addresses
+- **TR-069 ACS Server** — required for remote management
+- **TR-069 OLT Profile ID** — required for binding ONTs to ACS
+- **GEM/WCD/IP indexes** — confirm values match the OLT design
+
+The config-pack validation badge on the OLT page must show no blocking errors before authorizing ONTs.
+
+### Step 6: Discover OLT Profiles
+
+On the OLT detail page:
+
+1. Open the **Profiles** / **TR-069 Profiles** tabs
+2. Fetch line/service profiles and TR-069 profiles from the OLT over SSH
+3. Create the TR-069 profile on the OLT if it does not exist
+4. Copy the correct OLT-local profile IDs back into the config pack
+
+### Step 7: Sync Inventory and Topology
+
+1. Click **"Sync ONTs"** — triggers OLT ONT discovery
+2. Click **"Discover Hardware"** — reads shelves/cards/ports/SFPs from Zabbix-collected SNMP Entity MIB data
+3. Run **"Repair PON Ports"** if ONTs exist but canonical PON ports are missing
+4. Confirm the topology and PON interface views show the expected OLT structure
+
+### Step 8: Run Autofind
 
 For unregistered ONTs:
 1. Click **"Autofind Scan"**
 2. Review discovered serial numbers
-3. Click **"Authorize"** next to each ONT to add it
-
-### Step 7: View TR-069 Profiles
-
-On the OLT detail page, go to the **TR-069 Profiles** tab:
-1. View existing profiles (fetched via SSH)
-2. Note the profile ID you want to use for ONT binding (e.g., profile ID 2 for GenieACS)
-3. If needed, click **"Create TR-069 Profile"** to add a new one
+3. Confirm config-pack readiness is green
+4. Click **"Authorize"** next to each ONT to add it
+5. Authorization runs synchronously and, when TR-069 is configured, waits for the ONT to become resolvable in ACS before returning success
 
 ---
 
@@ -172,7 +217,10 @@ This is the end-to-end workflow for activating a new subscriber.
 - [ ] ONT assigned to subscriber
 - [ ] Speed profiles configured
 - [ ] VLANs created
-- [ ] TR-069 ACS server configured on OLT
+- [ ] Management IP pool assigned to OLT
+- [ ] TR-069 ACS server assigned to OLT
+- [ ] TR-069 OLT profile exists and its profile ID is in the OLT config pack
+- [ ] OLT config-pack validation has no blocking errors
 - [ ] Provisioning profile created
 
 ### Step 2: Create or Select a Provisioning Profile
@@ -411,10 +459,10 @@ Run these checks to confirm the system is ready for production.
 For each OLT:
 1. Go to OLT detail page
 2. Click **"Test SSH"** — expect "Connection successful"
-3. Click **"Test SNMP"** — expect device info returned
+3. Confirm the OLT is linked to a Zabbix host and recent SNMP items are visible
 4. Click **"Sync ONTs"** — expect ONT count to match reality
 
-**Pass criteria:** All 8 OLTs show SSH and SNMP successful.
+**Pass criteria:** All 8 OLTs show SSH successful and current Zabbix SNMP ingestion.
 
 ### Test 2: ONT Signal Monitoring
 

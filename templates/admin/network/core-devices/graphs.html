@@ -76,10 +76,6 @@
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clone</button>
                     </form>
-                    <form method="post" action="/admin/network/core-devices/{{ device.id }}/graphs/{{ graph.id }}/preview">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="rounded border border-primary-300 px-2 py-1 text-xs text-primary-700 hover:bg-primary-50 dark:border-primary-700 dark:text-primary-300 dark:hover:bg-primary-900/20">Preview</button>
-                    </form>
                 </div>
             </div>
         </div>
@@ -169,34 +165,6 @@
                 </table>
             </div>
 
-            {% if preview_for_graph == graph.id|string and preview_rows %}
-            <div class="rounded-lg border border-primary-200 bg-primary-50/40 p-4 dark:border-primary-900/40 dark:bg-primary-900/10">
-                <h3 class="font-medium text-slate-900 dark:text-white">Live Preview Snapshot</h3>
-                <p class="text-xs text-slate-500 dark:text-slate-400">Real-time SNMP sample values with max/avg/last snapshot.</p>
-                <div class="mt-3 overflow-x-auto">
-                    <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
-                        <thead>
-                            <tr>
-                                <th class="px-2 py-1 text-left">Source</th>
-                                <th class="px-2 py-1 text-left">Last</th>
-                                <th class="px-2 py-1 text-left">Avg</th>
-                                <th class="px-2 py-1 text-left">Max</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for row in preview_rows %}
-                            <tr>
-                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ row.title }}</td>
-                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ '%.2f'|format(row.last) if row.last is not none else '-' }} {{ row.unit }}</td>
-                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ '%.2f'|format(row.avg) if row.avg is not none else '-' }} {{ row.unit }}</td>
-                                <td class="px-2 py-1 text-slate-700 dark:text-slate-300">{{ '%.2f'|format(row.max) if row.max is not none else '-' }} {{ row.unit }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            {% endif %}
         </div>
     </div>
     {% else %}

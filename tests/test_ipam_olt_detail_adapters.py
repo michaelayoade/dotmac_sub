@@ -353,7 +353,7 @@ def test_olt_action_adapter_delegates_authorization_sync(monkeypatch) -> None:
 
     monkeypatch.setattr(
         ont_authorization,
-        "authorize_autofind_ont_and_provision_network_audited",
+        "authorize_ont",
         fake_authorize,
     )
 

@@ -197,7 +197,7 @@ class TestAuthorizeOnt:
             assert ont_id is None
 
     def test_success_returns_none_for_ont_id(self, mock_olt):
-        """ONT-ID is populated by post-auth SNMP sync, not NETCONF."""
+        """ONT-ID is populated by post-auth inventory readback, not NETCONF."""
         olt_netconf_ont._namespace_cache[str(mock_olt.id)] = (
             "urn:huawei:yang:huawei-gpon"
         )
@@ -213,7 +213,7 @@ class TestAuthorizeOnt:
                 )
                 assert ok is True
                 assert "authorized" in msg.lower()
-                # ONT-ID is None - will be populated by post-auth SNMP sync
+                # ONT-ID is None - will be populated by post-auth inventory readback
                 assert ont_id is None
         finally:
             olt_netconf_ont.clear_namespace_cache(str(mock_olt.id))

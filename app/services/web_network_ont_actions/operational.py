@@ -617,9 +617,8 @@ def reconcile_operational_state(
 def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     """Fetch ONT config/state from OLT side via SSH-backed services.
 
-    Uses the ont_status for unified status resolution (combining
-    monitoring data and TR-069 status), with live SSH queries for
-    detailed OLT-side configuration.
+    Uses Zabbix for monitoring status, with live SSH queries for detailed
+    OLT-side diagnostic configuration.
     """
     ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
     if not ont:
@@ -637,7 +636,7 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     service_ports_text = ""
 
     try:
-        # Use adapter for unified status (combines SNMP + TR-069 cached data)
+        # Use adapter for Zabbix-backed monitoring status.
         adapter_status: OntStatusResult = get_adapter_status(
             db, ont, include_optical=True
         )
@@ -656,10 +655,8 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
                 f"Config State: {_display_olt_value(ssh_status.config_state)}",
                 f"Match State: {_display_olt_value(ssh_status.match_state)}",
             ]
-            # Add unified status from adapter
-            status_lines.append(f"Effective Status: {adapter_status.effective_status.value}")
+            status_lines.append(f"Monitoring Status: {adapter_status.status.value}")
             status_lines.append(f"Status Source: {adapter_status.status_source.value}")
-            status_lines.append(f"Effective Source: {adapter_status.status_source.value}")
             if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
                 metrics = adapter_status.optical_metrics
                 if metrics.olt_rx_dbm is not None:
@@ -673,9 +670,8 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
             # SSH failed but we may still have adapter status
             status_lines = [
                 f"SSH Query: {ssh_msg}",
-                f"Effective Status: {adapter_status.effective_status.value}",
+                f"Monitoring Status: {adapter_status.status.value}",
                 f"Status Source: {adapter_status.status_source.value}",
-                f"Effective Source: {adapter_status.status_source.value}",
             ]
             status_text = "\n".join(status_lines)
     except Exception as exc:
@@ -729,11 +725,7 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
 
 
 def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
-    """Query ONT registration state using the unified status adapter.
-
-    Uses ont_status for unified status resolution (combining SNMP
-    polling data and TR-069 status), with live SSH query for GPON layer
-    details (run/config/match states).
+    """Query ONT registration diagnostics with Zabbix monitoring status.
 
     Returns a dict with success, message, and optional entry data.
     """
@@ -748,7 +740,7 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
             "message": "ONT is missing a usable F/S/P or OLT ONT-ID.",
         }
 
-    # Get unified status from adapter (combines SNMP + TR-069)
+    # Get monitoring status from Zabbix-backed adapter.
     adapter_status: OntStatusResult = get_adapter_status(db, ont, include_optical=True)
 
     # Also get live SSH status for GPON layer details
@@ -760,10 +752,8 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "fsp": fsp,
         "ont_id": ont_id_on_olt,
-        # Unified status from adapter
-        "effective_status": adapter_status.effective_status.value,
+        "status": adapter_status.status.value,
         "status_source": adapter_status.status_source.value,
-        "effective_status_source": adapter_status.status_source.value,
     }
 
     # Add SSH-based GPON layer details if available

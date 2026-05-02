@@ -8,7 +8,7 @@ from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
 from app.services.network.olt_ssh_ont._common import _SSH_CONNECTION_ERRORS
-from app.services.network.olt_ssh_ont.iphost import _run_ont_config_command
+from app.services.network.olt_ssh_ont._common import _run_ont_config_command
 
 logger = logging.getLogger(__name__)
 

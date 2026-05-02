@@ -98,21 +98,6 @@ def devices_filter(
     )
 
 
-@router.post(
-    "/devices/discover",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:device:write"))],
-)
-def devices_discover(request: Request, db: Session = Depends(get_db)):
-    """Direct SNMP interface discovery is disabled in favor of Zabbix."""
-    return HTMLResponse(
-        '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">'
-        '<span class="font-medium">Discovery skipped.</span> '
-        "Direct SNMP discovery is disabled because Zabbix is the monitoring source."
-        "</div>"
-    )
-
-
 @router.get(
     "/devices/create",
     response_class=HTMLResponse,

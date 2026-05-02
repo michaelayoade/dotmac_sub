@@ -108,7 +108,7 @@
                 {# Online status filter #}
                 <select name="online_status" onchange="this.form.submit()"
                         class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
-                    <option value="">All Status</option>
+                    <option value="">All Zabbix Status</option>
                     <option value="online" {% if filters.online_status == 'online' %}selected{% endif %}>Online</option>
                     <option value="offline" {% if filters.online_status == 'offline' %}selected{% endif %}>Offline</option>
                 </select>

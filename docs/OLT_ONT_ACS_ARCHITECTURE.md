@@ -2,6 +2,26 @@
 
 This document maps the relationships between OLT, ONT, and ACS services in the DotMac Sub codebase.
 
+## Operational Sequence
+
+Provisioning is staged so live OLT writes only happen after the shared foundation and OLT-specific readiness gates are complete.
+
+| Phase | Responsibility | Main modules |
+|-------|----------------|--------------|
+| 1. Foundation setup | Configure VLANs, speed profiles, ONU types, zones, IP pools, TR-069 ACS servers, and optional WireGuard access before touching live OLTs. | `app/web/admin/network_tr069.py`, `app/web/admin/wireguard.py`, `app/services/web_network_tr069.py`, `app/services/web_network_vlans.py`, `app/services/network/speed_profiles.py`, `app/services/network/onu_types.py`, `app/services/network/zones.py`, `app/services/wireguard.py` |
+| 2. OLT onboarding | Create the OLT record with vendor/model, management IP, credentials, ACS assignment, VLAN/IP-pool scope, config-pack defaults, and backup settings. | `app/web/admin/network_olts_inventory.py`, `app/services/web_network_olts.py`, `app/services/network/olt.py`, `app/services/network/olt_web_forms.py`, `app/services/network/olt_config_pack.py` |
+| 3. Connectivity and protocol validation | Test and operate against OLTs via SSH, NETCONF, and REST where supported. SNMP collection is owned by Zabbix. Huawei SSH CLI remains the primary write path, with protocol adapters selecting the backend. | `app/services/network/olt_protocol_adapters.py`, `app/services/network/olt_ssh.py`, `app/services/network/olt_ssh_session.py`, `app/services/network/olt_ssh_pool.py`, `app/services/network/olt_netconf.py`, `app/services/network/olt_rest_client.py`, `app/services/network/olt_vendor_adapters.py` |
+| 4. Config-pack readiness | Validate that the OLT has authorization profiles, internet and management VLANs, a management IP pool, ACS assignment, and an OLT-local TR-069 profile ID. | `app/services/network/olt_config_pack.py`, `app/services/network/olt_readiness_validator.py`, `app/services/network/acs_reachability.py`, `app/services/network/olt_profile_resolution.py` |
+| 5. Inventory and topology sync | Model shelves, cards, ports, PON interfaces, SFPs, power units, hardware inventory, linked monitoring devices, and topology views. Hardware inventory reads SNMP Entity MIB data collected by Zabbix. | `app/services/network/olt_inventory.py`, `app/services/network/olt_hardware_discovery.py`, `app/services/network/olt_web_topology.py`, `app/web/admin/network_pon_interfaces.py`, `app/web/admin/network_olts_profiles.py`, `app/tasks/olt_hardware_discovery.py` |
+| 6. ONT authorization and provisioning | Authorize ONTs only after readiness passes. Authorization runs synchronously and waits for ACS bootstrap when TR-069 is configured. | `app/services/network/ont_authorization.py`, `app/services/network/acs_foundation.py`, `app/services/network/ont_provision_steps.py`, `app/services/network/ont_provisioning/orchestrator.py` |
+| 7. Backup, config audit, and drift checks | Capture OLT running-config backups over SSH, audit backups and live config-pack assumptions against intended state, and retry failed compensation entries. Drift checks are read-only guardrails by default. | `app/tasks/olt_config_backup.py`, `app/services/network/olt_config_audit.py`, `app/services/network/olt_config_pack_live_audit.py`, `app/tasks/provisioning.py` |
+
+## Polling, Monitoring, and Status
+
+Zabbix owns OLT/ONT SNMP collection. DotMac does not run direct OLT SNMP polling for status or hardware inventory; it ingests Zabbix walk items and combines them with ACS runtime refresh, optical metrics, signal thresholds, and stale-device cleanup.
+
+Main modules: `app/services/network/olt_polling.py`, `app/services/network/olt_polling_metrics.py`, `app/services/network/ont_metrics.py`, `app/services/network/ont_status.py`, `app/services/network/signal_thresholds.py`, `app/tasks/zabbix_ingestion.py`, `app/tasks/zabbix_sync.py`.
+
 ## High-Level Architecture
 
 ```
@@ -18,18 +38,19 @@ This document maps the relationships between OLT, ONT, and ACS services in the D
 │                              EXECUTION LAYER                                         │
 │                                                                                      │
 │  ┌────────────────────────────────────────────────────────────────────────────────┐ │
-│  │                    authorization_executor.py                                    │ │
-│  │         execute_authorization() / execute_authorization_batch()                 │ │
+│  │                    ont_authorization.py                                         │ │
+│  │         authorize_autofind_ont_and_provision_network_audited()                 │ │
 │  └────────────────────────────────┬───────────────────────────────────────────────┘ │
 │                                   │                                                  │
 │  ┌────────────────────────────────▼───────────────────────────────────────────────┐ │
-│  │                  olt_authorization_workflow.py (2,429 lines)                    │ │
+│  │                    ont_authorization.py                                         │ │
 │  │    authorize_autofind_ont_and_provision_network_audited()                       │ │
-│  │    ├─ Validate autofind candidate freshness                                     │ │
+│  │    ├─ Resolve authorization line/service profiles                               │ │
 │  │    ├─ Delete existing registration (if force_reauthorize)                       │ │
 │  │    ├─ Authorize via protocol adapter                                            │ │
-│  │    ├─ Create ONT database record                                                │ │
-│  │    └─ Trigger network provisioning (optional)                                   │ │
+│  │    ├─ Create or update ONT inventory state                                      │ │
+│  │    ├─ Link PON assignment and allocate management IP                            │ │
+│  │    └─ Apply ACS foundation and wait for ACS bootstrap when TR-069 is configured │ │
 │  └────────────────────────────────┬───────────────────────────────────────────────┘ │
 └───────────────────────────────────┼─────────────────────────────────────────────────┘
                                     │
@@ -202,14 +223,14 @@ This document maps the relationships between OLT, ONT, and ACS services in the D
 
 ```
 User clicks "Authorize"
-    → authorization_executor.execute_authorization()
-    → olt_authorization_workflow.authorize_autofind_ont_and_provision_network_audited()
-        → Validate autofind candidate (freshness check)
+    → ont_authorization.authorize_autofind_ont_and_provision_network_audited()
+        → Validate OLT authorization readiness
+        → Resolve line/service/TR-069 profile and VLAN defaults
         → olt_protocol_adapters.authorize_ont()
             → olt_ssh_ont/lifecycle.authorize_ont() [via SSH]
-        → Create OntUnit record in DB
-        → (Optional) provisioning_coordinator → executor
-        → (Optional) ACS binding
+        → Create or update OntUnit record in DB
+        → Allocate management IP and apply ACS foundation
+        → Wait for ACS bootstrap when TR-069 is configured
 ```
 
 ### 2. ACS Configuration Push Flow
@@ -242,8 +263,7 @@ OntUnit
 
 | Layer | Key Files | Lines | Purpose |
 |-------|-----------|-------|---------|
-| **Execution** | `authorization_executor.py` | ~200 | Entry point |
-| **Workflow** | `olt_authorization_workflow.py` | 2,429 | Orchestration |
+| **Authorization** | `ont_authorization.py` | ~2,000 | Readiness-gated ONT authorization |
 | **Protocol** | `olt_protocol_adapters.py` | 1,991 | SSH/NETCONF/REST |
 | **SSH Core** | `olt_ssh.py` | 1,567 | Low-level CLI |
 | **SSH Pool** | `olt_ssh_pool.py` | ~300 | Connection reuse |
@@ -372,7 +392,7 @@ app/services/network/olt.py                    # CRUD infrastructure
 app/services/network/olt_ssh.py                # Low-level CLI
 app/services/network/olt_ssh_pool.py           # Connection pooling
 app/services/network/olt_operations.py         # Operational tasks
-app/services/network/olt_authorization_workflow.py  # Main auth flow
+app/services/network/ont_authorization.py           # Main auth flow
 app/services/network/olt_protocol_adapters.py  # Multi-protocol abstraction
 app/services/network/olt_ssh_ont/              # ONT operations via SSH
     lifecycle.py
@@ -407,6 +427,5 @@ app/services/olt_action_adapter.py
 app/services/olt_detail_adapter.py
 app/services/olt_profile_adapter.py
 app/services/genieacs_service_intent.py
-app/services/network/authorization_executor.py
 app/services/network/provisioning_coordinator.py
 ```

@@ -1,6 +1,6 @@
 """Canonical serial number normalization and variant generation.
 
-Used by GenieACS resolution, SNMP polling, VictoriaMetrics queries,
+Used by GenieACS resolution, monitoring ingestion, VictoriaMetrics queries,
 and TR-069 device matching. Single source of truth for all serial
 number transformations across the provisioning and monitoring stack.
 """

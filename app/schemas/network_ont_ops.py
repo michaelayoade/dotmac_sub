@@ -74,8 +74,8 @@ class OntEnrichedRead(BaseModel):
     model: str | None = None
     firmware_version: str | None = None
     olt_status: str | None = None
-    effective_status: str | None = None
-    effective_status_source: str | None = None
+    status: str | None = None
+    status_source: str | None = None
     acs_last_inform_at: datetime | None = None
     last_seen_at: datetime | None = None
     name: str | None = None

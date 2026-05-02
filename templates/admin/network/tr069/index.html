@@ -92,7 +92,7 @@
                  class="absolute top-full left-0 mt-2 z-20 w-80 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-800">
                 <h4 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">ACS URL Enforcement</h4>
                 <p class="mb-3 text-xs text-slate-600 dark:text-slate-400">
-                    Create a GenieACS preset that forces all devices to use this ACS server's URL on every inform. This prevents devices from connecting to competing ACS servers.
+                    Create a GenieACS preset that forces devices to use this ACS server's URL during bootstrap and boot.
                 </p>
                 <form method="POST" action="/admin/network/tr069/acs/{{ selected_server_id }}/enforcement-preset" class="space-y-3">
                     {% include "components/forms/csrf_input.html" %}
@@ -106,7 +106,7 @@
                             On Boot (device reboot)
                         </label>
                         <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" name="on_periodic" value="1" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600">
+                            <input type="checkbox" name="on_periodic" value="1" class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 dark:border-slate-600">
                             On Periodic Inform
                         </label>
                     </div>

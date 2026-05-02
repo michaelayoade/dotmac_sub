@@ -13,7 +13,7 @@ class _FakeZabbixClient:
 
 
 def _ifindex(snmp_slot: int, port: int) -> int:
-    return 4194304000 + (snmp_slot * 2048) + (port * 256)
+    return 4194304000 + (snmp_slot * 8192) + (port * 256)
 
 
 def _walk(ifindex: int, ont_index: int, value: int | float) -> str:
@@ -53,7 +53,6 @@ def test_ingest_matches_full_fsp_external_id(db_session) -> None:
     db_session.refresh(ont)
     assert updated == 1
     assert ont.olt_status == OnuOnlineStatus.online
-    assert ont.effective_status == OnuOnlineStatus.online
     assert ont.olt_rx_signal_dbm == -23.18
     assert ont.last_sync_source == "zabbix_data_ingest"
 
@@ -99,7 +98,6 @@ def test_ingest_matches_numeric_external_id_with_board_and_port(db_session) -> N
     db_session.refresh(ont)
     assert updated == 1
     assert ont.olt_status == OnuOnlineStatus.online
-    assert ont.effective_status == OnuOnlineStatus.online
     assert ont.olt_rx_signal_dbm == -20.6
 
 
@@ -160,7 +158,6 @@ def test_ingest_marks_missing_previously_online_mapped_ont_offline(db_session) -
         "ONT-MISSING",
         external_id="0/1/0.6",
         olt_status=OnuOnlineStatus.online,
-        effective_status=OnuOnlineStatus.online,
         olt_status_seen_at=now,
         last_seen_at=now,
     )
@@ -191,7 +188,6 @@ def test_ingest_does_not_force_unmapped_online_ont_offline(db_session) -> None:
         "ONT-UNMAPPED",
         external_id="not-parseable",
         olt_status=OnuOnlineStatus.online,
-        effective_status=OnuOnlineStatus.online,
         olt_status_seen_at=now,
         last_seen_at=now,
     )

@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.ont_action_common import get_ont_strict_or_error
-from app.services.network.ont_status import resolve_effective_last_seen_at
 from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
 
 logger = logging.getLogger(__name__)
@@ -80,12 +79,10 @@ class OntReadFacade:
             "model": ont.model,
             "firmware_version": ont.firmware_version,
             "olt_status": zabbix_status,
-            "effective_status_source": "zabbix",
-            "effective_status": zabbix_status,
+            "status_source": "zabbix",
+            "status": zabbix_status,
             "acs_last_inform_at": acs_last_inform_at,
-            "last_seen_at": resolve_effective_last_seen_at(
-                ont, acs_last_inform_at=acs_last_inform_at
-            ),
+            "last_seen_at": zabbix_snapshot.updated_at,
             "name": ont.name,
             # Signal
             "olt_rx_signal_dbm": zabbix_snapshot.olt_rx_dbm,

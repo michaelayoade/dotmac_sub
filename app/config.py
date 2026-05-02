@@ -92,6 +92,7 @@ class Settings:
     tr069_periodic_inform_interval: int = int(
         os.getenv("TR069_PERIODIC_INFORM_INTERVAL", "300")
     )  # seconds, default 5 minutes
+    tr069_auth_shared_secret: str = os.getenv("TR069_AUTH_SHARED_SECRET", "")
     acs_routable_management_cidrs: str = os.getenv(
         "ACS_ROUTABLE_MANAGEMENT_CIDRS",
         "172.16.0.0/16",

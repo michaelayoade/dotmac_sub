@@ -204,7 +204,7 @@ class TestInformWebhook:
         assert parts[2] == "SERIAL123"
 
     def test_receive_inform_updates_linked_ont_last_seen_at(self, db_session) -> None:
-        from app.models.network import OntStatusSource, OntUnit
+        from app.models.network import OntUnit
         from app.services import tr069 as tr069_service
 
         server = Tr069AcsServer(
@@ -239,7 +239,6 @@ class TestInformWebhook:
         db_session.refresh(device)
         assert device.last_inform_at is not None
         assert ont.acs_last_inform_at == device.last_inform_at
-        assert ont.effective_status_source == OntStatusSource.acs
         assert ont.last_seen_at == device.last_inform_at
 
 
@@ -410,14 +409,16 @@ class TestAutoLinkOnts:
         assert rows[0].id == ont.id
         assert rows[0].last_seen_at == device.last_inform_at
 
-    def test_ont_list_page_data_uses_latest_linked_cpe_inform_for_last_seen(
-        self, db_session
+    def test_ont_list_page_data_uses_zabbix_for_last_seen(
+        self, db_session, monkeypatch
     ) -> None:
         from app.models.network import OntUnit
+        from app.services import zabbix_ont_status
         from app.services.web_network_core_devices_views import onts_list_page_data
 
         stale_last_seen = datetime.now(UTC) - timedelta(hours=2)
         latest_inform = datetime.now(UTC) - timedelta(minutes=5)
+        zabbix_seen = datetime.now(UTC) - timedelta(minutes=1)
         server = Tr069AcsServer(
             name="Latest Inform Table ACS",
             base_url="http://genieacs:7557",
@@ -443,6 +444,18 @@ class TestAutoLinkOnts:
         )
         db_session.commit()
 
+        monkeypatch.setattr(
+            zabbix_ont_status,
+            "get_ont_snapshots_from_zabbix",
+            lambda db, onts: {
+                str(item.id): zabbix_ont_status.OntSignalData(
+                    online=True,
+                    updated_at=zabbix_seen,
+                )
+                for item in onts
+            },
+        )
+
         page_data = onts_list_page_data(
             db_session,
             authorization="all",
@@ -450,16 +463,15 @@ class TestAutoLinkOnts:
         )
 
         signal_data = page_data["signal_data"][str(ont.id)]
-        expected_latest_inform = latest_inform.replace(tzinfo=None)
-        assert signal_data["acs_last_inform_at"] == expected_latest_inform
-        assert signal_data["last_seen_at"] == expected_latest_inform.replace(
-            tzinfo=UTC
-        )
+        assert signal_data["acs_last_inform_at"] == stale_last_seen.replace(tzinfo=None)
+        assert signal_data["last_seen_at"] == zabbix_seen
+        assert signal_data["status_source"] == "zabbix"
+        assert signal_data["status_display"] == "Online"
 
-    def test_ont_index_template_renders_acs_last_seen_column(self) -> None:
+    def test_ont_index_template_renders_zabbix_last_seen_column(self) -> None:
         ont_id = uuid4()
         stale_last_seen = datetime(2026, 4, 28, 8, 10, tzinfo=UTC)
-        latest_acs_inform = datetime(2026, 4, 28, 8, 55, tzinfo=UTC)
+        latest_zabbix_seen = datetime(2026, 4, 28, 8, 55, tzinfo=UTC)
         ont = SimpleNamespace(
             id=ont_id,
             serial_number="UI-ACS-LAST-SEEN-001",
@@ -485,7 +497,7 @@ class TestAutoLinkOnts:
                 pon_port_id=None,
                 pon_hint=None,
                 zone_id=None,
-                olt_status=None,
+                online_status=None,
                 authorization="authorized",
                 signal_quality=None,
                 vendor=None,
@@ -512,7 +524,7 @@ class TestAutoLinkOnts:
                 str(ont_id): {
                     "status_display": "Online",
                     "status_class": "ok",
-                    "last_seen_at": latest_acs_inform,
+                    "last_seen_at": latest_zabbix_seen,
                 }
             },
             "assignment_info": {str(ont_id): {}},
@@ -532,7 +544,7 @@ class TestAutoLinkOnts:
             "authorization_result": None,
         }
 
-        html = Environment(loader=FileSystemLoader("templates")).get_template(
+        html = Environment(loader=FileSystemLoader("templates"), autoescape=True).get_template(
             "admin/network/onts/index.html"
         ).render(context)
 
@@ -1321,6 +1333,23 @@ class TestDeviceResolution:
 
 
 class TestAcsPropagation:
+    def test_acs_enforcement_preset_defaults_to_bootstrap_and_boot_only(self) -> None:
+        from app.services.tr069 import _build_acs_preset
+
+        preset = _build_acs_preset("preset", "provision")
+
+        assert preset["events"] == {
+            "0 BOOTSTRAP": True,
+            "1 BOOT": True,
+        }
+
+    def test_acs_enforcement_preset_can_opt_into_periodic(self) -> None:
+        from app.services.tr069 import _build_acs_preset
+
+        preset = _build_acs_preset("preset", "provision", on_periodic=True)
+
+        assert preset["events"]["2 PERIODIC"] is True
+
     def test_auto_bind_uses_olt_linked_acs_profile_without_hardcoded_match(
         self, monkeypatch
     ) -> None:

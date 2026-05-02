@@ -239,7 +239,7 @@ def validate_values(
         try:
             snmp_port = int(snmp_port_value)
         except ValueError:
-            return None, "SNMP port must be a valid number"
+            return None, "Zabbix SNMP port must be a valid number"
     else:
         snmp_port = 161 if snmp_enabled else None
 
@@ -310,7 +310,7 @@ def validate_values(
     if ping_enabled and not host:
         return None, "Management IP or hostname is required for ping checks."
     if snmp_enabled and not host:
-        return None, "Management IP or hostname is required for SNMP checks."
+        return None, "Management IP or hostname is required for Zabbix SNMP collection."
 
     normalized = dict(values)
     normalized.update(
@@ -371,37 +371,8 @@ def run_ping_probe(host: str) -> bool:
     return success
 
 
-def run_snmp_probe(values: dict[str, object]) -> str | None:
-    """Run lightweight SNMP probe; return error message on failure."""
-    from app.services.snmp_discovery import _run_snmpwalk
-
-    probe = NetworkDevice(
-        name="SNMP Probe",
-        hostname=cast(str | None, values.get("hostname")),
-        mgmt_ip=cast(str | None, values.get("mgmt_ip")),
-        role=DeviceRole.edge,
-        status=DeviceStatus.offline,
-        ping_enabled=False,
-        snmp_enabled=True,
-        snmp_port=cast(int | None, values.get("snmp_port")),
-        snmp_version=cast(str | None, values.get("snmp_version")),
-        snmp_community=cast(str | None, values.get("snmp_community")),
-        snmp_username=cast(str | None, values.get("snmp_username")),
-        snmp_auth_protocol=cast(str | None, values.get("snmp_auth_protocol")),
-        snmp_auth_secret=cast(str | None, values.get("snmp_auth_secret")),
-        snmp_priv_protocol=cast(str | None, values.get("snmp_priv_protocol")),
-        snmp_priv_secret=cast(str | None, values.get("snmp_priv_secret")),
-        is_active=True,
-    )
-    try:
-        _run_snmpwalk(probe, ".1.3.6.1.2.1.1.3.0", timeout=8)
-    except Exception as exc:
-        return f"SNMP check failed: {str(exc)}"
-    return None
-
-
 def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitResult:
-    """Create a core device with optional ping/SNMP probes."""
+    """Create a core device with optional ping probe and monitoring fields."""
     status = DeviceStatus.offline
     warnings: list[str] = []
     device = NetworkDevice(
@@ -444,16 +415,6 @@ def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitRes
             device.last_ping_at = datetime.now(UTC)
             device.last_ping_ok = True
 
-    if values.get("snmp_enabled"):
-        snmp_error = run_snmp_probe(values)
-        if snmp_error:
-            warnings.append(snmp_error)
-            device.last_snmp_at = datetime.now(UTC)
-            device.last_snmp_ok = False
-        else:
-            device.last_snmp_at = datetime.now(UTC)
-            device.last_snmp_ok = True
-
     db.add(device)
     try:
         db.commit()
@@ -474,7 +435,7 @@ def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitRes
 def update_device(
     db: Session, device: NetworkDevice, values: dict[str, object]
 ) -> CoreDeviceSubmitResult:
-    """Update a core device with optional ping/SNMP probes."""
+    """Update a core device with optional ping probe and monitoring fields."""
     previous_mgmt_ip = (device.mgmt_ip or "").strip() or None
     warnings: list[str] = []
 
@@ -486,16 +447,6 @@ def update_device(
         else:
             device.last_ping_at = datetime.now(UTC)
             device.last_ping_ok = True
-
-    if values.get("snmp_enabled"):
-        snmp_error = run_snmp_probe(values)
-        if snmp_error:
-            warnings.append(snmp_error)
-            device.last_snmp_at = datetime.now(UTC)
-            device.last_snmp_ok = False
-        else:
-            device.last_snmp_at = datetime.now(UTC)
-            device.last_snmp_ok = True
 
     device.name = cast(str, values["name"])
     device.hostname = cast(str | None, values.get("hostname"))
@@ -1034,128 +985,6 @@ def update_provisioning_access_for_device(
     return True, "Provisioning access settings saved."
 
 
-def snmp_oids_page_data(
-    db: Session,
-    device_id: str,
-    *,
-    walk_lines: list[str] | None = None,
-    message: str | None = None,
-    error: str | None = None,
-) -> dict[str, object] | None:
-    device = get_device(db, device_id)
-    if not device:
-        return None
-    oids = list(
-        db.scalars(
-            select(NetworkDeviceSnmpOid)
-            .where(NetworkDeviceSnmpOid.device_id == device.id)
-            .order_by(NetworkDeviceSnmpOid.created_at.desc())
-        ).all()
-    )
-    return {
-        "device": device,
-        "snmp_oids": oids,
-        "walk_lines": walk_lines or [],
-        "message": message,
-        "error": error,
-    }
-
-
-def create_snmp_oid_for_device(
-    db: Session,
-    *,
-    device_id: str,
-    title: str,
-    oid: str,
-    check_interval_seconds: int,
-    rrd_data_source_type: str,
-    is_enabled: bool,
-) -> tuple[bool, str]:
-    device = get_device(db, device_id)
-    if not device:
-        return False, "Device not found."
-    if not title.strip():
-        return False, "Title is required."
-    if not oid.strip():
-        return False, "OID is required."
-    ds_type = rrd_data_source_type.strip().lower()
-    if ds_type not in {"gauge", "counter", "derive"}:
-        return False, "RRD data source type must be gauge, counter, or derive."
-    item = NetworkDeviceSnmpOid(
-        device_id=device.id,
-        title=title.strip(),
-        oid=oid.strip(),
-        check_interval_seconds=max(10, int(check_interval_seconds or 60)),
-        rrd_data_source_type=ds_type,
-        is_enabled=is_enabled,
-    )
-    db.add(item)
-    db.commit()
-    return True, "SNMP OID added."
-
-
-def poll_snmp_oid_for_device(
-    db: Session, *, device_id: str, snmp_oid_id: str
-) -> tuple[bool, str]:
-    device = get_device(db, device_id)
-    if not device:
-        return False, "Device not found."
-    item = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
-    if not item or str(item.device_id) != str(device.id):
-        return False, "SNMP OID not found."
-    if not device.snmp_enabled:
-        item.last_poll_status = "error"
-        item.last_error = "SNMP is disabled."
-        item.last_polled_at = datetime.now(UTC)
-        db.commit()
-        return False, "SNMP is disabled."
-    try:
-        from app.services.snmp_discovery import _run_snmpwalk
-
-        lines = _run_snmpwalk(device, item.oid, timeout=8)
-        if not lines:
-            raise ValueError("No SNMP response for OID.")
-        item.last_poll_status = "ok"
-        item.last_error = None
-        item.last_polled_at = datetime.now(UTC)
-        db.commit()
-        return True, "OID poll succeeded."
-    except Exception as exc:
-        item.last_poll_status = "error"
-        item.last_error = str(exc)
-        item.last_polled_at = datetime.now(UTC)
-        db.commit()
-        return False, f"OID poll failed: {exc!s}"
-
-
-def toggle_snmp_oid_for_device(
-    db: Session, *, device_id: str, snmp_oid_id: str, is_enabled: bool
-) -> tuple[bool, str]:
-    device = get_device(db, device_id)
-    if not device:
-        return False, "Device not found."
-    item = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
-    if not item or str(item.device_id) != str(device.id):
-        return False, "SNMP OID not found."
-    item.is_enabled = is_enabled
-    db.commit()
-    return True, "SNMP OID updated."
-
-
-def delete_snmp_oid_for_device(
-    db: Session, *, device_id: str, snmp_oid_id: str
-) -> tuple[bool, str]:
-    device = get_device(db, device_id)
-    if not device:
-        return False, "Device not found."
-    item = db.get(NetworkDeviceSnmpOid, snmp_oid_id)
-    if not item or str(item.device_id) != str(device.id):
-        return False, "SNMP OID not found."
-    db.delete(item)
-    db.commit()
-    return True, "SNMP OID deleted."
-
-
 def toggle_interface_monitored(
     db: Session, *, device_id: str, interface_id: str, monitored: bool
 ) -> tuple[bool, str]:
@@ -1171,85 +1000,10 @@ def toggle_interface_monitored(
     return True, "Interface monitoring updated."
 
 
-def run_snmp_walk_preview(
-    db: Session, *, device_id: str, base_oid: str = ".1.3.6.1.2.1"
-) -> tuple[list[str], str | None]:
-    device = get_device(db, device_id)
-    if not device:
-        return [], "Device not found."
-    if not device.snmp_enabled:
-        return [], "SNMP is disabled for this device."
-    try:
-        from app.services.snmp_discovery import _run_snmpbulkwalk
-
-        lines = _run_snmpbulkwalk(
-            device, base_oid.strip() or ".1.3.6.1.2.1", timeout=10
-        )
-        return lines[:200], None
-    except Exception as exc:
-        return [], f"SNMP walk failed: {exc!s}"
-
-
 def _graph_view_url(graph: NetworkDeviceBandwidthGraph) -> str | None:
     if not graph.public_token:
         return None
     return f"/network/graphs/{graph.public_token}"
-
-
-def _parse_numeric_value(lines: list[str]) -> float | None:
-    for line in lines:
-        match = re.search(r"(-?\d+(?:\.\d+)?)\s*$", line)
-        if match:
-            try:
-                return float(match.group(1))
-            except ValueError:
-                continue
-    return None
-
-
-def _graph_preview_snapshot(
-    db: Session,
-    graph: NetworkDeviceBandwidthGraph,
-) -> tuple[list[dict[str, object]], str | None]:
-    if not graph.sources:
-        return [], "Add at least one OID source to preview this graph."
-    if not graph.device.snmp_enabled:
-        return [], "SNMP is disabled on this graph device."
-
-    rows: list[dict[str, object]] = []
-    try:
-        from app.services.snmp_discovery import _run_snmpwalk
-
-        for source in graph.sources:
-            oid_ref = source.snmp_oid
-            if not oid_ref:
-                continue
-            lines = _run_snmpwalk(graph.device, oid_ref.oid, timeout=8)
-            numeric = _parse_numeric_value(lines)
-            scaled_value = (
-                None if numeric is None else numeric * float(source.factor or 1.0)
-            )
-            rows.append(
-                {
-                    "source_id": str(source.id),
-                    "title": oid_ref.title,
-                    "oid": oid_ref.oid,
-                    "value": scaled_value,
-                    "unit": source.value_unit,
-                    "draw_type": source.draw_type,
-                    "color_hex": source.color_hex,
-                    "stack_enabled": source.stack_enabled,
-                    "max": scaled_value,
-                    "avg": scaled_value,
-                    "last": scaled_value,
-                }
-            )
-    except Exception as exc:
-        return [], f"Preview failed: {exc!s}"
-
-    if not rows:
-        return [], "No preview rows returned."
-    return rows, None
 
 
 def bandwidth_graphs_page_data(
@@ -1258,7 +1012,6 @@ def bandwidth_graphs_page_data(
     *,
     message: str | None = None,
     error: str | None = None,
-    preview_graph_id: str | None = None,
 ) -> dict[str, object] | None:
     device = get_device(db, device_id)
     if not device:
@@ -1295,26 +1048,12 @@ def bandwidth_graphs_page_data(
             .order_by(NetworkDeviceSnmpOid.title)
         ).all()
     )
-    preview_rows: list[dict[str, object]] = []
-    preview_for_graph: str | None = None
-    if preview_graph_id:
-        graph = next(
-            (item for item in graphs if str(item.id) == str(preview_graph_id)), None
-        )
-        if graph:
-            preview_rows, preview_error = _graph_preview_snapshot(db, graph)
-            preview_for_graph = str(graph.id)
-            if preview_error:
-                error = preview_error
-
     return {
         "device": device,
         "graphs": graphs,
         "graph_view_urls": {str(graph.id): _graph_view_url(graph) for graph in graphs},
         "all_devices": all_devices,
         "all_oids": all_oids,
-        "preview_rows": preview_rows,
-        "preview_for_graph": preview_for_graph,
         "message": message,
         "error": error,
     }

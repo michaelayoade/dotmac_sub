@@ -5,7 +5,6 @@ from app.models.network import OntStatusSource, OntUnit, OnuOnlineStatus
 from app.services import network as network_service
 from app.services import zabbix_ont_status
 from app.services.network.ont_status import (
-    OntStatusInputs,
     apply_acs_inform_observation,
     apply_olt_status_observation,
     apply_status_snapshot,
@@ -13,13 +12,12 @@ from app.services.network.ont_status import (
     reconcile_ont_state,
     resolve_acs_online_window_minutes_for_model,
     resolve_effective_last_seen_at,
-    resolve_ont_effective_status,
     resolve_ont_status_for_model,
     resolve_ont_status_snapshot,
 )
 
 
-def test_olt_online_immediately_marks_effective_online() -> None:
+def test_snapshot_preserves_raw_olt_online_observation() -> None:
     now = datetime.now(UTC)
     snapshot = resolve_ont_status_snapshot(
         olt_status=OnuOnlineStatus.online,
@@ -28,56 +26,39 @@ def test_olt_online_immediately_marks_effective_online() -> None:
     )
 
     assert snapshot.olt_status == OnuOnlineStatus.online
-    assert snapshot.effective_status == OnuOnlineStatus.online
-    assert snapshot.effective_status_source == OntStatusSource.olt
+    assert snapshot.olt_status_seen_at == now
+    assert snapshot.acs_last_inform_at == now - timedelta(hours=2)
+    assert snapshot.last_seen_at == now
 
 
-def test_recent_acs_inform_overrides_olt_offline() -> None:
+def test_snapshot_preserves_recent_acs_inform_without_status_override() -> None:
     now = datetime.now(UTC)
-    resolution = resolve_ont_effective_status(
-        OntStatusInputs(
-            olt_status=OnuOnlineStatus.offline,
-            olt_seen_at=now,
-            acs_last_inform_at=now,
-            acs_online_window_minutes=15,
-        ),
+    snapshot = resolve_ont_status_snapshot(
+        olt_status=OnuOnlineStatus.offline,
+        acs_last_inform_at=now,
         now=now,
     )
 
-    assert resolution.effective_status == OnuOnlineStatus.online
-    assert resolution.effective_status_source == OntStatusSource.acs
+    assert snapshot.olt_status == OnuOnlineStatus.offline
+    assert snapshot.olt_status_seen_at is None
+    assert snapshot.acs_last_inform_at == now
+    assert snapshot.last_seen_at == now
 
 
-def test_olt_offline_is_trusted_directly() -> None:
+def test_snapshot_offline_keeps_no_last_seen_without_acs() -> None:
     now = datetime.now(UTC)
-    resolution = resolve_ont_effective_status(
-        OntStatusInputs(
-            olt_status=OnuOnlineStatus.offline,
-            olt_seen_at=now,
-            acs_last_inform_at=None,
-            acs_online_window_minutes=15,
-        ),
-        now=now,
-    )
-
-    assert resolution.effective_status == OnuOnlineStatus.offline
-    assert resolution.effective_status_source == OntStatusSource.olt
-
-
-def test_snapshot_offline_uses_olt_source() -> None:
-    now = datetime.now(UTC)
-
     snapshot = resolve_ont_status_snapshot(
         olt_status=OnuOnlineStatus.offline,
         acs_last_inform_at=None,
         now=now,
     )
 
-    assert snapshot.effective_status == OnuOnlineStatus.offline
-    assert snapshot.effective_status_source == OntStatusSource.olt
+    assert snapshot.olt_status == OnuOnlineStatus.offline
+    assert snapshot.olt_status_seen_at is None
+    assert snapshot.last_seen_at is None
 
 
-def test_stale_acs_does_not_override_olt_online() -> None:
+def test_stale_acs_does_not_change_raw_olt_online_status() -> None:
     now = datetime.now(UTC)
     snapshot = resolve_ont_status_snapshot(
         olt_status=OnuOnlineStatus.online,
@@ -85,8 +66,8 @@ def test_stale_acs_does_not_override_olt_online() -> None:
         now=now,
     )
 
-    assert snapshot.effective_status == OnuOnlineStatus.online
-    assert snapshot.effective_status_source == OntStatusSource.olt
+    assert snapshot.olt_status == OnuOnlineStatus.online
+    assert snapshot.last_seen_at == now
 
 
 def test_apply_status_snapshot_updates_explicit_fields() -> None:
@@ -103,23 +84,20 @@ def test_apply_status_snapshot_updates_explicit_fields() -> None:
     assert ont.olt_status == OnuOnlineStatus.online
     assert ont.olt_status_seen_at == now
     assert ont.acs_last_inform_at == now
-    assert ont.effective_status == OnuOnlineStatus.online
-    assert ont.effective_status_source == OntStatusSource.acs
     assert ont.last_seen_at == now
 
 
-def test_apply_observations_persist_source_semantics() -> None:
+def test_apply_observations_persist_raw_olt_and_acs_state() -> None:
     now = datetime.now(UTC)
     ont = OntUnit(serial_number="ONT-OBSERVE")
 
     apply_olt_status_observation(ont, OnuOnlineStatus.offline, now=now)
     assert ont.olt_status == OnuOnlineStatus.offline
-    assert ont.effective_status == OnuOnlineStatus.offline
+    assert ont.olt_status_seen_at == now
 
     apply_acs_inform_observation(ont, now=now + timedelta(minutes=1))
     assert ont.acs_last_inform_at == now + timedelta(minutes=1)
-    assert ont.effective_status == OnuOnlineStatus.online
-    assert ont.effective_status_source == OntStatusSource.acs
+    assert ont.last_seen_at == now + timedelta(minutes=1)
 
 
 def test_resolve_acs_online_window_minutes_for_model_uses_acs_interval() -> None:
@@ -143,31 +121,29 @@ def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
             tr069_acs_server=SimpleNamespace(periodic_inform_interval=300),
         ),
         acs_last_inform_at=None,
-        consecutive_offline_polls=0,
     )
 
     assert ont_has_acs_management(ont) is True
     snapshot = resolve_ont_status_for_model(ont, now=now)
 
-    assert snapshot.effective_status == OnuOnlineStatus.offline
-    assert snapshot.effective_status_source == OntStatusSource.olt
+    assert snapshot.olt_status == OnuOnlineStatus.offline
+    assert snapshot.last_seen_at is None
 
 
-def test_reconcile_ont_state_flags_recent_acs_over_olt_offline() -> None:
+def test_reconcile_ont_state_keeps_zabbix_as_authority() -> None:
     now = datetime.now(UTC)
     ont = OntUnit(
         serial_number="ONT-RECON-ACS",
         olt_status=OnuOnlineStatus.offline,
         olt_status_seen_at=now,
         acs_last_inform_at=now,
-        consecutive_offline_polls=3,
     )
 
     result = reconcile_ont_state(ont, now=now)
 
-    assert result.conflict is True
-    assert result.authoritative_source == OntStatusSource.acs
-    assert result.recommended_action == "check_monitoring_freshness"
+    assert result.conflict is False
+    assert result.authoritative_source == OntStatusSource.zabbix
+    assert result.recommended_action is None
 
 
 def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:
@@ -183,10 +159,9 @@ def test_resolve_effective_last_seen_at_prefers_newer_acs_inform() -> None:
 
 def test_list_advanced_filters_by_zabbix_status(db_session, monkeypatch) -> None:
     ont = OntUnit(
-        serial_number="ONT-EFFECTIVE-ONLINE",
+        serial_number="ONT-ZABBIX-ONLINE",
         is_active=True,
         olt_status=OnuOnlineStatus.offline,
-        effective_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)
     db_session.commit()
@@ -208,4 +183,4 @@ def test_list_advanced_filters_by_zabbix_status(db_session, monkeypatch) -> None
     )
 
     assert total == 1
-    assert [item.serial_number for item in rows] == ["ONT-EFFECTIVE-ONLINE"]
+    assert [item.serial_number for item in rows] == ["ONT-ZABBIX-ONLINE"]

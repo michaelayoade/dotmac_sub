@@ -309,12 +309,12 @@ def tr069_push_enforcement_preset(
     """Push ACS enforcement preset to GenieACS.
 
     This creates a provision and preset in GenieACS that enforces this
-    ACS server's URL on every device inform (bootstrap, boot, periodic).
+    ACS server's URL during bootstrap/boot by default.
     """
     form = parse_form_data_sync(request)
     on_bootstrap = str(form.get("on_bootstrap", "1")).strip() in ("1", "true", "on")
     on_boot = str(form.get("on_boot", "1")).strip() in ("1", "true", "on")
-    on_periodic = str(form.get("on_periodic", "1")).strip() in ("1", "true", "on")
+    on_periodic = str(form.get("on_periodic", "0")).strip() in ("1", "true", "on")
     precondition = str(form.get("precondition") or "").strip()
 
     try:

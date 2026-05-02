@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from types import SimpleNamespace
 
 from app import celery_app as celery_app_module
@@ -108,75 +107,3 @@ def test_enqueue_celery_task_uses_headers_and_logs(monkeypatch, caplog):
     )
     assert queued_record.task_id == "task-3"
     assert queued_record.correlation_id == "webhook_event:event-1"
-
-
-def test_poll_all_olt_signals_returns_noop():
-    """poll_all_olt_signals is now a no-op; status is read from Zabbix directly."""
-    from app.tasks import olt_polling as olt_polling_module
-
-    result = olt_polling_module.poll_all_olt_signals()
-    assert result == {"olts_dispatched": 0}
-
-
-def test_capture_all_olts_task_uses_correlated_enqueue(monkeypatch):
-    from app.tasks import olt_capture as olt_capture_module
-
-    captured: list[dict[str, object]] = []
-
-    class _FakeScalarResult:
-        def __init__(self, items):
-            self._items = items
-
-        def all(self):
-            return self._items
-
-    class _FakeSession:
-        def scalars(self, _stmt):
-            return _FakeScalarResult(
-                [
-                    SimpleNamespace(id="olt-10", name="OLT Ten"),
-                    SimpleNamespace(id="olt-20", name="OLT Twenty"),
-                ]
-            )
-
-        def close(self):
-            return None
-
-    @contextmanager
-    def _fake_read_session():
-        yield _FakeSession()
-
-    def _fake_enqueue(
-        task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra
-    ):
-        task_id = f"task-{len(captured) + 1}"
-        captured.append(
-            {
-                "task": task,
-                "args": args,
-                "kwargs": kwargs,
-                "correlation_id": correlation_id,
-                "source": source,
-                "extra": extra,
-                "task_id": task_id,
-            }
-            )
-        return SimpleNamespace(task_id=task_id)
-
-    monkeypatch.setattr(
-        olt_capture_module.db_session_adapter,
-        "read_session",
-        _fake_read_session,
-    )
-    monkeypatch.setattr(olt_capture_module, "enqueue_task", _fake_enqueue)
-
-    result = olt_capture_module.capture_all_olts_task(force=True)
-
-    assert result["queued"] == 2
-    assert captured[0]["args"] == ["olt-10"]
-    assert captured[0]["kwargs"] == {"force": True}
-    assert captured[0]["correlation_id"] == "olt_capture:olt-10"
-    assert captured[0]["source"] == "capture_all_olts_task"
-    assert result["tasks"][0]["task_id"] == "task-1"
-    assert captured[1]["args"] == ["olt-20"]
-    assert captured[1]["correlation_id"] == "olt_capture:olt-20"

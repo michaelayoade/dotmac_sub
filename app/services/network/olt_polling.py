@@ -1,8 +1,8 @@
 """OLT optical signal utilities.
 
-Provides signal classification, threshold management, and SNMP status
-reconciliation for OLT/ONT monitoring. Actual SNMP polling has been
-moved to Zabbix; this module retains utilities used by web UI and
+Provides signal classification, threshold management, and Zabbix-reported
+status reconciliation for OLT/ONT monitoring. Actual SNMP collection has
+been moved to Zabbix; this module retains utilities used by web UI and
 other monitoring services.
 """
 
@@ -21,12 +21,6 @@ from app.models.network import (
 )
 
 # Re-exports for backwards compatibility with importers
-from app.services.network.olt_polling_metrics import (
-    _push_olt_health_metrics as _push_olt_health_metrics,  # noqa: F401
-)
-from app.services.network.olt_polling_metrics import (
-    push_signal_metrics_to_victoriametrics as push_signal_metrics_to_victoriametrics,  # noqa: F401
-)
 from app.services.network.olt_polling_oids import (
     _SIGNAL_SENTINELS as _SIGNAL_SENTINELS,  # noqa: F401
 )
@@ -58,9 +52,6 @@ from app.services.network.olt_polling_parsers import (
     _parse_snmp_table as _parse_snmp_table,  # noqa: F401
 )
 from app.services.network.olt_polling_parsers import (
-    _run_olt_snmpwalk as _run_olt_snmpwalk,  # noqa: F401
-)
-from app.services.network.olt_polling_parsers import (
     _split_onu_index as _split_onu_index,  # noqa: F401
 )
 
@@ -78,60 +69,6 @@ SIGNAL_QUALITY_GOOD = "good"
 SIGNAL_QUALITY_WARNING = "warning"
 SIGNAL_QUALITY_CRITICAL = "critical"
 SIGNAL_QUALITY_UNKNOWN = "unknown"
-
-
-def poll_olt_ont_signals(
-    db: Session,
-    olt: OLTDevice,
-    community: str | None = None,
-) -> dict[str, int]:
-    """Compatibility wrapper for legacy OLT signal polling callers.
-
-    Direct SNMP polling has moved to Zabbix ingestion. This function now
-    summarizes currently stored inventory signal data while preserving the old
-    callable boundary for monitoring integrations and tests.
-    """
-    from sqlalchemy import func
-
-    from app.models.network import OntUnit
-
-    warning_threshold, _ = get_signal_thresholds(db, olt=olt)
-    total = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(OntUnit.is_active.is_(True))
-            .where(OntUnit.olt_device_id == olt.id)
-        )
-        or 0
-    )
-    updated = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(OntUnit.is_active.is_(True))
-            .where(OntUnit.olt_device_id == olt.id)
-            .where(OntUnit.olt_rx_signal_dbm.is_not(None))
-        )
-        or 0
-    )
-    low_signal = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(OntUnit.is_active.is_(True))
-            .where(OntUnit.olt_device_id == olt.id)
-            .where(OntUnit.olt_rx_signal_dbm.is_not(None))
-            .where(OntUnit.olt_rx_signal_dbm < warning_threshold)
-        )
-        or 0
-    )
-    return {
-        "polled": int(total),
-        "updated": int(updated),
-        "low_signal": int(low_signal),
-        "errors": 0,
-    }
 
 
 def classify_signal(
@@ -263,7 +200,7 @@ def _get_threshold_override(
 
 
 # ---------------------------------------------------------------------------
-# SNMP status reconciliation
+# Zabbix-reported status reconciliation
 # ---------------------------------------------------------------------------
 
 
@@ -273,11 +210,11 @@ def reconcile_snmp_status_with_signal(
     raw_status: str | None,
     olt_rx_dbm: float | None,
 ) -> tuple[OnuOnlineStatus, OnuOfflineReason | None, bool]:
-    """Determine effective ONT status using SNMP state and signal level.
+    """Determine effective ONT status using Zabbix state and signal level.
 
     Args:
         vendor: OLT vendor key (e.g. "huawei", "zte").
-        raw_status: Raw SNMP online/offline state string.
+        raw_status: Raw Zabbix-reported online/offline state string.
         olt_rx_dbm: OLT-side received signal in dBm.
 
     Returns:
@@ -301,7 +238,7 @@ def reconcile_snmp_status_with_signal(
         if code in {2, 3, 4, 5}:
             if _has_valid_signal():
                 logger.warning(
-                    "SNMP reports offline code %s but has valid signal %.1f dBm (vendor=%s)",
+                    "Zabbix reports offline code %s but has valid signal %.1f dBm (vendor=%s)",
                     code,
                     olt_rx_dbm,
                     vendor,
@@ -317,19 +254,19 @@ def reconcile_snmp_status_with_signal(
             except ValueError:
                 return OnuOnlineStatus.offline, OnuOfflineReason.unknown, False
 
-    # Map SNMP states to status
+    # Map Zabbix-reported states to status
     if state_lower in ("online", "up", "1", "active"):
         return OnuOnlineStatus.online, None, False
 
     if state_lower in ("offline", "down", "0", "inactive", "2"):
-        # If SNMP says offline but we have a valid signal, something is off
+        # If Zabbix says offline but we have a valid signal, something is off
         if _has_valid_signal():
             logger.warning(
-                "SNMP reports offline but has valid signal %.1f dBm (vendor=%s)",
+                "Zabbix reports offline but has valid signal %.1f dBm (vendor=%s)",
                 olt_rx_dbm,
                 vendor,
             )
-            # Reconcile: trust signal over SNMP state
+            # Reconcile: trust signal over the collected status state
             return OnuOnlineStatus.online, None, True
         return OnuOnlineStatus.offline, OnuOfflineReason.unknown, False
 

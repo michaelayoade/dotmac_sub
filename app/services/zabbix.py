@@ -28,6 +28,7 @@ ALLOWED_METHODS = [
     "host.create",
     "host.update",
     "host.delete",
+    "hostinterface.update",
     # Host group methods
     "hostgroup.get",
     "hostgroup.create",
@@ -813,20 +814,57 @@ class ZabbixClient:
                 "key_",
                 "value_type",
                 "units",
+                "snmp_oid",
                 "lastvalue",
                 "lastclock",
             ],
             "monitored": True,
-            "search": {"key_": metric or "net.if"},
             "sortfield": "name",
             "limit": limit,
         }
+        if metric is None:
+            params["search"] = {"key_": "net.if"}
+        elif metric:
+            params["search"] = {"key_": metric}
         if host_ids:
             params["hostids"] = host_ids
         payload = {
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
+            "id": next(self._request_ids),
+        }
+        return self._submit_read_payload(payload, method)
+
+    def get_snmp_items(
+        self,
+        host_ids: list[str],
+        oid: str,
+        limit: int = 100000,
+    ) -> list[dict[str, Any]]:
+        """Get monitored SNMP items matching an OID for one or more hosts."""
+        method = "item.get"
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": {
+                "output": [
+                    "itemid",
+                    "hostid",
+                    "name",
+                    "key_",
+                    "value_type",
+                    "units",
+                    "snmp_oid",
+                    "lastvalue",
+                    "lastclock",
+                ],
+                "hostids": host_ids,
+                "monitored": True,
+                "search": {"snmp_oid": oid},
+                "sortfield": "name",
+                "limit": limit,
+            },
             "id": next(self._request_ids),
         }
         return self._submit_read_payload(payload, method)

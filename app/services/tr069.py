@@ -28,14 +28,18 @@ from app.schemas.tr069 import (
     Tr069SessionCreate,
     Tr069SessionUpdate,
 )
-from app.services.genieacs_client import GenieACSClient, create_genieacs_client
 from app.services.common import (
     apply_ordering,
     apply_pagination,
     validate_enum,
 )
 from app.services.credential_crypto import encrypt_credential
-from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
+from app.services.genieacs_client import (
+    GenieACSClient,
+    GenieACSError,
+    create_genieacs_client,
+    normalize_tr069_serial,
+)
 from app.services.network import cpe as cpe_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_status import (
@@ -532,9 +536,6 @@ def refresh_ont_status_snapshot(
     snapshot = resolve_ont_status_snapshot(
         olt_status=getattr(ont, "olt_status", None),
         acs_last_inform_at=acs_last_inform_at,
-        consecutive_offline_polls=int(
-            getattr(ont, "consecutive_offline_polls", 0) or 0
-        ),
         online_window_minutes=resolve_acs_online_window_minutes_for_model(ont),
     )
     apply_status_snapshot(ont, snapshot)
@@ -832,9 +833,6 @@ class CpeDevices(ListResponseMixin):
                 resolve_ont_status_snapshot(
                     olt_status=getattr(ont, "olt_status", None),
                     acs_last_inform_at=device.last_inform_at,
-                    consecutive_offline_polls=int(
-                        getattr(ont, "consecutive_offline_polls", 0) or 0
-                    ),
                     online_window_minutes=(
                         resolve_acs_online_window_minutes_for_model(ont)
                     ),
@@ -1121,9 +1119,6 @@ class CpeDevices(ListResponseMixin):
                         resolve_ont_status_snapshot(
                             olt_status=getattr(ont, "olt_status", None),
                             acs_last_inform_at=cpe_dev.last_inform_at,
-                            consecutive_offline_polls=int(
-                                getattr(ont, "consecutive_offline_polls", 0) or 0
-                            ),
                             online_window_minutes=(
                                 resolve_acs_online_window_minutes_for_model(ont)
                             ),
@@ -1654,9 +1649,6 @@ def receive_inform(
                 resolve_ont_status_snapshot(
                     olt_status=getattr(ont, "olt_status", None),
                     acs_last_inform_at=now,
-                    consecutive_offline_polls=int(
-                        getattr(ont, "consecutive_offline_polls", 0) or 0
-                    ),
                     online_window_minutes=resolve_acs_online_window_minutes_for_model(
                         ont
                     ),
@@ -1837,7 +1829,7 @@ def _build_acs_preset(
     *,
     on_bootstrap: bool = True,
     on_boot: bool = True,
-    on_periodic: bool = True,
+    on_periodic: bool = False,
     precondition: str = "",
     weight: int = 100,
 ) -> dict:
@@ -1880,14 +1872,14 @@ def push_acs_enforcement_preset(
     *,
     on_bootstrap: bool = True,
     on_boot: bool = True,
-    on_periodic: bool = True,
+    on_periodic: bool = False,
     precondition: str = "",
 ) -> dict:
     """Push ACS enforcement provision and preset to GenieACS.
 
     Creates a provision script that sets ManagementServer.URL to this ACS server's
-    CWMP URL, and a preset that runs it on specified events. This ensures all
-    devices will use this ACS regardless of any competing ACS configurations.
+    CWMP URL, and a preset that runs it on specified events. By default this is
+    limited to bootstrap/boot so periodic informs remain a lightweight heartbeat.
 
     Args:
         db: Database session

@@ -776,7 +776,7 @@ def update_external_id(
     *,
     external_id: str,
 ) -> ActionResult:
-    """Update ONT external ID used for SNMP polling correlation."""
+    """Update ONT external ID used for monitoring correlation."""
     ont, err = get_ont_or_error(db, ont_id)
     if err:
         return err

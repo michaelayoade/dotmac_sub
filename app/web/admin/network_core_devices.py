@@ -31,16 +31,6 @@ def _render_template_fragment(template_name: str, context: dict) -> str:
     return templates.env.get_template(template_name).render(context)
 
 
-def _zabbix_monitoring_skip_response(action: str) -> HTMLResponse:
-    return HTMLResponse(
-        '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 '
-        'dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">'
-        f'<span class="font-medium">{action} skipped.</span> '
-        "Direct device polling is disabled because Zabbix is the monitoring source."
-        "</div>"
-    )
-
-
 def _coerce_uuid_or_none(value: str | None) -> UUID | None:
     if not value:
         return None
@@ -432,146 +422,6 @@ def core_device_provisioning_access_update(
     )
 
 
-@router.get(
-    "/core-devices/{device_id}/snmp-oids",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def core_device_snmp_oids(
-    request: Request,
-    device_id: str,
-    db: Session = Depends(get_db),
-):
-    page_data = web_network_core_devices_service.snmp_oids_page_data(
-        db,
-        device_id,
-        message=request.query_params.get("message"),
-        error=request.query_params.get("error"),
-    )
-    if not page_data:
-        return templates.TemplateResponse(
-            "admin/errors/404.html",
-            {"request": request, "message": "Device not found"},
-            status_code=404,
-        )
-    context = _base_context(
-        request, db, active_page="core-devices", active_menu="core-network"
-    )
-    context.update(page_data)
-    return templates.TemplateResponse(
-        "admin/network/core-devices/snmp_oids.html", context
-    )
-
-
-@router.post(
-    "/core-devices/{device_id}/snmp-oids",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_oid_create(
-    device_id: str,
-    title: str = Form(...),
-    oid: str = Form(...),
-    check_interval_seconds: int = Form(60),
-    rrd_data_source_type: str = Form("gauge"),
-    is_enabled: bool = Form(False),
-    db: Session = Depends(get_db),
-):
-    ok, msg = web_network_core_devices_service.create_snmp_oid_for_device(
-        db,
-        device_id=device_id,
-        title=title,
-        oid=oid,
-        check_interval_seconds=check_interval_seconds,
-        rrd_data_source_type=rrd_data_source_type,
-        is_enabled=is_enabled,
-    )
-    key = "message" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
-        status_code=303,
-    )
-
-
-@router.post(
-    "/core-devices/{device_id}/snmp-oids/snmp-walk",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_oid_walk(
-    request: Request,
-    device_id: str,
-    base_oid: str = Form(".1.3.6.1.2.1"),
-    db: Session = Depends(get_db),
-):
-    lines, error = web_network_core_devices_service.run_snmp_walk_preview(
-        db,
-        device_id=device_id,
-        base_oid=base_oid,
-    )
-    page_data = web_network_core_devices_service.snmp_oids_page_data(
-        db,
-        device_id,
-        walk_lines=lines,
-        error=error,
-        message=None if error else f"SNMP walk returned {len(lines)} lines.",
-    )
-    if not page_data:
-        return templates.TemplateResponse(
-            "admin/errors/404.html",
-            {"request": request, "message": "Device not found"},
-            status_code=404,
-        )
-    context = _base_context(
-        request, db, active_page="core-devices", active_menu="core-network"
-    )
-    context.update(page_data)
-    return templates.TemplateResponse(
-        "admin/network/core-devices/snmp_oids.html", context
-    )
-
-
-@router.post(
-    "/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/poll",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_oid_poll(
-    device_id: str,
-    snmp_oid_id: str,
-    db: Session = Depends(get_db),
-):
-    ok, msg = web_network_core_devices_service.poll_snmp_oid_for_device(
-        db, device_id=device_id, snmp_oid_id=snmp_oid_id
-    )
-    key = "message" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
-        status_code=303,
-    )
-
-
-@router.post(
-    "/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/toggle",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_oid_toggle(
-    device_id: str,
-    snmp_oid_id: str,
-    is_enabled: bool = Form(False),
-    db: Session = Depends(get_db),
-):
-    ok, msg = web_network_core_devices_service.toggle_snmp_oid_for_device(
-        db, device_id=device_id, snmp_oid_id=snmp_oid_id, is_enabled=is_enabled
-    )
-    key = "message" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
-        status_code=303,
-    )
-
-
 @router.post(
     "/core-devices/{device_id}/interfaces/{interface_id}/toggle-monitored",
     response_class=HTMLResponse,
@@ -593,26 +443,6 @@ def core_device_interface_toggle_monitored(
     )
 
 
-@router.post(
-    "/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/delete",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_oid_delete(
-    device_id: str,
-    snmp_oid_id: str,
-    db: Session = Depends(get_db),
-):
-    ok, msg = web_network_core_devices_service.delete_snmp_oid_for_device(
-        db, device_id=device_id, snmp_oid_id=snmp_oid_id
-    )
-    key = "message" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/core-devices/{device_id}/snmp-oids?{key}={msg}",
-        status_code=303,
-    )
-
-
 @router.get(
     "/core-devices/{device_id}/graphs",
     response_class=HTMLResponse,
@@ -621,7 +451,6 @@ def core_device_snmp_oid_delete(
 def core_device_graphs(
     request: Request,
     device_id: str,
-    preview_graph_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     page_data = web_network_core_devices_service.bandwidth_graphs_page_data(
@@ -629,7 +458,6 @@ def core_device_graphs(
         device_id,
         message=request.query_params.get("message"),
         error=request.query_params.get("error"),
-        preview_graph_id=preview_graph_id,
     )
     if not page_data:
         return templates.TemplateResponse(
@@ -704,22 +532,6 @@ def core_device_graph_source_add(
     key = "message" if ok else "error"
     return RedirectResponse(
         f"/admin/network/core-devices/{device_id}/graphs?{key}={quote_plus(msg)}",
-        status_code=303,
-    )
-
-
-@router.post(
-    "/core-devices/{device_id}/graphs/{graph_id}/preview",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_graph_preview(
-    device_id: str,
-    graph_id: str,
-    db: Session = Depends(get_db),
-):
-    return RedirectResponse(
-        f"/admin/network/core-devices/{device_id}/graphs?preview_graph_id={graph_id}",
         status_code=303,
     )
 
@@ -974,39 +786,6 @@ def core_device_backup_compare(
     )
 
 
-@router.post(
-    "/core-devices/{device_id}/ping",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_ping(
-    request: Request, device_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    return _zabbix_monitoring_skip_response("Ping")
-
-
-@router.post(
-    "/core-devices/{device_id}/snmp-check",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_check(
-    request: Request, device_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    return _zabbix_monitoring_skip_response("SNMP check")
-
-
-@router.post(
-    "/core-devices/{device_id}/snmp-debug",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_snmp_debug(
-    request: Request, device_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    return _zabbix_monitoring_skip_response("SNMP debug")
-
-
 @router.get(
     "/core-devices/{device_id}/health",
     response_class=HTMLResponse,
@@ -1034,17 +813,6 @@ def core_device_health_partial(
     return HTMLResponse(
         f'<div id="device-health-content" hx-swap-oob="true">{html}</div>'
     )
-
-
-@router.post(
-    "/core-devices/{device_id}/discover-interfaces",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def core_device_discover_interfaces(
-    request: Request, device_id: str, db: Session = Depends(get_db)
-):
-    return _zabbix_monitoring_skip_response("Interface discovery")
 
 
 @router.post(

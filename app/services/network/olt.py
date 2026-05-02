@@ -236,6 +236,28 @@ class OLTDevices(CRUDManager[OLTDevice]):
     soft_delete_value = False
 
     @staticmethod
+    def _require_authorization_ready(db: Session, device: OLTDevice) -> None:
+        """Enforce the active-OLT data contract at the service boundary."""
+        if not bool(getattr(device, "is_active", False)):
+            return
+        from app.services.network.olt_config_pack import (
+            get_validation_summary,
+            validate_config_pack_comprehensive,
+        )
+
+        validation = validate_config_pack_comprehensive(db, device.id)
+        if validation.is_valid:
+            return
+        summary = get_validation_summary(validation)
+        errors = "; ".join(validation.errors)
+        detail = (
+            f"Active OLTs must be authorization-ready: {summary}."
+            if not errors
+            else f"Active OLTs must be authorization-ready: {summary}. {errors}"
+        )
+        raise HTTPException(status_code=400, detail=detail)
+
+    @staticmethod
     def list(
         db: Session,
         is_active: bool | None,
@@ -256,7 +278,14 @@ class OLTDevices(CRUDManager[OLTDevice]):
 
     @classmethod
     def create(cls, db: Session, payload) -> OLTDevice:
-        device = super().create(db, payload)
+        device = super().create(db, payload, commit=False)
+        try:
+            cls._require_authorization_ready(db, device)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(device)
         emit_event(
             db,
             EventType.olt_created,
@@ -278,7 +307,14 @@ class OLTDevices(CRUDManager[OLTDevice]):
             existing.ssh_username,
             existing.ssh_password,
         )
-        device = super().update(db, device_id, payload)
+        device = super().update(db, device_id, payload, commit=False)
+        try:
+            cls._require_authorization_ready(db, device)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(device)
         after_ssh_identity = (
             device.mgmt_ip,
             device.ssh_port,

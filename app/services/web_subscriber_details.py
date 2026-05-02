@@ -217,16 +217,9 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
             ont = assignment.ont_unit
             if not ont:
                 continue
-            status_value = (
-                (
-                    ont.effective_status.value
-                    if getattr(ont, "effective_status", None) is not None
-                    and hasattr(ont.effective_status, "value")
-                    else str(getattr(ont, "effective_status", "") or "")
-                )
-                .strip()
-                .lower()
-            )
+            from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
+
+            status_value = get_ont_signal_from_zabbix(ont).status
             equipment.append(
                 {
                     "type": "ONT",

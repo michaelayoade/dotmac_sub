@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from app.services.network.olt_ssh import ServicePortEntry
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice
@@ -34,6 +34,7 @@ from app.services.genieacs_service import genieacs_service
 from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.provisioning_settings import get_stale_runtime_hours
+from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +99,6 @@ class ProvisioningEnforcement:
             db: Database session.
             olt_id: Optional filter to a single OLT.
         """
-        from app.models.network import OnuOnlineStatus
-
         gaps: dict[str, list[str]] = {
             "no_acs_binding": [],
             "no_acs_on_olt": [],
@@ -112,7 +111,13 @@ class ProvisioningEnforcement:
         stale_hours = get_stale_runtime_hours(db)
         stale_cutoff = datetime.now(UTC) - timedelta(hours=stale_hours)
 
-        for ont in ProvisioningEnforcement._list_candidate_onts(db, olt_id=olt_id):
+        candidates = ProvisioningEnforcement._list_candidate_onts(db, olt_id=olt_id)
+        zabbix_snapshots = get_ont_snapshots_from_zabbix(db, candidates)
+
+        for ont in candidates:
+            zabbix_online = bool(
+                (snapshot := zabbix_snapshots.get(str(ont.id))) and snapshot.online
+            )
             resolved = resolve_effective_ont_config(db, ont)
             values = resolved.get("values", {}) if isinstance(resolved, dict) else {}
             effective_pppoe_username = values.get("pppoe_username")
@@ -148,14 +153,14 @@ class ProvisioningEnforcement:
                 effective_pppoe_username not in (None, "")
                 and effective_acs_server_id is not None
                 and getattr(ont, "observed_wan_ip", None) is None
-                and getattr(ont, "effective_status", None) == OnuOnlineStatus.online
+                and zabbix_online
             ):
                 gaps["pppoe_not_pushed"].append(str(ont.id))
 
             if (
                 effective_wifi_ssid not in (None, "")
                 and effective_acs_server_id is not None
-                and getattr(ont, "effective_status", None) == OnuOnlineStatus.online
+                and zabbix_online
             ):
                 gaps["wifi_pending_sync"].append(str(ont.id))
 
@@ -170,7 +175,7 @@ class ProvisioningEnforcement:
             runtime_updated = getattr(ont, "observed_runtime_updated_at", None)
             if (
                 getattr(ont, "observed_wan_ip", None) is not None
-                and getattr(ont, "effective_status", None) == OnuOnlineStatus.offline
+                and not zabbix_online
                 and runtime_updated is not None
                 and runtime_updated < stale_cutoff
             ):

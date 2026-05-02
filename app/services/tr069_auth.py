@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
+from app.models.network import OntAuthorizationStatus
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
@@ -25,7 +26,7 @@ def get_device_credentials(
     db: Session,
     serial_number: str,
     credential_type: Literal["connection_request", "cpe_auth"],
-) -> dict[str, str | None]:
+) -> dict[str, str | bool | None]:
     """Get credentials for a device by serial number.
 
     Looks up the device in both Tr069CpeDevice and OntUnit tables.
@@ -40,7 +41,7 @@ def get_device_credentials(
         Dict with username and password keys (may be None if not configured)
     """
     if not serial_number:
-        return {"username": None, "password": None}
+        return {"username": None, "password": None, "authorized": False}
 
     # Normalize serial for matching
     candidates = search_candidates(serial_number)
@@ -60,20 +61,40 @@ def get_device_credentials(
     # Try to find linked ONT unit
     ont_unit = None
     if cpe_device and cpe_device.ont_unit_id:
-        ont_unit = db.get(OntUnit, cpe_device.ont_unit_id)
+        candidate_ont = db.get(OntUnit, cpe_device.ont_unit_id)
+        if _is_authorized_ont(candidate_ont):
+            ont_unit = candidate_ont
     if ont_unit is None:
         # Try direct ONT lookup by serial. This also handles stale inactive
         # TR-069 rows that still carry the plain HWTC serial with no ONT link.
         for candidate in candidates:
-            ont_stmt = select(OntUnit).where(OntUnit.serial_number.ilike(candidate))
+            ont_stmt = (
+                select(OntUnit)
+                .where(OntUnit.serial_number.ilike(candidate))
+                .where(OntUnit.is_active.is_(True))
+                .where(OntUnit.authorization_status == OntAuthorizationStatus.authorized)
+            )
             ont_unit = db.scalars(ont_stmt).first()
             if ont_unit:
                 break
 
     if credential_type == "connection_request":
-        return _get_connection_request_credentials(db, ont_unit, cpe_device)
+        credentials = _get_connection_request_credentials(db, ont_unit, cpe_device)
     else:
-        return _get_cpe_auth_credentials(db, ont_unit, cpe_device)
+        credentials = _get_cpe_auth_credentials(db, ont_unit, cpe_device)
+
+    credentials["authorized"] = bool(ont_unit)
+    return credentials
+
+
+def _is_authorized_ont(ont_unit: OntUnit | None) -> bool:
+    if ont_unit is None:
+        return False
+    return bool(
+        getattr(ont_unit, "is_active", False)
+        and getattr(ont_unit, "authorization_status", None)
+        == OntAuthorizationStatus.authorized
+    )
 
 
 def _get_connection_request_credentials(

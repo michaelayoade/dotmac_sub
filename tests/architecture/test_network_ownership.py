@@ -11,8 +11,7 @@ APP_DIR = PROJECT_ROOT / "app"
 
 STATUS_WRITE_PATTERN = re.compile(
     r"\.("
-    r"olt_status|olt_status_seen_at|acs_last_inform_at|effective_status|"
-    r"effective_status_source|consecutive_offline_polls"
+    r"olt_status|olt_status_seen_at|acs_last_inform_at"
     r")\s*(?<![=!<>])=(?!=)"
 )
 DESIRED_CONFIG_WRITE_PATTERN = re.compile(r"\.desired_config\s*(?<![=!<>])=(?!=)")
@@ -25,7 +24,6 @@ APPROVED_STATUS_WRITERS = {
     Path("app/services/network/olt_autofind.py"),
     Path("app/services/network/ont_authorization.py"),
     Path("app/services/network/ont_decommission.py"),
-    Path("app/tasks/olt_polling.py"),
 }
 
 APPROVED_DESIRED_CONFIG_WRITERS = {

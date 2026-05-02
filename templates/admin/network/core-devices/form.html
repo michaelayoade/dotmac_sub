@@ -172,9 +172,9 @@
                         <label class="flex items-center gap-2">
                             <input type="checkbox" id="snmp_enabled" name="snmp_enabled" value="true" {% if device and device.snmp_enabled %}checked{% endif %}
                                 class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable SNMP Monitoring</span>
+                            <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Enable Zabbix SNMP Collection</span>
                         </label>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Collect metrics via SNMP.</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400 ml-6">Store SNMP access details for Zabbix-backed collection.</p>
                     </div>
                     <div>
                         <label class="flex items-center gap-2">
@@ -196,13 +196,13 @@
                     <div id="snmp-details" class="{% if not device or not device.snmp_enabled %}hidden{% endif %}">
                     <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                         <div>
-                            <label for="snmp_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SNMP Port</label>
+                            <label for="snmp_port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zabbix SNMP Port</label>
                             <input type="number" name="snmp_port" id="snmp_port" min="1" max="65535"
                                 value="{{ device.snmp_port if device and device.snmp_port is not none else 161 }}"
                                 class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         </div>
                         <div>
-                            <label for="snmp_version" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SNMP Version</label>
+                            <label for="snmp_version" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zabbix SNMP Version</label>
                             <select name="snmp_version" id="snmp_version"
                                 class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <option value="v2c" {% if device and device.snmp_version == 'v2c' %}selected{% elif not device %}selected{% endif %}>v2c</option>

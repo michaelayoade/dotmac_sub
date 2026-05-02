@@ -4,6 +4,7 @@ import uuid
 
 from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
 from app.models.subscriber import Address, Subscriber
+from app.services import zabbix_ont_status
 from app.services.web_subscriber_details import build_subscriber_detail_snapshot
 from app.web.admin import subscribers as subscribers_web
 
@@ -88,13 +89,14 @@ def test_subscriber_geocode_endpoint_updates_coordinates(db_session):
     assert round(float(address.longitude), 6) == 3.300001
 
 
-def test_subscriber_detail_snapshot_equipment_uses_effective_ont_status(db_session):
+def test_subscriber_detail_snapshot_equipment_uses_zabbix_ont_status(
+    db_session, monkeypatch
+):
     subscriber = _create_subscriber(db_session)
     ont = OntUnit(
         serial_number="ONT-SUB-1",
         name="Subscriber ONT",
         olt_status=OnuOnlineStatus.offline,
-        effective_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)
     db_session.flush()
@@ -106,6 +108,11 @@ def test_subscriber_detail_snapshot_equipment_uses_effective_ont_status(db_sessi
         )
     )
     db_session.commit()
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_ont_signal_from_zabbix",
+        lambda _ont: zabbix_ont_status.OntSignalData(online=True),
+    )
 
     snapshot = build_subscriber_detail_snapshot(db_session, subscriber, subscriber.id)
 

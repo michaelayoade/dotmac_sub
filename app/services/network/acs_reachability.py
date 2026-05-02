@@ -51,6 +51,32 @@ def _pool_networks(db: Session, pool: IpPool) -> list[IPv4Network]:
     return [network] if network is not None else []
 
 
+def _ensure_pool_has_active_block(db: Session, pool: IpPool) -> None:
+    """Make the pool allocator contract match the pool CIDR."""
+    active_block = db.scalars(
+        select(IpBlock)
+        .where(IpBlock.pool_id == pool.id)
+        .where(IpBlock.is_active.is_(True))
+    ).first()
+    if active_block is not None:
+        return
+
+    network = _parse_ipv4_network(pool.cidr)
+    if network is None:
+        return
+
+    existing_block = db.scalars(
+        select(IpBlock)
+        .where(IpBlock.pool_id == pool.id)
+        .where(IpBlock.cidr == str(network))
+    ).first()
+    if existing_block is not None:
+        existing_block.is_active = True
+    else:
+        db.add(IpBlock(pool_id=pool.id, cidr=str(network), is_active=True))
+    db.flush()
+
+
 def _networks_within(
     candidates: list[IPv4Network], allowed: list[IPv4Network]
 ) -> bool:
@@ -103,6 +129,7 @@ def validate_olt_acs_management_reachability(
         return "Management IP pool must exist and be active."
     if pool.ip_version != IPVersion.ipv4:
         return "ACS management IP pool must be IPv4."
+    _ensure_pool_has_active_block(db, pool)
 
     olt_id = getattr(current_olt, "id", None)
     pool_olt_id = getattr(pool, "olt_device_id", None)
@@ -131,5 +158,11 @@ def validate_olt_acs_management_reachability(
             "Management IP pool CIDRs must be routable from GenieACS. "
             f"Pool: {pool_cidrs}; allowed: {allowed}."
         )
+
+    from app.services.network.ont_authorization import refresh_pool_availability
+
+    next_ip, available_count = refresh_pool_availability(db, pool.id)
+    if not next_ip or available_count < 1:
+        return "Management IP pool must have at least one available address."
 
     return None

@@ -262,7 +262,6 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(
             serial_number=f"FULL-{idx}-{uuid.uuid4().hex[:8]}",
             olt_device_id=olt.id,
             olt_status=OnuOnlineStatus.offline,
-            effective_status=OnuOnlineStatus.offline,
         )
         db_session.add(ont)
         db_session.flush()
@@ -274,13 +273,11 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(
         serial_number=f"PARTIAL-OFFLINE-{uuid.uuid4().hex[:8]}",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.offline,
-        effective_status=OnuOnlineStatus.offline,
     )
     online_partial = OntUnit(
         serial_number=f"PARTIAL-ONLINE-{uuid.uuid4().hex[:8]}",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.online,
-        effective_status=OnuOnlineStatus.online,
     )
     db_session.add_all([offline_partial, online_partial])
     db_session.flush()
@@ -379,7 +376,6 @@ def test_push_signal_metrics_does_not_emit_ont_status_counts(
                     ]
                 },
                 olt_status=OnuOnlineStatus.offline,
-                effective_status=OnuOnlineStatus.online,
             ),
             OntUnit(
                 serial_number="ONT-METRIC-2",
@@ -391,7 +387,6 @@ def test_push_signal_metrics_does_not_emit_ont_status_counts(
                     ]
                 },
                 olt_status=OnuOnlineStatus.online,
-                effective_status=OnuOnlineStatus.offline,
             ),
         ]
     )
@@ -886,89 +881,44 @@ def test_get_device_health_table_uses_latest_metrics(db_session, network_device)
     assert row["memory"] == 84.0
 
 
-def test_poll_device_system_metrics_uses_mgmt_ip_backed_device(
-    db_session, network_device, monkeypatch
-):
-    network_device.mgmt_ip = "10.0.0.9"
-    network_device.vendor = "mikrotik"
-    network_device.snmp_community = "encrypted-community"
-    db_session.commit()
-
-    oid_values = {
-        ".1.3.6.1.2.1.25.3.3.1.2.1": 63.0,
-        ".1.3.6.1.2.1.25.2.3.1.6.65536": 400.0,
-        ".1.3.6.1.2.1.25.2.3.1.5.65536": 800.0,
-        ".1.3.6.1.2.1.1.3.0": 12345.0,
-        ".1.3.6.1.4.1.14988.1.1.3.10.0": 48.0,
-    }
-
-    monkeypatch.setattr(
-        monitoring_metrics_service,
-        "_snmp_get_single",
-        lambda device, oid: oid_values.get(oid),
-    )
-    pushed: dict[str, float] = {}
-    monkeypatch.setattr(
-        monitoring_metrics_service,
-        "push_device_health_metrics",
-        lambda device, metrics: pushed.update(metrics),
-    )
-
-    result = monitoring_metrics_service.poll_device_system_metrics(
-        db_session, network_device
-    )
-    db_session.commit()
-
-    assert result["stored"] == 4
-    assert pushed["cpu"] == 63.0
-    assert pushed["memory"] == 50.0
-    assert pushed["temperature"] == 48.0
-
-
-def test_poll_onu_signal_strength_delegates_to_olt_inventory(
-    db_session, network_device, monkeypatch
+def test_poll_onu_signal_strength_reads_zabbix_ingested_inventory(
+    db_session, network_device
 ):
     network_device.mgmt_ip = "10.20.30.40"
     network_device.vendor = "huawei"
-    db_session.add(
-        OLTDevice(
-            name="OLT-1",
-            mgmt_ip="10.20.30.40",
-            vendor="huawei",
-            is_active=True,
-            snmp_ro_community="enc-ro",
-        )
+    olt = OLTDevice(
+        name="OLT-1",
+        mgmt_ip="10.20.30.40",
+        vendor="huawei",
+        is_active=True,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-ZBX-1",
+                olt_device_id=olt.id,
+                olt_rx_signal_dbm=-20.0,
+            ),
+            OntUnit(
+                serial_number="ONT-ZBX-2",
+                olt_device_id=olt.id,
+                olt_rx_signal_dbm=-26.0,
+            ),
+            OntUnit(serial_number="ONT-ZBX-3", olt_device_id=olt.id),
+        ]
     )
     db_session.commit()
-
-    monkeypatch.setattr(
-        "app.services.monitoring_metrics.decrypt_credential",
-        lambda value: "public",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_polling.poll_olt_ont_signals",
-        lambda db, olt, community=None: {"polled": 12, "updated": 9, "errors": 1},
-    )
-    def _unexpected_metrics_push(db):
-        raise AssertionError("ONT signal/status metrics must not be pushed")
-
-    monkeypatch.setattr(
-        "app.services.network.olt_polling.push_signal_metrics_to_victoriametrics",
-        _unexpected_metrics_push,
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_polling.get_signal_thresholds",
-        lambda db: (-25.0, -28.0),
-    )
 
     result = monitoring_metrics_service.poll_onu_signal_strength(
         db_session, network_device
     )
 
-    assert result["polled"] == 12
-    assert result["stored"] == 9
-    assert result["errors"] == 1
+    assert result["polled"] == 3
+    assert result["stored"] == 2
+    assert result["low_signal"] == 1
+    assert result["errors"] == 0
 
 
 def test_monitoring_config_context_includes_runtime_settings(db_session):

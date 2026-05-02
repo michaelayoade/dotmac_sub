@@ -238,12 +238,12 @@ def queue_context(
     per_page: int,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
-    effective_status = status if status else "queued"
+    notification_status = status if status else "queued"
     effective_channel = channel if channel else None
     notifications_list = notification_service.notifications.list(
         db=db,
         channel=effective_channel,
-        status=effective_status,
+        status=notification_status,
         is_active=True,
         order_by="created_at",
         order_dir="desc",
@@ -253,7 +253,7 @@ def queue_context(
     total = notification_service.notifications.count(
         db=db,
         channel=effective_channel,
-        status=effective_status,
+        status=notification_status,
     )
     total_pages = (total + per_page - 1) // per_page if total else 1
     return {
@@ -262,7 +262,7 @@ def queue_context(
         "per_page": per_page,
         "total": total,
         "total_pages": total_pages,
-        "status": effective_status,
+        "status": notification_status,
         "channel": channel,
         "status_counts": notification_service.notifications.status_counts(db),
         "channels": channels(),

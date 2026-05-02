@@ -245,7 +245,7 @@ def execute_reauthorize(
     Commits on success.
     """
     from app.models.network import OntUnit
-    from app.services.network import olt_operations as olt_operations_service
+    from app.services.network.ont_authorization import authorize_ont
 
     ont = db.get(OntUnit, ont_id)
     if not ont:
@@ -260,14 +260,16 @@ def execute_reauthorize(
         return ActionResult(success=False, message="ONT missing port assignment (FSP)")
 
     # Call authorize with force=True
-    auth_ok, auth_msg, _ = olt_operations_service.authorize_ont(
+    auth_result = authorize_ont(
         db,
-        olt_id=str(ont.olt_device_id),
-        fsp=fsp,
-        serial_number=ont.serial_number or "",
+        str(ont.olt_device_id),
+        fsp,
+        ont.serial_number or "",
         force_reauthorize=True,
         request=request,
     )
+    auth_ok = auth_result.success
+    auth_msg = auth_result.message
 
     if auth_ok:
         db.commit()

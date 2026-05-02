@@ -287,7 +287,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else if (!data.interface_count) {
                     var discoverWarn = document.createElement('div');
                     discoverWarn.className = 'mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
-                    discoverWarn.textContent = 'No discovered interfaces yet. Run SNMP interface discovery from the device page to populate topology interfaces.';
+                    discoverWarn.textContent = 'No discovered interfaces yet. Link the device to centralized monitoring to populate topology interfaces.';
                     content.appendChild(discoverWarn);
                 }
 

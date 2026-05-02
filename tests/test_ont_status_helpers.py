@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.models.network import OntStatusSource, OnuOnlineStatus
+from app.services import zabbix_ont_status
 from app.services.network.ont_status import (
     get_ont_status,
     get_optical_metrics,
@@ -33,7 +34,7 @@ def test_get_optical_metrics_reads_persisted_ont_ddm_fields() -> None:
     assert metrics.fetched_at == fetched_at
 
 
-def test_get_ont_status_uses_shared_acs_override_rule() -> None:
+def test_get_ont_status_uses_zabbix_monitoring_source(monkeypatch) -> None:
     now = datetime.now(UTC)
     ont = SimpleNamespace(
         olt_status=OnuOnlineStatus.offline,
@@ -42,10 +43,14 @@ def test_get_ont_status_uses_shared_acs_override_rule() -> None:
         tr069_acs_server_id="acs-1",
         tr069_acs_server=None,
         olt_device=None,
-        consecutive_offline_polls=3,
+    )
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_ont_signal_from_zabbix",
+        lambda _ont: zabbix_ont_status.OntSignalData(online=True),
     )
 
     result = get_ont_status(None, ont)  # type: ignore[arg-type]
 
-    assert result.effective_status == OnuOnlineStatus.online
-    assert result.status_source == OntStatusSource.acs
+    assert result.status == OnuOnlineStatus.online
+    assert result.status_source == OntStatusSource.zabbix

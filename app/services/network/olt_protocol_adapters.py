@@ -21,7 +21,6 @@ from app.services.adapters.base import AdapterResult
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
-    from app.services.network.olt_batched_auth import BatchedAuthorizationSpec
     from app.services.network.olt_batched_mgmt import BatchedMgmtSpec
 
 logger = logging.getLogger(__name__)
@@ -372,34 +371,6 @@ class OltProtocolAdapter:
             )
 
     # ========== Batched Operations ==========
-
-    def execute_authorization_batch(
-        self,
-        spec: BatchedAuthorizationSpec,
-    ) -> OltOperationResult:
-        """Execute batched ONT authorization via one SSH session."""
-        from app.services.network.olt_batched_auth import execute_batched_authorization
-
-        try:
-            result = execute_batched_authorization(self._olt, spec)
-            return OltOperationResult(
-                success=result.success,
-                message=result.error_message or "Batched authorization complete",
-                ont_id=result.ont_id,
-                data={
-                    "batch_result": result,
-                    "service_port_indices": result.service_port_indices,
-                    "steps_completed": result.steps_completed,
-                    "steps_failed": result.steps_failed,
-                    "raw_output": result.raw_output,
-                },
-            )
-        except Exception as exc:
-            logger.exception("SSH execute_authorization_batch failed")
-            return OltOperationResult(
-                success=False,
-                message=f"SSH batched authorization failed: {exc}",
-            )
 
     def configure_management_batch(
         self,

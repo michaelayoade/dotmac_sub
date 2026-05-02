@@ -22,6 +22,8 @@ _WALK_ENTRY_RE = re.compile(
 _EXTERNAL_ID_RE = re.compile(r"0/(\d+)/(\d+)\.(\d+)")
 _HUAWEI_EXTERNAL_ID_RE = re.compile(r"huawei:(\d+)\.(\d+)", re.IGNORECASE)
 _HUAWEI_IFINDEX_BASE = 4194304000
+_HUAWEI_IFINDEX_SLOT_STRIDE = 8192
+_HUAWEI_IFINDEX_PORT_STRIDE = 256
 
 OntTarget = tuple[int, int, int]
 WalkEntry = tuple[int, int, int, float]
@@ -44,8 +46,8 @@ def _decode_huawei_ifindex(encoded: int) -> tuple[int, int] | None:
     if encoded < _HUAWEI_IFINDEX_BASE:
         return None
     offset = encoded - _HUAWEI_IFINDEX_BASE
-    snmp_slot = offset // 2048
-    port = (offset % 2048) // 256
+    snmp_slot = offset // _HUAWEI_IFINDEX_SLOT_STRIDE
+    port = (offset % _HUAWEI_IFINDEX_SLOT_STRIDE) // _HUAWEI_IFINDEX_PORT_STRIDE
     return snmp_slot, port
 
 

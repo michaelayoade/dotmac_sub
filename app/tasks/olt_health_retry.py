@@ -1,4 +1,4 @@
-"""Celery task to auto-retry failed OLT ping/SNMP connections."""
+"""Celery task to auto-retry failed OLT ping connections."""
 
 from __future__ import annotations
 
@@ -16,24 +16,21 @@ RETRY_COOLDOWN_SECONDS = 30
 
 @celery_app.task(name="app.tasks.olt_health_retry.retry_failed_olt_connections")
 def retry_failed_olt_connections() -> dict[str, int]:
-    """Retry ping/SNMP for OLTs that are in failed state.
+    """Retry ping for OLTs that are in failed state.
 
     Finds OLTs with linked monitoring devices where last_ping_ok=False
-    or last_snmp_ok=False, and attempts to reconnect.
+    and attempts to reconnect.
 
     Returns:
         Statistics dict with retry counts.
     """
     from sqlalchemy import select
-    from sqlalchemy.orm import joinedload
 
     from app.models.network import OLTDevice
     from app.models.network_monitoring import NetworkDevice
 
     stats = {
         "checked": 0,
-        "snmp_retried": 0,
-        "snmp_recovered": 0,
         "ping_retried": 0,
         "ping_recovered": 0,
         "errors": 0,
@@ -73,22 +70,6 @@ def retry_failed_olt_connections() -> dict[str, int]:
 
                 stats["checked"] += 1
 
-                # Check if SNMP needs retry
-                if linked.snmp_enabled and linked.last_snmp_ok is False:
-                    stats["snmp_retried"] += 1
-                    try:
-                        recovered = _retry_snmp_check(db, linked)
-                        if recovered:
-                            stats["snmp_recovered"] += 1
-                            logger.info(
-                                "OLT %s SNMP recovered after retry", olt.name
-                            )
-                    except Exception as exc:
-                        stats["errors"] += 1
-                        logger.warning(
-                            "SNMP retry failed for OLT %s: %s", olt.name, exc
-                        )
-
                 # Check if ping needs retry
                 if linked.ping_enabled and linked.last_ping_ok is False:
                     stats["ping_retried"] += 1
@@ -107,10 +88,9 @@ def retry_failed_olt_connections() -> dict[str, int]:
 
             db.commit()
 
-        if stats["snmp_recovered"] or stats["ping_recovered"]:
+        if stats["ping_recovered"]:
             logger.info(
-                "OLT health retry complete: %d SNMP recovered, %d ping recovered",
-                stats["snmp_recovered"],
+                "OLT health retry complete: %d ping recovered",
                 stats["ping_recovered"],
             )
 
@@ -121,25 +101,8 @@ def retry_failed_olt_connections() -> dict[str, int]:
         raise
 
 
-def _retry_snmp_check(db, device) -> bool:
-    """Retry SNMP check for a device. Returns True if recovered."""
-    from app.services import web_network_core_runtime as core_runtime_service
-
-    try:
-        updated_device, error = core_runtime_service.snmp_check_device(
-            db, str(device.id)
-        )
-        if updated_device and updated_device.last_snmp_ok:
-            return True
-        return False
-    except Exception:
-        return False
-
-
 def _retry_ping_check(db, device) -> bool:
     """Retry ping check for a device. Returns True if recovered."""
-    from datetime import UTC, datetime
-
     import subprocess
 
     if not device.mgmt_ip:
@@ -175,7 +138,7 @@ def _retry_ping_check(db, device) -> bool:
     default_retry_delay=RETRY_COOLDOWN_SECONDS,
 )
 def retry_single_olt(self, olt_id: str) -> dict[str, object]:
-    """Retry ping/SNMP for a single OLT immediately after failure detection.
+    """Retry ping for a single OLT immediately after failure detection.
 
     This is triggered when an OLT transitions from healthy to failed state.
     Uses exponential backoff via Celery's retry mechanism.
@@ -193,7 +156,6 @@ def retry_single_olt(self, olt_id: str) -> dict[str, object]:
 
     result: dict[str, object] = {
         "olt_id": olt_id,
-        "snmp_recovered": False,
         "ping_recovered": False,
         "error": None,
     }
@@ -232,17 +194,6 @@ def retry_single_olt(self, olt_id: str) -> dict[str, object]:
                 result["error"] = "No linked monitoring device found"
                 return result
 
-            # Check and retry SNMP if failed
-            if linked.snmp_enabled and linked.last_snmp_ok is False:
-                try:
-                    if _retry_snmp_check(db, linked):
-                        result["snmp_recovered"] = True
-                        logger.info("OLT %s SNMP recovered via immediate retry", olt.name)
-                except Exception as exc:
-                    logger.warning(
-                        "Immediate SNMP retry failed for OLT %s: %s", olt.name, exc
-                    )
-
             # Check and retry ping if failed
             if linked.ping_enabled and linked.last_ping_ok is False:
                 try:
@@ -257,11 +208,7 @@ def retry_single_olt(self, olt_id: str) -> dict[str, object]:
             db.commit()
 
             # If not recovered and we have retries left, schedule another attempt
-            if (
-                not result["snmp_recovered"]
-                and not result["ping_recovered"]
-                and (linked.last_snmp_ok is False or linked.last_ping_ok is False)
-            ):
+            if not result["ping_recovered"] and linked.last_ping_ok is False:
                 try:
                     raise self.retry()
                 except self.MaxRetriesExceededError:

@@ -1,6 +1,6 @@
 """Celery task for periodic OLT running-config backup.
 
-Connects to each active OLT via SNMP to retrieve the running
+Connects to each active OLT over SSH to retrieve the full running
 configuration and stores it as a timestamped text file.
 """
 
@@ -15,62 +15,11 @@ from pathlib import Path
 from app.celery_app import celery_app
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
 from app.services import backup_alerts
-from app.services.credential_crypto import decrypt_credential
 from app.services.db_session_adapter import db_session_adapter
 
 logger = logging.getLogger(__name__)
 
 BACKUP_DIR = Path("/app/uploads/olt_config_backups")
-
-
-def _resolve_snmp_community(db, olt: OLTDevice) -> str | None:
-    """Resolve SNMP community string for an OLT.
-
-    Checks the OLT's own snmp_ro_community first, then falls back to a
-    linked NetworkDevice record.
-    """
-    from sqlalchemy import select
-
-    from app.models.network_monitoring import NetworkDevice
-
-    # 1. Prefer SNMP community stored directly on the OLT device
-    raw_olt_community = getattr(olt, "snmp_ro_community", None)
-    if raw_olt_community:
-        raw_olt_community = raw_olt_community.strip()
-    if raw_olt_community:
-        try:
-            return decrypt_credential(raw_olt_community)
-        except ValueError as exc:
-            logger.warning(
-                "Skipping OLT-level SNMP community for %s: %s",
-                olt.name,
-                exc,
-            )
-            return None
-
-    # 2. Fallback: linked NetworkDevice
-    linked = None
-    if olt.mgmt_ip:
-        linked = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
-        ).first()
-    if linked is None and olt.hostname:
-        linked = db.scalars(
-            select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
-        ).first()
-    if linked and linked.snmp_enabled:
-        raw_community = (linked.snmp_community or "").strip() or None
-        if raw_community:
-            try:
-                return decrypt_credential(raw_community)
-            except ValueError as exc:
-                logger.warning(
-                    "Skipping linked SNMP community for OLT %s: %s",
-                    olt.name,
-                    exc,
-                )
-                return None
-    return None
 
 
 def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
@@ -104,81 +53,6 @@ def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
         return None
     except Exception as e:
         logger.warning("SSH config backup failed for OLT %s: %s", olt.name, e)
-        return None
-
-
-def _fetch_running_config(
-    olt: OLTDevice, community_str: str | None = None
-) -> str | None:
-    """Fetch running config from an OLT via SNMP sysDescr + entPhysicalTable.
-
-    This is the SNMP fallback when SSH is unavailable.
-    Returns the config text or None if unreachable.
-    """
-    if not olt.mgmt_ip:
-        return None
-
-    try:
-        from pysnmp.hlapi import (
-            CommunityData,
-            ContextData,
-            ObjectIdentity,
-            ObjectType,
-            SnmpEngine,
-            UdpTransportTarget,
-            getCmd,
-        )
-
-        # Gather basic info via SNMP
-        engine = SnmpEngine()
-        community = CommunityData(community_str or "public", mpModel=1)  # nosec  # noqa: S508
-        target = UdpTransportTarget((olt.mgmt_ip, 161), timeout=10, retries=1)
-
-        oids = [
-            "1.3.6.1.2.1.1.1.0",  # sysDescr
-            "1.3.6.1.2.1.1.3.0",  # sysUpTime
-            "1.3.6.1.2.1.1.5.0",  # sysName
-            "1.3.6.1.2.1.1.6.0",  # sysLocation
-        ]
-
-        lines = [
-            f"# OLT Config Snapshot: {olt.name}",
-            f"# IP: {olt.mgmt_ip}",
-            f"# Vendor: {olt.vendor or 'unknown'}",
-            f"# Model: {olt.model or 'unknown'}",
-            f"# Serial: {olt.serial_number or 'unknown'}",
-            f"# Captured: {datetime.now(UTC).isoformat()}",
-            "",
-        ]
-
-        for oid in oids:
-            error_indication, error_status, _error_index, var_binds = next(
-                getCmd(
-                    engine,
-                    community,
-                    target,
-                    ContextData(),
-                    ObjectType(ObjectIdentity(oid)),
-                )
-            )
-            if error_indication or error_status:
-                continue
-            for var_bind in var_binds:
-                lines.append(
-                    f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}"
-                )
-
-        return "\n".join(lines) + "\n"
-
-    except ImportError:
-        logger.warning(
-            "pysnmp not installed — skipping SNMP config fetch for %s", olt.name
-        )
-        return None
-    except Exception as e:
-        logger.error(
-            "Failed to fetch config from OLT %s (%s): %s", olt.name, olt.mgmt_ip, e
-        )
         return None
 
 
@@ -258,13 +132,7 @@ def backup_all_olts() -> dict[str, int]:
 
         for olt in olts:
             try:
-                # Try SSH first (full running-config), fall back to SNMP metadata
                 config_text = _fetch_running_config_via_ssh(olt)
-                if config_text is None:
-                    community_str = _resolve_snmp_community(db, olt)
-                    config_text = _fetch_running_config(
-                        olt, community_str=community_str
-                    )
                 if config_text is None:
                     skipped += 1
                     error_details.append(

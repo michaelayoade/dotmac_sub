@@ -23,6 +23,10 @@ def test_authorization_follow_up_applies_acs_foundation_inline(
 ):
     """Authorized ONTs apply the OLT-side ACS foundation synchronously."""
     foundation_calls: list[dict] = []
+    olt = OLTDevice(name="OLT-Foundation-Inline", is_active=True)
+    ont = OntUnit(serial_number="HWTCBOOTSTRAP", olt_device=olt, is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.flush()
 
     monkeypatch.setattr(
         ont_authorization,
@@ -33,6 +37,17 @@ def test_authorization_follow_up_applies_acs_foundation_inline(
         ont_authorization,
         "allocate_management_ip_for_ont",
         lambda *args, **kwargs: (True, "Allocated management IP.", "10.10.10.2"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        lambda db, ont, **kwargs: {
+            "values": {
+                "tr069_acs_server_id": "acs-1",
+                "tr069_olt_profile_id": 7,
+                "mgmt_vlan": 201,
+                "mgmt_ip_address": "10.10.10.2",
+            }
+        },
     )
 
     monkeypatch.setattr(
@@ -48,24 +63,25 @@ def test_authorization_follow_up_applies_acs_foundation_inline(
 
     success, message, steps = ont_authorization.apply_authorization_foundation(
         db_session,
-        ont_unit_id="ont-1",
-        olt_id="olt-1",
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
         fsp="0/1/1",
         serial_number="HWTCBOOTSTRAP",
         ont_id_on_olt=7,
     )
 
     assert success is True
-    assert message == "Authorization foundation completed."
+    assert message == "Authorization foundation completed with ACS connected."
     assert steps[-1]["name"] == "Apply ACS foundation"
     assert steps[-1]["success"] is True
     assert steps[-1]["message"] == "ACS foundation applied."
     assert foundation_calls == [
         {
-            "ont_unit_id": "ont-1",
-            "olt_id": "olt-1",
+            "ont_unit_id": str(ont.id),
+            "olt_id": str(olt.id),
             "fsp": "0/1/1",
             "ont_id_on_olt": 7,
+            "wait_for_acs_bootstrap": True,
         }
     ]
 
@@ -74,6 +90,11 @@ def test_authorization_foundation_fails_when_acs_foundation_fails(
     db_session, monkeypatch
 ):
     """A failed ACS foundation write makes authorization foundation fail."""
+    olt = OLTDevice(name="OLT-Foundation-Fail", is_active=True)
+    ont = OntUnit(serial_number="HWTCBOOTSTRAP", olt_device=olt, is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.flush()
+
     monkeypatch.setattr(
         ont_authorization,
         "ensure_assignment_and_pon_port_for_authorized_ont",
@@ -83,6 +104,17 @@ def test_authorization_foundation_fails_when_acs_foundation_fails(
         ont_authorization,
         "allocate_management_ip_for_ont",
         lambda *args, **kwargs: (True, "Allocated management IP.", "10.10.10.2"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        lambda db, ont, **kwargs: {
+            "values": {
+                "tr069_acs_server_id": "acs-1",
+                "tr069_olt_profile_id": 7,
+                "mgmt_vlan": 201,
+                "mgmt_ip_address": "10.10.10.2",
+            }
+        },
     )
     monkeypatch.setattr(
         acs_foundation,
@@ -96,8 +128,8 @@ def test_authorization_foundation_fails_when_acs_foundation_fails(
 
     success, message, steps = ont_authorization.apply_authorization_foundation(
         db_session,
-        ont_unit_id="ont-1",
-        olt_id="olt-1",
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
         fsp="0/1/1",
         serial_number="HWTCBOOTSTRAP",
         ont_id_on_olt=7,
@@ -137,6 +169,40 @@ def test_authorization_foundation_fails_when_management_ip_not_allocated(
     assert success is False
     assert message == "Management IP pool exhausted."
     assert steps[-1]["name"] == "Allocate management IP"
+    assert steps[-1]["success"] is False
+
+
+def test_authorization_foundation_requires_allocated_static_management_ip(
+    db_session, monkeypatch
+):
+    """Authorization cannot complete if allocation succeeds without an IP address."""
+    monkeypatch.setattr(
+        ont_authorization,
+        "ensure_assignment_and_pon_port_for_authorized_ont",
+        lambda *args, **kwargs: (True, "Linked ONT to PON port."),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "allocate_management_ip_for_ont",
+        lambda *args, **kwargs: (True, "No management IP allocated.", None),
+    )
+    olt = OLTDevice(name="OLT-No-Allocated-IP", is_active=True)
+    ont = OntUnit(serial_number="HWTCNOALLOCIP", olt_device=olt, is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.flush()
+
+    success, message, steps = ont_authorization.apply_authorization_foundation(
+        db_session,
+        ont_unit_id=str(ont.id),
+        olt_id=str(olt.id),
+        fsp="0/1/1",
+        serial_number="HWTCNOALLOCIP",
+        ont_id_on_olt=7,
+    )
+
+    assert success is False
+    assert "static management IP is required" in message
+    assert steps[-1]["name"] == "Verify ACS prerequisites"
     assert steps[-1]["success"] is False
 
 
@@ -573,7 +639,7 @@ def test_authorization_fails_when_acs_foundation_fails(
             ],
         ),
     )
-    response = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
+    response = ont_authorization.authorize_ont(
         db_session,
         "olt-1",
         "0/1/1",
@@ -638,7 +704,7 @@ def test_authorization_duration_includes_foundation_work(
         ),
     )
 
-    response = ont_authorization.authorize_autofind_ont_and_provision_network_audited(
+    response = ont_authorization.authorize_ont(
         db_session,
         "olt-1",
         "0/1/1",
@@ -717,7 +783,7 @@ def test_acs_connectivity_refuses_tr069_without_management_vlan(
 def test_acs_connectivity_does_not_auto_normalize_wan_after_inform(
     db_session, monkeypatch
 ):
-    """The ACS bootstrap path stops after ACS reachability and inform settings."""
+    """The ACS bootstrap path stops after reachability, without WAN normalization."""
     olt = OLTDevice(name="OLT-ACS-Bootstrap", is_active=True)
     ont = OntUnit(serial_number="HWTCBOOTACS", olt_device=olt, is_active=True)
     acs_server = Tr069AcsServer(
@@ -771,20 +837,30 @@ def test_acs_connectivity_does_not_auto_normalize_wan_after_inform(
             )
         ),
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
+        lambda db, ont_id, **kwargs: SimpleNamespace(
+            success=True,
+            message="Device registered in ACS",
+            duration_ms=25,
+        ),
+    )
     result = acs_foundation.apply_acs_foundation(
         db_session,
         ont_unit_id=str(ont.id),
         olt_id=str(olt.id),
         fsp="0/1/1",
         ont_id_on_olt=7,
+        wait_for_acs_bootstrap=True,
     )
 
     assert result["success"] is True
     step_names = [step["name"] for step in result["steps"]]
     assert "Run batched OLT management setup" in step_names
-    assert "Wait for ACS inform" not in step_names
+    assert "Wait for ACS inform" in step_names
     assert "Apply ACS inform settings" not in step_names
     assert "Normalize WAN structure" not in step_names
+    assert result["message"] == "ONT connected to ACS."
     assert captured_specs
     assert captured_specs[0].mgmt_vlan_tag == 201
     assert captured_specs[0].ip_mode == "dhcp"
@@ -842,15 +918,94 @@ def test_acs_connection_request_credentials_are_not_required_during_authorizatio
             )
         ),
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
+        lambda db, ont_id, **kwargs: SimpleNamespace(
+            success=True,
+            message="Device registered in ACS",
+            duration_ms=25,
+        ),
+    )
     result = acs_foundation.apply_acs_foundation(
         db_session,
         ont_unit_id=str(ont.id),
         olt_id=str(olt.id),
         fsp="0/1/1",
         ont_id_on_olt=7,
+        wait_for_acs_bootstrap=True,
     )
 
     assert result["success"] is True
+
+
+def test_acs_connectivity_requires_acs_bootstrap_when_authorization_waits(
+    db_session, monkeypatch
+):
+    """Foreground authorization fails synchronously if the ONT never informs ACS."""
+    olt = OLTDevice(name="OLT-ACS-Wait-Failure", is_active=True)
+    ont = OntUnit(serial_number="HWTCWAITFAIL", olt_device=olt, is_active=True)
+    acs_server = Tr069AcsServer(
+        name="Post Auth ACS Timeout",
+        base_url="http://genieacs.example:7557",
+        connection_request_username="cr-user",
+        connection_request_password=encrypt_credential("cr-pass"),
+        periodic_inform_interval=300,
+        is_active=True,
+    )
+    db_session.add_all([olt, ont, acs_server])
+    db_session.flush()
+    db_session.add(
+        Tr069CpeDevice(
+            serial_number=ont.serial_number,
+            ont_unit_id=ont.id,
+            acs_server_id=acs_server.id,
+            genieacs_device_id=None,
+            last_inform_at=None,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        acs_foundation,
+        "resolve_effective_ont_config",
+        lambda db, ont: {
+            "config_pack": SimpleNamespace(mgmt_gem_index=2),
+            "values": {
+                "tr069_acs_server_id": str(acs_server.id),
+                "tr069_olt_profile_id": 7,
+                "mgmt_vlan": 201,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        acs_foundation,
+        "get_protocol_adapter",
+        lambda olt: SimpleNamespace(
+            configure_management_batch=lambda spec: SimpleNamespace(
+                success=True,
+                message="bound tr069",
+                data={},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
+        lambda db, ont_id, **kwargs: SimpleNamespace(
+            success=False,
+            message="Device not found in ACS after 120s",
+            duration_ms=120000,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Device did not register with ACS"):
+        acs_foundation.apply_acs_foundation(
+            db_session,
+            ont_unit_id=str(ont.id),
+            olt_id=str(olt.id),
+            fsp="0/1/1",
+            ont_id_on_olt=7,
+            wait_for_acs_bootstrap=True,
+        )
 
 
 def test_acs_connectivity_failure_is_synchronous(

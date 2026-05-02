@@ -995,7 +995,7 @@ def log_detail(request: Request, log_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{device_id}/enable-monitoring")
 def enable_monitoring_for_nas(device_id: str, db: Session = Depends(get_db)):
-    """Create a NetworkDevice from a NAS device and enable ping/SNMP monitoring."""
+    """Create a NetworkDevice from a NAS device and enable monitoring."""
     return RedirectResponse(
         nas_service.enable_monitoring_redirect_url(db, device_id=device_id),
         status_code=303,

@@ -1,4 +1,4 @@
-"""Celery task for periodic OLT hardware inventory discovery via SNMP."""
+"""Celery task for periodic OLT hardware inventory discovery via Zabbix SNMP."""
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ _HW_DISCOVERY_LOCK_KEY = 70420613
 
 @celery_app.task(name="app.tasks.olt_hardware_discovery.discover_all_olt_hardware")
 def discover_all_olt_hardware() -> dict[str, int]:
-    """Discover hardware inventory from all active OLTs via SNMP Entity MIB.
+    """Discover hardware inventory from all active OLTs via Zabbix Entity MIB.
 
-    Iterates every active OLT with SNMP enabled, walks the Entity MIB,
-    and upserts shelf, card, port, power unit, and fan unit records.
+    Zabbix owns SNMP collection. This task consumes latest Zabbix SNMP item
+    values and upserts shelf, card, port, power unit, and fan unit records.
 
     Returns:
         Statistics dict with olts_scanned, created, updated, errors.
@@ -48,18 +48,15 @@ def discover_all_olt_hardware() -> dict[str, int]:
             from app.services.network.olt_hardware_discovery import (
                 discover_olt_hardware,
             )
+            from app.services.zabbix_host_sync import sync_olt_to_zabbix
 
             olts = list(
                 db.scalars(
-                    select(OLTDevice).where(
-                        OLTDevice.is_active.is_(True),
-                        OLTDevice.snmp_ro_community.isnot(None),
-                        OLTDevice.snmp_ro_community != "",
-                    )
+                    select(OLTDevice).where(OLTDevice.is_active.is_(True))
                 ).all()
             )
             logger.info(
-                "OLT hardware discovery: found %d OLTs with SNMP credentials",
+                "OLT hardware discovery: found %d active OLTs",
                 len(olts),
             )
 
@@ -70,6 +67,16 @@ def discover_all_olt_hardware() -> dict[str, int]:
 
             for olt in olts:
                 try:
+                    if not olt.zabbix_host_id:
+                        sync_olt_to_zabbix(db, olt)
+                        db.flush()
+                    if not olt.zabbix_host_id:
+                        logger.warning(
+                            "Hardware discovery skipped OLT %s (%s): no Zabbix host",
+                            olt.name,
+                            olt.mgmt_ip,
+                        )
+                        continue
                     ok, msg, olt_stats = discover_olt_hardware(db, olt)
                     if ok:
                         olts_scanned += 1

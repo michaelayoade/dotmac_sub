@@ -28,7 +28,7 @@ def test_api_authorize_ont_returns_synchronous_acs_failure_result(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "app.services.network.olt_api_operations.authorize_autofind_ont_and_provision_network_audited",
+        "app.services.network.olt_api_operations.authorize_ont_workflow",
         lambda *args, **kwargs: failed_result,
     )
 

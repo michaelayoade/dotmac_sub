@@ -1,8 +1,6 @@
 """Device monitoring metric collection and VictoriaMetrics push services.
 
 Handles:
-- Custom SNMP OID polling per device
-- Interface traffic counter collection (ifHCInOctets/ifHCOutOctets)
 - Pushing device/ONU metrics to VictoriaMetrics
 - Subscriber impact counting on device outages
 - Device metrics TTL cleanup
@@ -19,217 +17,13 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models.network_monitoring import (
-    DeviceInterface,
     DeviceMetric,
-    InterfaceStatus,
     MetricType,
     NetworkDevice,
-    NetworkDeviceSnmpOid,
 )
-from app.services.credential_crypto import decrypt_credential
-
 logger = logging.getLogger(__name__)
 
 _VICTORIAMETRICS_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
-
-# SNMP OIDs for 64-bit interface traffic counters (IF-MIB)
-_IF_HC_IN_OCTETS = ".1.3.6.1.2.1.31.1.1.1.6"
-_IF_HC_OUT_OCTETS = ".1.3.6.1.2.1.31.1.1.1.10"
-
-
-def _device_metric_unit(value: str | None) -> str | None:
-    """Normalize DeviceMetric.unit values to the database column limit."""
-    if not value:
-        return None
-    normalized = str(value).strip()
-    return normalized[:40] or None
-
-
-# ── Custom SNMP OID Polling ──────────────────────────────────────────────
-
-
-def poll_custom_snmp_oids(db: Session, device: NetworkDevice) -> dict[str, int]:
-    """Poll all enabled custom SNMP OIDs for a device.
-
-    Returns:
-        {polled, updated, errors}
-    """
-    oids = list(
-        db.scalars(
-            select(NetworkDeviceSnmpOid).where(
-                NetworkDeviceSnmpOid.device_id == device.id,
-                NetworkDeviceSnmpOid.is_enabled.is_(True),
-            )
-        ).all()
-    )
-    if not oids:
-        return {"polled": 0, "updated": 0, "errors": 0}
-
-    now = datetime.now(UTC)
-    polled = 0
-    updated = 0
-    errors = 0
-
-    for oid_config in oids:
-        # Respect per-OID check interval
-        if oid_config.last_polled_at:
-            interval = oid_config.check_interval_seconds or 300
-            next_poll = oid_config.last_polled_at + timedelta(seconds=interval)
-            if now < next_poll:
-                continue
-
-        polled += 1
-        try:
-            value = _snmp_get_single(device, oid_config.oid)
-            if value is not None:
-                # Store as DeviceMetric
-                metric = DeviceMetric(
-                    device_id=device.id,
-                    metric_type=MetricType.custom,
-                    value=float(value),
-                    unit=_device_metric_unit(oid_config.title or oid_config.oid),
-                    recorded_at=now,
-                )
-                db.add(metric)
-
-                # Update OID tracking
-                oid_config.last_polled_at = now
-                oid_config.last_poll_status = "ok"
-                oid_config.last_poll_status = "ok"
-                oid_config.last_error = None
-                updated += 1
-            else:
-                oid_config.last_polled_at = now
-                oid_config.last_poll_status = "no_response"
-                oid_config.last_error = "No SNMP response"
-                errors += 1
-        except Exception as exc:
-            oid_config.last_polled_at = now
-            oid_config.last_poll_status = "error"
-            oid_config.last_error = str(exc)[:200]
-            errors += 1
-            logger.warning(
-                "Custom OID poll failed for device %s OID %s: %s",
-                device.name,
-                oid_config.oid,
-                exc,
-            )
-
-    return {"polled": polled, "updated": updated, "errors": errors}
-
-
-def _snmp_get_single(device: NetworkDevice, oid: str) -> float | None:
-    """Perform a single SNMP GET on a device. Returns numeric value or None."""
-    from app.services.credential_crypto import decrypt_credential
-    from app.services.snmp_client import snmp_get
-
-    mgmt_ip = str(device.mgmt_ip) if device.mgmt_ip else None
-    community = (
-        decrypt_credential(device.snmp_community) if device.snmp_community else "public"
-    ) or "public"
-    if not mgmt_ip:
-        return None
-
-    # Use device's configured SNMP version (normalize to CLI format)
-    raw_ver = str(getattr(device, "snmp_version", "") or "2c").strip().lower()
-    version = "1" if raw_ver in ("1", "v1") else "2c"
-
-    try:
-        result = snmp_get(mgmt_ip, community, oid, timeout=8, version=version)
-        if result is not None:
-            return float(result)
-    except (ValueError, TypeError):
-        pass
-    except Exception as exc:
-        logger.debug("SNMP GET failed for %s %s: %s", mgmt_ip, oid, exc)
-    return None
-
-
-# ── Interface Traffic Counter Polling ────────────────────────────────────
-
-
-def poll_interface_traffic(db: Session, device: NetworkDevice) -> dict[str, int]:
-    """Poll 64-bit interface counters and compute bps deltas.
-
-    Returns:
-        {interfaces_polled, updated}
-    """
-    interfaces = list(
-        db.scalars(
-            select(DeviceInterface).where(
-                DeviceInterface.device_id == device.id,
-                DeviceInterface.status == InterfaceStatus.up,
-                DeviceInterface.monitored.is_(True),
-                DeviceInterface.snmp_index.is_not(None),
-            )
-        ).all()
-    )
-    if not interfaces:
-        return {"interfaces_polled": 0, "updated": 0}
-
-    now = datetime.now(UTC)
-    polled = 0
-    updated = 0
-
-    for iface in interfaces:
-        polled += 1
-        try:
-            # Get ifIndex for this interface (stored as snmp_index or derived from name)
-            if_index = getattr(iface, "snmp_index", None)
-            if not if_index:
-                continue
-
-            in_oid = f"{_IF_HC_IN_OCTETS}.{if_index}"
-            out_oid = f"{_IF_HC_OUT_OCTETS}.{if_index}"
-
-            in_octets = _snmp_get_single(device, in_oid)
-            out_octets = _snmp_get_single(device, out_oid)
-
-            if in_octets is None or out_octets is None:
-                continue
-
-            # Calculate delta bps from previous values
-            prev_in = getattr(iface, "last_in_octets", None)
-            prev_out = getattr(iface, "last_out_octets", None)
-            prev_ts = getattr(iface, "last_counter_at", None)
-
-            if prev_in is not None and prev_out is not None and prev_ts:
-                elapsed = (now - prev_ts).total_seconds()
-                if elapsed > 0:
-                    rx_bps = max(0, (in_octets - prev_in) * 8 / elapsed)
-                    tx_bps = max(0, (out_octets - prev_out) * 8 / elapsed)
-
-                    # Store metrics
-                    for mt, val in [
-                        (MetricType.rx_bps, rx_bps),
-                        (MetricType.tx_bps, tx_bps),
-                    ]:
-                        db.add(
-                            DeviceMetric(
-                                device_id=device.id,
-                                interface_id=iface.id,
-                                metric_type=mt,
-                                value=val,
-                                unit="bps",
-                                recorded_at=now,
-                            )
-                        )
-                    updated += 1
-
-            # Store current counters for next delta calculation
-            iface.last_in_octets = in_octets
-            iface.last_out_octets = out_octets
-            iface.last_counter_at = now
-
-        except Exception as exc:
-            logger.debug(
-                "Interface traffic poll failed for %s/%s: %s",
-                device.name,
-                iface.name,
-                exc,
-            )
-
-    return {"interfaces_polled": polled, "updated": updated}
 
 
 # ── VictoriaMetrics Push ─────────────────────────────────────────────────
@@ -520,138 +314,6 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
     return {"synced": synced, "skipped": skipped, "errors": errors}
 
 
-# ── Vendor SNMP OID Mappings ────────────────────────────────────────
-
-
-# Common SNMP OIDs for device system metrics by vendor
-_VENDOR_HEALTH_OIDS: dict[str, dict[str, str]] = {
-    "mikrotik": {
-        "cpu": ".1.3.6.1.2.1.25.3.3.1.2.1",  # hrProcessorLoad
-        "memory_total": ".1.3.6.1.2.1.25.2.3.1.5.65536",
-        "memory_used": ".1.3.6.1.2.1.25.2.3.1.6.65536",
-        "uptime": ".1.3.6.1.2.1.1.3.0",
-        "temperature": ".1.3.6.1.4.1.14988.1.1.3.10.0",
-    },
-    "huawei": {
-        "cpu": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5.67108873",
-        "memory_total": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7.67108873",
-        "memory_used": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.8.67108873",
-        "uptime": ".1.3.6.1.2.1.1.3.0",
-        "temperature": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11.67108873",
-    },
-    "generic": {
-        "cpu": ".1.3.6.1.2.1.25.3.3.1.2.1",  # HOST-RESOURCES-MIB
-        "uptime": ".1.3.6.1.2.1.1.3.0",  # sysUpTime
-    },
-}
-
-# Huawei OLT OIDs for ONT optical signal monitoring
-_HUAWEI_ONT_SIGNAL_OID = (
-    ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4"  # hwGponOntOpticalDdmRxPower
-)
-
-
-def poll_device_system_metrics(
-    db: Session,
-    device: NetworkDevice,
-    *,
-    vendor: str | None = None,
-) -> dict[str, int]:
-    """Poll CPU, memory, temperature via SNMP for a device.
-
-    Args:
-        db: Database session.
-        device: The network device to poll.
-        vendor: Vendor hint (mikrotik, huawei, generic). Auto-detected if None.
-
-    Returns:
-        {polled, stored, errors}
-    """
-    if not device.snmp_community:
-        return {"polled": 0, "stored": 0, "errors": 0}
-
-    ip = str(device.mgmt_ip or "")
-    if not ip:
-        return {"polled": 0, "stored": 0, "errors": 0}
-
-    # Auto-detect vendor from sysDescr if not provided
-    if not vendor:
-        vendor_str = str(device.vendor or device.device_type or "").lower()
-        if "mikrotik" in vendor_str or "routeros" in vendor_str:
-            vendor = "mikrotik"
-        elif "huawei" in vendor_str:
-            vendor = "huawei"
-        else:
-            vendor = "generic"
-
-    oid_map = _VENDOR_HEALTH_OIDS.get(vendor, _VENDOR_HEALTH_OIDS["generic"])
-
-    polled = 0
-    stored = 0
-    errors = 0
-    now = datetime.now(UTC)
-    metric_type_map = {
-        "cpu": MetricType.cpu,
-        "memory_used": MetricType.memory,
-        "temperature": MetricType.temperature,
-        "uptime": MetricType.uptime,
-    }
-
-    for metric_name, oid in oid_map.items():
-        try:
-            value = _snmp_get_single(device, oid)
-            if value is None:
-                continue
-            polled += 1
-
-            # For memory, compute percentage if we have total
-            numeric_value = float(value)
-
-            # Map to MetricType
-            mt = metric_type_map.get(metric_name)
-            if mt is None:
-                continue
-
-            # Special: compute memory % from used/total
-            if metric_name == "memory_used" and "memory_total" in oid_map:
-                total_val = _snmp_get_single(device, oid_map["memory_total"])
-                if total_val and float(total_val) > 0:
-                    numeric_value = (float(value) / float(total_val)) * 100
-                    polled += 1
-
-            dm = DeviceMetric(
-                device_id=device.id,
-                metric_type=mt,
-                value=numeric_value,
-                recorded_at=now,
-            )
-            db.add(dm)
-            stored += 1
-        except Exception as exc:
-            errors += 1
-            logger.debug("SNMP poll failed for %s OID %s: %s", device.name, oid, exc)
-
-    if stored > 0:
-        db.flush()
-        push_device_health_metrics(
-            device,
-            {
-                k: v
-                for k, v in [
-                    ("cpu", _latest_metric_value(db, device.id, MetricType.cpu)),
-                    ("memory", _latest_metric_value(db, device.id, MetricType.memory)),
-                    (
-                        "temperature",
-                        _latest_metric_value(db, device.id, MetricType.temperature),
-                    ),
-                ]
-                if v is not None
-            },
-        )
-
-    return {"polled": polled, "stored": stored, "errors": errors}
-
-
 def _latest_metric_value(
     db: Session, device_id, metric_type: MetricType
 ) -> float | None:
@@ -671,14 +333,9 @@ def poll_onu_signal_strength(
     db: Session,
     olt_device: NetworkDevice,
 ) -> dict[str, int]:
-    """Query ONT signal status from inventory (polling moved to Zabbix).
-
-    DEPRECATED: Direct SNMP polling has been moved to Zabbix.
-    This function now only returns current low-signal counts from inventory
-    which is updated by Zabbix data ingestion.
-    """
-    from app.models.network import OLTDevice
-    from app.services.network import olt_polling as olt_polling_service
+    """Query ONT signal status from inventory populated by Zabbix ingestion."""
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.olt_polling import get_signal_thresholds
 
     host = str(olt_device.mgmt_ip or olt_device.hostname or "").strip()
     if not host:
@@ -697,14 +354,29 @@ def poll_onu_signal_strength(
         )
         return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 0}
 
-    community = (
-        decrypt_credential(olt.snmp_ro_community) if olt.snmp_ro_community else None
+    warning_threshold, _ = get_signal_thresholds(db, olt=olt)
+    base_query = (
+        select(func.count())
+        .select_from(OntUnit)
+        .where(OntUnit.is_active.is_(True))
+        .where(OntUnit.olt_device_id == olt.id)
     )
-    result = olt_polling_service.poll_olt_ont_signals(db, olt, community=community)
+    total = db.scalar(base_query) or 0
+    stored = (
+        db.scalar(base_query.where(OntUnit.olt_rx_signal_dbm.is_not(None))) or 0
+    )
+    low_signal = (
+        db.scalar(
+            base_query.where(OntUnit.olt_rx_signal_dbm.is_not(None)).where(
+                OntUnit.olt_rx_signal_dbm < warning_threshold
+            )
+        )
+        or 0
+    )
 
     return {
-        "polled": int(result.get("polled", 0)),
-        "stored": int(result.get("updated", 0)),
-        "low_signal": int(result.get("low_signal", 0)),
-        "errors": int(result.get("errors", 0)),
+        "polled": int(total),
+        "stored": int(stored),
+        "low_signal": int(low_signal),
+        "errors": 0,
     }

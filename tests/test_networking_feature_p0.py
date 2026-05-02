@@ -103,6 +103,7 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
+from app.services import zabbix_ont_status
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_ssh as olt_ssh_service
@@ -1430,7 +1431,7 @@ def test_network_map_context_includes_network_device_markers(db_session):
     assert context["stats"]["network_devices_online"] == 1
 
 
-def test_network_map_context_uses_effective_ont_status(db_session):
+def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
     ont = OntUnit(
         serial_number="ONT-MAP-1",
         name="Map ONT",
@@ -1439,10 +1440,17 @@ def test_network_map_context_uses_effective_ont_status(db_session):
         gps_latitude=9.07,
         gps_longitude=7.51,
         olt_status=OnuOnlineStatus.offline,
-        effective_status=OnuOnlineStatus.online,
     )
     db_session.add(ont)
     db_session.commit()
+    monkeypatch.setattr(
+        network_map_service,
+        "get_ont_snapshots_from_zabbix",
+        lambda db, onts: {
+            str(item.id): zabbix_ont_status.OntSignalData(online=True)
+            for item in onts
+        },
+    )
 
     context = network_map_service.build_network_map_context(db_session)
     ont_features = [

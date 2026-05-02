@@ -16,7 +16,7 @@ from app.services.network import olt_operations
 from app.services.network.olt import OLTDevices
 from app.services.network.ont_authorization import (
     AuthorizationWorkflowResult,
-    authorize_autofind_ont_and_provision_network_audited,
+    authorize_ont as authorize_ont_workflow,
 )
 
 
@@ -40,7 +40,7 @@ def authorize_ont(
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> OltApiWriteResult:
-    result = authorize_autofind_ont_and_provision_network_audited(
+    result = authorize_ont_workflow(
         db,
         olt_id,
         fsp,

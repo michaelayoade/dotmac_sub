@@ -2,11 +2,12 @@
 
 Provides signal history and traffic history for ONT detail page charts.
 Uses the metrics adapter pattern to support multiple data sources
-(VictoriaMetrics, Zabbix, or composite).
+(Zabbix, VictoriaMetrics, or composite). Zabbix is the default source for
+SNMP-backed OLT/ONT monitoring data.
 
 Configure via METRICS_ADAPTER env var:
-- "victoriametrics" (default): Query VictoriaMetrics directly
-- "zabbix": Query Zabbix API history
+- "zabbix" (default): Query Zabbix API history
+- "victoriametrics": Query VictoriaMetrics data directly
 - "composite": Try VictoriaMetrics first, fall back to Zabbix
 """
 
@@ -27,7 +28,7 @@ def get_signal_history(
 ) -> ChartData:
     """Query signal level history for an ONT.
 
-    Uses the configured metrics adapter (VictoriaMetrics, Zabbix, or composite).
+    Uses the configured metrics adapter (Zabbix by default).
 
     Args:
         ont_serial: ONT serial number.
@@ -46,7 +47,7 @@ def get_traffic_history(
 ) -> ChartData:
     """Query traffic history for an ONT.
 
-    Uses the configured metrics adapter (VictoriaMetrics, Zabbix, or composite).
+    Uses the configured metrics adapter (Zabbix by default).
 
     Args:
         ont_serial: ONT serial number.

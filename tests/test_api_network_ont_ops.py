@@ -100,14 +100,10 @@ class TestOntUnitReadSchema:
             id="00000000-0000-0000-0000-000000000002",
             serial_number="HWTC-5678",
             olt_status="offline",
-            effective_status="online",
-            effective_status_source="acs",
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
         assert read.olt_status == "offline"
-        assert read.effective_status == "online"
-        assert read.effective_status_source == "acs"
 
 
 class TestBulkActionResponse:

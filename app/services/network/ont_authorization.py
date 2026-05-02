@@ -742,18 +742,62 @@ def apply_authorization_foundation(
     if not ip_ok:
         return False, ip_msg, steps
 
-    # Apply ACS foundation if we have management IP
+    ont = db.get(OntUnit, ont_unit_id)
+    olt = db.get(OLTDevice, olt_id)
+    acs_prereq_step: dict[str, object] = {
+        "name": "Verify ACS prerequisites",
+        "success": True,
+        "message": "ACS prerequisites resolved.",
+    }
+    if not ont:
+        acs_prereq_step.update({"success": False, "message": "ONT not found."})
+        steps.append(acs_prereq_step)
+        return False, "ONT not found.", steps
+    if not olt:
+        acs_prereq_step.update({"success": False, "message": "OLT not found."})
+        steps.append(acs_prereq_step)
+        return False, "OLT not found.", steps
     if not allocated_ip:
-        # No pool configured - skip ACS foundation
-        steps.append(
+        message = (
+            "A static management IP is required before ACS authorization can be "
+            "guaranteed."
+        )
+        acs_prereq_step.update({"success": False, "message": message})
+        steps.append(acs_prereq_step)
+        return False, message, steps
+
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+
+    effective_values = resolve_effective_ont_config(db, ont, olt=olt).get("values", {})
+    missing_acs_prereqs: list[str] = []
+    if not effective_values.get("tr069_acs_server_id"):
+        missing_acs_prereqs.append("ACS server")
+    if effective_values.get("tr069_olt_profile_id") in (None, ""):
+        missing_acs_prereqs.append("OLT TR-069 profile")
+    if effective_values.get("mgmt_vlan") in (None, ""):
+        missing_acs_prereqs.append("management VLAN")
+    effective_mgmt_ip = effective_values.get("mgmt_ip_address")
+    if not effective_mgmt_ip:
+        missing_acs_prereqs.append("static management IP")
+    elif str(effective_mgmt_ip) != str(allocated_ip):
+        missing_acs_prereqs.append("matching static management IP")
+
+    if missing_acs_prereqs:
+        message = (
+            "ACS authorization cannot be guaranteed; missing "
+            f"{', '.join(missing_acs_prereqs)}."
+        )
+        acs_prereq_step.update(
             {
-                "name": "Apply ACS foundation",
-                "success": True,
-                "message": "Skipped - no management IP allocated.",
-                "skipped": True,
+                "success": False,
+                "message": message,
+                "missing": missing_acs_prereqs,
             }
         )
-        return True, "Authorization foundation completed (no ACS).", steps
+        steps.append(acs_prereq_step)
+        return False, message, steps
+
+    steps.append(acs_prereq_step)
 
     try:
         db.commit()
@@ -773,6 +817,7 @@ def apply_authorization_foundation(
             olt_id=olt_id,
             fsp=fsp,
             ont_id_on_olt=ont_id_on_olt,
+            wait_for_acs_bootstrap=True,
         )
         acs_ok = bool(acs_result.get("success"))
         acs_msg = str(acs_result.get("message") or "")
@@ -803,7 +848,7 @@ def apply_authorization_foundation(
         )
         return False, f"ACS foundation failed: {exc}", steps
 
-    return True, "Authorization foundation completed.", steps
+    return True, "Authorization foundation completed with ACS connected.", steps
 
 
 # ---------------------------------------------------------------------------
@@ -1148,9 +1193,11 @@ def authorize_ont(
             )
             allocated_ip = ip_step.get("allocated_ip") if ip_step else None
             if allocated_ip:
-                result.message = f"ONT authorized with management IP {allocated_ip}."
+                result.message = (
+                    f"ONT authorized with management IP {allocated_ip} and ACS connected."
+                )
             else:
-                result.message = "ONT authorized (no management IP pool configured)."
+                result.message = "ONT authorized and ACS connected."
 
     db.commit()
     _audit_authorization(
@@ -1205,7 +1252,3 @@ def _audit_authorization(
             "force_reauthorize": force_reauthorize,
         },
     )
-
-
-# Backwards compatibility alias
-authorize_autofind_ont_and_provision_network_audited = authorize_ont

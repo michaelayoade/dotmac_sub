@@ -586,8 +586,6 @@ class OntUnitRead(OntUnitBase):
     distance_meters: int | None = None
     signal_updated_at: datetime | None = None
     olt_status: str | None = None
-    effective_status: str | None = None
-    effective_status_source: str | None = None
     acs_last_inform_at: datetime | None = None
     last_seen_at: datetime | None = None
     offline_reason: str | None = None
