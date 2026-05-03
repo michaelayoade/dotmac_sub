@@ -35,6 +35,7 @@ from app.models.network import OntUnit
 from app.services.genieacs_service import genieacs_service
 from app.services.network._common import NasTarget
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -732,6 +733,8 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             data={"steps": steps, "needs_input": needs_input},
         )
     if not steps and not needs_input:
+        set_desired_config_values(ont, {"delivery.pending_apply": None})
+        db.add(ont)
         return StepResult(
             "apply_saved_service_config",
             True,
@@ -744,6 +747,9 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     message = "Saved ONT service config applied."
     if needs_input:
         message = "Saved ONT service config is incomplete."
+    if not needs_input:
+        set_desired_config_values(ont, {"delivery.pending_apply": None})
+        db.add(ont)
     return StepResult(
         "apply_saved_service_config",
         not needs_input,
@@ -1102,10 +1108,13 @@ def _ensure_static_management_ip_from_profile(
             notes=f"Management IP for ONT {ont.serial_number}",
         )
     )
-    # Store the allocated IP on the active assignment (source of truth)
-    assignment = effective.get("assignment")
-    if assignment is not None:
-        assignment.mgmt_ip_address = selected_ip
+    set_desired_config_values(
+        ont,
+        {
+            "management.ip_mode": "static_ip",
+            "management.ip_address": selected_ip,
+        },
+    )
 
     remaining = 0
     next_available = None

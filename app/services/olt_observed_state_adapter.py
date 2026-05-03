@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 if TYPE_CHECKING:
@@ -164,10 +165,21 @@ class OltObservedStateAdapter:
                 "fetched_at": fetched_at.isoformat(),
             }
             _write_redis_json(cache_key, payload, ttl_seconds)
-            olt.tr069_profiles_snapshot = payload
-            olt.tr069_profiles_snapshot_at = fetched_at
-            db.add(olt)
-            db.flush()
+            snapshot_txn = db.begin_nested()
+            try:
+                olt.tr069_profiles_snapshot = payload
+                olt.tr069_profiles_snapshot_at = fetched_at
+                db.add(olt)
+                db.flush()
+                snapshot_txn.commit()
+            except SQLAlchemyError:
+                snapshot_txn.rollback()
+                logger.warning(
+                    "Failed to persist TR-069 profile snapshot for OLT %s; "
+                    "continuing with live profile data.",
+                    getattr(olt, "id", None),
+                    exc_info=True,
+                )
             return ObservedReadResult(
                 ok=True,
                 message=msg,

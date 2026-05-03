@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
-from app.services.network.ont_desired_config import desired_config
+from app.services.network.ont_desired_config import desired_config, get_desired_config_value
 
 
 def _resolve_config_pack(
@@ -41,58 +41,52 @@ def _get_active_assignment(ont: OntUnit) -> OntAssignment | None:
 def _values_from_assignment(
     config_pack: OltConfigPack | None,
     assignment: OntAssignment | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build effective config values from the two authoritative sources."""
-    asn_wan_mode = None
-    asn_ip_mode = None
-    asn_static_ip = None
-    asn_static_gateway = None
-    asn_static_subnet = None
-    asn_pppoe_username = None
-    asn_pppoe_password = None
-    asn_wifi_ssid = None
-    asn_wifi_password = None
-    if assignment is not None:
-        # Get enum values as strings for compatibility
-        if hasattr(assignment, "wan_mode") and assignment.wan_mode is not None:
-            asn_wan_mode = assignment.wan_mode.value
-        if hasattr(assignment, "ip_mode") and assignment.ip_mode is not None:
-            asn_ip_mode = assignment.ip_mode.value
-        asn_static_ip = getattr(assignment, "static_ip", None)
-        asn_static_gateway = getattr(assignment, "static_gateway", None)
-        asn_static_subnet = getattr(assignment, "static_subnet", None)
-        asn_pppoe_username = getattr(assignment, "pppoe_username", None)
-        asn_pppoe_password = getattr(assignment, "pppoe_password", None)
-        if asn_pppoe_username:
-            asn_ip_mode = "pppoe"
-        elif asn_static_ip:
-            asn_ip_mode = "static_ip"
-        asn_wifi_ssid = getattr(assignment, "wifi_ssid", None)
-        asn_wifi_password = getattr(assignment, "wifi_password", None)
+    """Build effective config values from desired_config plus OLT defaults."""
+    _ = assignment
+    config = config or {}
 
-    asn_mgmt_ip_mode = None
-    asn_mgmt_ip_address = None
-    if assignment is not None:
-        mgmt_ip_mode = getattr(assignment, "mgmt_ip_mode", None)
-        if mgmt_ip_mode is not None:
-            asn_mgmt_ip_mode = mgmt_ip_mode.value if hasattr(mgmt_ip_mode, "value") else str(mgmt_ip_mode)
-        asn_mgmt_ip_address = getattr(assignment, "mgmt_ip_address", None)
+    def cfg(*path: str, default: Any = None) -> Any:
+        return get_desired_config_value(config, *path, default=default)
 
-    # Get assignment values (None if no assignment)
-    asn_static_dns = getattr(assignment, "static_dns", None) if assignment else None
-    asn_mgmt_subnet = getattr(assignment, "mgmt_subnet", None) if assignment else None
-    asn_mgmt_gateway = getattr(assignment, "mgmt_gateway", None) if assignment else None
-    asn_lan_ip = getattr(assignment, "lan_ip", None) if assignment else None
-    asn_lan_subnet = getattr(assignment, "lan_subnet", None) if assignment else None
-    asn_lan_dhcp_enabled = getattr(assignment, "lan_dhcp_enabled", None) if assignment else None
-    asn_lan_dhcp_start = getattr(assignment, "lan_dhcp_start", None) if assignment else None
-    asn_lan_dhcp_end = getattr(assignment, "lan_dhcp_end", None) if assignment else None
-    asn_wifi_enabled = getattr(assignment, "wifi_enabled", None) if assignment else None
-    asn_wifi_channel = getattr(assignment, "wifi_channel", None) if assignment else None
-    asn_wifi_security_mode = getattr(assignment, "wifi_security_mode", None) if assignment else None
+    asn_wan_mode = cfg("wan", "onu_mode")
+    asn_ip_mode = cfg("wan", "mode")
+    asn_static_ip = cfg("wan", "static_ip")
+    asn_static_gateway = cfg("wan", "static_gateway")
+    asn_static_subnet = cfg("wan", "static_subnet")
+    asn_static_dns = cfg("wan", "static_dns")
+    asn_pppoe_username = cfg("wan", "pppoe_username")
+    asn_pppoe_password = cfg("wan", "pppoe_password")
+    asn_wifi_ssid = cfg("wifi", "ssid")
+    asn_wifi_password = cfg("wifi", "password")
 
+    if asn_wan_mode is None and asn_ip_mode:
+        asn_wan_mode = (
+            "bridging"
+            if str(asn_ip_mode) in {"bridge", "setup_via_onu"}
+            else "routing"
+        )
+
+    asn_mgmt_ip_mode = cfg("management", "ip_mode")
+    asn_mgmt_ip_address = cfg("management", "ip_address")
+    asn_mgmt_subnet = cfg("management", "subnet")
+    asn_mgmt_gateway = cfg("management", "gateway")
+
+    asn_lan_ip = cfg("lan", "ip")
+    asn_lan_subnet = cfg("lan", "subnet")
+    asn_lan_dhcp_enabled = cfg("lan", "dhcp_enabled")
+    asn_lan_dhcp_start = cfg("lan", "dhcp_start")
+    asn_lan_dhcp_end = cfg("lan", "dhcp_end")
+    asn_wifi_enabled = cfg("wifi", "enabled")
+    asn_wifi_channel = cfg("wifi", "channel")
+    asn_wifi_security_mode = cfg("wifi", "security_mode")
     # wifi_enabled: explicit setting takes precedence, else True if SSID is set
-    wifi_enabled = asn_wifi_enabled if asn_wifi_enabled is not None else (True if asn_wifi_ssid else None)
+    wifi_enabled = (
+        asn_wifi_enabled
+        if asn_wifi_enabled is not None
+        else (True if asn_wifi_ssid else None)
+    )
 
     # Extract VLAN info (both ID and tag for compatibility)
     wan_vlan = config_pack.internet_vlan if config_pack else None
@@ -111,7 +105,7 @@ def _values_from_assignment(
         "wan_static_subnet": asn_static_subnet,
         "wan_static_gateway": asn_static_gateway,
         "wan_static_dns": asn_static_dns,
-        "wan_instance_index": 1,
+        "wan_instance_index": cfg("wan", "instance_index", default=1),
         "wan_gem_index": config_pack.internet_gem_index if config_pack else None,
         "mgmt_ip_mode": asn_mgmt_ip_mode,
         "mgmt_vlan": mgmt_vlan.tag if mgmt_vlan else None,
@@ -142,7 +136,7 @@ def _values_from_assignment(
         "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
         "authorization_line_profile_id": config_pack.line_profile_id if config_pack else None,
         "authorization_service_profile_id": config_pack.service_profile_id if config_pack else None,
-        "primary_wan_service": None,
+        "primary_wan_service": cfg("wan", "primary_service"),
     }
 
 
@@ -180,7 +174,7 @@ def resolve_effective_ont_config(
         "config_pack": config_pack,
         "assignment": assignment,
         "desired_config_keys": _explicit_keys(config),
-        "values": _values_from_assignment(config_pack, assignment),
+        "values": _values_from_assignment(config_pack, assignment, config),
     }
 
 

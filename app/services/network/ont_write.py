@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.olt_config_pack import resolve_olt_config_pack
+from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
@@ -217,19 +218,17 @@ class OntWriteService:
         except ValueError:
             parsed_mgmt_mode = None
 
-        assignment = db.scalars(
-            select(OntAssignment).where(
-                OntAssignment.ont_unit_id == ont.id,
-                OntAssignment.active.is_(True),
-            )
-        ).first()
-        if assignment is None:
-            assignment = OntAssignment(ont_unit_id=ont.id, active=True)
-            db.add(assignment)
-        assignment.mgmt_ip_mode = parsed_mgmt_mode
-        assignment.mgmt_ip_address = mgmt_ip_address
-        assignment.mgmt_subnet = mgmt_subnet
-        assignment.mgmt_gateway = mgmt_gateway
+        set_desired_config_values(
+            ont,
+            {
+                "management.ip_mode": parsed_mgmt_mode.value
+                if parsed_mgmt_mode is not None
+                else mgmt_ip_mode,
+                "management.ip_address": mgmt_ip_address,
+                "management.subnet": mgmt_subnet,
+                "management.gateway": mgmt_gateway,
+            },
+        )
         _set_sync_meta(ont, "ssh")
         db.commit()
         db.refresh(ont)

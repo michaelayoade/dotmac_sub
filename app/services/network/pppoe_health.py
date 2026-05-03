@@ -26,6 +26,10 @@ from app.services.network._credentials import (
     PppoeCredential,
     PppoeCredentialProvider,
 )
+from app.services.network.ont_desired_config import (
+    desired_config_column,
+    get_desired_config_value,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -107,8 +111,8 @@ def _health_base_query() -> Any:
     stmt = (
         select(
             OntUnit.id.label("ont_id"),
+            desired_config_column(OntUnit).label("desired_config"),
             OntAssignment.subscriber_id.label("subscriber_id"),
-            OntAssignment.pppoe_username.label("ont_pppoe_username"),
             OntUnit.observed_wan_ip.label("observed_wan_ip"),
             Tr069CpeDevice.id.label("tr069_device_id"),
         )
@@ -128,6 +132,15 @@ def _health_base_query() -> Any:
         )
     )
     return stmt
+
+
+def _row_pppoe_username(row: Any) -> str | None:
+    config = row._mapping.get("desired_config") if hasattr(row, "_mapping") else None
+    if config is None:
+        config = getattr(row, "desired_config", None)
+    config = config if isinstance(config, dict) else {}
+    username = get_desired_config_value(config, "wan", "pppoe_username")
+    return str(username or "").strip() or None
 
 
 _NO_WAN_IP_VALUES = ("", "0.0.0.0")  # nosec B104  # noqa: S104
@@ -258,6 +271,7 @@ class PppoeHealthClassifier:
         result: dict[str, PppoeHealthInfo] = {}
         for row in rows:
             ont_id_str = str(row.ont_id)
+            ont_pppoe_username = _row_pppoe_username(row)
             credential = (
                 credentials_by_sub.get(row.subscriber_id)
                 if row.subscriber_id is not None
@@ -266,14 +280,14 @@ class PppoeHealthClassifier:
             category = _classify_row(
                 row.subscriber_id,
                 credential,
-                row.ont_pppoe_username,
+                ont_pppoe_username,
                 row.observed_wan_ip,
                 row.tr069_device_id,
             )
             result[ont_id_str] = _build_info(
                 category,
                 credential.username if credential else None,
-                row.ont_pppoe_username,
+                ont_pppoe_username,
                 row.tr069_device_id,
                 row.observed_wan_ip,
             )
@@ -326,6 +340,7 @@ class PppoeHealthClassifier:
 
         matching_ids: list[str] = []
         for row in rows:
+            ont_pppoe_username = _row_pppoe_username(row)
             credential = (
                 credentials_by_sub.get(row.subscriber_id)
                 if row.subscriber_id is not None
@@ -334,7 +349,7 @@ class PppoeHealthClassifier:
             cat = _classify_row(
                 row.subscriber_id,
                 credential,
-                row.ont_pppoe_username,
+                ont_pppoe_username,
                 row.observed_wan_ip,
                 row.tr069_device_id,
             )

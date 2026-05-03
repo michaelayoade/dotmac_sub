@@ -5,27 +5,41 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import MgmtIpMode, OntAssignment, OnuMode, WanMode
 from app.services import network as network_service
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_actions import ActionResult
+from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.web_network_ont_actions._common import (
+    _is_input_error,
     _log_action_audit,
 )
 from app.services.web_network_ont_actions.config_setters import (
     set_lan_config,
     set_mgmt_remote_access,
+    set_wan_config,
     set_wifi_config,
 )
 
 
-def _active_assignment_for_ont(db: Session, ont) -> OntAssignment:
-    for assignment in getattr(ont, "assignments", []) or []:
-        if getattr(assignment, "active", False):
-            return assignment
-    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
-    db.add(assignment)
-    return assignment
+def _delivery_pending_result(result: ActionResult) -> ActionResult:
+    """Treat saved desired config as pending when only ACS delivery failed."""
+    if result.success or _is_input_error(result.message):
+        return result
+
+    text = (result.message or "").lower()
+    if "no acs server configured" in text:
+        return result
+
+    data = dict(result.data or {})
+    data["delivery_pending"] = True
+    data.setdefault("waiting_reason", "next_inform")
+    reason = (result.message or "Device is not reachable through ACS.").strip()
+    return ActionResult(
+        success=True,
+        message=f"saved, waiting for device inform to apply ({reason})",
+        data=data,
+        waiting=True,
+    )
 
 
 def update_ont_config(
@@ -35,6 +49,10 @@ def update_ont_config(
     wan_mode: str | None = None,
     config_method: str | None = None,
     ip_protocol: str | None = None,
+    wan_static_ip: str | None = None,
+    wan_static_subnet: str | None = None,
+    wan_static_gateway: str | None = None,
+    wan_static_dns: str | None = None,
     pppoe_username: str | None = None,
     pppoe_password: str | None = None,
     mgmt_ip_mode: str | None = None,
@@ -45,7 +63,7 @@ def update_ont_config(
     lan_dhcp_enabled: bool | None = None,
     lan_dhcp_start: str | None = None,
     lan_dhcp_end: str | None = None,
-    wifi_enabled: bool = True,
+    wifi_enabled: bool | None = None,
     wifi_ssid: str | None = None,
     wifi_channel: str | None = None,
     wifi_security_mode: str | None = None,
@@ -75,61 +93,56 @@ def update_ont_config(
     elif mgmt_remote_access is not None:
         mgmt_access_enabled = mgmt_remote_access
         ont.mgmt_remote_access = mgmt_remote_access
-    if lan_gateway_ip is not None:
-        ont.lan_gateway_ip = lan_gateway_ip.strip() or None
-    if lan_subnet_mask is not None:
-        ont.lan_subnet_mask = lan_subnet_mask.strip() or None
-    ont.lan_dhcp_enabled = lan_dhcp_enabled
-    if lan_dhcp_start is not None:
-        ont.lan_dhcp_start = lan_dhcp_start.strip() or None
-    if lan_dhcp_end is not None:
-        ont.lan_dhcp_end = lan_dhcp_end.strip() or None
     if voip_enabled is not None:
         ont.voip_enabled = voip_enabled
 
     try:
-        assignment = _active_assignment_for_ont(db, ont)
+        desired_updates = {}
         if wan_mode is not None:
-            assignment.wan_mode = (
-                OnuMode.bridging
-                if wan_mode in {WanMode.setup_via_onu.value, "bridge", "bridged"}
-                else OnuMode.routing
-            )
-            assignment.ip_mode = (
-                MgmtIpMode.static_ip
-                if wan_mode == WanMode.static_ip.value
-                else MgmtIpMode.dhcp
-            )
+            wan_mode_value = wan_mode.strip() or None
+            desired_updates["wan.mode"] = wan_mode_value
+            if wan_mode_value != "pppoe":
+                desired_updates["wan.pppoe_username"] = None
+                desired_updates["wan.pppoe_password"] = None
+        if ip_protocol is not None:
+            desired_updates["wan.ip_protocol"] = ip_protocol.strip() or None
+        if wan_static_ip is not None:
+            desired_updates["wan.static_ip"] = wan_static_ip.strip() or None
+        if wan_static_subnet is not None:
+            desired_updates["wan.static_subnet"] = wan_static_subnet.strip() or None
+        if wan_static_gateway is not None:
+            desired_updates["wan.static_gateway"] = wan_static_gateway.strip() or None
+        if wan_static_dns is not None:
+            desired_updates["wan.static_dns"] = wan_static_dns.strip() or None
         if pppoe_username is not None:
-            assignment.pppoe_username = pppoe_username.strip() or None
-        if pppoe_password:
-            assignment.pppoe_password = encrypt_credential(pppoe_password)
-        if lan_gateway_ip is not None:
-            assignment.lan_ip = lan_gateway_ip.strip() or None
-        if lan_subnet_mask is not None:
-            assignment.lan_subnet = lan_subnet_mask.strip() or None
-        assignment.lan_dhcp_enabled = lan_dhcp_enabled
-        if lan_dhcp_start is not None:
-            assignment.lan_dhcp_start = lan_dhcp_start.strip() or None
-        if lan_dhcp_end is not None:
-            assignment.lan_dhcp_end = lan_dhcp_end.strip() or None
+            desired_updates["wan.pppoe_username"] = pppoe_username.strip() or None
         if mgmt_ip_mode is not None:
-            assignment.mgmt_ip_mode = (
-                MgmtIpMode.static_ip
-                if mgmt_ip_mode == "static_ip"
-                else MgmtIpMode.dhcp
-                if mgmt_ip_mode == "dhcp"
-                else MgmtIpMode.inactive
-            )
+            desired_updates["management.ip_mode"] = mgmt_ip_mode.strip() or None
         if mgmt_ip_address is not None:
-            assignment.mgmt_ip_address = mgmt_ip_address.strip() or None
-        assignment.wifi_enabled = wifi_enabled
+            desired_updates["management.ip_address"] = mgmt_ip_address.strip() or None
+        if lan_gateway_ip is not None:
+            desired_updates["lan.ip"] = lan_gateway_ip.strip() or None
+        if lan_subnet_mask is not None:
+            desired_updates["lan.subnet"] = lan_subnet_mask.strip() or None
+        if lan_dhcp_enabled is not None:
+            desired_updates["lan.dhcp_enabled"] = lan_dhcp_enabled
+        if lan_dhcp_start is not None:
+            desired_updates["lan.dhcp_start"] = lan_dhcp_start.strip() or None
+        if lan_dhcp_end is not None:
+            desired_updates["lan.dhcp_end"] = lan_dhcp_end.strip() or None
+        if wifi_enabled is not None:
+            desired_updates["wifi.enabled"] = wifi_enabled
         if wifi_ssid is not None:
-            assignment.wifi_ssid = wifi_ssid.strip() or None
-        assignment.wifi_channel = wifi_channel
-        assignment.wifi_security_mode = wifi_security_mode
+            desired_updates["wifi.ssid"] = wifi_ssid.strip() or None
+        if wifi_channel is not None:
+            desired_updates["wifi.channel"] = wifi_channel.strip() or None
+        if wifi_security_mode is not None:
+            desired_updates["wifi.security_mode"] = wifi_security_mode.strip() or None
+        if pppoe_password:
+            desired_updates["wan.pppoe_password"] = encrypt_credential(pppoe_password)
         if wifi_password:
-            assignment.wifi_password = encrypt_credential(wifi_password)
+            desired_updates["wifi.password"] = encrypt_credential(wifi_password)
+        set_desired_config_values(ont, desired_updates)
     except ValueError as exc:
         db.rollback()
         return ActionResult(success=False, message=str(exc))
@@ -139,6 +152,7 @@ def update_ont_config(
 
     push_messages: list[str] = []
     push_success = True
+    push_waiting = False
 
     if push_to_device:
         wan_push_requested = push_wan and any(
@@ -147,28 +161,60 @@ def update_ont_config(
                 wan_mode,
                 config_method,
                 ip_protocol,
+                wan_static_ip,
+                wan_static_subnet,
+                wan_static_gateway,
+                wan_static_dns,
                 pppoe_username,
                 pppoe_password,
             )
         )
         if wan_push_requested:
-            # WAN config is saved to DB; TR-069 push requires provisioning flow
-            push_messages.append(
-                "WAN: saved to database. Use Advanced Actions to push to device."
+            action_wan_mode = (
+                "bridge" if wan_mode in {"setup_via_onu", "bridged"} else wan_mode
             )
+            if action_wan_mode == "static_ip":
+                action_wan_mode = "static"
+            result = set_wan_config(
+                db,
+                ont_id,
+                wan_mode=action_wan_mode or "dhcp",
+                pppoe_username=pppoe_username.strip() if pppoe_username else None,
+                pppoe_password=pppoe_password.strip() if pppoe_password else None,
+                ip_address=wan_static_ip.strip() if wan_static_ip else None,
+                subnet_mask=wan_static_subnet.strip() if wan_static_subnet else None,
+                gateway=wan_static_gateway.strip() if wan_static_gateway else None,
+                dns_servers=wan_static_dns.strip() if wan_static_dns else None,
+                request=request,
+            )
+            result = _delivery_pending_result(result)
+            push_messages.append(f"WAN: {result.message}")
+            push_waiting = push_waiting or result.waiting
+            if not result.success:
+                push_success = False
 
-        if push_lan and any([lan_gateway_ip, lan_subnet_mask, lan_dhcp_enabled is not None]):
+        if push_lan and any(
+            [
+                lan_gateway_ip,
+                lan_subnet_mask,
+                lan_dhcp_enabled is not None,
+                lan_dhcp_start,
+                lan_dhcp_end,
+            ]
+        ):
             result = set_lan_config(
                 db,
                 ont_id,
-                lan_ip=ont.lan_gateway_ip,
-                lan_subnet=ont.lan_subnet_mask,
-                dhcp_enabled=ont.lan_dhcp_enabled,
-                dhcp_start=ont.lan_dhcp_start,
-                dhcp_end=ont.lan_dhcp_end,
+                lan_ip=lan_gateway_ip.strip() if lan_gateway_ip else None,
+                lan_subnet=lan_subnet_mask.strip() if lan_subnet_mask else None,
+                dhcp_enabled=lan_dhcp_enabled,
+                dhcp_start=lan_dhcp_start.strip() if lan_dhcp_start else None,
+                dhcp_end=lan_dhcp_end.strip() if lan_dhcp_end else None,
                 request=request,
             )
+            result = _delivery_pending_result(result)
             push_messages.append(f"LAN: {result.message}")
+            push_waiting = push_waiting or result.waiting
             if not result.success:
                 push_success = False
 
@@ -180,10 +226,19 @@ def update_ont_config(
                 request=request,
             )
             push_messages.append(f"Management: {result.message}")
+            push_waiting = push_waiting or result.waiting
             if not result.success:
                 push_success = False
 
-        if push_wifi and any([wifi_ssid, wifi_password, wifi_security_mode, wifi_channel]):
+        if push_wifi and any(
+            [
+                wifi_enabled is not None,
+                wifi_ssid,
+                wifi_password,
+                wifi_security_mode,
+                wifi_channel,
+            ]
+        ):
             channel_int: int | None = None
             if wifi_channel:
                 try:
@@ -202,7 +257,9 @@ def update_ont_config(
                 else None,
                 request=request,
             )
+            result = _delivery_pending_result(result)
             push_messages.append(f"WiFi: {result.message}")
+            push_waiting = push_waiting or result.waiting
             if not result.success:
                 push_success = False
 
@@ -221,10 +278,21 @@ def update_ont_config(
     )
 
     if push_to_device:
-        message = "Configuration saved. " + "; ".join(push_messages)
-        return ActionResult(success=push_success, message=message)
+        if push_waiting:
+            set_desired_config_values(ont, {"delivery.pending_apply": True})
+            db.add(ont)
+            db.flush()
+        elif push_success:
+            set_desired_config_values(ont, {"delivery.pending_apply": None})
+            db.add(ont)
+            db.flush()
+        if push_messages:
+            message = "Configuration saved. " + "; ".join(push_messages)
+        else:
+            message = "Configuration saved. No device-delivered fields changed."
+        return ActionResult(success=push_success, message=message, waiting=push_waiting)
 
-    return ActionResult(success=True, message="Configuration saved to database.")
+    return ActionResult(success=True, message="Configuration saved.")
 
 
 def set_voip_enabled(

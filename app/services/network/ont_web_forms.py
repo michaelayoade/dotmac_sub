@@ -32,6 +32,7 @@ from app.services import web_network_onts as web_onts_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_desired_config import set_desired_config_values
 
 _LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
 
@@ -307,26 +308,24 @@ def update_onu_mode_from_form(
         return OntFormResult(not_found=True)
     before_snapshot = model_to_dict(ont)
     previous_wan_remote_access = bool(getattr(ont, "wan_remote_access", False))
-    assignment = active_assignment_for_ont(db, ont)
     onu_mode = form_str(form, "onu_mode").strip() or None
     wan_mode = form_str(form, "wan_mode").strip() or None
-    assignment.wan_mode = (
-        OnuMode.bridging if onu_mode == OnuMode.bridging.value else OnuMode.routing
-    )
-    assignment.ip_mode = (
-        MgmtIpMode.static_ip
-        if wan_mode == WanMode.static_ip.value
-        else MgmtIpMode.dhcp
-    )
-    assignment.pppoe_username = (
-        form_str(form, "pppoe_username").strip()
-        if wan_mode == WanMode.pppoe.value
-        else None
-    )
+    desired_updates = {
+        "wan.onu_mode": onu_mode,
+        "wan.mode": wan_mode,
+        "wan.pppoe_username": (
+            form_str(form, "pppoe_username").strip()
+            if wan_mode == WanMode.pppoe.value
+            else None
+        ),
+        "wan.config_method": form_str(form, "config_method").strip() or None,
+        "wan.ip_protocol": form_str(form, "ip_protocol").strip() or None,
+    }
     if wan_mode != WanMode.pppoe.value:
-        assignment.pppoe_password = None
+        desired_updates["wan.pppoe_password"] = None
     elif pw := form_str(form, "pppoe_password").strip():
-        assignment.pppoe_password = encrypt_credential(pw)
+        desired_updates["wan.pppoe_password"] = encrypt_credential(pw)
+    set_desired_config_values(ont, desired_updates)
     wan_remote_access = form_str(form, "wan_remote_access") == "true"
     ont.wan_remote_access = wan_remote_access
     db.add(ont)
@@ -688,18 +687,16 @@ def update_mgmt_ip_from_form(
 
     before_snapshot = model_to_dict(ont)
     mgmt_ip_mode = form_str(form, "mgmt_ip_mode").strip() or None
-    assignment = active_assignment_for_ont(db, ont)
-    assignment.mgmt_ip_mode = (
-        MgmtIpMode.static_ip
-        if mgmt_ip_mode == "static_ip"
-        else MgmtIpMode.dhcp
-        if mgmt_ip_mode == "dhcp"
-        else MgmtIpMode.inactive
-    )
-    assignment.mgmt_ip_address = (
-        form_str(form, "mgmt_ip_address").strip()
-        if mgmt_ip_mode == "static_ip"
-        else None
+    set_desired_config_values(
+        ont,
+        {
+            "management.ip_mode": mgmt_ip_mode,
+            "management.ip_address": (
+                form_str(form, "mgmt_ip_address").strip()
+                if mgmt_ip_mode == "static_ip"
+                else None
+            ),
+        },
     )
     ont.mgmt_remote_access = form_str(form, "mgmt_remote_access") == "true"
     ont.voip_enabled = form_str(form, "voip_enabled") == "true"

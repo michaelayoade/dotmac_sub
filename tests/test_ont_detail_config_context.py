@@ -157,8 +157,8 @@ def test_unified_config_context_does_not_perform_live_reads(
 
     context = context_builders.unified_config_context(db_session, str(ont.id))
 
-    assert context["desired_wan_config"]["pppoe_username"] == ""
-    assert context["desired_wifi_config"]["ssid"] == ""
+    assert context["desired_wan_config"]["pppoe_username"] == "customer@example"
+    assert context["desired_wifi_config"]["ssid"] == "CustomerWiFi"
     assert context["desired_lan_config"]["lan_ip"] == ""
     assert context["iphost_freshness"]["source"] == "db"
 
@@ -228,10 +228,10 @@ def test_unified_config_context_preserves_cached_freshness_and_summaries(
     assert context["tr069_profiles_freshness"]["stale"] is True
     assert context["iphost_config"]["mode"] == "static"
     assert context["mgmt_ip_summary"]["ip"] is None
-    assert context["wan_summary"]["pppoe_user"] == ""
+    assert context["wan_summary"]["pppoe_user"] == "db-user"
     assert context["wan_summary"]["wan_ip"] == "41.0.0.10"
     assert context["wan_summary"]["status"] == "connected"
-    assert context["wifi_summary"]["ssid"] == ""
+    assert context["wifi_summary"]["ssid"] == "DB-SSID"
 
 
 def test_unified_config_context_exposes_shared_db_observed_state(
@@ -357,8 +357,8 @@ def test_unified_config_context_includes_configure_form_values(
     assert context["mgmt_ip_address"] == "10.30.0.44"
     assert context["mgmt_vlan"] == 300
     assert context["mgmt_vlan_id"] == "mgmt-vlan-id"
-    assert context["lan_gateway_ip"] == "192.168.70.1"
-    assert context["wifi_ssid"] == "StoredWiFi"
+    assert context["lan_gateway_ip"] == "192.168.1.1"
+    assert context["wifi_ssid"] == "DesiredWiFi"
     assert context["config_pack_name"] == "Residential GPON"
     assert context["tr069_profile_name"] == "DotMac ACS"
 

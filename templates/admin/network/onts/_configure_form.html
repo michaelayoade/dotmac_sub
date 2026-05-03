@@ -55,6 +55,10 @@
 
 {% set wan_mode_val = wan_mode or '' %}
 {% set ip_protocol_val = ip_protocol or '' %}
+{% set wan_static_ip_val = wan_static_ip or '' %}
+{% set wan_static_subnet_val = wan_static_subnet or '' %}
+{% set wan_static_gateway_val = wan_static_gateway or '' %}
+{% set wan_static_dns_val = wan_static_dns or '' %}
 {% set mgmt_ip_mode_val = mgmt_ip_mode or 'inactive' %}
 {% set lan_dhcp_enabled_val = lan_dhcp_enabled if lan_dhcp_enabled is defined and lan_dhcp_enabled is not none else true %}
 {% set wifi_enabled_val = wifi_enabled if wifi_enabled is defined and wifi_enabled is not none else true %}
@@ -221,6 +225,30 @@
                         </div>
                     </div>
                 </template>
+                <template x-if="wanMode === 'static_ip'">
+                    <div class="flex items-end gap-2">
+                        <div class="w-36">
+                            <label for="wan_static_ip" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">IP</label>
+                            <input type="text" id="wan_static_ip" name="wan_static_ip" value="{{ wan_static_ip_val }}"
+                                   class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="w-36">
+                            <label for="wan_static_subnet" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">Subnet</label>
+                            <input type="text" id="wan_static_subnet" name="wan_static_subnet" value="{{ wan_static_subnet_val }}"
+                                   class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="w-36">
+                            <label for="wan_static_gateway" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">Gateway</label>
+                            <input type="text" id="wan_static_gateway" name="wan_static_gateway" value="{{ wan_static_gateway_val }}"
+                                   class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                        <div class="w-36">
+                            <label for="wan_static_dns" class="mb-1 block text-xs text-slate-600 dark:text-slate-400">DNS</label>
+                            <input type="text" id="wan_static_dns" name="wan_static_dns" value="{{ wan_static_dns_val }}"
+                                   class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                </template>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="wan"
                             class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
@@ -358,7 +386,7 @@
     {# ═══════════════════════ SUBMIT ALL ═══════════════════════ #}
     <input type="hidden" name="push_to_device" value="true">
     <div class="flex flex-wrap items-center justify-end gap-2 pt-1">
-        <p class="mr-auto text-xs text-slate-500 dark:text-slate-400">Push LAN and WiFi changes to device</p>
+        <p class="mr-auto text-xs text-slate-500 dark:text-slate-400">Save and apply device changes</p>
         <button type="submit"
                 name="push_scope"
                 value="all"

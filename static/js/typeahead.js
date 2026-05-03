@@ -1,5 +1,8 @@
 (function () {
     function initTypeahead(container) {
+        if (container.getAttribute("data-typeahead-ready") === "true") {
+            return;
+        }
         var input = container.querySelector("[data-typeahead-input]");
         var hidden = container.querySelector("[data-typeahead-hidden]");
         var results = container.querySelector("[data-typeahead-results]");
@@ -9,6 +12,7 @@
         if (!input || !hidden || !results || !url) {
             return;
         }
+        container.setAttribute("data-typeahead-ready", "true");
         var timer = null;
         var lastQuery = "";
 
@@ -88,16 +92,31 @@
         });
     }
 
-    function initAll() {
-        var containers = document.querySelectorAll("[data-typeahead-url]");
+    function initAll(root) {
+        if (!root || !root.querySelectorAll) {
+            root = document;
+        }
+        if (root.matches && root.matches("[data-typeahead-url]")) {
+            initTypeahead(root);
+        }
+        var containers = root.querySelectorAll("[data-typeahead-url]");
         containers.forEach(function (container) {
             initTypeahead(container);
         });
     }
 
     if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initAll);
+        document.addEventListener("DOMContentLoaded", function () {
+            initAll(document);
+        });
     } else {
-        initAll();
+        initAll(document);
     }
+    document.addEventListener("htmx:load", function (event) {
+        initAll(event.detail && event.detail.elt ? event.detail.elt : document);
+    });
+    document.addEventListener("htmx:afterSettle", function (event) {
+        initAll(event.detail && event.detail.elt ? event.detail.elt : document);
+    });
+    window.initTypeaheadFields = initAll;
 })();

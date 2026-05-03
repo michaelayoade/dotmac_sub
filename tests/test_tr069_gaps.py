@@ -1273,6 +1273,46 @@ class TestDeviceResolution:
         assert reason == "resolved_via_linked_tr069_device"
         MockClient.return_value.list_devices.assert_not_called()
 
+    def test_resolve_links_unlinked_tr069_device_by_serial_match(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Unlinked Resolve ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HWTC600AC29C",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        observed = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number="48575443600AC29C",
+            genieacs_device_id="00259E-HG8546M-48575443600AC29C",
+            oui="00259E",
+            product_class="HG8546M",
+            is_active=True,
+        )
+        db_session.add_all([ont, observed])
+        db_session.commit()
+
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is not None
+        _client, device_id = result
+        assert device_id == "00259E-HG8546M-48575443600AC29C"
+        assert reason == "resolved_via_unlinked_tr069_serial_match"
+        assert observed.ont_unit_id == ont.id
+        MockClient.return_value.list_devices.assert_not_called()
+
     def test_resolve_moves_ont_link_when_genieacs_id_already_owned(
         self, db_session
     ) -> None:
@@ -1326,10 +1366,11 @@ class TestDeviceResolution:
         assert result is not None
         _client, device_id = result
         assert device_id == "00259E-EG8145V5-48575443A31A3673"
-        assert reason == "resolved_via_ont_acs"
+        assert reason == "resolved_via_unlinked_tr069_serial_match"
         assert discovered.ont_unit_id == ont.id
         assert placeholder.ont_unit_id is None
         assert placeholder.is_active is False
+        instance.list_devices.assert_not_called()
 
 
 class TestAcsPropagation:

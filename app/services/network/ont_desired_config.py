@@ -64,6 +64,11 @@ def desired_config(ont: OntUnit) -> dict[str, Any]:
     return {}
 
 
+def desired_config_column(model: type[OntUnit] = OntUnit) -> Any:
+    """Return the desired_config ORM column for query builders."""
+    return getattr(model, "desired_config")
+
+
 def clear_desired_config(ont: OntUnit) -> None:
     """Clear all per-ONT desired configuration intent."""
     ont.desired_config = {}
@@ -101,13 +106,21 @@ def set_desired_config_value(
     normalized = _normalize_value(value)
     if normalized is None:
         cursor = config
+        parents: list[tuple[dict[str, Any], str]] = []
         for part in path[:-1]:
             next_value = cursor.get(part)
             if not isinstance(next_value, dict):
                 ont.desired_config = config
                 return
+            parents.append((cursor, part))
             cursor = next_value
         cursor.pop(path[-1], None)
+        for parent, key in reversed(parents):
+            child = parent.get(key)
+            if isinstance(child, dict) and not child:
+                parent.pop(key, None)
+            else:
+                break
         ont.desired_config = config
         return
 
@@ -146,3 +159,9 @@ def get_desired_config_value(
             return default
         cursor = cursor[part]
     return cursor
+
+
+def set_desired_config_values(ont: OntUnit, values: dict[str, Any]) -> None:
+    """Set or clear multiple canonical desired-config values."""
+    for field_name, value in values.items():
+        set_desired_config_value(ont, field_name, value)

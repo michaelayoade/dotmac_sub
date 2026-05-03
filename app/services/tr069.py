@@ -42,6 +42,10 @@ from app.services.genieacs_client import (
 )
 from app.services.network import cpe as cpe_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_desired_config import (
+    desired_config,
+    get_desired_config_value,
+)
 from app.services.network.ont_status import (
     apply_status_snapshot,
     resolve_acs_online_window_minutes_for_model,
@@ -322,9 +326,20 @@ def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
         effective.get("values", {}) if isinstance(effective, dict) else {}
     )
     if (
-        ont.tr069_last_snapshot
+        get_desired_config_value(desired_config(ont), "delivery", "pending_apply")
+        or ont.tr069_last_snapshot
         or effective_values.get("pppoe_username")
+        or effective_values.get("wan_static_ip")
         or effective_values.get("wifi_ssid")
+        or effective_values.get("wifi_password")
+        or effective_values.get("wifi_enabled") is not None
+        or effective_values.get("wifi_channel")
+        or effective_values.get("wifi_security_mode")
+        or effective_values.get("lan_ip")
+        or effective_values.get("lan_subnet")
+        or effective_values.get("lan_dhcp_enabled") is not None
+        or effective_values.get("lan_dhcp_start")
+        or effective_values.get("lan_dhcp_end")
         or ont.lan_gateway_ip
         or ont.lan_subnet_mask
         or ont.lan_dhcp_start
@@ -362,8 +377,11 @@ def _queue_saved_service_apply_after_stale_inform(
         return False
     current = _normalize_utc_timestamp(now) or datetime.now(UTC)
     previous = _normalize_utc_timestamp(previous_last_inform_at)
+    ont = db.get(OntUnit, ont_id)
+    config = desired_config(ont) if ont else {}
+    pending_apply = bool(get_desired_config_value(config, "delivery", "pending_apply"))
     stale_cutoff = current - timedelta(days=_STALE_INFORM_SERVICE_APPLY_DAYS)
-    if previous is not None and previous >= stale_cutoff:
+    if not pending_apply and previous is not None and previous >= stale_cutoff:
         return False
     if not _ont_has_saved_service_intent(db, ont_id):
         return False

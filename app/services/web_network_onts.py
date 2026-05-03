@@ -8,8 +8,9 @@ from ipaddress import IPv4Network, ip_address, ip_network
 from typing import Any
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
+from app.models.catalog import Subscription
 from app.models.network import (
     IpPool,
     IPVersion,
@@ -920,11 +921,31 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     # Get the active assignment for this ONT (service config source)
     active_assignment = None
     assignment_subscriber = None
+    assignment_subscription = None
     for assignment in getattr(ont, "assignments", []):
         if getattr(assignment, "active", False):
             active_assignment = assignment
             assignment_subscriber = getattr(assignment, "subscriber", None)
             break
+
+    if active_assignment and assignment_subscriber is None:
+        pppoe_username = str(effective_values.get("pppoe_username") or "").strip()
+        if pppoe_username:
+            assignment_subscription = db.scalars(
+                select(Subscription)
+                .options(
+                    joinedload(Subscription.subscriber),
+                    joinedload(Subscription.offer),
+                )
+                .where(Subscription.login == pppoe_username)
+                .order_by(Subscription.updated_at.desc())
+                .limit(1)
+            ).first()
+            assignment_subscriber = (
+                getattr(assignment_subscription, "subscriber", None)
+                if assignment_subscription
+                else None
+            )
 
     zabbix_signal = get_ont_signal_from_zabbix(ont)
 
@@ -964,7 +985,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
             if getattr(ont, "board", None) and getattr(ont, "port", None)
             else None
         ),
-        "subscription": None,
+        "subscription": assignment_subscription,
         "acs_bound": bool(effective_values.get("tr069_acs_server_id")),
         "operational_acs_server_name": getattr(
             getattr(olt, "tr069_acs_server", None), "name", None

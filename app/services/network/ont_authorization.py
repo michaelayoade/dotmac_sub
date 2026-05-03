@@ -29,6 +29,11 @@ from app.models.network import (
     OnuOnlineStatus,
 )
 from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.ont_desired_config import (
+    desired_config_column,
+    get_desired_config_value,
+    set_desired_config_values,
+)
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
     normalize as normalize_serial,
@@ -190,7 +195,22 @@ def _management_ip_is_available(
         .where(OntAssignment.active.is_(True))
         .limit(1)
     )
-    return assigned is None
+    if assigned is not None:
+        return False
+    return candidate not in _desired_management_ips(db)
+
+
+def _desired_management_ips(db: Session) -> set[str]:
+    """Return management IPs stored in ONT desired_config."""
+    rows = db.scalars(select(desired_config_column(OntUnit))).all()
+    ips: set[str] = set()
+    for config in rows:
+        if not isinstance(config, dict):
+            continue
+        value = get_desired_config_value(config, "management", "ip_address")
+        if value:
+            ips.add(str(value))
+    return ips
 
 
 def refresh_pool_availability(
@@ -234,6 +254,7 @@ def refresh_pool_availability(
     for ip in assigned_ips:
         if ip:
             used.add(str(ip))
+    used.update(_desired_management_ips(db))
 
     gateway = getattr(pool, "gateway", None)
     if gateway:
@@ -321,8 +342,8 @@ def allocate_management_ip_for_ont(
 ) -> tuple[bool, str, str | None]:
     """Allocate a management IP from the OLT's management IP pool for the ONT.
 
-    The IP is stored on the ONT's active assignment (ont_assignments.mgmt_ip_address),
-    which is the source of truth read by resolve_effective_ont_config().
+    The IP is stored on OntUnit.desired_config. Legacy assignment columns are
+    updated during the transition for compatibility with old pool scans.
 
     Returns:
         Tuple of (success, message, allocated_ip).
@@ -394,6 +415,13 @@ def allocate_management_ip_for_ont(
             record.allocation_type = None
         assignment.mgmt_ip_address = None
         assignment.mgmt_ip_mode = MgmtIpMode.inactive
+        set_desired_config_values(
+            ont,
+            {
+                "management.ip_address": None,
+                "management.ip_mode": "inactive",
+            },
+        )
         db.flush()
 
     # Find next available IP
@@ -431,6 +459,13 @@ def allocate_management_ip_for_ont(
 
     assignment.mgmt_ip_address = next_ip
     assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+    set_desired_config_values(
+        ont,
+        {
+            "management.ip_address": next_ip,
+            "management.ip_mode": "static_ip",
+        },
+    )
     _advance_pool_cache_after_allocation(db, pool=locked_pool, allocated_ip=next_ip)
 
     db.flush()

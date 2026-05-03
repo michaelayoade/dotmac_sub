@@ -197,25 +197,12 @@ def get_available_mgmt_ips_for_vlan(
 
 
 def parse_form_values(form) -> dict[str, object]:
-    """Parse ONT assignment form values including service config."""
+    """Parse ONT assignment form values."""
     return {
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
-        # Service configuration fields
-        "wan_mode": form.get("wan_mode", "").strip() or None,
-        "ip_mode": form.get("ip_mode", "").strip() or None,
-        "static_ip": form.get("static_ip", "").strip() or None,
-        "static_gateway": form.get("static_gateway", "").strip() or None,
-        "static_subnet": form.get("static_subnet", "").strip() or None,
-        "pppoe_username": form.get("pppoe_username", "").strip() or None,
-        "pppoe_password": form.get("pppoe_password", "").strip() or None,
-        "wifi_ssid": form.get("wifi_ssid", "").strip() or None,
-        "wifi_password": form.get("wifi_password", "").strip() or None,
-        # Management IP configuration
-        "mgmt_ip_mode": form.get("mgmt_ip_mode", "").strip() or None,
-        "mgmt_ip_address": form.get("mgmt_ip_address", "").strip() or None,
     }
 
 
@@ -313,8 +300,6 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
 
     Subscriber account is optional. When absent, the service address lookup
     is skipped and the assignment is created without a subscriber ref.
-    Service config fields (WAN mode, IP mode, PPPoE, WiFi) are saved for
-    provisioning use.
     """
     pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
     pon_port_id = coerce_uuid(pon_port_id_str) if pon_port_id_str else None
@@ -341,19 +326,6 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         assigned_at=datetime.now(UTC),
         active=True,
         notes=str(values.get("notes")) if values.get("notes") else None,
-        # Service configuration
-        wan_mode=str(values.get("wan_mode")) if values.get("wan_mode") else "routing",
-        ip_mode=str(values.get("ip_mode")) if values.get("ip_mode") else "dhcp",
-        static_ip=str(values.get("static_ip")) if values.get("static_ip") else None,
-        static_gateway=str(values.get("static_gateway")) if values.get("static_gateway") else None,
-        static_subnet=str(values.get("static_subnet")) if values.get("static_subnet") else None,
-        pppoe_username=str(values.get("pppoe_username")) if values.get("pppoe_username") else None,
-        pppoe_password=str(values.get("pppoe_password")) if values.get("pppoe_password") else None,
-        wifi_ssid=str(values.get("wifi_ssid")) if values.get("wifi_ssid") else None,
-        wifi_password=str(values.get("wifi_password")) if values.get("wifi_password") else None,
-        # Management IP configuration
-        mgmt_ip_mode=str(values.get("mgmt_ip_mode")) if values.get("mgmt_ip_mode") else "inactive",
-        mgmt_ip_address=str(values.get("mgmt_ip_address")) if values.get("mgmt_ip_address") else None,
     )
     network_service.ont_assignments.create(db=db, payload=payload)
 
@@ -372,19 +344,6 @@ def form_payload(
         "account_label": "",
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
-        # Service config fields
-        "wan_mode": values.get("wan_mode"),
-        "ip_mode": values.get("ip_mode"),
-        "static_ip": values.get("static_ip"),
-        "static_gateway": values.get("static_gateway"),
-        "static_subnet": values.get("static_subnet"),
-        "pppoe_username": values.get("pppoe_username"),
-        "pppoe_password": values.get("pppoe_password"),
-        "wifi_ssid": values.get("wifi_ssid"),
-        "wifi_password": values.get("wifi_password"),
-        # Management IP config fields
-        "mgmt_ip_mode": values.get("mgmt_ip_mode"),
-        "mgmt_ip_address": values.get("mgmt_ip_address"),
     }
     # Look up subscriber label for typeahead repopulation
     if db and values.get("account_id"):
@@ -413,10 +372,6 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
     """Return template-friendly form defaults for an existing assignment."""
     subscriber = getattr(assignment, "subscriber", None)
     account_label = getattr(subscriber, "name", "") if subscriber else ""
-    # Get enum values as strings for form display
-    wan_mode_val = getattr(assignment, "wan_mode", None)
-    ip_mode_val = getattr(assignment, "ip_mode", None)
-    mgmt_ip_mode_val = getattr(assignment, "mgmt_ip_mode", None)
     return {
         "pon_port_id": str(assignment.pon_port_id) if assignment.pon_port_id else "",
         "account_id": str(assignment.subscriber_id) if assignment.subscriber_id else "",
@@ -425,19 +380,6 @@ def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:
             str(assignment.service_address_id) if assignment.service_address_id else ""
         ),
         "notes": assignment.notes or "",
-        # Service config fields
-        "wan_mode": wan_mode_val.value if wan_mode_val else "routing",
-        "ip_mode": ip_mode_val.value if ip_mode_val else "dhcp",
-        "static_ip": getattr(assignment, "static_ip", "") or "",
-        "static_gateway": getattr(assignment, "static_gateway", "") or "",
-        "static_subnet": getattr(assignment, "static_subnet", "") or "",
-        "pppoe_username": getattr(assignment, "pppoe_username", "") or "",
-        "pppoe_password": getattr(assignment, "pppoe_password", "") or "",
-        "wifi_ssid": getattr(assignment, "wifi_ssid", "") or "",
-        "wifi_password": getattr(assignment, "wifi_password", "") or "",
-        # Management IP config fields
-        "mgmt_ip_mode": mgmt_ip_mode_val.value if mgmt_ip_mode_val else "inactive",
-        "mgmt_ip_address": getattr(assignment, "mgmt_ip_address", "") or "",
     }
 
 
@@ -552,19 +494,6 @@ def update_assignment_from_form(
             else None
         ),
         notes=str(values.get("notes")) if values.get("notes") else None,
-        # Service configuration
-        wan_mode=str(values.get("wan_mode")) if values.get("wan_mode") else None,
-        ip_mode=str(values.get("ip_mode")) if values.get("ip_mode") else None,
-        static_ip=str(values.get("static_ip")) if values.get("static_ip") else None,
-        static_gateway=str(values.get("static_gateway")) if values.get("static_gateway") else None,
-        static_subnet=str(values.get("static_subnet")) if values.get("static_subnet") else None,
-        pppoe_username=str(values.get("pppoe_username")) if values.get("pppoe_username") else None,
-        pppoe_password=str(values.get("pppoe_password")) if values.get("pppoe_password") else None,
-        wifi_ssid=str(values.get("wifi_ssid")) if values.get("wifi_ssid") else None,
-        wifi_password=str(values.get("wifi_password")) if values.get("wifi_password") else None,
-        # Management IP configuration
-        mgmt_ip_mode=str(values.get("mgmt_ip_mode")) if values.get("mgmt_ip_mode") else None,
-        mgmt_ip_address=str(values.get("mgmt_ip_address")) if values.get("mgmt_ip_address") else None,
     )
     network_service.ont_assignments.update(db, assignment_id, payload)
     return AssignmentFormResult(ont=loaded.ont, assignment=assignment, values=values)

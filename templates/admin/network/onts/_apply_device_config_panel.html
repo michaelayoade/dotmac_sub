@@ -1,6 +1,13 @@
 {# Advanced TR-069 actions - repair tools and credentials #}
 {% macro spinner() %}<svg class="htmx-indicator mr-1 inline h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>{% endmacro %}
 
+{% set advanced_wan_mode = wan_mode or '' %}
+{% if advanced_wan_mode in ['static_ip'] %}
+    {% set advanced_wan_mode = 'static' %}
+{% elif advanced_wan_mode in ['setup_via_onu', 'bridged'] %}
+    {% set advanced_wan_mode = 'bridge' %}
+{% endif %}
+
 <details id="advanced-device-actions" class="mt-4 rounded-lg border border-slate-200 dark:border-slate-700">
     <summary class="cursor-pointer px-3 py-2 text-xs font-medium text-slate-500 dark:text-slate-400">
         Advanced
@@ -10,11 +17,16 @@
         <form hx-post="/admin/network/onts/{{ ont_id }}/wan/probe" hx-swap="none" hx-indicator="find button" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="instance_index" value="1">
+            <input type="hidden" name="wan_mode" value="{{ advanced_wan_mode or 'pppoe' }}">
             <button class="inline-flex items-center rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400">{{ spinner() }}Probe</button>
         </form>
         <form hx-post="/admin/network/onts/{{ ont_id }}/wan/ensure-instance" hx-swap="none" hx-indicator="find button" class="contents">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="instance_index" value="1">
+            <input type="hidden" name="wan_mode" value="{{ advanced_wan_mode or 'pppoe' }}">
+            {% if wan_vlan %}
+            <input type="hidden" name="wan_vlan" value="{{ wan_vlan }}">
+            {% endif %}
             <button class="inline-flex items-center rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400">{{ spinner() }}Ensure</button>
         </form>
         <form hx-post="/admin/network/onts/{{ ont_id }}/wan/normalize" hx-swap="none" hx-indicator="find button" class="contents">

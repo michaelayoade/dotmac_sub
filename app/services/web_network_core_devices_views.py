@@ -1815,6 +1815,37 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             .limit(1)
         )
         subscription = db.scalars(subscription_stmt).first()
+    else:
+        effective_values = resolve_effective_ont_config(db, ont).get("values", {})
+        pppoe_username = str(effective_values.get("pppoe_username") or "").strip()
+        if pppoe_username:
+            subscription_stmt = (
+                select(Subscription)
+                .options(
+                    joinedload(Subscription.subscriber),
+                    joinedload(Subscription.offer),
+                )
+                .where(Subscription.login == pppoe_username)
+                .order_by(Subscription.updated_at.desc())
+                .limit(1)
+            )
+            subscription = db.scalars(subscription_stmt).first()
+            sub = getattr(subscription, "subscriber", None) if subscription else None
+            if sub:
+                subscriber_info["id"] = str(sub.id)
+                subscriber_info["customer_url"] = (
+                    f"/admin/customers/business/{sub.id}"
+                    if getattr(sub, "category", None) == SubscriberCategory.business
+                    else f"/admin/customers/person/{sub.id}"
+                )
+                subscriber_info["name"] = _subscriber_display_name(sub)
+                subscriber_info["status"] = sub.status.value if sub.status else "unknown"
+                subscriber_info["status_class"] = SUBSCRIBER_STATUS_CLASSES.get(
+                    str(subscriber_info["status"]),
+                    SUBSCRIBER_STATUS_CLASSES["unknown"],
+                )
+                subscriber_info["source"] = "pppoe_login"
+                subscriber_info["pppoe_username"] = pppoe_username
 
     if subscription:
         subscriber_info["subscription_id"] = str(subscription.id)

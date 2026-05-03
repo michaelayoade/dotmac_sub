@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -14,6 +14,7 @@ from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
 from app.services.genieacs_client import GenieACSClient, create_genieacs_client
 from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
+from app.services.network.serial_utils import search_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -32,40 +33,65 @@ def _serial_search_candidates(serial_number: str | None) -> list[str]:
     Supports raw inventory serials like ``HWTC7D4701C3`` and Huawei hex-style
     serials like ``485754437D4701C3`` that GenieACS may report instead.
     """
-    serial = str(serial_number or "").strip()
-    if not serial:
-        return []
+    return search_candidates(serial_number)
 
-    candidates: list[str] = []
 
-    def add(value: str | None) -> None:
-        value = str(value or "").strip()
-        if value and value not in candidates:
-            candidates.append(value)
+def _normalized_serial_candidates(serial_number: str | None) -> list[str]:
+    values = [
+        normalize_tr069_serial(value) for value in search_candidates(serial_number)
+    ]
+    return [value for value in dict.fromkeys(values) if value]
 
-    add(serial)
-    normalized = normalize_tr069_serial(serial)
-    add(normalized)
 
-    # Huawei display serials often appear as HWTC-XXXXXXXX on OLTs but as
-    # 48575443XXXXXXXX in GenieACS (ASCII vendor prefix hex-encoded).
-    if len(normalized) == 12 and normalized[:4].isalpha():
-        add(f"{normalized[:4]}-{normalized[4:]}")
-        vendor_hex = normalized[:4].encode("ascii").hex().upper()
-        add(vendor_hex + normalized[4:])
+def _resolve_unlinked_tr069_match(
+    db: Session,
+    ont: OntUnit,
+    server: Tr069AcsServer | None,
+) -> Tr069CpeDevice | None:
+    """Find and link an observed TR-069 row that already matches this ONT."""
+    serial_candidates = _normalized_serial_candidates(
+        getattr(ont, "serial_number", None)
+    )
+    if not serial_candidates:
+        return None
 
-    # If the provided serial is already in Huawei hex form, also try the
-    # human-readable vendor-prefix representation for local matching.
-    if len(normalized) == 16 and re.fullmatch(r"[0-9A-F]{16}", normalized):
-        try:
-            vendor_ascii = bytes.fromhex(normalized[:8]).decode("ascii")
-        except (ValueError, UnicodeDecodeError):
-            vendor_ascii = ""
-        if vendor_ascii.isalpha():
-            add(vendor_ascii + normalized[8:])
-            add(f"{vendor_ascii}-{normalized[8:]}")
+    conditions = [
+        _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(serial_candidates)
+    ]
+    for candidate in serial_candidates:
+        conditions.append(Tr069CpeDevice.genieacs_device_id.ilike(f"%-{candidate}"))
 
-    return candidates
+    stmt = (
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .where(Tr069CpeDevice.ont_unit_id.is_(None))
+        .where(Tr069CpeDevice.genieacs_device_id.is_not(None))
+        .where(
+            (Tr069CpeDevice.acs_server_id == server.id)
+            if server is not None
+            else Tr069CpeDevice.acs_server_id.is_not(None)
+        )
+        .where(or_(*conditions))
+        .limit(1)
+    )
+    device = db.scalars(stmt).first()
+    if device is None:
+        return None
+
+    from app.services.tr069 import link_tr069_device_to_ont
+
+    link_tr069_device_to_ont(
+        db,
+        device,
+        ont,
+        acs_server_id=server.id if server is not None else device.acs_server_id,
+    )
+    logger.info(
+        "Linked ONT %s to existing TR-069 device %s while resolving GenieACS identity",
+        ont.id,
+        device.id,
+    )
+    return device
 
 
 def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
@@ -250,6 +276,15 @@ def resolve_genieacs_with_reason(
         servers_to_try.append((acs_resolution.server, reason))
 
     serial = str(getattr(ont, "serial_number", "") or "").strip()
+    for server, _reason in servers_to_try:
+        matched = _resolve_unlinked_tr069_match(db, ont, server)
+        if matched and matched.genieacs_device_id:
+            client = create_genieacs_client(server.base_url)
+            return (
+                client,
+                str(matched.genieacs_device_id),
+            ), "resolved_via_unlinked_tr069_serial_match"
+
     for server, reason in servers_to_try:
         client = create_genieacs_client(server.base_url)
         try:

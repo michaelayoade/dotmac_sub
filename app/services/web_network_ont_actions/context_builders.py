@@ -80,10 +80,10 @@ def _desired_config_context(
             "wan_mode": wan_mode or "",
             "ip_protocol": str(values.get("ip_protocol") or ""),
             "wan_vlan": str(wan_vlan or ""),
-            "ip_address": str(values.get("wan_ip") or ""),
-            "subnet_mask": str(values.get("subnet_mask") or ""),
-            "gateway": str(values.get("gateway") or ""),
-            "dns_servers": str(values.get("dns_servers") or ""),
+            "ip_address": str(values.get("wan_static_ip") or ""),
+            "subnet_mask": str(values.get("wan_static_subnet") or ""),
+            "gateway": str(values.get("wan_static_gateway") or ""),
+            "dns_servers": str(values.get("wan_static_dns") or ""),
             "instance_index": 1,
             "pppoe_username": str(values.get("pppoe_username") or ""),
         },
@@ -364,35 +364,19 @@ def _configure_form_context_from_state(
     values = effective["values"]
     config_pack = effective.get("config_pack")
 
-    def _prefer_stored(stored_value: object, desired_key: str) -> object:
-        if stored_value not in (None, ""):
-            return stored_value
-        return values.get(desired_key)
+    lan_gateway = values.get("lan_ip")
+    lan_subnet = values.get("lan_subnet")
+    lan_dhcp_enabled = values.get("lan_dhcp_enabled")
+    lan_dhcp_start = values.get("lan_dhcp_start")
+    lan_dhcp_end = values.get("lan_dhcp_end")
 
-    lan_gateway = _prefer_stored(getattr(ont, "lan_gateway_ip", None), "lan_ip")
-    lan_subnet = _prefer_stored(getattr(ont, "lan_subnet_mask", None), "lan_subnet")
-    lan_dhcp_enabled = getattr(ont, "lan_dhcp_enabled", None)
-    if lan_dhcp_enabled is None:
-        lan_dhcp_enabled = values.get("lan_dhcp_enabled")
-    lan_dhcp_start = _prefer_stored(
-        getattr(ont, "lan_dhcp_start", None), "lan_dhcp_start"
-    )
-    lan_dhcp_end = _prefer_stored(getattr(ont, "lan_dhcp_end", None), "lan_dhcp_end")
+    wifi_ssid = values.get("wifi_ssid")
+    wifi_enabled = values.get("wifi_enabled")
+    wifi_channel = values.get("wifi_channel")
+    wifi_security = values.get("wifi_security_mode")
 
-    wifi_ssid = _prefer_stored(getattr(ont, "wifi_ssid", None), "wifi_ssid")
-    wifi_enabled = getattr(ont, "wifi_enabled", None)
-    if wifi_enabled is None:
-        wifi_enabled = values.get("wifi_enabled")
-    wifi_channel = _prefer_stored(getattr(ont, "wifi_channel", None), "wifi_channel")
-    wifi_security = _prefer_stored(
-        getattr(ont, "wifi_security_mode", None), "wifi_security_mode"
-    )
-
-    mgmt_mode = _prefer_stored(
-        _enum_value(getattr(ont, "mgmt_ip_mode", None)),
-        "mgmt_ip_mode",
-    )
-    mgmt_ip = _prefer_stored(getattr(ont, "mgmt_ip_address", None), "mgmt_ip_address")
+    mgmt_mode = values.get("mgmt_ip_mode")
+    mgmt_ip = values.get("mgmt_ip_address")
     mgmt_mode_value = _enum_value(mgmt_mode) or ""
     mgmt_remote_access = bool(getattr(ont, "mgmt_remote_access", False))
     if mgmt_mode_value in {"dhcp", "static_ip"}:
@@ -422,6 +406,10 @@ def _configure_form_context_from_state(
         "ont_id": ont_id,
         "wan_mode": values.get("wan_mode"),
         "ip_protocol": values.get("ip_protocol"),
+        "wan_static_ip": str(values.get("wan_static_ip") or ""),
+        "wan_static_subnet": str(values.get("wan_static_subnet") or ""),
+        "wan_static_gateway": str(values.get("wan_static_gateway") or ""),
+        "wan_static_dns": str(values.get("wan_static_dns") or ""),
         "pppoe_username": str(values.get("pppoe_username") or ""),
         "wan_vlan": values.get("wan_vlan"),
         "wan_vlan_id": values.get("wan_vlan_id") or "",

@@ -11,6 +11,7 @@ from app.models.network import OntUnit
 from app.services.genieacs_service import genieacs_service
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
     _log_action_audit,
@@ -19,6 +20,13 @@ from app.services.web_network_ont_actions._common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _wan_mode_to_instance_type(wan_mode: str | None) -> str:
+    normalized = str(wan_mode or "").strip().lower()
+    if normalized in {"dhcp", "static", "static_ip", "bridge", "bridged"}:
+        return "ip"
+    return "ppp"
 
 
 def set_wifi_ssid(
@@ -432,7 +440,7 @@ def set_wan_static(
     ip_address: str,
     subnet_mask: str,
     gateway: str,
-    dns_servers: list[str] | None = None,
+    dns_servers: str | None = None,
     instance_index: int = 1,
     request: Request | None = None,
 ) -> ActionResult:
@@ -589,7 +597,7 @@ def probe_wan_instance(
         db,
         ont_id,
         instance_index=instance_index,
-        wan_mode=wan_mode,
+        wan_type=_wan_mode_to_instance_type(wan_mode),
     )
 
     _log_action_audit(
@@ -625,7 +633,7 @@ def ensure_wan_instance(
         db,
         ont_id,
         instance_index=instance_index,
-        wan_mode=wan_mode,
+        wan_type=_wan_mode_to_instance_type(wan_mode),
         wan_vlan=wan_vlan,
     )
 
@@ -786,16 +794,9 @@ def set_mgmt_remote_access(
     if ont is None:
         return ActionResult(success=False, message="ONT not found.")
 
-    assignment = next(
-        (
-            item
-            for item in getattr(ont, "assignments", []) or []
-            if getattr(item, "active", False)
-        ),
-        None,
-    )
-    mode_value = getattr(assignment, "mgmt_ip_mode", None) if assignment else None
-    mode = getattr(mode_value, "value", mode_value) or "inactive"
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    mode = str(values.get("mgmt_ip_mode") or "inactive")
     if not enabled:
         mode = "inactive"
 
@@ -804,11 +805,15 @@ def set_mgmt_remote_access(
             db,
             ont_id,
             str(mode),
-            ip_address=getattr(assignment, "mgmt_ip_address", None)
-            if assignment
-            else None,
-            subnet=getattr(assignment, "mgmt_subnet", None) if assignment else None,
-            gateway=getattr(assignment, "mgmt_gateway", None) if assignment else None,
+            ip_address=(
+                str(values.get("mgmt_ip_address"))
+                if values.get("mgmt_ip_address")
+                else None
+            ),
+            subnet=str(values.get("mgmt_subnet")) if values.get("mgmt_subnet") else None,
+            gateway=(
+                str(values.get("mgmt_gateway")) if values.get("mgmt_gateway") else None
+            ),
         )
         result = ActionResult(success=ok, message=msg)
     else:

@@ -15,8 +15,6 @@ from app.models.network import (
     IpPool,
     IPv4Address,
     IPVersion,
-    MgmtIpMode,
-    OntAssignment,
     OnuMode,
     WanMode,
 )
@@ -27,6 +25,7 @@ from app.services import web_network_onts as web_network_onts_service
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
 
@@ -738,65 +737,50 @@ def save_provision_settings(
         static_dns_value = static_dns_value or reserved_dns
 
     try:
-        assignment = (
-            effective.get("assignment") if isinstance(effective, dict) else None
-        )
-        if assignment is None:
-            assignment = OntAssignment(ont_unit_id=ont.id, active=True)
-            db.add(assignment)
-
-        assignment.wan_mode = (
-            OnuMode.bridging
-            if onu_mode_value == OnuMode.bridging.value
-            else OnuMode.routing
-        )
-        assignment.ip_mode = (
-            MgmtIpMode.static_ip
-            if wan_protocol_value == "static"
-            else MgmtIpMode.dhcp
-        )
-        assignment.static_ip = static_ip_value if wan_protocol_value == "static" else None
-        assignment.static_subnet = (
-            static_subnet_value if wan_protocol_value == "static" else None
-        )
-        assignment.static_gateway = (
-            static_gateway_value if wan_protocol_value == "static" else None
-        )
-        assignment.static_dns = static_dns_value if wan_protocol_value == "static" else None
-        assignment.pppoe_username = (
-            pppoe_username_value if wan_protocol_value == "pppoe" else None
-        )
+        desired_updates = {
+            "wan.onu_mode": onu_mode_value,
+            "wan.mode": wan_mode_value,
+            "wan.static_ip": static_ip_value if wan_protocol_value == "static" else None,
+            "wan.static_subnet": (
+                static_subnet_value if wan_protocol_value == "static" else None
+            ),
+            "wan.static_gateway": (
+                static_gateway_value if wan_protocol_value == "static" else None
+            ),
+            "wan.static_dns": static_dns_value if wan_protocol_value == "static" else None,
+            "wan.pppoe_username": (
+                pppoe_username_value if wan_protocol_value == "pppoe" else None
+            ),
+            "management.ip_mode": mgmt_ip_mode_value,
+            "management.ip_address": (
+                mgmt_ip_address_value if mgmt_ip_mode_value == "static_ip" else None
+            ),
+            "management.subnet": (
+                mgmt_subnet_value if mgmt_ip_mode_value == "static_ip" else None
+            ),
+            "management.gateway": (
+                mgmt_gateway_value if mgmt_ip_mode_value == "static_ip" else None
+            ),
+            "lan.ip": lan_ip_value,
+            "lan.subnet": lan_subnet_value,
+            "lan.dhcp_enabled": dhcp_enabled_value,
+            "lan.dhcp_start": dhcp_start_value,
+            "lan.dhcp_end": dhcp_end_value,
+            "wifi.enabled": wifi_enabled_value,
+            "wifi.ssid": wifi_ssid_value,
+            "wifi.security_mode": wifi_security_mode_value,
+            "wifi.channel": wifi_channel_value,
+        }
         if wan_protocol_value != "pppoe":
-            assignment.pppoe_password = None
+            desired_updates["wan.pppoe_password"] = None
         elif pppoe_password_value:
-            assignment.pppoe_password = encrypt_credential(pppoe_password_value)
-        assignment.mgmt_ip_mode = (
-            MgmtIpMode.static_ip
-            if mgmt_ip_mode_value == "static_ip"
-            else MgmtIpMode.dhcp
-            if mgmt_ip_mode_value == "dhcp"
-            else MgmtIpMode.inactive
-        )
-        assignment.mgmt_ip_address = (
-            mgmt_ip_address_value if mgmt_ip_mode_value == "static_ip" else None
-        )
-        assignment.mgmt_subnet = (
-            mgmt_subnet_value if mgmt_ip_mode_value == "static_ip" else None
-        )
-        assignment.mgmt_gateway = (
-            mgmt_gateway_value if mgmt_ip_mode_value == "static_ip" else None
-        )
-        assignment.lan_ip = lan_ip_value
-        assignment.lan_subnet = lan_subnet_value
-        assignment.lan_dhcp_enabled = dhcp_enabled_value
-        assignment.lan_dhcp_start = dhcp_start_value
-        assignment.lan_dhcp_end = dhcp_end_value
-        assignment.wifi_enabled = wifi_enabled_value
-        assignment.wifi_ssid = wifi_ssid_value
+            desired_updates["wan.pppoe_password"] = encrypt_credential(
+                pppoe_password_value
+            )
         if wifi_password_value:
-            assignment.wifi_password = encrypt_credential(wifi_password_value)
-        assignment.wifi_security_mode = wifi_security_mode_value
-        assignment.wifi_channel = wifi_channel_value
+            desired_updates["wifi.password"] = encrypt_credential(wifi_password_value)
+        set_desired_config_values(ont, desired_updates)
+        db.add(ont)
 
         if mgmt_ip_mode_value:
             update_service_order_execution_context_for_ont(
