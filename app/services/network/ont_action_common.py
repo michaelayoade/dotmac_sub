@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice, OntUnit
 from app.services.network._resolve import (
+    clear_stale_genieacs_device_id,
     resolve_genieacs_for_cpe_with_reason,
     resolve_genieacs_with_reason,
 )
@@ -41,6 +42,66 @@ class DeviceConfig:
 
 TR069_ROOT_DEVICE = "Device"
 TR069_ROOT_IGD = "InternetGatewayDevice"
+
+
+def _is_device_not_found_error(exc: Exception, device_id: str | None = None) -> bool:
+    text = str(exc)
+    if "Device not found:" not in text:
+        return False
+    return not device_id or str(device_id) in text
+
+
+def refresh_stale_ont_genieacs_identity(
+    db: Session,
+    ont: OntUnit,
+    client: Any,
+    device_id: str,
+) -> tuple[Any, str] | None:
+    """Clear a stale GenieACS id, rediscover by serial, and return fresh identity."""
+    try:
+        client.get_device(device_id)
+        return client, device_id
+    except Exception as exc:  # noqa: BLE001 - client wraps transport in GenieACSError
+        if not _is_device_not_found_error(exc, device_id):
+            raise
+
+    logger.info(
+        "Clearing stale GenieACS device id %s for ONT %s and resolving by serial",
+        device_id,
+        ont.serial_number,
+    )
+    clear_stale_genieacs_device_id(db, ont, device_id)
+    resolved, reason = resolve_genieacs_with_reason(db, ont)
+    if not resolved:
+        logger.info(
+            "Stale GenieACS id %s for ONT %s could not be rediscovered: %s",
+            device_id,
+            ont.serial_number,
+            reason,
+        )
+        return None
+    fresh_client, fresh_device_id = resolved
+    if fresh_device_id == device_id:
+        return None
+    logger.info(
+        "Rediscovered ONT %s GenieACS identity: %s -> %s",
+        ont.serial_number,
+        device_id,
+        fresh_device_id,
+    )
+    return fresh_client, fresh_device_id
+
+
+def _missing_acs_identity_result(ont: OntUnit) -> ActionResult:
+    return ActionResult(
+        success=False,
+        message=(
+            f"ONT {ont.serial_number} has no GenieACS identity. Sync-only "
+            "provisioning requires a resolvable ACS device before push."
+        ),
+        data={"missing_acs_identity": True, "serial": ont.serial_number},
+        waiting=False,
+    )
 
 
 def detect_data_model_root(
@@ -410,15 +471,7 @@ def get_ont_client_or_error(
     resolved, error = resolve_client_or_error(db, ont)
     if error:
         if error.message.startswith("No TR-069 device found in GenieACS"):
-            return None, ActionResult(
-                success=False,
-                message=(
-                    f"ONT {ont.serial_number} has no GenieACS identity. Sync-only "
-                    "provisioning requires a resolvable ACS device before push."
-                ),
-                data={"missing_acs_identity": True, "serial": ont.serial_number},
-                waiting=False,
-            )
+            return None, _missing_acs_identity_result(ont)
         return None, error
     if resolved is None:
         return None, ActionResult(
@@ -426,6 +479,16 @@ def get_ont_client_or_error(
             message="No GenieACS server configured for this ONT.",
         )
     client, device_id = resolved
+    try:
+        refreshed = refresh_stale_ont_genieacs_identity(db, ont, client, device_id)
+    except Exception as exc:
+        return None, ActionResult(
+            success=False,
+            message=f"Failed to fetch device from GenieACS: {exc}",
+        )
+    if not refreshed:
+        return None, _missing_acs_identity_result(ont)
+    client, device_id = refreshed
     return (ont, client, device_id), None
 
 

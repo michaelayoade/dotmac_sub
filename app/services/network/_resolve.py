@@ -47,6 +47,8 @@ def _resolve_unlinked_tr069_match(
     db: Session,
     ont: OntUnit,
     server: Tr069AcsServer | None,
+    *,
+    require_unlinked: bool = True,
 ) -> Tr069CpeDevice | None:
     """Find and link an observed TR-069 row that already matches this ONT."""
     serial_candidates = _normalized_serial_candidates(
@@ -64,7 +66,6 @@ def _resolve_unlinked_tr069_match(
     stmt = (
         select(Tr069CpeDevice)
         .where(Tr069CpeDevice.is_active.is_(True))
-        .where(Tr069CpeDevice.ont_unit_id.is_(None))
         .where(Tr069CpeDevice.genieacs_device_id.is_not(None))
         .where(
             (Tr069CpeDevice.acs_server_id == server.id)
@@ -74,6 +75,8 @@ def _resolve_unlinked_tr069_match(
         .where(or_(*conditions))
         .limit(1)
     )
+    if require_unlinked:
+        stmt = stmt.where(Tr069CpeDevice.ont_unit_id.is_(None))
     device = db.scalars(stmt).first()
     if device is None:
         return None
@@ -92,6 +95,40 @@ def _resolve_unlinked_tr069_match(
         device.id,
     )
     return device
+
+
+def clear_stale_genieacs_device_id(
+    db: Session,
+    ont: OntUnit,
+    stale_device_id: str,
+) -> bool:
+    """Clear a stale linked GenieACS ID so serial search can rediscover it."""
+    clean_id = str(stale_device_id or "").strip()
+    if not clean_id:
+        return False
+    stmt = (
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.ont_unit_id == ont.id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .where(Tr069CpeDevice.genieacs_device_id == clean_id)
+        .limit(1)
+    )
+    device = db.scalars(stmt).first()
+    if device is None:
+        return False
+    device.genieacs_device_id = None
+    try:
+        db.flush()
+    except Exception:
+        db.rollback()
+        logger.debug(
+            "Failed to clear stale GenieACS device id %s for ONT %s",
+            clean_id,
+            ont.id,
+            exc_info=True,
+        )
+        return False
+    return True
 
 
 def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
@@ -277,7 +314,12 @@ def resolve_genieacs_with_reason(
 
     serial = str(getattr(ont, "serial_number", "") or "").strip()
     for server, _reason in servers_to_try:
-        matched = _resolve_unlinked_tr069_match(db, ont, server)
+        matched = _resolve_unlinked_tr069_match(
+            db,
+            ont,
+            server,
+            require_unlinked=False,
+        )
         if matched and matched.genieacs_device_id:
             client = create_genieacs_client(server.base_url)
             return (

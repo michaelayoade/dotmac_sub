@@ -247,6 +247,54 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
     assert deleted == ["gpv-task", "gpv-task", "spv-task"]
 
 
+def test_ont_client_resolution_repairs_stale_genieacs_identity(
+    db_session,
+    monkeypatch,
+) -> None:
+    from app.models.network import OntUnit
+    from app.services.network import ont_action_common
+
+    ont = OntUnit(serial_number="HWTC600AC29C", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+
+    calls: dict[str, object] = {"refreshed": False}
+    stale_client = object()
+    fresh_client = object()
+
+    def fake_resolve_client_or_error(_db, resolved_ont):
+        assert resolved_ont.id == ont.id
+        return (stale_client, "stale-device"), None
+
+    def fake_refresh(_db, refreshed_ont, client, device_id):
+        assert refreshed_ont.id == ont.id
+        assert client is stale_client
+        assert device_id == "stale-device"
+        calls["refreshed"] = True
+        return fresh_client, "fresh-device"
+
+    monkeypatch.setattr(
+        ont_action_common,
+        "resolve_client_or_error",
+        fake_resolve_client_or_error,
+    )
+    monkeypatch.setattr(
+        ont_action_common,
+        "refresh_stale_ont_genieacs_identity",
+        fake_refresh,
+    )
+
+    resolved, error = ont_action_common.get_ont_client_or_error(db_session, str(ont.id))
+
+    assert error is None
+    assert resolved is not None
+    resolved_ont, client, device_id = resolved
+    assert resolved_ont.id == ont.id
+    assert client is fresh_client
+    assert device_id == "fresh-device"
+    assert calls["refreshed"] is True
+
+
 def test_genieacs_service_download_uses_acs_download_rpc(monkeypatch) -> None:
     from app.services.genieacs_service import genieacs_service
     from app.services.network import ont_action_common
