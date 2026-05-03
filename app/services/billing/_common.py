@@ -164,6 +164,28 @@ def _resolve_tax_rate(db: Session, tax_rate_id: str | None) -> TaxRate | None:
     return rate
 
 
+def _calculate_tax_amount(
+    amount: Decimal,
+    rate_percent: Decimal,
+    tax_application: TaxApplication,
+) -> Decimal:
+    """Calculate the tax amount for a line.
+
+    Inclusive tax extracts the tax portion from the gross amount. Exclusive tax
+    calculates tax to add on top. Exempt lines carry no tax.
+    """
+    amount = round_money(to_decimal(amount))
+    rate_percent = to_decimal(rate_percent)
+    if tax_application == TaxApplication.exempt or rate_percent <= 0:
+        return Decimal("0.00")
+    if tax_application == TaxApplication.inclusive:
+        return round_money(
+            amount
+            - (amount / (Decimal("1.00") + rate_percent / Decimal("100.00")))
+        )
+    return round_money(amount * rate_percent / Decimal("100.00"))
+
+
 def _validate_invoice_currency(invoice: Invoice, currency: str | None):
     """Validate that currency matches the invoice."""
     if currency and invoice.currency != currency:
@@ -214,12 +236,8 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
                     if line.tax_application == TaxApplication.inclusive:
                         # Legacy billing semantics: keep gross amount in
                         # subtotal and additionally track extracted tax.
-                        tax_amount = round_money(
-                            amount
-                            - (
-                                amount
-                                / (Decimal("1.00") + rate_percent / Decimal("100.00"))
-                            )
+                        tax_amount = _calculate_tax_amount(
+                            amount, rate_percent, line.tax_application
                         )
                         subtotal += amount
                         tax_total += tax_amount
@@ -227,8 +245,8 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
                         subtotal += amount
                     else:
                         # Exclusive: tax is added on top
-                        tax_amount = round_money(
-                            amount * rate_percent / Decimal("100.00")
+                        tax_amount = _calculate_tax_amount(
+                            amount, rate_percent, line.tax_application
                         )
                         subtotal += amount
                         tax_total += tax_amount
@@ -404,12 +422,8 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
                     rate_percent = to_decimal(rate.rate)
                     if line.tax_application == TaxApplication.inclusive:
                         # Inclusive: amount already contains tax — extract it
-                        tax_amount = round_money(
-                            amount
-                            - (
-                                amount
-                                / (Decimal("1.00") + rate_percent / Decimal("100.00"))
-                            )
+                        tax_amount = _calculate_tax_amount(
+                            amount, rate_percent, line.tax_application
                         )
                         subtotal += round_money(amount - tax_amount)
                         tax_total += tax_amount
@@ -417,8 +431,8 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
                         subtotal += amount
                     else:
                         # Exclusive: tax is added on top
-                        tax_amount = round_money(
-                            amount * rate_percent / Decimal("100.00")
+                        tax_amount = _calculate_tax_amount(
+                            amount, rate_percent, line.tax_application
                         )
                         subtotal += amount
                         tax_total += tax_amount

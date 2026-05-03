@@ -54,6 +54,7 @@ from app.schemas.billing import (
 )
 from app.services import billing as billing_service
 from app.services.billing._common import (
+    _calculate_tax_amount,
     _validate_invoice_line_amount,
     _validate_invoice_totals,
 )
@@ -555,6 +556,17 @@ class TestTaxRateCRUD:
 
 
 class TestInvoiceLineWithTax:
+    def test_calculate_tax_amount_handles_supported_applications(self):
+        assert _calculate_tax_amount(
+            Decimal("100.00"), Decimal("10.0000"), TaxApplication.exclusive
+        ) == Decimal("10.00")
+        assert _calculate_tax_amount(
+            Decimal("110.00"), Decimal("10.0000"), TaxApplication.inclusive
+        ) == Decimal("10.00")
+        assert _calculate_tax_amount(
+            Decimal("100.00"), Decimal("10.0000"), TaxApplication.exempt
+        ) == Decimal("0.00")
+
     def test_line_with_exclusive_tax(self, db_session, subscriber):
         tax = billing_service.tax_rates.create(
             db_session,

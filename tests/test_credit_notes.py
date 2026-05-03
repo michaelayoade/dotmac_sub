@@ -1,11 +1,12 @@
 from decimal import Decimal
 
-from app.models.billing import CreditNoteStatus
+from app.models.billing import CreditNoteStatus, TaxApplication
 from app.schemas.billing import (
     CreditNoteApplyRequest,
     CreditNoteCreate,
     CreditNoteLineCreate,
     InvoiceCreate,
+    TaxRateCreate,
 )
 from app.services import billing as billing_service
 
@@ -91,3 +92,39 @@ def test_credit_note_apply_without_lines_uses_total(db_session, subscriber_accou
     assert refreshed_credit_note.total == Decimal("50.00")
     assert refreshed_credit_note.applied_total == Decimal("50.00")
     assert refreshed_credit_note.status == CreditNoteStatus.applied
+
+
+def test_credit_note_line_inclusive_tax_extracts_tax(
+    db_session,
+    subscriber_account,
+):
+    tax = billing_service.tax_rates.create(
+        db_session,
+        TaxRateCreate(name="Credit GST", rate=Decimal("10.0000")),
+    )
+    credit_note = billing_service.credit_notes.create(
+        db_session,
+        CreditNoteCreate(
+            account_id=subscriber_account.id,
+            status=CreditNoteStatus.issued,
+            currency="USD",
+        ),
+    )
+    billing_service.credit_note_lines.create(
+        db_session,
+        CreditNoteLineCreate(
+            credit_note_id=credit_note.id,
+            description="Inclusive service credit",
+            quantity=Decimal("1"),
+            unit_price=Decimal("110.00"),
+            tax_rate_id=tax.id,
+            tax_application=TaxApplication.inclusive,
+        ),
+    )
+
+    refreshed_credit_note = billing_service.credit_notes.get(
+        db_session, str(credit_note.id)
+    )
+    assert refreshed_credit_note.subtotal == Decimal("100.00")
+    assert refreshed_credit_note.tax_total == Decimal("10.00")
+    assert refreshed_credit_note.total == Decimal("110.00")
