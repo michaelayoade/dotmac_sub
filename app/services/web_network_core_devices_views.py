@@ -2337,13 +2337,7 @@ def _ont_desired_config_summary(
     ont_plan: dict[str, object],
 ) -> dict[str, object]:
     """Return DB-backed intended config for the overview page."""
-    plan = ont_plan if isinstance(ont_plan, dict) else {}
-    mgmt = plan.get("configure_management_ip")
-    mgmt = mgmt if isinstance(mgmt, dict) else {}
-    lan = plan.get("configure_lan_tr069")
-    lan = lan if isinstance(lan, dict) else {}
-    wifi = plan.get("configure_wifi_tr069")
-    wifi = wifi if isinstance(wifi, dict) else {}
+    _ = ont_plan
     olt_snapshot = getattr(ont, "olt_observed_snapshot", None)
     olt_snapshot = olt_snapshot if isinstance(olt_snapshot, dict) else {}
     iphost = olt_snapshot.get("iphost_config")
@@ -2356,21 +2350,17 @@ def _ont_desired_config_summary(
     rows = [
         {
             "label": "Mgmt mode",
-            "value": _display_config_value(
-                values.get("mgmt_ip_mode") or mgmt.get("ip_mode")
-            ),
+            "value": _display_config_value(values.get("mgmt_ip_mode")),
             "value_class": "",
         },
         {
             "label": "Mgmt VLAN",
-            "value": _display_config_value(mgmt_vlan or mgmt.get("vlan_id")),
+            "value": _display_config_value(mgmt_vlan),
             "value_class": "font-mono",
         },
         {
             "label": "Mgmt IP",
-            "value": _display_config_value(
-                values.get("mgmt_ip_address") or mgmt.get("ip_address")
-            ),
+            "value": _display_config_value(values.get("mgmt_ip_address")),
             "value_class": "font-mono",
         },
         {
@@ -2409,47 +2399,37 @@ def _ont_desired_config_summary(
         },
         {
             "label": "PPPoE password",
-            "value": _secret_status(getattr(ont, "pppoe_password", None)),
+            "value": _secret_status(values.get("pppoe_password")),
             "value_class": "",
         },
         {
             "label": "LAN gateway",
-            "value": _display_config_value(
-                getattr(ont, "lan_gateway_ip", None) or lan.get("lan_ip")
-            ),
+            "value": _display_config_value(values.get("lan_ip")),
             "value_class": "font-mono",
         },
         {
             "label": "LAN subnet",
-            "value": _display_config_value(
-                getattr(ont, "lan_subnet_mask", None) or lan.get("lan_subnet")
-            ),
+            "value": _display_config_value(values.get("lan_subnet")),
             "value_class": "font-mono",
         },
         {
             "label": "WiFi enabled",
-            "value": _display_config_value(
-                values.get("wifi_enabled")
-                if values.get("wifi_enabled") is not None
-                else wifi.get("enabled")
-            ),
+            "value": _display_config_value(values.get("wifi_enabled")),
             "value_class": "",
         },
         {
             "label": "SSID",
-            "value": _display_config_value(values.get("wifi_ssid") or wifi.get("ssid")),
+            "value": _display_config_value(values.get("wifi_ssid")),
             "value_class": "font-mono",
         },
         {
             "label": "WiFi password",
-            "value": _secret_status(getattr(ont, "wifi_password", None)),
+            "value": _secret_status(values.get("wifi_password")),
             "value_class": "",
         },
         {
             "label": "WiFi channel",
-            "value": _display_config_value(
-                values.get("wifi_channel") or wifi.get("channel")
-            ),
+            "value": _display_config_value(values.get("wifi_channel")),
             "value_class": "",
         },
     ]

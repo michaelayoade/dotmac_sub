@@ -26,6 +26,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.services.network.ont_desired_config import (
+    desired_config,
+    get_desired_config_value,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -340,14 +345,18 @@ class Tr069ConfigBatch:
                 periodic_inform_interval=periodic_inform_interval,
             )
 
-        # LAN configuration from ONT
-        lan_ip = getattr(ont, "lan_gateway_ip", None)
-        lan_subnet = getattr(ont, "lan_subnet_mask", None)
-        dhcp_enabled = getattr(ont, "lan_dhcp_enabled", None)
-        dhcp_start = getattr(ont, "lan_dhcp_start", None)
-        dhcp_end = getattr(ont, "lan_dhcp_end", None)
+        config = desired_config(ont)
 
-        if any(v is not None for v in [lan_ip, lan_subnet, dhcp_enabled, dhcp_start, dhcp_end]):
+        # LAN configuration from desired_config
+        lan_ip = get_desired_config_value(config, "lan", "ip")
+        lan_subnet = get_desired_config_value(config, "lan", "subnet")
+        dhcp_enabled = get_desired_config_value(config, "lan", "dhcp_enabled")
+        dhcp_start = get_desired_config_value(config, "lan", "dhcp_start")
+        dhcp_end = get_desired_config_value(config, "lan", "dhcp_end")
+
+        if any(
+            v is not None for v in [lan_ip, lan_subnet, dhcp_enabled, dhcp_start, dhcp_end]
+        ):
             batch.add_lan_config(
                 lan_ip=lan_ip,
                 subnet=lan_subnet,
@@ -356,13 +365,15 @@ class Tr069ConfigBatch:
                 dhcp_end=dhcp_end,
             )
 
-        # WiFi configuration from ONT
-        wifi_ssid = getattr(ont, "wifi_ssid", None)
-        wifi_password = getattr(ont, "wifi_password", None)
-        wifi_enabled = getattr(ont, "wifi_enabled", None)
-        wifi_channel = getattr(ont, "wifi_channel", None)
+        # WiFi configuration from desired_config
+        wifi_ssid = get_desired_config_value(config, "wifi", "ssid")
+        wifi_password = get_desired_config_value(config, "wifi", "password")
+        wifi_enabled = get_desired_config_value(config, "wifi", "enabled")
+        wifi_channel = get_desired_config_value(config, "wifi", "channel")
 
-        if any(v is not None for v in [wifi_ssid, wifi_password, wifi_enabled, wifi_channel]):
+        if any(
+            v is not None for v in [wifi_ssid, wifi_password, wifi_enabled, wifi_channel]
+        ):
             # Decrypt password if encrypted
             decrypted_password = None
             if wifi_password:

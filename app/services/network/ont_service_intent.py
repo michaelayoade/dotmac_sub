@@ -162,12 +162,6 @@ def _service_port_value(
     return _value(fallback_value)
 
 
-from app.services.network._util import first_present
-
-def _first_present(*values: object) -> object | None:
-    return first_present(*values, exclude_empty_list=True)
-
-
 def build_service_intent(
     ont: object,
     *,
@@ -177,74 +171,37 @@ def build_service_intent(
 ) -> dict[str, object]:
     """Return a normalized desired-service summary for an ONT.
 
-    The ONT model contains the durable service intent. LAN configuration is
-    stored directly on the ONT (independent of service orders). Service order
-    execution context provides fallback for backwards compatibility and fills
-    gaps for values not yet on the ONT model, such as WiFi settings.
+    Intended config is resolved only through ``resolve_effective_ont_config``:
+    per-ONT ``desired_config`` plus OLT config-pack defaults. Service-order
+    execution context is historical metadata and must not fill intended values.
     """
     subscriber_info = subscriber_info or {}
-    ont_plan = ont_plan or {}
-    mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
-    lan_plan_from_order = _plan_section(ont_plan, "configure_lan_tr069")
-    lan_plan = {
-        "lan_ip": _first_present(
-            getattr(ont, "lan_gateway_ip", None),
-            lan_plan_from_order.get("lan_ip"),
-        ),
-        "lan_subnet": _first_present(
-            getattr(ont, "lan_subnet_mask", None),
-            lan_plan_from_order.get("lan_subnet"),
-        ),
-        "dhcp_enabled": _first_present(
-            getattr(ont, "lan_dhcp_enabled", None),
-            lan_plan_from_order.get("dhcp_enabled"),
-        ),
-        "dhcp_start": _first_present(
-            getattr(ont, "lan_dhcp_start", None),
-            lan_plan_from_order.get("dhcp_start"),
-        ),
-        "dhcp_end": _first_present(
-            getattr(ont, "lan_dhcp_end", None),
-            lan_plan_from_order.get("dhcp_end"),
-        ),
-    }
-    wifi_plan_from_order = _plan_section(ont_plan, "configure_wifi_tr069")
+    _ = ont_plan
     effective = resolve_effective_ont_config(db, ont) if db is not None else {}
     effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
     wifi_plan = {
-        "enabled": _first_present(
-            effective_values.get("wifi_enabled"),
-            wifi_plan_from_order.get("enabled"),
-        ),
-        "ssid": _first_present(
-            effective_values.get("wifi_ssid"),
-            wifi_plan_from_order.get("ssid"),
-        ),
-        "channel": _first_present(
-            effective_values.get("wifi_channel"),
-            wifi_plan_from_order.get("channel"),
-        ),
-        "security_mode": _first_present(
-            effective_values.get("wifi_security_mode"),
-            wifi_plan_from_order.get("security_mode"),
-        ),
+        "enabled": effective_values.get("wifi_enabled"),
+        "ssid": effective_values.get("wifi_ssid"),
+        "channel": effective_values.get("wifi_channel"),
+        "security_mode": effective_values.get("wifi_security_mode"),
     }
-    service_port_plan = _plan_section(ont_plan, "create_service_port")
+    lan_plan = {
+        "lan_ip": effective_values.get("lan_ip"),
+        "lan_subnet": effective_values.get("lan_subnet"),
+        "dhcp_enabled": effective_values.get("lan_dhcp_enabled"),
+        "dhcp_start": effective_values.get("lan_dhcp_start"),
+        "dhcp_end": effective_values.get("lan_dhcp_end"),
+    }
+    service_port_plan: dict[str, Any] = {}
     wan_service_instances = _active_wan_service_instances(ont, db)
     profile_wan_services = wan_service_instances
     profile_service_vlans = _profile_service_vlans(profile_wan_services)
     profile_service_gems = _profile_service_gems(profile_wan_services)
     profile_service_tag_modes = _profile_service_tag_modes(profile_wan_services)
 
-    onu_mode = _enum_value(effective_values.get("onu_mode")) or _enum_value(
-        getattr(ont, "onu_mode", None)
-    )
+    onu_mode = _enum_value(effective_values.get("onu_mode"))
     wan_mode = _enum_value(effective_values.get("wan_mode"))
-    mgmt_ip_mode = (
-        _enum_value(effective_values.get("mgmt_ip_mode"))
-        or mgmt_plan.get("ip_mode")
-        or ""
-    )
+    mgmt_ip_mode = _enum_value(effective_values.get("mgmt_ip_mode")) or ""
     mgmt_ip_mode = "static" if mgmt_ip_mode == "static_ip" else str(mgmt_ip_mode)
 
     pppoe_username = effective_values.get("pppoe_username")
@@ -290,12 +247,9 @@ def build_service_intent(
                 },
                 {
                     "label": "Management IP",
-                    "value": _value(
-                        effective_values.get("mgmt_ip_address")
-                        or mgmt_plan.get("ip_address")
-                    ),
+                    "value": _value(effective_values.get("mgmt_ip_address")),
                 },
-                {"label": "Gateway", "value": _value(mgmt_plan.get("gateway"))},
+                {"label": "Gateway", "value": _value(effective_values.get("mgmt_gateway"))},
             ],
         },
         {

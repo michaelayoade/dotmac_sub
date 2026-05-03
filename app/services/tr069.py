@@ -327,7 +327,6 @@ def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
     )
     if (
         get_desired_config_value(desired_config(ont), "delivery", "pending_apply")
-        or ont.tr069_last_snapshot
         or effective_values.get("pppoe_username")
         or effective_values.get("wan_static_ip")
         or effective_values.get("wifi_ssid")
@@ -340,10 +339,6 @@ def _ont_has_saved_service_intent(db: Session, ont_id: object) -> bool:
         or effective_values.get("lan_dhcp_enabled") is not None
         or effective_values.get("lan_dhcp_start")
         or effective_values.get("lan_dhcp_end")
-        or ont.lan_gateway_ip
-        or ont.lan_subnet_mask
-        or ont.lan_dhcp_start
-        or ont.lan_dhcp_end
         or effective_values.get("wan_mode")
         or effective_values.get("wan_vlan")
     ):

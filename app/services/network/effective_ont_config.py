@@ -1,8 +1,8 @@
-"""Resolve ONT desired state from OLT config pack plus OntAssignment service config.
+"""Resolve ONT desired state from OLT config pack plus ONT desired config.
 
 Architecture:
 - Network config (VLANs, profiles, GEM indices, TR-069) comes from OLT Config Pack
-- Service config (WAN mode, IP mode, PPPoE, WiFi) comes from OntAssignment
+- Service config (WAN mode, IP mode, PPPoE, LAN, WiFi) comes from OntUnit.desired_config
 """
 
 from __future__ import annotations
@@ -160,10 +160,10 @@ def resolve_effective_ont_config(
     *,
     olt: OLTDevice | None = None,
 ) -> dict[str, Any]:
-    """Return ONT desired config resolved from OLT config pack and OntAssignment.
+    """Return ONT desired config resolved from OLT config pack and desired_config.
 
-    Service config (WAN mode, IP mode, PPPoE, LAN, WiFi) is read from the active
-    OntAssignment.
+    Service config (WAN mode, IP mode, PPPoE, LAN, WiFi) is read from
+    ``OntUnit.desired_config``.
 
     Network config (VLANs, profiles, GEM indices, TR-069) comes from OltConfigPack.
     """

@@ -22,6 +22,7 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     encrypt_credential_with_key,
 )
+from app.services.network.ont_desired_config import rotate_desired_config_credentials
 from app.services.secrets import clear_cache, read_secret_fields, write_secret
 from app.services.settings_cache import SettingsCache
 
@@ -57,6 +58,10 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
 _MODEL_FIELDS: tuple[tuple[type[Any], tuple[str, ...]], ...] = tuple(
     (model, ENCRYPTED_MODEL_FIELDS[model_name])
     for model_name, model in _MODEL_BY_NAME.items()
+)
+
+_ONT_DESIRED_CONFIG_CREDENTIAL_PATHS: tuple[tuple[str, ...], ...] = (
+    ("wifi", "password"),
 )
 
 
@@ -175,6 +180,37 @@ def _rotate_model_fields(
     return updated_records, updated_values
 
 
+def _rotate_ont_desired_config_credentials(
+    db: Session,
+    *,
+    old_key: str,
+    new_key: str,
+) -> tuple[int, int]:
+    updated_records = 0
+    updated_values = 0
+    for ont in db.scalars(select(OntUnit)).all():
+        def rotate_nested_value(
+            path: tuple[str, ...], current: Any
+        ) -> tuple[Any, bool]:
+            try:
+                return _rotate_value(current, old_key=old_key, new_key=new_key)
+            except ValueError as exc:
+                dotted_path = ".".join(("desired_config", *path))
+                raise ValueError(
+                    f"Failed to rotate OntUnit.{dotted_path} id={_record_identity(ont)}"
+                ) from exc
+
+        changed_values = rotate_desired_config_credentials(
+            ont,
+            _ONT_DESIRED_CONFIG_CREDENTIAL_PATHS,
+            rotate_nested_value,
+        )
+        if changed_values:
+            updated_records += 1
+            updated_values += changed_values
+    return updated_records, updated_values
+
+
 def _rotate_domain_settings(
     db: Session, *, old_key: str, new_key: str
 ) -> tuple[int, int]:
@@ -257,6 +293,12 @@ def rotate_credential_encryption_material(
         )
         updated_records += records
         updated_values += values
+
+    records, values = _rotate_ont_desired_config_credentials(
+        db, old_key=old_key, new_key=new_key
+    )
+    updated_records += records
+    updated_values += values
 
     records, values = _rotate_domain_settings(db, old_key=old_key, new_key=new_key)
     updated_records += records

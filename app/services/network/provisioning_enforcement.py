@@ -270,8 +270,8 @@ class ProvisioningEnforcement:
     ) -> dict[str, int]:
         """Push WiFi configuration to ONTs via TR-069.
 
-        Reads wifi_ssid and wifi_password from the OntUnit model and pushes
-        them to the device using GenieACS. This is idempotent - pushing the
+        Reads effective desired_config values and pushes them to the device
+        using GenieACS. This is idempotent - pushing the
         same config multiple times has no adverse effects.
         """
         from app.services.credential_crypto import decrypt_credential
@@ -290,7 +290,7 @@ class ProvisioningEnforcement:
                 skipped += 1
                 continue
 
-            # Get password from effective config (stored as override)
+            # Get password from effective config.
             password: str | None = None
             wifi_password_override = _effective_field(db, ont, "wifi.password")
             if wifi_password_override:

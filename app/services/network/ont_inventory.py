@@ -460,11 +460,6 @@ def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") 
     ont.tr069_acs_server_id = None
     ont.mgmt_remote_access = False
     ont.voip_enabled = False
-    ont.lan_gateway_ip = None
-    ont.lan_subnet_mask = None
-    ont.lan_dhcp_enabled = None
-    ont.lan_dhcp_start = None
-    ont.lan_dhcp_end = None
     ont.provisioning_steps_completed = None
     reset_status_for_inventory(ont)
     ont.onu_rx_signal_dbm = None

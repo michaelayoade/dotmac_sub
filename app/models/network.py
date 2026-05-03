@@ -1250,13 +1250,6 @@ class OntUnit(Base):
     mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # LAN configuration (independent of service orders)
-    lan_gateway_ip: Mapped[str | None] = mapped_column(String(64))
-    lan_subnet_mask: Mapped[str | None] = mapped_column(String(64))
-    lan_dhcp_enabled: Mapped[bool | None] = mapped_column(Boolean)
-    lan_dhcp_start: Mapped[str | None] = mapped_column(String(64))
-    lan_dhcp_end: Mapped[str | None] = mapped_column(String(64))
-
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
         Enum(
             OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False
@@ -1367,22 +1360,6 @@ class OntUnit(Base):
     @pppoe_password.setter
     def pppoe_password(self, value) -> None:
         self._set_desired_value("wan", "pppoe_password", value)
-
-    @property
-    def wifi_ssid(self):
-        return self._get_desired_value("wifi", "ssid")
-
-    @wifi_ssid.setter
-    def wifi_ssid(self, value) -> None:
-        self._set_desired_value("wifi", "ssid", value)
-
-    @property
-    def wifi_password(self):
-        return self._get_desired_value("wifi", "password")
-
-    @wifi_password.setter
-    def wifi_password(self, value) -> None:
-        self._set_desired_value("wifi", "password", value)
 
     @property
     def mgmt_ip_address(self):

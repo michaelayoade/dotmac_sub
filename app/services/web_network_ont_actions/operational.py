@@ -176,13 +176,14 @@ def _build_ont_operations_runbook(
     else:
         has_internet_credentials_intent = False
     has_lan_intent = bool(
-        getattr(ont, "lan_gateway_ip", None)
-        or getattr(ont, "lan_subnet_mask", None)
-        or _intent_step_present(ont_plan, "configure_lan_tr069")
+        effective_values.get("lan_ip")
+        or effective_values.get("lan_subnet")
+        or effective_values.get("lan_dhcp_enabled") is not None
+        or effective_values.get("lan_dhcp_start")
+        or effective_values.get("lan_dhcp_end")
     )
     has_wifi_intent = bool(
-        _intent_step_present(ont_plan, "configure_wifi_tr069")
-        or effective_values.get("wifi_enabled")
+        effective_values.get("wifi_enabled") is not None
         or effective_values.get("wifi_ssid")
         or effective_values.get("wifi_channel")
         or effective_values.get("wifi_security_mode")

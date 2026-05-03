@@ -134,9 +134,10 @@ def test_unified_config_context_does_not_perform_live_reads(
 
     ont = OntUnit(
         serial_number="DB-ONLY-CONFIG",
-        pppoe_username="customer@example",
-        wifi_ssid="CustomerWiFi",
-        lan_gateway_ip="192.168.44.1",
+        desired_config={
+            "wan": {"pppoe_username": "customer@example"},
+            "wifi": {"ssid": "CustomerWiFi"},
+        },
     )
     db_session.add(ont)
     db_session.commit()
@@ -178,9 +179,11 @@ def test_unified_config_context_preserves_cached_freshness_and_summaries(
     ont = OntUnit(
         serial_number="CTX-SUMMARY-001",
         olt_device=olt,
-        pppoe_username="db-user",
-        wifi_ssid="DB-SSID",
-        mgmt_ip_address="10.30.0.44",
+        desired_config={
+            "wan": {"pppoe_username": "db-user"},
+            "wifi": {"ssid": "DB-SSID"},
+            "management": {"ip_address": "10.30.0.44"},
+        },
         observed_wan_ip="41.0.0.10",
         observed_pppoe_status="connected",
     )
@@ -249,10 +252,11 @@ def test_unified_config_context_exposes_shared_db_observed_state(
     ont = OntUnit(
         serial_number="CTX-TABS-001",
         olt_device=olt,
-        pppoe_username="shared-user",
-        wifi_ssid="Shared-SSID",
-        lan_gateway_ip="192.168.55.1",
-        lan_subnet_mask="255.255.255.0",
+        desired_config={
+            "wan": {"pppoe_username": "shared-user"},
+            "wifi": {"ssid": "Shared-SSID"},
+            "lan": {"ip": "192.168.55.1", "subnet": "255.255.255.0"},
+        },
         observed_wan_ip="41.0.0.20",
         observed_pppoe_status="connected",
     )
@@ -300,7 +304,7 @@ def test_unified_config_context_exposes_shared_db_observed_state(
     assert context["wan_info"]["pppoe_username"] is None
     assert context["wan_info"]["wan_ip"] == "41.0.0.20"
     assert context["wireless_info"]["ssid"] is None
-    assert context["lan_info"]["lan_ip"] == "192.168.55.1"
+    assert context["lan_info"]["lan_ip"] is None
     assert context["tr069_profiles"][0].name == "ACS Primary"
     assert context["tr069_profiles_freshness"]["fetched_at"] == fetched_at
 
@@ -311,11 +315,7 @@ def test_unified_config_context_includes_configure_form_values(
     from app.models.network import OntUnit
     from app.services.web_network_ont_actions import context_builders
 
-    ont = OntUnit(
-        serial_number="CTX-FORM-VALUES-001",
-        lan_gateway_ip="192.168.70.1",
-        wifi_ssid="StoredWiFi",
-    )
+    ont = OntUnit(serial_number="CTX-FORM-VALUES-001")
     db_session.add(ont)
     db_session.commit()
 

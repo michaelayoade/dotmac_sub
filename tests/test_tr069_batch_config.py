@@ -333,15 +333,7 @@ class TestFromOntConfig:
         """Should create batch from ONT config."""
         ont = MagicMock()
         ont.tr069_data_model = "Device"
-        ont.lan_gateway_ip = None
-        ont.lan_subnet_mask = None
-        ont.lan_dhcp_enabled = None
-        ont.lan_dhcp_start = None
-        ont.lan_dhcp_end = None
-        ont.wifi_ssid = None
-        ont.wifi_password = None
-        ont.wifi_enabled = None
-        ont.wifi_channel = None
+        ont.desired_config = {}
 
         profile = MagicMock()
         profile.cr_username = "cr_user"
@@ -356,15 +348,7 @@ class TestFromOntConfig:
         """Should fallback to Device when data model not set."""
         ont = MagicMock()
         ont.tr069_data_model = None
-        ont.lan_gateway_ip = None
-        ont.lan_subnet_mask = None
-        ont.lan_dhcp_enabled = None
-        ont.lan_dhcp_start = None
-        ont.lan_dhcp_end = None
-        ont.wifi_ssid = None
-        ont.wifi_password = None
-        ont.wifi_enabled = None
-        ont.wifi_channel = None
+        ont.desired_config = {}
 
         profile = MagicMock()
         profile.cr_username = "user"
@@ -375,18 +359,18 @@ class TestFromOntConfig:
         assert batch.data_model == "Device"
 
     def test_includes_lan_config(self):
-        """Should include LAN config from ONT."""
+        """Should include LAN config from desired_config."""
         ont = MagicMock()
         ont.tr069_data_model = "Device"
-        ont.lan_gateway_ip = "192.168.1.1"
-        ont.lan_subnet_mask = "255.255.255.0"
-        ont.lan_dhcp_enabled = True
-        ont.lan_dhcp_start = "192.168.1.100"
-        ont.lan_dhcp_end = "192.168.1.200"
-        ont.wifi_ssid = None
-        ont.wifi_password = None
-        ont.wifi_enabled = None
-        ont.wifi_channel = None
+        ont.desired_config = {
+            "lan": {
+                "ip": "192.168.1.1",
+                "subnet": "255.255.255.0",
+                "dhcp_enabled": True,
+                "dhcp_start": "192.168.1.100",
+                "dhcp_end": "192.168.1.200",
+            }
+        }
 
         profile = MagicMock()
         profile.cr_username = None
@@ -398,18 +382,17 @@ class TestFromOntConfig:
         assert batch.parameters[paths["lan_ip"]] == "192.168.1.1"
 
     def test_includes_wifi_config(self):
-        """Should include WiFi config from ONT."""
+        """Should include WiFi config from desired_config."""
         ont = MagicMock()
         ont.tr069_data_model = "Device"
-        ont.lan_gateway_ip = None
-        ont.lan_subnet_mask = None
-        ont.lan_dhcp_enabled = None
-        ont.lan_dhcp_start = None
-        ont.lan_dhcp_end = None
-        ont.wifi_ssid = "TestNetwork"
-        ont.wifi_password = "secret"
-        ont.wifi_enabled = True
-        ont.wifi_channel = 11
+        ont.desired_config = {
+            "wifi": {
+                "ssid": "TestNetwork",
+                "password": "secret",
+                "enabled": True,
+                "channel": 11,
+            }
+        }
 
         profile = MagicMock()
         profile.cr_username = None
@@ -424,15 +407,7 @@ class TestFromOntConfig:
         """Explicit credentials should override profile."""
         ont = MagicMock()
         ont.tr069_data_model = "Device"
-        ont.lan_gateway_ip = None
-        ont.lan_subnet_mask = None
-        ont.lan_dhcp_enabled = None
-        ont.lan_dhcp_start = None
-        ont.lan_dhcp_end = None
-        ont.wifi_ssid = None
-        ont.wifi_password = None
-        ont.wifi_enabled = None
-        ont.wifi_channel = None
+        ont.desired_config = {}
 
         profile = MagicMock()
         profile.cr_username = "profile_user"

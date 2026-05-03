@@ -8,7 +8,7 @@ defaults remain in ``OltConfigPack`` and are merged at read time by
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Callable
 
 from app.models.network import OntUnit
 
@@ -165,3 +165,52 @@ def set_desired_config_values(ont: OntUnit, values: dict[str, Any]) -> None:
     """Set or clear multiple canonical desired-config values."""
     for field_name, value in values.items():
         set_desired_config_value(ont, field_name, value)
+
+
+def _nested_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
+    cursor: Any = config
+    for key in path:
+        if not isinstance(cursor, dict):
+            return None
+        cursor = cursor.get(key)
+    return cursor
+
+
+def _set_nested_value(config: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    cursor = config
+    for key in path[:-1]:
+        next_value = cursor.get(key)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            cursor[key] = next_value
+        cursor = next_value
+    cursor[path[-1]] = value
+
+
+def rotate_desired_config_credentials(
+    ont: OntUnit,
+    paths: tuple[tuple[str, ...], ...],
+    rotate_value: Callable[[tuple[str, ...], Any], tuple[Any, bool]],
+) -> int:
+    """Rotate credential values stored inside desired_config.
+
+    Returns the number of changed values. This keeps direct desired_config
+    mutation inside the desired-config owner module.
+    """
+    config = desired_config(ont)
+    if not config:
+        return 0
+    next_config = deepcopy(config)
+    updated_values = 0
+    for path in paths:
+        current = _nested_value(next_config, path)
+        if not current:
+            continue
+        rotated, changed = rotate_value(path, current)
+        if not changed:
+            continue
+        _set_nested_value(next_config, path, rotated)
+        updated_values += 1
+    if updated_values:
+        ont.desired_config = next_config
+    return updated_values

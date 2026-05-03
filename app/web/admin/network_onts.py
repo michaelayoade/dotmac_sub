@@ -566,7 +566,7 @@ def ont_configure_form(
     ont_id: str,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """HTMX partial: Configure form populated from OntUnit DB fields."""
+    """HTMX partial: Configure form populated from resolved ONT desired config."""
     context = _base_context(request, db, active_page="onts")
     context.update(web_network_ont_actions_service.configure_form_context(db, ont_id))
     return templates.TemplateResponse(

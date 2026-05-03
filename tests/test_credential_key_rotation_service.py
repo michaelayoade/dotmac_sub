@@ -119,8 +119,10 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
     )
     ont = OntUnit(
         serial_number="ONT123456",
-        pppoe_password=encrypt_credential_with_key("ont-pass", old_key),
-        wifi_password="plain:wifi-pass",
+        desired_config={
+            "wan": {"pppoe_password": encrypt_credential_with_key("ont-pass", old_key)},
+            "wifi": {"password": "plain:wifi-pass"},
+        },
     )
     wan = OntProfileWanService(
         profile_id=profile.id,
@@ -224,7 +226,10 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         decrypt_credential_with_key(refreshed_ont.pppoe_password, new_key) == "ont-pass"
     )
     assert (
-        decrypt_credential_with_key(refreshed_ont.wifi_password, new_key) == "wifi-pass"
+        decrypt_credential_with_key(
+            refreshed_ont.desired_config["wifi"]["password"], new_key
+        )
+        == "wifi-pass"
     )
     assert (
         decrypt_credential_with_key(
