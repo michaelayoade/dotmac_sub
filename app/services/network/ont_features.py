@@ -13,6 +13,7 @@ from app.services.network.ont_action_common import (
     get_ont_or_error,
     get_ont_strict_or_error,
 )
+from app.services.network.ont_desired_config import set_access_flag
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +203,7 @@ class OntFeatureService:
             return ActionResult(success=False, message="ONT not found.")
 
         if type(ont).__module__.startswith("unittest.mock"):
-            ont.wan_remote_access = enabled
+            set_access_flag(ont, "wan_remote", enabled)
             _emit_feature_event(db, ont_id, "wan_remote_access", enabled)
             return ActionResult(
                 success=True,
@@ -228,7 +229,7 @@ class OntFeatureService:
         )
 
         if result.success:
-            ont.wan_remote_access = enabled
+            set_access_flag(ont, "wan_remote", enabled)
             _set_sync_meta(ont, "acs")
             db.commit()
             db.refresh(ont)

@@ -140,6 +140,12 @@ class VictoriaMetricsWriter:
             return WriteResult(success=True, written=len(aggregates))
         except httpx.HTTPError as e:
             error_msg = str(e)
+            from app.metrics import VICTORIAMETRICS_WRITE_FAILURES
+
+            VICTORIAMETRICS_WRITE_FAILURES.labels(
+                adapter="bandwidth.metrics",
+                operation="write_aggregates_batch",
+            ).inc()
             logger.error("Failed to write aggregates to VictoriaMetrics: %s", error_msg)
             return WriteResult(success=False, written=0, error=error_msg)
 

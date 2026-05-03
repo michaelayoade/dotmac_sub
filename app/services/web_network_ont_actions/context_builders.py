@@ -372,7 +372,7 @@ def _configure_form_context_from_state(
     mgmt_mode = values.get("mgmt_ip_mode")
     mgmt_ip = values.get("mgmt_ip_address")
     mgmt_mode_value = _enum_value(mgmt_mode) or ""
-    mgmt_remote_access = bool(getattr(ont, "mgmt_remote_access", False))
+    mgmt_remote_access = bool(values.get("mgmt_remote_access"))
     if mgmt_mode_value in {"dhcp", "static_ip"}:
         mgmt_remote_access = True
 

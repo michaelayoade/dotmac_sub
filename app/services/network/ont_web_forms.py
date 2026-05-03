@@ -32,7 +32,10 @@ from app.services import web_network_onts as web_onts_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import set_desired_config_values
+from app.services.network.ont_desired_config import (
+    get_access_flag,
+    set_desired_config_values,
+)
 
 _LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
 
@@ -307,7 +310,7 @@ def update_onu_mode_from_form(
     except HTTPException:
         return OntFormResult(not_found=True)
     before_snapshot = model_to_dict(ont)
-    previous_wan_remote_access = bool(getattr(ont, "wan_remote_access", False))
+    previous_wan_remote_access = get_access_flag(ont, "wan_remote")
     onu_mode = form_str(form, "onu_mode").strip() or None
     wan_mode = form_str(form, "wan_mode").strip() or None
     desired_updates = {
@@ -325,9 +328,9 @@ def update_onu_mode_from_form(
         desired_updates["wan.pppoe_password"] = None
     elif pw := form_str(form, "pppoe_password").strip():
         desired_updates["wan.pppoe_password"] = encrypt_credential(pw)
-    set_desired_config_values(ont, desired_updates)
     wan_remote_access = form_str(form, "wan_remote_access") == "true"
-    ont.wan_remote_access = wan_remote_access
+    desired_updates["access.wan_remote"] = wan_remote_access
+    set_desired_config_values(ont, desired_updates)
     db.add(ont)
     db.flush()
 
@@ -698,7 +701,10 @@ def update_mgmt_ip_from_form(
             ),
         },
     )
-    ont.mgmt_remote_access = form_str(form, "mgmt_remote_access") == "true"
+    set_desired_config_values(
+        ont,
+        {"access.mgmt_remote": form_str(form, "mgmt_remote_access") == "true"},
+    )
     ont.voip_enabled = form_str(form, "voip_enabled") == "true"
     db.add(ont)
     db.flush()

@@ -81,6 +81,9 @@ def _values_from_assignment(
     asn_wifi_enabled = cfg("wifi", "enabled")
     asn_wifi_channel = cfg("wifi", "channel")
     asn_wifi_security_mode = cfg("wifi", "security_mode")
+    access_wan_remote = cfg("access", "wan_remote")
+    access_mgmt_remote = cfg("access", "mgmt_remote")
+    access_http_management = cfg("access", "http_management")
     # wifi_enabled: explicit setting takes precedence, else True if SSID is set
     wifi_enabled = (
         asn_wifi_enabled
@@ -123,6 +126,17 @@ def _values_from_assignment(
         "wifi_password": asn_wifi_password,
         "wifi_channel": asn_wifi_channel,
         "wifi_security_mode": asn_wifi_security_mode,
+        "wan_remote_access": (
+            bool(access_wan_remote) if access_wan_remote is not None else False
+        ),
+        "mgmt_remote_access": (
+            bool(access_mgmt_remote) if access_mgmt_remote is not None else False
+        ),
+        "http_management": (
+            bool(access_http_management)
+            if access_http_management is not None
+            else False
+        ),
         "tr069_acs_server_id": config_pack.tr069_acs_server_id if config_pack else None,
         "tr069_olt_profile_id": config_pack.tr069_olt_profile_id if config_pack else None,
         "cr_username": config_pack.cr_username if config_pack else None,

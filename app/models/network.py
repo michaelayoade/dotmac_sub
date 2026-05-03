@@ -1243,11 +1243,9 @@ class OntUnit(Base):
     olt_observed_snapshot_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
-    wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
-    mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(

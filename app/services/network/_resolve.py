@@ -115,12 +115,24 @@ def clear_stale_genieacs_device_id(
     )
     device = db.scalars(stmt).first()
     if device is None:
+        from app.metrics import GENIEACS_IDENTITY_RECOVERY_EVENTS
+
+        GENIEACS_IDENTITY_RECOVERY_EVENTS.labels(
+            event="clear_stale_id",
+            result="not_found",
+        ).inc()
         return False
     device.genieacs_device_id = None
     try:
         db.flush()
     except Exception:
         db.rollback()
+        from app.metrics import GENIEACS_IDENTITY_RECOVERY_EVENTS
+
+        GENIEACS_IDENTITY_RECOVERY_EVENTS.labels(
+            event="clear_stale_id",
+            result="error",
+        ).inc()
         logger.debug(
             "Failed to clear stale GenieACS device id %s for ONT %s",
             clean_id,
@@ -128,6 +140,17 @@ def clear_stale_genieacs_device_id(
             exc_info=True,
         )
         return False
+    from app.metrics import GENIEACS_IDENTITY_RECOVERY_EVENTS
+
+    GENIEACS_IDENTITY_RECOVERY_EVENTS.labels(
+        event="clear_stale_id",
+        result="success",
+    ).inc()
+    logger.warning(
+        "Cleared stale GenieACS device id %s for ONT %s; serial rediscovery required",
+        clean_id,
+        ont.id,
+    )
     return True
 
 
@@ -246,6 +269,19 @@ def _cache_genieacs_device_id(
             device.id,
             exc_info=True,
         )
+        from app.metrics import GENIEACS_IDENTITY_RECOVERY_EVENTS
+
+        GENIEACS_IDENTITY_RECOVERY_EVENTS.labels(
+            event="cache_device_id",
+            result="error",
+        ).inc()
+        return
+    from app.metrics import GENIEACS_IDENTITY_RECOVERY_EVENTS
+
+    GENIEACS_IDENTITY_RECOVERY_EVENTS.labels(
+        event="cache_device_id",
+        result="success",
+    ).inc()
 
 
 def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[GenieACSClient, str] | None:

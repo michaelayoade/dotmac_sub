@@ -313,13 +313,13 @@ def test_olt_action_adapter_delegates_find_ont_and_running_config(monkeypatch) -
     assert olt_action_adapter.fetch_running_config(olt, db=db) == (
         "display current-configuration"
     )
-    ok, message, payload = olt_action_adapter.get_ont_status_by_serial(
+    result = olt_action_adapter.get_ont_status_by_serial(
         db, "olt-1", "HWTC1234", request="request-context"
     )
 
-    assert ok is True
-    assert message == "found"
-    assert payload == {"serial": "HWTC1234"}
+    assert result.success is True
+    assert result.message == "found"
+    assert result.data == {"serial": "HWTC1234"}
     assert calls["running_config"] == (olt, db)
     assert calls["find_ont"] == (
         db,
@@ -368,7 +368,9 @@ def test_olt_action_adapter_delegates_authorization_sync(monkeypatch) -> None:
         request="request-context",
     )
 
-    assert result == (True, "ONT authorized", "ont-123")
+    assert result.success is True
+    assert result.message == "ONT authorized"
+    assert result.data == {"ont_unit_id": "ont-123"}
     assert calls["authorize"] == (
         db,
         "olt-1",

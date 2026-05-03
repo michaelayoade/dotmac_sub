@@ -559,12 +559,10 @@ class OntUnitUpdate(BaseModel):
     ip_protocol: str | None = None
     pppoe_username: str | None = Field(default=None, max_length=120)
     pppoe_password: str | None = Field(default=None, max_length=120)
-    wan_remote_access: bool | None = None
     # Management IP configuration fields
     tr069_acs_server_id: UUID | None = None
     mgmt_ip_mode: str | None = None
     mgmt_ip_address: str | None = Field(default=None, max_length=64)
-    mgmt_remote_access: bool | None = None
     voip_enabled: bool | None = None
 
 class OntUnitRead(OntUnitBase):

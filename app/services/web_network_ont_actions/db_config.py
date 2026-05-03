@@ -82,17 +82,12 @@ def update_ont_config(
     if not ont:
         return ActionResult(success=False, message="ONT not found")
 
-    # Management reachability is controlled by the management IP mode. Keeping a
-    # second "remote access" switch in sync is error-prone because an unchecked
-    # form checkbox can otherwise clear IPHOST while static management intent is
-    # still present.
+    # Management reachability is controlled by desired_config access intent.
     mgmt_access_enabled: bool | None = None
     if mgmt_ip_mode is not None:
         mgmt_access_enabled = mgmt_ip_mode in {"dhcp", "static_ip"}
-        ont.mgmt_remote_access = mgmt_access_enabled
     elif mgmt_remote_access is not None:
         mgmt_access_enabled = mgmt_remote_access
-        ont.mgmt_remote_access = mgmt_remote_access
     if voip_enabled is not None:
         ont.voip_enabled = voip_enabled
 
@@ -120,6 +115,8 @@ def update_ont_config(
             desired_updates["management.ip_mode"] = mgmt_ip_mode.strip() or None
         if mgmt_ip_address is not None:
             desired_updates["management.ip_address"] = mgmt_ip_address.strip() or None
+        if mgmt_access_enabled is not None:
+            desired_updates["access.mgmt_remote"] = mgmt_access_enabled
         if lan_gateway_ip is not None:
             desired_updates["lan.ip"] = lan_gateway_ip.strip() or None
         if lan_subnet_mask is not None:

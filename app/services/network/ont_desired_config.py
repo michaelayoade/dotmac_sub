@@ -167,6 +167,17 @@ def set_desired_config_values(ont: OntUnit, values: dict[str, Any]) -> None:
         set_desired_config_value(ont, field_name, value)
 
 
+def get_access_flag(ont: OntUnit, key: str, *, default: bool = False) -> bool:
+    """Read a durable access-policy flag from desired_config."""
+    value = get_desired_config_value(desired_config(ont), "access", key)
+    return default if value is None else bool(value)
+
+
+def set_access_flag(ont: OntUnit, key: str, enabled: bool) -> None:
+    """Persist a durable access-policy flag on desired_config."""
+    set_desired_config_value(ont, f"access.{key}", bool(enabled))
+
+
 def _nested_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
     cursor: Any = config
     for key in path:

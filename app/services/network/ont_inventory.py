@@ -456,9 +456,7 @@ def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") 
     ont.tr069_last_snapshot_at = None
     ont.olt_observed_snapshot = {}
     ont.olt_observed_snapshot_at = None
-    ont.wan_remote_access = False
     ont.tr069_acs_server_id = None
-    ont.mgmt_remote_access = False
     ont.voip_enabled = False
     ont.provisioning_steps_completed = None
     reset_status_for_inventory(ont)

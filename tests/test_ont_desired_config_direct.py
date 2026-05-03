@@ -914,7 +914,7 @@ def test_onu_mode_remote_access_change_pushes_to_device(db_session, monkeypatch)
     from app.services.network.ont_features import OntFeatureService
     from app.services.network.ont_web_forms import update_onu_mode_from_form
 
-    ont = OntUnit(serial_number="REMOTE-ACCESS-001", wan_remote_access=False)
+    ont = OntUnit(serial_number="REMOTE-ACCESS-001")
     db_session.add(ont)
     db_session.flush()
     db_session.commit()
@@ -944,7 +944,7 @@ def test_onu_mode_remote_access_change_pushes_to_device(db_session, monkeypatch)
     )
 
     assert result.error is None
-    assert ont.wan_remote_access is True
+    assert ont.desired_config["access"]["wan_remote"] is True
     assert calls == [(str(ont.id), True)]
 
 
@@ -956,7 +956,7 @@ def test_onu_mode_remote_access_push_failure_returns_error(db_session, monkeypat
     from app.services.network.ont_features import OntFeatureService
     from app.services.network.ont_web_forms import update_onu_mode_from_form
 
-    ont = OntUnit(serial_number="REMOTE-ACCESS-002", wan_remote_access=False)
+    ont = OntUnit(serial_number="REMOTE-ACCESS-002")
     db_session.add(ont)
     db_session.flush()
     db_session.commit()
@@ -999,7 +999,10 @@ def test_mgmt_remote_access_applies_iphost_without_global_remote_access(
         set_mgmt_remote_access,
     )
 
-    ont = OntUnit(serial_number="MGMT-REMOTE-001", mgmt_remote_access=False)
+    ont = OntUnit(
+        serial_number="MGMT-REMOTE-001",
+        desired_config={"management": {"ip_mode": "dhcp"}},
+    )
     db_session.add(ont)
     db_session.flush()
     assignment = OntAssignment(
@@ -1031,7 +1034,7 @@ def test_mgmt_remote_access_applies_iphost_without_global_remote_access(
             {"ip_address": None, "subnet": None, "gateway": None},
         )
     ]
-    assert ont.mgmt_remote_access is True
+    assert ont.desired_config["access"]["mgmt_remote"] is True
 
 
 def test_wan_config_uses_submitted_vlan_when_config_pack_missing(
@@ -1078,9 +1081,7 @@ def test_wan_config_uses_submitted_vlan_when_config_pack_missing(
 def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unset(
     db_session, monkeypatch
 ):
-    """DHCP server enable is pushed defensively even when desired_config has no
-    lan_* values. Some ONT firmware ships with DHCP off, leaving customers with
-    WiFi but no LAN IPs."""
+    """DHCP server enable is pushed when desired_config explicitly enables it."""
     from types import SimpleNamespace
 
     from app.models.catalog import RegionZone
@@ -1115,17 +1116,21 @@ def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unse
         "internet_vlan_id": str(internet_vlan.id),
     }
 
-    ont = OntUnit(serial_number="LAN-DEFAULT-DHCP", olt_device_id=olt.id)
+    ont = OntUnit(
+        serial_number="LAN-DEFAULT-DHCP",
+        olt_device_id=olt.id,
+        desired_config={
+            "wan": {
+                "mode": "pppoe",
+                "pppoe_username": "cust",
+                "pppoe_password": "secret",
+            },
+            "lan": {"dhcp_enabled": True},
+        },
+    )
     db_session.add(ont)
     db_session.flush()
-    db_session.add(
-        OntAssignment(
-            ont_unit_id=ont.id,
-            active=True,
-            pppoe_username="cust",
-            pppoe_password="secret",
-        )
-    )
+    db_session.add(OntAssignment(ont_unit_id=ont.id, active=True))
     db_session.flush()
 
     lan_calls: list[dict] = []
@@ -1172,8 +1177,7 @@ def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unse
 def test_apply_saved_service_config_respects_explicit_dhcp_disable(
     db_session, monkeypatch
 ):
-    """If lan_dhcp_enabled is explicitly False on the assignment, the operator
-    opt-out is respected and False is pushed."""
+    """If LAN DHCP is explicitly False in desired_config, False is pushed."""
     from types import SimpleNamespace
 
     from app.models.catalog import RegionZone
@@ -1208,18 +1212,21 @@ def test_apply_saved_service_config_respects_explicit_dhcp_disable(
         "internet_vlan_id": str(internet_vlan.id),
     }
 
-    ont = OntUnit(serial_number="DHCP-OFF-EXPLICIT", olt_device_id=olt.id)
+    ont = OntUnit(
+        serial_number="DHCP-OFF-EXPLICIT",
+        olt_device_id=olt.id,
+        desired_config={
+            "wan": {
+                "mode": "pppoe",
+                "pppoe_username": "cust",
+                "pppoe_password": "secret",
+            },
+            "lan": {"dhcp_enabled": False},
+        },
+    )
     db_session.add(ont)
     db_session.flush()
-    db_session.add(
-        OntAssignment(
-            ont_unit_id=ont.id,
-            active=True,
-            pppoe_username="cust",
-            pppoe_password="secret",
-            lan_dhcp_enabled=False,
-        )
-    )
+    db_session.add(OntAssignment(ont_unit_id=ont.id, active=True))
     db_session.flush()
 
     lan_calls: list[dict] = []

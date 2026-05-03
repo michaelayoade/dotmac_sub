@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
-from app.services.adapters import adapter_registry
+from app.services.adapters import AdapterResult, adapter_registry
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -30,12 +30,15 @@ class OltActionAdapter:
         olt_id: str,
         serial_number: str,
         **kwargs: Any,
-    ) -> tuple[bool, str, dict[str, object]]:
+    ) -> AdapterResult:
         from app.services.network import olt_operations
 
-        return olt_operations.get_ont_status_by_serial(
+        success, message, payload = olt_operations.get_ont_status_by_serial(
             db, olt_id, serial_number, **kwargs
         )
+        if success:
+            return AdapterResult.ok(message, data=payload)
+        return AdapterResult.fail(message, data=payload)
 
     def authorize_ont(
         self,
@@ -47,7 +50,7 @@ class OltActionAdapter:
         force_reauthorize: bool = False,
         preset_id: str | None = None,
         request: Request | None = None,
-    ) -> tuple[bool, str, str | None]:
+    ) -> AdapterResult:
         from app.services.network import ont_authorization
 
         result = ont_authorization.authorize_ont(
@@ -59,7 +62,12 @@ class OltActionAdapter:
             preset_id=preset_id,
             request=request,
         )
-        return result.success, result.message, result.ont_unit_id
+        data: dict[str, Any] = {}
+        if result.ont_unit_id:
+            data["ont_unit_id"] = result.ont_unit_id
+        if result.success:
+            return AdapterResult.ok(result.message, data=data)
+        return AdapterResult.fail(result.message, data=data)
 
     def get_olt_firmware_images(
         self, db: Session, olt_id: str

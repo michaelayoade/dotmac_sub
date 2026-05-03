@@ -11,6 +11,7 @@ from app.models.network import OntUnit
 from app.services.genieacs_service import genieacs_service
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
+from app.services.network.ont_desired_config import set_access_flag
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
@@ -674,6 +675,11 @@ def set_http_management(
     )
 
     if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont is not None:
+            set_access_flag(ont, "http_management", enabled)
+            db.add(ont)
+            db.commit()
         _persist_ont_plan_step(
             db,
             ont_id,
@@ -838,7 +844,7 @@ def set_mgmt_remote_access(
             )
 
     if result.success:
-        ont.mgmt_remote_access = enabled
+        set_access_flag(ont, "mgmt_remote", enabled)
         db.add(ont)
         db.commit()
 
