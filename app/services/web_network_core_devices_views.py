@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 _STALE_THRESHOLD_MINUTES = 15
 
 
-def _maybe_queue_stale_ont_refresh(ont: object, *, ont_id: str) -> bool:
+def _maybe_queue_stale_ont_refresh(db: Session, ont: object, *, ont_id: str) -> bool:
     """Queue a background TR-069 refresh if ONT data is stale.
 
     Checks if tr069_last_snapshot_at is older than _STALE_THRESHOLD_MINUTES.
@@ -70,9 +70,15 @@ def _maybe_queue_stale_ont_refresh(ont: object, *, ont_id: str) -> bool:
     if age < timedelta(minutes=_STALE_THRESHOLD_MINUTES):
         return False
 
-    # Check if ONT has TR-069 configured
-    acs_device_id = getattr(ont, "acs_device_id", None)
-    if not acs_device_id:
+    has_acs_identity = (
+        db.query(Tr069CpeDevice.id)
+        .filter(Tr069CpeDevice.ont_unit_id == getattr(ont, "id", None))
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .filter(Tr069CpeDevice.genieacs_device_id.isnot(None))
+        .first()
+        is not None
+    )
+    if not has_acs_identity:
         return False
 
     # Queue background refresh
@@ -1965,7 +1971,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         )
 
     # Auto-refresh stale TR-069 data in background (> 15 min old)
-    _maybe_queue_stale_ont_refresh(ont, ont_id=ont_id)
+    _maybe_queue_stale_ont_refresh(db, ont, ont_id=ont_id)
 
     observed_runtime_summary = _acs_observed_runtime_summary(
         acs_observed_intent,

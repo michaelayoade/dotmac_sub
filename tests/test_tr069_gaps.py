@@ -241,6 +241,133 @@ class TestInformWebhook:
         assert ont.acs_last_inform_at == device.last_inform_at
         assert ont.last_seen_at == device.last_inform_at
 
+    def test_receive_inform_updates_changed_genieacs_device_id(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services import tr069 as tr069_service
+
+        server = Tr069AcsServer(
+            name="Changed Inform ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        ont = OntUnit(serial_number="INFORM-CHANGED-ID-001", is_active=True)
+        db_session.add_all([server, ont])
+        db_session.flush()
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="00D09E-TestProduct-OLD-INFORM-ID",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+
+        result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw="00D09E-TestProduct-NEW-INFORM-ID",
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert result["status"] == "ok"
+        db_session.refresh(device)
+        assert device.genieacs_device_id == "00D09E-TestProduct-NEW-INFORM-ID"
+
+    def test_stale_ont_refresh_uses_linked_tr069_identity(
+        self,
+        db_session,
+        monkeypatch,
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services import web_network_core_devices_views as views
+
+        queued: list[str] = []
+
+        class FakeTask:
+            @staticmethod
+            def delay(ont_id):
+                queued.append(ont_id)
+
+        monkeypatch.setattr(
+            "app.tasks.tr069.refresh_single_ont_runtime",
+            FakeTask,
+        )
+
+        server = Tr069AcsServer(
+            name="Stale Refresh ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        ont = OntUnit(
+            serial_number="STALE-REFRESH-001",
+            is_active=True,
+            tr069_last_snapshot={"wan": {"ip": "10.0.0.2"}},
+            tr069_last_snapshot_at=datetime.now(UTC) - timedelta(minutes=30),
+        )
+        db_session.add_all([server, ont])
+        db_session.flush()
+        db_session.add(
+            Tr069CpeDevice(
+                acs_server_id=server.id,
+                ont_unit_id=ont.id,
+                serial_number=ont.serial_number,
+                genieacs_device_id="00D09E-TestProduct-STALE-REFRESH-001",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        assert views._maybe_queue_stale_ont_refresh(
+            db_session,
+            ont,
+            ont_id=str(ont.id),
+        )
+        assert queued == [str(ont.id)]
+
+    def test_clear_stale_runtime_clears_cached_tr069_snapshot(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network.provisioning_enforcement import (
+            ProvisioningEnforcement,
+        )
+
+        ont = OntUnit(
+            serial_number="CLEAR-RUNTIME-001",
+            is_active=True,
+            observed_wan_ip="10.0.0.2",
+            observed_pppoe_status="Connected",
+            observed_lan_mode="router",
+            observed_wifi_clients=2,
+            observed_lan_hosts=3,
+            observed_runtime_updated_at=datetime.now(UTC),
+            tr069_last_snapshot={"wan": {"ip": "10.0.0.2"}},
+            tr069_last_snapshot_at=datetime.now(UTC),
+        )
+        db_session.add(ont)
+        db_session.commit()
+
+        result = ProvisioningEnforcement.clear_stale_runtime(
+            db_session,
+            [str(ont.id)],
+        )
+
+        assert result == {"cleared": 1}
+        db_session.refresh(ont)
+        assert ont.observed_wan_ip is None
+        assert ont.observed_pppoe_status is None
+        assert ont.observed_lan_mode is None
+        assert ont.observed_wifi_clients is None
+        assert ont.observed_lan_hosts is None
+        assert ont.observed_runtime_updated_at is None
+        assert ont.tr069_last_snapshot == {}
+        assert ont.tr069_last_snapshot_at is None
+
 
 # ---------------------------------------------------------------------------
 # 4. Auto-link ONTs during sync

@@ -478,7 +478,7 @@ class ProvisioningEnforcement:
         db: Session,
         ont_ids: list[str],
     ) -> dict[str, int]:
-        """Clear stale observed_wan_ip on offline ONTs.
+        """Clear stale cached runtime observations on offline ONTs.
 
         Note:
             This method uses flush() to stage changes. Caller is responsible
@@ -491,6 +491,12 @@ class ProvisioningEnforcement:
                 continue
             ont.observed_wan_ip = None
             ont.observed_pppoe_status = None
+            ont.observed_lan_mode = None
+            ont.observed_wifi_clients = None
+            ont.observed_lan_hosts = None
+            ont.observed_runtime_updated_at = None
+            ont.tr069_last_snapshot = {}
+            ont.tr069_last_snapshot_at = None
             cleared += 1
 
         if cleared:

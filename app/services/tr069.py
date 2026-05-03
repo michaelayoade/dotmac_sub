@@ -496,6 +496,42 @@ def _resolve_device_for_inform(
     return device
 
 
+def _update_genieacs_device_id_from_inform(
+    db: Session,
+    device: Tr069CpeDevice,
+    device_id_str: str,
+) -> None:
+    clean_id = _first_text(device_id_str, max_len=255)
+    if not clean_id or device.genieacs_device_id == clean_id:
+        return
+
+    owner = (
+        db.query(Tr069CpeDevice)
+        .filter(Tr069CpeDevice.genieacs_device_id == clean_id)
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .filter(Tr069CpeDevice.id != device.id)
+        .first()
+    )
+    if owner:
+        logger.info(
+            "Inform for TR-069 device %s reported GenieACS id %s already owned by "
+            "active TR-069 device %s; leaving current id %s",
+            device.id,
+            clean_id,
+            owner.id,
+            device.genieacs_device_id,
+        )
+        return
+
+    logger.info(
+        "Updating TR-069 device %s GenieACS id from %s to %s after inform",
+        device.id,
+        device.genieacs_device_id,
+        clean_id,
+    )
+    device.genieacs_device_id = clean_id
+
+
 def _validate_target_cpe_device(
     db: Session,
     *,
@@ -1650,8 +1686,8 @@ def receive_inform(
     ont_id_for_service_apply = device.ont_unit_id
     if serial and not device.serial_number:
         device.serial_number = serial[:120]
-    if device_id_str and not device.genieacs_device_id:
-        device.genieacs_device_id = device_id_str[:255]
+    if device_id_str:
+        _update_genieacs_device_id_from_inform(db, device, device_id_str)
     if oui and not device.oui:
         device.oui = oui[:8]
     if product_class and not device.product_class:
