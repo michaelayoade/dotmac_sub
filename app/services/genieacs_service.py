@@ -51,8 +51,6 @@ class GenieAcsService:
             "download",
             "firmware_upgrade",
             # WAN TR-069 actions
-            "probe_wan_instance",
-            "ensure_wan_instance",
             "set_pppoe_credentials",
             "set_wan_dhcp",
             "set_wan_static",
@@ -584,80 +582,6 @@ class GenieAcsService:
     # WAN TR-069 Actions
     # -------------------------------------------------------------------------
 
-    def queue_probe_wan_instance(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        instance_index: int = 1,
-        wan_type: str = "ppp",
-        **metadata: Any,
-    ) -> AcsConfigQueueResult:
-        return self.queue_config_action(
-            db,
-            "probe_wan_instance",
-            ont_id,
-            kwargs={"instance_index": instance_index, "wan_type": wan_type},
-            **metadata,
-        )
-
-    def probe_wan_instance(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        instance_index: int = 1,
-        wan_type: str = "ppp",
-    ) -> ActionResult:
-        """Probe whether a WAN instance exists on the ONT."""
-        from app.services.network.ont_action_wan import probe_wan_instance
-
-        return probe_wan_instance(
-            db, ont_id, instance_index=instance_index, wan_type=wan_type
-        )
-
-    def queue_ensure_wan_instance(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        instance_index: int = 1,
-        wan_type: str = "ppp",
-        wan_vlan: int | None = None,
-        **metadata: Any,
-    ) -> AcsConfigQueueResult:
-        return self.queue_config_action(
-            db,
-            "ensure_wan_instance",
-            ont_id,
-            kwargs={
-                "instance_index": instance_index,
-                "wan_type": wan_type,
-                "wan_vlan": wan_vlan,
-            },
-            **metadata,
-        )
-
-    def ensure_wan_instance(
-        self,
-        db: Session,
-        ont_id: str,
-        *,
-        instance_index: int = 1,
-        wan_type: str = "ppp",
-        wan_vlan: int | None = None,
-    ) -> ActionResult:
-        """Ensure a WAN instance exists, creating via addObject if needed."""
-        from app.services.network.ont_action_wan import ensure_wan_instance
-
-        return ensure_wan_instance(
-            db,
-            ont_id,
-            instance_index=instance_index,
-            wan_type=wan_type,
-            wan_vlan=wan_vlan,
-        )
-
     def queue_set_pppoe_credentials(
         self,
         db: Session,
@@ -666,7 +590,6 @@ class GenieAcsService:
         username: str,
         password: str,
         instance_index: int = 1,
-        ensure_instance: bool = True,
         wan_vlan: int | None = None,
         **metadata: Any,
     ) -> AcsConfigQueueResult:
@@ -678,7 +601,6 @@ class GenieAcsService:
                 "username": username,
                 "password": password,
                 "instance_index": instance_index,
-                "ensure_instance": ensure_instance,
                 "wan_vlan": wan_vlan,
             },
             **metadata,
@@ -692,7 +614,6 @@ class GenieAcsService:
         username: str,
         password: str,
         instance_index: int = 1,
-        ensure_instance: bool = True,
         wan_vlan: int | None = None,
     ) -> ActionResult:
         """Set PPPoE credentials on an ONT via TR-069."""
@@ -704,7 +625,6 @@ class GenieAcsService:
             username=username,
             password=password,
             instance_index=instance_index,
-            ensure_instance=ensure_instance,
             wan_vlan=wan_vlan,
         )
 
@@ -714,7 +634,6 @@ class GenieAcsService:
         ont_id: str,
         *,
         instance_index: int = 1,
-        ensure_instance: bool = True,
         wan_vlan: int | None = None,
         **metadata: Any,
     ) -> AcsConfigQueueResult:
@@ -724,7 +643,6 @@ class GenieAcsService:
             ont_id,
             kwargs={
                 "instance_index": instance_index,
-                "ensure_instance": ensure_instance,
                 "wan_vlan": wan_vlan,
             },
             **metadata,
@@ -736,7 +654,6 @@ class GenieAcsService:
         ont_id: str,
         *,
         instance_index: int = 1,
-        ensure_instance: bool = True,
         wan_vlan: int | None = None,
     ) -> ActionResult:
         """Configure WAN interface for DHCP mode."""
@@ -746,7 +663,6 @@ class GenieAcsService:
             db,
             ont_id,
             instance_index=instance_index,
-            ensure_instance=ensure_instance,
             wan_vlan=wan_vlan,
         )
 

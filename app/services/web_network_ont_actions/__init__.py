@@ -29,8 +29,6 @@ from app.services.web_network_ont_actions._common import (
 from app.services.web_network_ont_actions.config_setters import (
     bind_tr069_profile,
     configure_management_ip,
-    ensure_wan_instance,
-    probe_wan_instance,
     set_connection_request_credentials,
     set_http_management,
     set_lan_config,
@@ -156,8 +154,6 @@ __all__ = [
     # Configuration setters
     "bind_tr069_profile",
     "configure_management_ip",
-    "ensure_wan_instance",
-    "probe_wan_instance",
     "set_connection_request_credentials",
     "set_http_management",
     "set_lan_config",

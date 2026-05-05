@@ -352,297 +352,6 @@ def _igd_ppp_container_conflict(
         )
     return None
 
-
-# ---------------------------------------------------------------------------
-# WAN Instance Management
-# ---------------------------------------------------------------------------
-
-
-def probe_wan_instance(
-    db: Session,
-    ont_id: str,
-    *,
-    instance_index: int = 1,
-    wan_type: str = "ppp",
-) -> ActionResult:
-    """Probe whether a WAN instance exists on the ONT.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        instance_index: WAN instance index (default 1).
-        wan_type: Type of WAN interface ("ppp" or "ip").
-
-    Returns:
-        ActionResult with data containing:
-        - exists: bool - Whether the instance exists
-        - instance_index: int - The probed instance index
-        - wan_type: str - The probed WAN type
-        - details: dict - Additional WAN details (for IGD)
-    """
-    resolved, error = get_ont_client_or_error(db, ont_id)
-    if error:
-        return error
-    if resolved is None:
-        return ActionResult(success=False, message="ONT resolution failed.")
-
-    ont, client, device_id = resolved
-    root = detect_data_model_root(db, ont, client, device_id)
-    persist_data_model_root(ont, root)
-
-    try:
-        device = client.get_device(device_id)
-    except GenieACSError as exc:
-        return ActionResult(success=False, message=f"Failed to fetch device: {exc}")
-
-    exists = False
-    details: dict[str, Any] = {}
-
-    if root == "InternetGatewayDevice":
-        if wan_type == "ppp":
-            entries_path = _resolve_wan_path(root, "ppp.num_entries", instance_index)
-        else:
-            entries_path = _resolve_wan_path(root, "ip.num_entries", instance_index)
-
-        count = _int_value(client.extract_parameter_value(device, entries_path))
-        exists = count >= 1
-        details = _igd_wan_details(client, device, root, instance_index)
-    else:
-        # TR-181: Check if the interface exists
-        if wan_type == "ppp":
-            enable_path = _resolve_wan_path(root, "ppp.enable", instance_index)
-        else:
-            enable_path = _resolve_wan_path(root, "ip.enable", instance_index)
-
-        enable_value = client.extract_parameter_value(device, enable_path)
-        exists = enable_value is not None
-
-    return ActionResult(
-        success=True,
-        message=f"WAN {wan_type} instance {instance_index} {'exists' if exists else 'does not exist'}.",
-        data={
-            "exists": exists,
-            "instance_index": instance_index,
-            "wan_type": wan_type,
-            "root": root,
-            "details": details,
-        },
-    )
-
-
-def ensure_wan_instance(
-    db: Session,
-    ont_id: str,
-    *,
-    instance_index: int = 1,
-    wan_type: str = "ppp",
-    wan_vlan: int | None = None,
-) -> ActionResult:
-    """Ensure a WAN instance exists, creating it via addObject if necessary.
-
-    This function handles the critical addObject flow for factory-fresh ONTs
-    that lack WANPPPConnection instances.
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit primary key.
-        instance_index: WAN instance index (default 1).
-        wan_type: Type of WAN interface ("ppp" or "ip").
-        wan_vlan: Optional VLAN to verify against existing config.
-
-    Returns:
-        ActionResult with:
-        - success=True if instance exists or was created
-        - waiting=True if addObject was issued but needs verification
-        - data containing instance details
-    """
-    resolved, error = get_ont_client_or_error(db, ont_id)
-    if error:
-        return error
-    if resolved is None:
-        return ActionResult(success=False, message="ONT resolution failed.")
-
-    ont, client, device_id = resolved
-    root = detect_data_model_root(db, ont, client, device_id)
-    persist_data_model_root(ont, root)
-
-    try:
-        device = client.get_device(device_id)
-    except GenieACSError as exc:
-        return ActionResult(success=False, message=f"Failed to fetch device: {exc}")
-
-    # Check current instance count
-    if root == "InternetGatewayDevice":
-        if wan_type == "ppp":
-            entries_path = _resolve_wan_path(root, "ppp.num_entries", instance_index)
-        else:
-            entries_path = _resolve_wan_path(root, "ip.num_entries", instance_index)
-
-        count = _int_value(client.extract_parameter_value(device, entries_path))
-
-        if count >= 1:
-            # Instance exists - verify no conflict
-            details = _igd_wan_details(client, device, root, instance_index)
-            conflict = _igd_ppp_container_conflict(details, wan_vlan)
-            if conflict:
-                return ActionResult(
-                    success=False,
-                    message=f"Cannot use WAN instance {instance_index}: {conflict}",
-                    data={
-                        "conflict": True,
-                        "instance_index": instance_index,
-                        "details": details,
-                    },
-                )
-
-            _clear_wan_add_object_pending(ont, wan_type, success=True)
-            db.flush()
-            return ActionResult(
-                success=True,
-                message=f"WAN {wan_type} instance {instance_index} exists and is ready.",
-                data={
-                    "exists": True,
-                    "created": False,
-                    "instance_index": instance_index,
-                    "details": details,
-                },
-            )
-
-        # Check if addObject is pending
-        if _pending_wan_add_object(ont, instance_index, wan_type, wan_vlan):
-            # Trigger a refresh to check if object was created
-            refresh = getattr(client, "refresh_object", None)
-            if callable(refresh):
-                try:
-                    object_path = _get_wan_object_container(
-                        root, wan_type, instance_index
-                    )
-                    refresh(device_id, object_path)
-                except GenieACSError:
-                    logger.debug(
-                        "WAN addObject pending refresh failed for %s",
-                        device_id,
-                        exc_info=True,
-                    )
-
-            return ActionResult(
-                success=False,
-                waiting=True,
-                message=(
-                    f"WAN {wan_type} addObject is pending. "
-                    "Retry after device completes the operation."
-                ),
-                data={
-                    "pending": True,
-                    "instance_index": instance_index,
-                    "wan_vlan": wan_vlan,
-                    "retry_after_seconds": _WAN_ADD_OBJECT_VERIFY_DELAY_SECONDS,
-                },
-            )
-
-        # Need to create the instance
-        object_path = _get_wan_object_container(root, wan_type, instance_index)
-        try:
-            client.add_object(device_id, object_path)
-            _mark_wan_add_object_pending(
-                ont,
-                wan_type=wan_type,
-                root=root,
-                instance_index=instance_index,
-                wan_vlan=wan_vlan,
-                object_path=object_path,
-            )
-
-            # Trigger refresh to verify creation
-            refresh = getattr(client, "refresh_object", None)
-            if callable(refresh):
-                refresh(device_id, object_path)
-
-            # Re-check the count
-            refreshed = client.get_device(device_id)
-            refreshed_count = _int_value(
-                client.extract_parameter_value(refreshed, entries_path)
-            )
-
-            if refreshed_count >= 1:
-                _clear_wan_add_object_pending(ont, wan_type, success=True)
-                db.flush()
-                return ActionResult(
-                    success=True,
-                    message=f"WAN {wan_type} instance {instance_index} created successfully.",
-                    data={
-                        "exists": True,
-                        "created": True,
-                        "instance_index": instance_index,
-                    },
-                )
-
-            # addObject issued but not yet visible
-            db.flush()
-            return ActionResult(
-                success=False,
-                waiting=True,
-                message=(
-                    f"WAN {wan_type} addObject issued. Instance not visible yet. "
-                    "Retry after device processes the operation."
-                ),
-                data={
-                    "pending": True,
-                    "add_object_issued": True,
-                    "instance_index": instance_index,
-                    "wan_vlan": wan_vlan,
-                    "retry_after_seconds": _WAN_ADD_OBJECT_VERIFY_DELAY_SECONDS,
-                },
-            )
-
-        except GenieACSError as exc:
-            _clear_wan_add_object_pending(ont, wan_type, success=False)
-            db.flush()
-            return ActionResult(
-                success=False,
-                message=f"Failed to create WAN {wan_type} instance: {exc}",
-                data={
-                    "add_object_rejected": True,
-                    "error": str(exc),
-                },
-            )
-
-    else:
-        # TR-181: Check if interfaces exist
-        if wan_type == "ppp":
-            enable_path = _resolve_wan_path(root, "ppp.enable", instance_index)
-        else:
-            enable_path = _resolve_wan_path(root, "ip.enable", instance_index)
-
-        enable_value = client.extract_parameter_value(device, enable_path)
-
-        if enable_value is not None:
-            return ActionResult(
-                success=True,
-                message=f"TR-181 WAN {wan_type} instance {instance_index} exists.",
-                data={
-                    "exists": True,
-                    "created": False,
-                    "instance_index": instance_index,
-                },
-            )
-
-        # TR-181 typically requires OMCI pre-provisioning
-        return ActionResult(
-            success=False,
-            message=(
-                f"No TR-181 {wan_type.upper()} interface exists at index {instance_index}. "
-                "TR-181 devices typically require OMCI pre-provisioning to create "
-                "the WAN stack before TR-069 can configure credentials."
-            ),
-            data={
-                "tr181_stack_incomplete": True,
-                "requires_omci": True,
-                "instance_index": instance_index,
-            },
-        )
-
-
 # ---------------------------------------------------------------------------
 # PPPoE Configuration
 # ---------------------------------------------------------------------------
@@ -655,13 +364,9 @@ def set_pppoe_credentials(
     username: str,
     password: str,
     instance_index: int = 1,
-    ensure_instance: bool = True,
     wan_vlan: int | None = None,
 ) -> ActionResult:
     """Set PPPoE credentials on an ONT via TR-069.
-
-    This is the primary entry point for PPPoE credential provisioning.
-    It handles the addObject flow for factory-fresh ONTs.
 
     Args:
         db: Database session.
@@ -669,8 +374,7 @@ def set_pppoe_credentials(
         username: PPPoE username.
         password: PPPoE password.
         instance_index: WAN instance index (default 1).
-        ensure_instance: If True, create PPP instance if missing (default True).
-        wan_vlan: Optional VLAN to verify against existing config.
+        wan_vlan: Optional VLAN for service tagging.
 
     Returns:
         ActionResult indicating success/failure.
@@ -689,18 +393,6 @@ def set_pppoe_credentials(
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     persist_data_model_root(ont, root)
-
-    # Ensure PPP instance exists if requested
-    if ensure_instance:
-        ensure_result = ensure_wan_instance(
-            db,
-            ont_id,
-            instance_index=instance_index,
-            wan_type="ppp",
-            wan_vlan=wan_vlan,
-        )
-        if not ensure_result.success:
-            return ensure_result
 
     # Build parameter paths
     username_path = _resolve_wan_path(root, "ppp.username", instance_index)
@@ -777,7 +469,6 @@ def set_wan_dhcp(
     ont_id: str,
     *,
     instance_index: int = 1,
-    ensure_instance: bool = True,
     wan_vlan: int | None = None,
 ) -> ActionResult:
     """Configure WAN interface for DHCP mode.
@@ -786,12 +477,12 @@ def set_wan_dhcp(
         db: Database session.
         ont_id: OntUnit primary key.
         instance_index: WAN instance index (default 1).
-        ensure_instance: If True, create IP instance if missing (default True).
         wan_vlan: Optional VLAN to apply.
 
     Returns:
         ActionResult indicating success/failure.
     """
+    _ = wan_vlan  # Reserved for future VLAN tagging support
     resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
@@ -801,18 +492,6 @@ def set_wan_dhcp(
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     persist_data_model_root(ont, root)
-
-    # Ensure IP instance exists if requested
-    if ensure_instance:
-        ensure_result = ensure_wan_instance(
-            db,
-            ont_id,
-            instance_index=instance_index,
-            wan_type="ip",
-            wan_vlan=wan_vlan,
-        )
-        if not ensure_result.success:
-            return ensure_result
 
     params: dict[str, str] = {}
 
@@ -1000,7 +679,6 @@ def set_wan_config(
     subnet_mask: str | None = None,
     gateway: str | None = None,
     dns_servers: str | None = None,
-    ensure_instance: bool = True,
 ) -> ActionResult:
     """Unified entry point for WAN configuration.
 
@@ -1016,7 +694,6 @@ def set_wan_config(
         subnet_mask: Subnet mask (required for static mode).
         gateway: Gateway (required for static mode).
         dns_servers: Optional DNS servers.
-        ensure_instance: If True, create WAN instance if missing.
 
     Returns:
         ActionResult indicating success/failure.
@@ -1035,7 +712,6 @@ def set_wan_config(
             username=pppoe_username,
             password=pppoe_password,
             instance_index=instance_index,
-            ensure_instance=ensure_instance,
             wan_vlan=wan_vlan,
         )
 
@@ -1044,7 +720,6 @@ def set_wan_config(
             db,
             ont_id,
             instance_index=instance_index,
-            ensure_instance=ensure_instance,
             wan_vlan=wan_vlan,
         )
 
