@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -17,8 +18,9 @@ from app.services import web_network_ont_charts as web_network_ont_charts_servic
 from app.services import web_network_ont_topology as web_network_ont_topology_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
-from app.services.network.action_logging import log_network_action_result
+from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.ont_scope import can_manage_ont_from_request
+from app.services.queue_adapter import enqueue_task
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.web.request_parsing import parse_form_data_sync
 from app.web.templates import templates
@@ -363,36 +365,37 @@ def ont_return_to_inventory(
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = web_network_ont_actions_service.return_to_inventory_for_web(
-        db, ont_id, request=request
+    dispatch = enqueue_task(
+        "app.tasks.ont_provisioning.return_ont_to_inventory",
+        kwargs={
+            "ont_id": ont_id,
+            "initiated_by": actor_label(request),
+        },
+        correlation_id=f"return_to_inventory:{ont_id}",
+        source="admin_ont_return_to_inventory",
     )
-    if not result.success and result.message == "ONT not found":
-        return JSONResponse(
-            {"success": False, "message": "ONT not found"},
-            status_code=404,
-            headers=_toast_headers("ONT not found", "error"),
-        )
-
-    if result.success:
-        # Redirect to the global unconfigured ONT list so the returned device can be re-authorized.
-        target = str(
-            result.data.get("unconfigured_url")
-            if result.data and result.data.get("unconfigured_url")
-            else "/admin/network/onts?view=unconfigured"
-        )
+    if dispatch.queued:
+        message = "Return-to-inventory started. Refresh the ONT list shortly to confirm completion."
+        target = "/admin/network/onts?view=unconfigured"
         if request.headers.get("hx-request") == "true":
             return Response(
                 status_code=200,
                 headers={
-                    **_toast_headers(result.message, "success"),
+                    **_toast_headers(message, "success"),
                     "HX-Redirect": target,
                 },
             )
-        return RedirectResponse(target, status_code=303)
+        return RedirectResponse(
+            f"{target}&status=success&message={quote_plus(message)}",
+            status_code=303,
+        )
 
     return Response(
         status_code=400,
-        headers=_toast_headers(result.message, "error"),
+        headers=_toast_headers(
+            f"Failed to queue return-to-inventory: {dispatch.error or 'unknown error'}",
+            "error",
+        ),
     )
 
 
@@ -1647,45 +1650,6 @@ def ont_set_http_management(
         request=request,
         ont_id=ont_id,
         action="Set HTTP Management",
-    )
-
-
-@router.post(
-    "/onts/{ont_id}/wan/normalize",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_normalize_wan_structure(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Normalize WAN structure to standard layout via TR-069.
-
-    Deletes non-management WAN instances and establishes consistent WCD layout:
-    - WCD1 = Management (TR-069, static IP)
-    - WCD2 = Internet (PPPoE/DHCP)
-
-    This ensures TR-069 parameter paths are predictable across all ONTs.
-    """
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-
-    form = parse_form_data_sync(request)
-    preserve_mgmt_raw = _form_str(form, "preserve_mgmt").strip().lower()
-    preserve_mgmt = preserve_mgmt_raw not in {"false", "0", "no", "off"}
-
-    result = web_network_ont_actions_service.normalize_wan_structure(
-        db,
-        ont_id,
-        preserve_mgmt=preserve_mgmt,
-        request=request,
-    )
-    return _action_result_response(
-        result=result,
-        request=request,
-        ont_id=ont_id,
-        action="Normalize WAN Structure",
     )
 
 

@@ -29,10 +29,6 @@
             {% endif %}
             <button class="inline-flex items-center rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-400">{{ spinner() }}Ensure</button>
         </form>
-        <form hx-post="/admin/network/onts/{{ ont_id }}/wan/normalize" hx-swap="none" hx-indicator="find button" class="contents">
-            {% include "components/forms/csrf_input.html" %}
-            <button class="inline-flex items-center rounded border border-amber-300 px-2 py-1 text-xs text-amber-600 hover:bg-amber-50 disabled:opacity-50 dark:border-amber-700 dark:text-amber-400">{{ spinner() }}Normalize</button>
-        </form>
 
         <span class="mx-1 text-slate-300 dark:text-slate-600">|</span>
 

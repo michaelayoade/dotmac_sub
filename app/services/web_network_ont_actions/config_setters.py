@@ -9,10 +9,14 @@ from starlette.requests import Request
 
 from app.models.network import OntUnit
 from app.services.genieacs_service import genieacs_service
+from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_desired_config import set_access_flag
-from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.provisioning_settings import (
+    get_olt_write_mode_enabled,
+    get_pppoe_provisioning_method,
+)
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
     _log_action_audit,
@@ -28,6 +32,184 @@ def _wan_mode_to_instance_type(wan_mode: str | None) -> str:
     if normalized in {"dhcp", "static", "static_ip", "bridge", "bridged"}:
         return "ip"
     return "ppp"
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _pppoe_omci_ip_index(
+    effective_values: dict[str, object],
+    *,
+    instance_index: int,
+) -> int:
+    """Resolve Huawei OLT ip-index for PPPoE.
+
+    OLT ip-index N is normally exposed to TR-069 as WCD N+1. Prefer the
+    PPPoE WCD index over the generic internet_config_ip_index because the
+    latter can point at the management/default stack on older config packs.
+    """
+    pppoe_wcd_index = _int_or_none(effective_values.get("pppoe_wcd_index"))
+    if pppoe_wcd_index is not None:
+        return max(pppoe_wcd_index - 1, 0)
+
+    internet_config_ip_index = _int_or_none(
+        effective_values.get("internet_config_ip_index")
+    )
+    if internet_config_ip_index is not None:
+        return internet_config_ip_index
+
+    if instance_index > 1:
+        return instance_index - 1
+    return 1
+
+
+def _set_pppoe_config_omci(
+    db: Session,
+    ont_id: str,
+    *,
+    username: str,
+    password: str,
+    wan_vlan: int,
+    instance_index: int,
+) -> ActionResult:
+    """Apply PPPoE WAN credentials through the OLT/OMCI path."""
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.ont_provisioning.context import resolve_olt_context
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return ActionResult(
+            success=False,
+            message="ONT not found.",
+            data={"delivery_transport": "olt_omci", "delivery_pending": False},
+        )
+
+    effective = resolve_effective_ont_config(db, ont)
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
+    if not isinstance(effective_values, dict):
+        effective_values = {}
+
+    ctx, err = resolve_olt_context(db, ont_id)
+    if ctx is None:
+        return ActionResult(
+            success=False,
+            message=f"WAN PPPoE OMCI apply failed: {err}",
+            data={"delivery_transport": "olt_omci", "delivery_pending": False},
+        )
+
+    adapter = get_protocol_adapter(ctx.olt)
+    ip_index = _pppoe_omci_ip_index(
+        effective_values,
+        instance_index=instance_index,
+    )
+    steps: list[dict[str, object]] = []
+
+    inet_result = adapter.configure_internet_config(
+        ctx.fsp,
+        ctx.olt_ont_id,
+        ip_index=ip_index,
+    )
+    steps.append(
+        {
+            "step": "internet_config_olt",
+            "success": inet_result.success,
+            "message": inet_result.message,
+        }
+    )
+    if not inet_result.success:
+        return ActionResult(
+            success=False,
+            message=f"WAN PPPoE OMCI apply failed: {inet_result.message}",
+            data={
+                "delivery_transport": "olt_omci",
+                "delivery_pending": False,
+                "steps": steps,
+                "ip_index": ip_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    wan_profile_id = _int_or_none(effective_values.get("wan_config_profile_id")) or 0
+    if wan_profile_id:
+        wan_result = adapter.configure_wan_config(
+            ctx.fsp,
+            ctx.olt_ont_id,
+            ip_index=ip_index,
+            profile_id=wan_profile_id,
+        )
+        steps.append(
+            {
+                "step": "configure_wan_olt",
+                "success": wan_result.success,
+                "message": wan_result.message,
+            }
+        )
+        if not wan_result.success:
+            return ActionResult(
+                success=False,
+                message=f"WAN PPPoE OMCI apply failed: {wan_result.message}",
+                data={
+                    "delivery_transport": "olt_omci",
+                    "delivery_pending": False,
+                    "steps": steps,
+                    "ip_index": ip_index,
+                    "wan_vlan": wan_vlan,
+                    "wan_config_profile_id": wan_profile_id,
+                },
+            )
+
+    pppoe_result = adapter.configure_pppoe(
+        ctx.fsp,
+        ctx.olt_ont_id,
+        ip_index=ip_index,
+        vlan_id=wan_vlan,
+        username=username,
+        password=password,
+    )
+    steps.append(
+        {
+            "step": "configure_pppoe_omci",
+            "success": pppoe_result.success,
+            "message": pppoe_result.message,
+        }
+    )
+    if not pppoe_result.success:
+        return ActionResult(
+            success=False,
+            message=f"WAN PPPoE OMCI apply failed: {pppoe_result.message}",
+            data={
+                "delivery_transport": "olt_omci",
+                "delivery_pending": False,
+                "steps": steps,
+                "ip_index": ip_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    return ActionResult(
+        success=True,
+        message=(
+            "PPPoE WAN config sent via OLT/OMCI; waiting for PPP session "
+            "and runtime verification."
+        ),
+        data={
+            "delivery_transport": "olt_omci",
+            "verification_pending": True,
+            "steps": steps,
+            "ip_index": ip_index,
+            "wan_vlan": wan_vlan,
+            "pppoe_username": username,
+        },
+        waiting=True,
+    )
 
 
 def set_wifi_ssid(
@@ -535,26 +717,55 @@ def set_wan_config(
         )
         return result
 
-    result = _set_wan_config(
-        db,
-        ont_id,
-        wan_mode=wan_mode,
-        pppoe_username=pppoe_username,
-        pppoe_password=pppoe_password,
-        ip_address=ip_address,
-        subnet_mask=subnet_mask,
-        gateway=gateway,
-        dns_servers=dns_servers,
-        instance_index=instance_index,
-        ensure_instance=ensure_instance,
-        wan_vlan=resolved_wan_vlan,
+    use_omci_pppoe = (
+        wan_mode_normalized == "pppoe"
+        and get_pppoe_provisioning_method(db) != "tr069"
+        and get_olt_write_mode_enabled(db)
     )
+    if use_omci_pppoe:
+        if not pppoe_username or not pppoe_password:
+            result = ActionResult(
+                success=False,
+                message="PPPoE username and password are required for PPPoE mode.",
+                data={
+                    "delivery_transport": "olt_omci",
+                    "delivery_pending": False,
+                },
+            )
+        else:
+            result = _set_pppoe_config_omci(
+                db,
+                ont_id,
+                username=pppoe_username,
+                password=pppoe_password,
+                wan_vlan=int(resolved_wan_vlan),
+                instance_index=instance_index,
+            )
+    else:
+        result = _set_wan_config(
+            db,
+            ont_id,
+            wan_mode=wan_mode,
+            pppoe_username=pppoe_username,
+            pppoe_password=pppoe_password,
+            ip_address=ip_address,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            dns_servers=dns_servers,
+            instance_index=instance_index,
+            ensure_instance=ensure_instance,
+            wan_vlan=resolved_wan_vlan,
+        )
 
     if result.success:
         _persist_ont_plan_step(
             db,
             ont_id,
-            "set_wan_config_tr069",
+            (
+                "set_wan_config_omci"
+                if result.data and result.data.get("delivery_transport") == "olt_omci"
+                else "set_wan_config_tr069"
+            ),
             {
                 "wan_mode": wan_mode,
                 "pppoe_username": pppoe_username,
@@ -562,6 +773,11 @@ def set_wan_config(
                 "ip_address": ip_address,
                 "instance_index": instance_index,
                 "wan_vlan": resolved_wan_vlan,
+                "delivery_transport": (
+                    result.data.get("delivery_transport")
+                    if isinstance(result.data, dict)
+                    else "tr069"
+                ),
             },
         )
 
@@ -854,51 +1070,5 @@ def set_mgmt_remote_access(
         action="set_mgmt_remote_access",
         ont_id=ont_id,
         metadata={"success": result.success, "enabled": enabled, "mode": str(mode)},
-    )
-    return result
-
-
-def normalize_wan_structure(
-    db: Session,
-    ont_id: str,
-    *,
-    preserve_mgmt: bool = True,
-    request: Request | None = None,
-) -> ActionResult:
-    """Normalize WAN structure to standard layout via TR-069.
-
-    Deletes non-management WAN instances to establish consistent WCD layout:
-    - WCD1 = Management (TR-069, static IP)
-    - WCD2 = Internet (PPPoE/DHCP)
-
-    Args:
-        db: Database session.
-        ont_id: OntUnit ID.
-        preserve_mgmt: If True, preserve the management WAN service.
-        request: Optional request for audit logging.
-
-    Returns:
-        ActionResult with normalization details.
-    """
-    from app.services.network.ont_action_wan import (
-        normalize_wan_structure as _normalize_wan_structure,
-    )
-
-    result = _normalize_wan_structure(
-        db,
-        ont_id,
-        preserve_mgmt=preserve_mgmt,
-    )
-
-    _log_action_audit(
-        db,
-        request=request,
-        action="normalize_wan_structure",
-        ont_id=ont_id,
-        metadata={
-            "success": result.success,
-            "preserve_mgmt": preserve_mgmt,
-            "data": result.data,
-        },
     )
     return result
