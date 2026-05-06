@@ -60,13 +60,19 @@ def execute_create_olt_service_port(
         )
 
     vlan_id = config.get("vlan_id")
-    gem_index = int(config.get("gem_index", 1))
+    raw_gem_index = config.get("gem_index")
 
     if not vlan_id:
         return ProvisioningResult(
             status="failed",
             detail="VLAN ID is required in step config for OLT service-port creation.",
         )
+    if raw_gem_index is None:
+        return ProvisioningResult(
+            status="failed",
+            detail="GEM index is required in step config for OLT service-port creation.",
+        )
+    gem_index = int(raw_gem_index)
 
     try:
         from app.services.network.olt_protocol_adapters import get_protocol_adapter
@@ -250,4 +256,3 @@ def execute_restore_olt_from_backup(
             status="failed",
             detail=f"OLT backup restore failed: {exc}",
         )
-

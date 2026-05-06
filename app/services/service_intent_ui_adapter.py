@@ -111,7 +111,7 @@ class ServiceIntentUiAdapter:
             "primary_tag_transform": "default",
             "gem_choices": gem_choices,
             "user_vlan_choices": [],
-            "config_pack_source": config_pack.olt_name if config_pack else None,
+            "config_pack_source": None,
             "planned_services": [
                 {
                     "name": "Internet",

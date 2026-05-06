@@ -20,7 +20,6 @@ from app.services.network.provisioning_settings import get_olt_write_mode_enable
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WAN_SRVPROFILE_ID = 10
 DEFAULT_WAN_SRVPROFILE_NAME = "PPPoE-Internet"
 
 
@@ -72,7 +71,6 @@ def ensure_olt_baseline(
     olt_id: str,
     *,
     dry_run: bool = False,
-    default_wan_profile_id: int = DEFAULT_WAN_SRVPROFILE_ID,
 ) -> OltBaselineResult:
     """Ensure one OLT has DB intent and OLT-side WAN baseline config."""
     olt = db.get(OLTDevice, olt_id)
@@ -196,7 +194,6 @@ def sync_all_olt_baselines(
     db: Session,
     *,
     dry_run: bool = False,
-    default_wan_profile_id: int = DEFAULT_WAN_SRVPROFILE_ID,
 ) -> list[OltBaselineResult]:
     """Ensure baseline config for every active OLT."""
     olts = list(
@@ -212,7 +209,6 @@ def sync_all_olt_baselines(
             db,
             str(olt.id),
             dry_run=dry_run,
-            default_wan_profile_id=default_wan_profile_id,
         )
         results.append(result)
         logger.info(

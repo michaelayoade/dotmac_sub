@@ -1620,7 +1620,6 @@ def seed_provisioning_workflows(db: Session) -> None:
             "step_type": ProvisioningStepType.create_olt_service_port,
             "order_index": 10,
             "config": {
-                "gem_index": 1,
                 "description": "Map ONT GEM port to service VLAN on OLT",
             },
         },

@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 
 def test_translate_catalog_offer_prefers_radius_network_policy() -> None:
     from app.services.service_intent_adapter import translate_catalog_offer
@@ -187,12 +189,61 @@ def test_ui_adapter_builds_service_port_defaults_from_profile_intent() -> None:
     )
 
     assert defaults["primary_vlan_id"] is None
-    assert defaults["primary_gem_index"] == 1
+    assert defaults["primary_gem_index"] is None
     assert defaults["primary_user_vlan"] is None
     assert defaults["primary_tag_transform"] == "default"
     assert defaults["missing_vlans"] == []
     assert defaults["extra_vlans"] == []
     assert defaults["planned_services"] == []
+
+
+def test_olt_provisioning_spec_requires_explicit_gem_index() -> None:
+    from app.services.service_intent_adapter import (
+        ServiceIntentAdapter,
+        SubscriberServiceRef,
+        SubscriptionProvisioningSpec,
+    )
+
+    adapter = ServiceIntentAdapter()
+    intent = SubscriptionProvisioningSpec(
+        subscription_id="sub-1",
+        offer_id="offer-1",
+        status="active",
+        subscriber=SubscriberServiceRef(
+            subscriber_id="subscriber-1",
+            display_name="Network Safe Name",
+        ),
+        network=adapter.translate_offer(
+            SimpleNamespace(
+                name="Fiber 20",
+                code="FIBER20",
+                service_type="internet",
+                access_type="fiber",
+                plan_category="internet",
+                speed_download_mbps=20,
+                speed_upload_mbps=10,
+                guaranteed_speed_limit_at=None,
+                priority=None,
+                burst_profile=None,
+                default_ont_profile_id=None,
+            ),
+            radius_profile=SimpleNamespace(
+                id=uuid4(),
+                name="VLAN 203",
+                code="vlan203",
+                download_speed=None,
+                upload_speed=None,
+                vlan_id=203,
+                inner_vlan_id=None,
+                ip_pool_name=None,
+                ipv6_pool_name=None,
+                mikrotik_rate_limit=None,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="gem_index is required"):
+        adapter.build_olt_provisioning_spec(intent)
 
 
 def test_genieacs_service_intent_maps_observed_summary_without_secrets() -> None:

@@ -61,8 +61,8 @@ def _subnet_mask_from_cidr(cidr: str | None) -> str | None:
         return None
 
 
-def _management_pool_subnet(pool: object) -> str:
-    return _subnet_mask_from_cidr(getattr(pool, "cidr", None)) or "255.255.255.0"
+def _management_pool_subnet(pool: object) -> str | None:
+    return _subnet_mask_from_cidr(getattr(pool, "cidr", None))
 
 
 def _management_pool_gateway(pool: object) -> str | None:
@@ -424,6 +424,8 @@ def allocate_management_ip_for_ont(
         if in_current_pool and not owned_by_other_ont:
             mgmt_subnet = _management_pool_subnet(locked_pool)
             mgmt_gateway = _management_pool_gateway(locked_pool)
+            if not mgmt_subnet:
+                return False, "Management IP pool CIDR is invalid or missing.", None
             if record is None:
                 record = IPv4Address(
                     address=existing_ip,
@@ -511,6 +513,8 @@ def allocate_management_ip_for_ont(
 
     mgmt_subnet = _management_pool_subnet(locked_pool)
     mgmt_gateway = _management_pool_gateway(locked_pool)
+    if not mgmt_subnet:
+        return False, "Management IP pool CIDR is invalid or missing.", None
     assignment.mgmt_ip_address = next_ip
     assignment.mgmt_ip_mode = MgmtIpMode.static_ip
     assignment.mgmt_subnet = mgmt_subnet
@@ -1071,31 +1075,6 @@ def authorize_autofind_ont(
     # Resolve authorization profiles
     activation_started = monotonic()
     authorization_profiles: AuthorizationProfileResolution | None = None
-
-    if preset_id:
-        from app.models.network import AuthorizationPreset
-
-        preset_msg = "Selected authorization preset is not valid for this OLT."
-        try:
-            preset = db.get(AuthorizationPreset, uuid.UUID(str(preset_id)))
-            scoped_olt_id = getattr(preset, "olt_device_id", None) if preset else None
-            if (
-                preset is not None
-                and getattr(preset, "is_active", True)
-                and (scoped_olt_id is None or str(scoped_olt_id) == str(olt_id))
-                and preset.line_profile_id is not None
-                and preset.service_profile_id is not None
-            ):
-                authorization_profiles = AuthorizationProfileResolution(
-                    line_profile_id=preset.line_profile_id,
-                    service_profile_id=preset.service_profile_id,
-                    message=f"Using authorization preset '{preset.name}'.",
-                )
-        except (TypeError, ValueError):
-            preset_msg = "Selected authorization preset is invalid."
-        if authorization_profiles is None:
-            add_step("Activate ONT", False, preset_msg, activation_started)
-            return finish(success=False, message=preset_msg, status="error")
 
     model_hint = _authorization_model_hint(
         db,

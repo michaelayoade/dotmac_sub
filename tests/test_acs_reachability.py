@@ -160,7 +160,6 @@ def test_active_olt_form_requires_complete_authorization_pack(db_session):
 
     assert error is not None
     assert "complete authorization and ACS config pack" in error
-    assert "default line profile ID" in error
     assert "management IP pool" in error
 
 
@@ -181,8 +180,6 @@ def test_olt_create_payload_persists_config_pack_and_pool(db_session):
         "name": "Packed OLT",
         "is_active": True,
         "tr069_acs_server_id": acs.id,
-        "default_line_profile_id": 10,
-        "default_service_profile_id": 20,
         "internet_vlan_id": internet_vlan.id,
         "management_vlan_id": management_vlan.id,
         "default_tr069_olt_profile_id": 30,
@@ -190,8 +187,8 @@ def test_olt_create_payload_persists_config_pack_and_pool(db_session):
     }
     payload = olt_web_forms.create_payload(values)
 
-    assert payload.config_pack["line_profile_id"] == 10
-    assert payload.config_pack["service_profile_id"] == 20
+    assert "line_profile_id" not in payload.config_pack
+    assert "service_profile_id" not in payload.config_pack
     assert payload.config_pack["internet_vlan_id"] == str(internet_vlan.id)
     assert payload.config_pack["management_vlan_id"] == str(management_vlan.id)
     assert payload.config_pack["tr069_olt_profile_id"] == 30

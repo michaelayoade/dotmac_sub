@@ -292,7 +292,7 @@ class ServiceIntentAdapter:
         self,
         intent: SubscriptionProvisioningSpec,
         *,
-        gem_index: int = 1,
+        gem_index: int | None = None,
         connection_type: str = "pppoe",
     ):
         """Build an OLT command generator spec from subscription intent.
@@ -305,6 +305,9 @@ class ServiceIntentAdapter:
             ProvisioningSpec,
             WanServiceSpec,
         )
+
+        if gem_index is None:
+            raise ValueError("gem_index is required to build OLT provisioning spec")
 
         wan_services = []
         if intent.network.s_vlan:

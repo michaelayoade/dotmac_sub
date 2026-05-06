@@ -70,8 +70,9 @@
         <div>
             <label for="service_port_gem_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">GEM</label>
             <select id="service_port_gem_index" name="gem_index" required class="mt-0.5 block w-20 rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                {% for gem in service_port_intent.gem_choices or [service_port_intent.primary_gem_index or 1] %}
-                <option value="{{ gem }}" {% if (service_port_intent.primary_gem_index or 1) == gem %}selected{% endif %}>{{ gem }}</option>
+                <option value="">--</option>
+                {% for gem in service_port_intent.gem_choices %}
+                <option value="{{ gem }}" {% if service_port_intent.primary_gem_index == gem %}selected{% endif %}>{{ gem }}</option>
                 {% endfor %}
             </select>
         </div>

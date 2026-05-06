@@ -32,6 +32,16 @@ def test_create_olt_sp_fails_without_vlan_id() -> None:
     assert "VLAN" in result.detail
 
 
+def test_create_olt_sp_fails_without_gem_index() -> None:
+    db = MagicMock()
+    result = execute_create_olt_service_port(
+        db, {"ont_unit_id": "abc"}, {"vlan_id": 203}
+    )
+    assert result.status == "failed"
+    assert result.detail is not None
+    assert "GEM index" in result.detail
+
+
 @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
 def test_create_olt_sp_success(mock_resolve: MagicMock, mock_get_adapter: MagicMock) -> None:
@@ -50,7 +60,7 @@ def test_create_olt_sp_success(mock_resolve: MagicMock, mock_get_adapter: MagicM
     mock_get_adapter.return_value = mock_adapter
 
     result = execute_create_olt_service_port(
-        db, {"ont_unit_id": "abc"}, {"vlan_id": 203}
+        db, {"ont_unit_id": "abc"}, {"vlan_id": 203, "gem_index": 1}
     )
     assert result.status == "ok"
     assert result.payload is not None
@@ -78,7 +88,7 @@ def test_create_olt_sp_ssh_failure(
     mock_get_adapter.return_value = mock_adapter
 
     result = execute_create_olt_service_port(
-        db, {"ont_unit_id": "abc"}, {"vlan_id": 203}
+        db, {"ont_unit_id": "abc"}, {"vlan_id": 203, "gem_index": 1}
     )
     assert result.status == "failed"
     assert result.detail is not None
@@ -143,4 +153,3 @@ def test_ensure_nas_vlan_success(mock_provision: MagicMock) -> None:
     assert result.payload is not None
     assert result.payload["nas_vlan_provisioned"] is True
     mock_provision.assert_called_once()
-

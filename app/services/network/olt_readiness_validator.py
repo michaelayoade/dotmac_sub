@@ -144,32 +144,8 @@ def validate_olt_readiness(
     # 2. Validate OLT vendor/model
     _validate_olt_vendor_model(olt, report)
 
-    # 3. Validate OLT authorization defaults (from config_pack JSON)
+    # 3. Validate OLT provisioning pack fields that are not imported profile mappings.
     pack = getattr(olt, "config_pack", None) or {}
-    vendor = str(getattr(olt, "vendor", "") or "").lower()
-    if "huawei" in vendor:
-        if not pack.get("line_profile_id"):
-            report.issues.append(
-                ValidationIssue(
-                    category="authorization",
-                    message="Missing default authorization line profile ID",
-                    severity=IssueSeverity.blocking,
-                    code="NO_DEFAULT_LINE_PROFILE",
-                    field="line_profile_id",
-                )
-            )
-            report.is_ready = False
-        if not pack.get("service_profile_id"):
-            report.issues.append(
-                ValidationIssue(
-                    category="authorization",
-                    message="Missing default authorization service profile ID",
-                    severity=IssueSeverity.blocking,
-                    code="NO_DEFAULT_SERVICE_PROFILE",
-                    field="service_profile_id",
-                )
-            )
-            report.is_ready = False
 
     if not pack.get("management_vlan_id"):
         report.issues.append(

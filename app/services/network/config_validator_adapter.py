@@ -1068,21 +1068,8 @@ class NetworkConfigValidator(BaseConfigValidator):
         olt: OLTDevice,
         result: ConfigValidationResult,
     ) -> None:
-        """Check if OLT has default authorization profiles."""
-        del db
-        pack = getattr(olt, "config_pack", None) or {}
-        if not pack.get("line_profile_id"):
-            result.add_error(
-                "olt",
-                f"OLT '{olt.name}' has no default authorization line profile.",
-                code="NO_DEFAULT_LINE_PROFILE",
-            )
-        if not pack.get("service_profile_id"):
-            result.add_error(
-                "olt",
-                f"OLT '{olt.name}' has no default authorization service profile.",
-                code="NO_DEFAULT_SERVICE_PROFILE",
-            )
+        """Authorization profiles are resolved from imported ONT type mappings."""
+        del db, olt, result
 
     def _validate_pon_port_exists(
         self,

@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 from app.models.network import (
     OLTDevice,
     OltOnuTypeProfileMapping,
-    OntProvisioningProfile,
     OnuType,
 )
 from app.services.network.olt_ssh_profiles import OltProfileEntry, _parse_profile_table
@@ -222,94 +221,6 @@ def choose_service_profile(
         key=lambda profile: (profile.binding_count, -profile.profile_id),
         reverse=True,
     )[0]
-
-
-def _build_configured_resolution(
-    profile: OntProvisioningProfile,
-) -> tuple[bool, str, AuthorizationProfileResolution | None]:
-    line_profile_id = profile.authorization_line_profile_id
-    service_profile_id = profile.authorization_service_profile_id
-    if line_profile_id is None or service_profile_id is None:
-        return (
-            False,
-            (
-                f"Provisioning profile '{profile.name}' is missing OLT authorization "
-                "line/service profile IDs. Configure them before authorizing ONTs."
-            ),
-            None,
-        )
-
-    return (
-        True,
-        (
-            f"Resolved OLT authorization profiles from provisioning profile "
-            f"'{profile.name}': line {line_profile_id}, service {service_profile_id}."
-        ),
-        AuthorizationProfileResolution(
-            line_profile_id=line_profile_id,
-            service_profile_id=service_profile_id,
-            message=(
-                f"Resolved OLT authorization profiles from provisioning profile "
-                f"'{profile.name}': line {line_profile_id}, service {service_profile_id}."
-            ),
-        ),
-    )
-
-
-def resolve_authorization_profiles_from_db(
-    db: Session,
-    olt: OLTDevice,
-    *,
-    profile: OntProvisioningProfile | None = None,
-) -> tuple[bool, str, AuthorizationProfileResolution | None]:
-    """Resolve OLT-local authorization profile IDs from OLT Config Pack.
-
-    The OLT Config Pack JSON fields (line_profile_id, service_profile_id)
-    are required for authorization. These must be configured on the OLT before
-    any ONT authorization can proceed.
-
-    Args:
-        db: Database session (unused, kept for API compatibility)
-        olt: OLT device with config_pack JSON field
-        profile: Deprecated, ignored. Use OLT config pack fields instead.
-
-    Returns:
-        Tuple of (success, message, AuthorizationProfileResolution or None)
-    """
-    pack = getattr(olt, "config_pack", None) or {}
-    olt_line_profile = pack.get("line_profile_id")
-    olt_service_profile = pack.get("service_profile_id")
-
-    if olt_line_profile is None or olt_service_profile is None:
-        missing = []
-        if olt_line_profile is None:
-            missing.append("line_profile_id")
-        if olt_service_profile is None:
-            missing.append("service_profile_id")
-        return (
-            False,
-            (
-                f"OLT '{olt.name}' is missing required config pack fields: {', '.join(missing)}. "
-                "Configure these in OLT settings before authorizing ONTs."
-            ),
-            None,
-        )
-
-    return (
-        True,
-        (
-            f"Using OLT config pack for '{olt.name}': "
-            f"line {olt_line_profile}, service {olt_service_profile}."
-        ),
-        AuthorizationProfileResolution(
-            line_profile_id=olt_line_profile,
-            service_profile_id=olt_service_profile,
-            message=(
-                f"Using OLT config pack for '{olt.name}': "
-                f"line {olt_line_profile}, service {olt_service_profile}."
-            ),
-        ),
-    )
 
 
 def resolve_authorization_profiles_from_import(

@@ -17,7 +17,6 @@ from app.models.network import (
     IPv4Address,
     OLTDevice,
     OltLineProfileGemMapping,
-    OltOntRegistration,
     OltOnuTypeProfileMapping,
     OntAssignment,
     OntUnit,
@@ -53,29 +52,16 @@ def _resolve_imported_line_profile_id(
     db: Session,
     ont: OntUnit | None,
     olt_id: object | None,
-) -> int | None:
+) -> tuple[int | None, int | None]:
     if ont is None or olt_id is None:
-        return None
-
-    serial_number = str(getattr(ont, "serial_number", "") or "").strip()
-    if serial_number:
-        registration = db.scalars(
-            select(OltOntRegistration)
-            .where(OltOntRegistration.olt_id == olt_id)
-            .where(OltOntRegistration.serial_number == serial_number)
-            .where(OltOntRegistration.is_active.is_(True))
-            .where(OltOntRegistration.line_profile_id.isnot(None))
-            .limit(1)
-        ).first()
-        if registration is not None:
-            return int(registration.line_profile_id)
+        return None, None
 
     equipment_id = str(getattr(ont, "model", "") or "").strip()
     if not equipment_id:
         onu_type = getattr(ont, "onu_type", None)
         equipment_id = str(getattr(onu_type, "name", "") or "").strip()
     if not equipment_id:
-        return None
+        return None, None
 
     mapping = db.scalars(
         select(OltOnuTypeProfileMapping)
@@ -84,8 +70,8 @@ def _resolve_imported_line_profile_id(
         .limit(1)
     ).first()
     if mapping is None:
-        return None
-    return int(mapping.line_profile_id)
+        return None, None
+    return int(mapping.line_profile_id), int(mapping.service_profile_id)
 
 
 def _resolve_imported_vlan_gem_index(
@@ -193,7 +179,9 @@ def _values_from_assignment(
     wan_vlan = config_pack.internet_vlan if config_pack else None
     mgmt_vlan = config_pack.management_vlan if config_pack else None
     olt_id = config_pack.olt_id if config_pack else getattr(ont, "olt_device_id", None)
-    imported_line_profile_id = _resolve_imported_line_profile_id(db, ont, olt_id)
+    imported_line_profile_id, imported_service_profile_id = (
+        _resolve_imported_line_profile_id(db, ont, olt_id)
+    )
     imported_wan_gem_index = _resolve_imported_vlan_gem_index(
         db,
         olt_id=olt_id,
@@ -266,7 +254,7 @@ def _values_from_assignment(
         "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else None,
         "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
         "authorization_line_profile_id": imported_line_profile_id,
-        "authorization_service_profile_id": config_pack.service_profile_id if config_pack else None,
+        "authorization_service_profile_id": imported_service_profile_id,
         "primary_wan_service": cfg("wan", "primary_service"),
     }
 

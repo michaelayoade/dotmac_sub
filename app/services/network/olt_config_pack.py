@@ -374,12 +374,6 @@ def validate_olt_config_pack(
     """
     errors: list[str] = []
 
-    if require_authorization:
-        if config.line_profile_id is None:
-            errors.append("OLT missing default line profile ID")
-        if config.service_profile_id is None:
-            errors.append("OLT missing default service profile ID")
-
     if require_vlans:
         if config.internet_vlan.tag is None:
             errors.append("OLT missing internet VLAN")
@@ -472,19 +466,6 @@ def validate_config_pack_comprehensive(
         return validation
 
     # ========== ERRORS (blocking) ==========
-
-    # Authorization profiles are required for ONT authorization
-    if config_pack.line_profile_id is None:
-        validation.is_valid = False
-        validation.errors.append(
-            "Missing default line profile ID - ONTs cannot be authorized"
-        )
-
-    if config_pack.service_profile_id is None:
-        validation.is_valid = False
-        validation.errors.append(
-            "Missing default service profile ID - ONTs cannot be authorized"
-        )
 
     # Internet VLAN is required for service ports
     if config_pack.internet_vlan.tag is None:

@@ -210,6 +210,7 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     assert values["wan_gem_index"] == 1
     assert values["mgmt_gem_index"] == 2
     assert values["authorization_line_profile_id"] == 10
+    assert values["authorization_service_profile_id"] == 20
     assert values["tr069_acs_server_id"] == str(acs.id)
     assert values["tr069_olt_profile_id"] == 30
     assert values["cr_username"] == "pack-cr-user"

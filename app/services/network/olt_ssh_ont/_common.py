@@ -61,7 +61,7 @@ class OntIphostConfig:
     ont_id: int
     vlan_id: int
     ip_address: str
-    subnet: str = "255.255.255.0"
+    subnet: str
     gateway: str | None = None  # Derived from IP if not provided
     ip_mode: str = "static"
     priority: int | None = None

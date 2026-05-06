@@ -79,8 +79,6 @@ def _build_config_pack(values: Mapping[str, Any]) -> dict[str, object]:
         cr_password if isinstance(cr_password, str) else None
     )
     return {
-        "line_profile_id": values.get("default_line_profile_id"),
-        "service_profile_id": values.get("default_service_profile_id"),
         "tr069_olt_profile_id": values.get("default_tr069_olt_profile_id"),
         "internet_vlan_id": _uuid_to_str(values.get("internet_vlan_id")),
         "management_vlan_id": _uuid_to_str(values.get("management_vlan_id")),
@@ -110,8 +108,6 @@ def _validate_active_olt_preconfiguration(
         return None
 
     required_fields = [
-        ("default_line_profile_id", "default line profile ID"),
-        ("default_service_profile_id", "default service profile ID"),
         ("internet_vlan_id", "internet VLAN"),
         ("management_vlan_id", "management VLAN"),
         ("tr069_acs_server_id", "TR-069 ACS server"),
@@ -186,13 +182,6 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         # -------------------------------------------------------------------------
         # Config Pack fields (ONT Provisioning Defaults)
         # -------------------------------------------------------------------------
-        # Authorization profiles
-        "default_line_profile_id": _parse_int_or_none(
-            str(form.get("default_line_profile_id", ""))
-        ),
-        "default_service_profile_id": _parse_int_or_none(
-            str(form.get("default_service_profile_id", ""))
-        ),
         # VLANs by purpose
         "internet_vlan_id": _parse_uuid_or_none(str(form.get("internet_vlan_id", ""))),
         "management_vlan_id": _parse_uuid_or_none(
@@ -522,8 +511,6 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         snmp_priv_protocol=getattr(linked, "snmp_priv_protocol", None),
         snmp_priv_secret="",
         # Config Pack fields (read from config_pack JSON)
-        default_line_profile_id=pack.get("line_profile_id"),
-        default_service_profile_id=pack.get("service_profile_id"),
         internet_vlan_id=pack.get("internet_vlan_id"),
         management_vlan_id=pack.get("management_vlan_id"),
         tr069_vlan_id=pack.get("tr069_vlan_id"),

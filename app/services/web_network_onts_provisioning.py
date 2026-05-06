@@ -76,7 +76,7 @@ def _pool_networks(pool: IpPool) -> list[IPv4Network]:
 
 def _pool_netmask(pool: IpPool) -> str:
     networks = _pool_networks(pool)
-    return str(networks[0].netmask) if networks else "255.255.255.0"
+    return str(networks[0].netmask) if networks else ""
 
 
 def _existing_ipv4_state(
@@ -141,7 +141,7 @@ def available_static_ipv4_choices(
             "pool": None,
             "choices": [],
             "recommended_ip": None,
-            "netmask": "255.255.255.0",
+            "netmask": "",
             "gateway": "",
             "dns": "",
             "message": "Select an IP pool to see available addresses.",
@@ -156,7 +156,7 @@ def available_static_ipv4_choices(
             "pool": None,
             "choices": [],
             "recommended_ip": None,
-            "netmask": "255.255.255.0",
+            "netmask": "",
             "gateway": "",
             "dns": "",
             "message": "Selected IP pool is not available.",
@@ -167,7 +167,7 @@ def available_static_ipv4_choices(
             "pool": pool,
             "choices": [],
             "recommended_ip": None,
-            "netmask": "255.255.255.0",
+            "netmask": "",
             "gateway": pool.gateway or "",
             "dns": ", ".join(v for v in [pool.dns_primary, pool.dns_secondary] if v),
             "message": "Only IPv4 pools can be used for static ONT IPv4 selection.",
@@ -363,7 +363,7 @@ def _reserve_static_ipv4_for_ont(
     db.flush()
     return (
         selected,
-        str(choices_state.get("netmask") or "255.255.255.0"),
+        str(choices_state.get("netmask") or ""),
         str(choices_state.get("gateway") or ""),
         str(choices_state.get("dns") or ""),
     )

@@ -361,7 +361,6 @@ class ProvisioningEnforcement:
         This is idempotent - existing service-ports are detected and skipped.
         Batches by OLT for connection efficiency.
         """
-        import ipaddress
         import time
 
         from app.services.network.olt_protocol_adapters import get_protocol_adapter
@@ -415,17 +414,32 @@ class ProvisioningEnforcement:
                     skipped += 1
                     continue
 
-                # Resolve VLAN tag from effective config
-                mgmt_vlan_tag = 201
+                # Resolve management network from effective/imported state.
                 effective_mgmt_vlan = _effective_field(db, ont, "mgmt_vlan")
-                if effective_mgmt_vlan not in (None, ""):
-                    mgmt_vlan_tag = int(str(effective_mgmt_vlan))
+                effective_mgmt_subnet = _effective_field(db, ont, "mgmt_subnet")
+                effective_mgmt_gateway = _effective_field(db, ont, "mgmt_gateway")
+                if effective_mgmt_vlan in (None, ""):
+                    logger.warning(
+                        "Management enforcement skipped ONT %s: missing effective management VLAN",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    continue
+                if effective_mgmt_subnet in (None, "") or effective_mgmt_gateway in (
+                    None,
+                    "",
+                ):
+                    logger.warning(
+                        "Management enforcement skipped ONT %s: missing effective management subnet/gateway",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    continue
 
-                # Calculate subnet/gateway from IP (assume /24)
+                mgmt_vlan_tag = int(str(effective_mgmt_vlan))
                 ip_addr = str(mgmt_ip_address)
-                network = ipaddress.ip_network(f"{ip_addr}/24", strict=False)
-                subnet_mask = "255.255.255.0"
-                gateway = str(network.network_address + 1)
+                subnet_mask = str(effective_mgmt_subnet)
+                gateway = str(effective_mgmt_gateway)
 
                 try:
                     # Configure IPHOST (management IP on ONT)

@@ -193,6 +193,8 @@ def configure_ont_iphost(
     ok, err = core._validate_fsp(fsp)
     if not ok:
         return False, err
+    if ip_mode == "static" and not subnet:
+        return False, "Subnet is required for static ONT IPHOST configuration."
 
     # Build config and use batch function (single-item batch)
     config = OntIphostConfig(
@@ -200,7 +202,7 @@ def configure_ont_iphost(
         ont_id=ont_id,
         vlan_id=vlan_id,
         ip_address=ip_address or "",
-        subnet=subnet or "255.255.255.0",
+        subnet=subnet or "",
         gateway=gateway,
         ip_mode=ip_mode,
         priority=priority,

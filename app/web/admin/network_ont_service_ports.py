@@ -75,7 +75,7 @@ def ont_service_port_create(
     request: Request,
     ont_id: str,
     vlan_id: int = Form(...),
-    gem_index: int = Form(default=1),
+    gem_index: int = Form(...),
     user_vlan: str = Form(default=""),
     tag_transform: str = Form(default="translate"),
     db: Session = Depends(get_db),

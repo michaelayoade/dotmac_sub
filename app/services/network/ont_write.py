@@ -527,14 +527,23 @@ class OntWriteService:
 
         # If not available from context, try to get from OLT
         if line_profile_id is None or service_profile_id is None:
-            from app.services.network.ont_authorization_profiles import (
-                resolve_authorization_profiles,
+            from app.services.network.olt_profile_resolution import (
+                resolve_authorization_profiles_from_import,
             )
 
-            resolved = resolve_authorization_profiles(db, ctx.olt, ont)
-            if resolved:
-                line_profile_id = resolved.get("line_profile_id")
-                service_profile_id = resolved.get("service_profile_id")
+            equipment_id = str(getattr(ont, "model", "") or "").strip()
+            if not equipment_id:
+                onu_type = getattr(ont, "onu_type", None)
+                equipment_id = str(getattr(onu_type, "name", "") or "").strip()
+            profiles_ok, profiles_msg, resolved = resolve_authorization_profiles_from_import(
+                db,
+                ctx.olt,
+                equipment_id=equipment_id,
+            )
+            if not profiles_ok or resolved is None:
+                return ActionResult(success=False, message=profiles_msg)
+            line_profile_id = resolved.line_profile_id
+            service_profile_id = resolved.service_profile_id
 
         # Create device operation context
         op = DeviceOperationContext(

@@ -275,7 +275,7 @@ def validate_prerequisites(
             {
                 "name": "Authorization profiles",
                 "status": "fail",
-                "message": "Set OLT default or ONT desired line/service profile IDs",
+                "message": "Import OLT state and add an ONT type profile mapping for this equipment ID",
                 "can_auto_fix": False,
             }
         )
