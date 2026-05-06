@@ -12,6 +12,7 @@ from starlette.requests import Request
 
 from app.models.network import (
     OLTDevice,
+    OltLineProfileGemMapping,
     OltLineProfile,
     OltOnuTypeProfileMapping,
     OltServiceProfile,
@@ -75,11 +76,24 @@ def imported_profile_state_context(db: Session, olt_id: str) -> dict[str, Any]:
             .order_by(OltOnuTypeProfileMapping.equipment_id)
         )
     )
+    gem_mappings = list(
+        db.scalars(
+            select(OltLineProfileGemMapping)
+            .where(OltLineProfileGemMapping.olt_id == olt.id)
+            .order_by(
+                OltLineProfileGemMapping.line_profile_id,
+                OltLineProfileGemMapping.source,
+                OltLineProfileGemMapping.vlan_id,
+                OltLineProfileGemMapping.gem_index,
+            )
+        )
+    )
     return {
         "olt": olt,
         "line_profiles": line_profiles,
         "service_profiles": service_profiles,
         "profile_mappings": profile_mappings,
+        "gem_mappings": gem_mappings,
         "error": None,
     }
 

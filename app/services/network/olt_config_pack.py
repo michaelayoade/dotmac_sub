@@ -428,29 +428,6 @@ class ConfigPackValidation:
         }
 
 
-def _validate_gem_index(
-    validation: ConfigPackValidation,
-    *,
-    name: str,
-    value: int | str | None,
-    minimum: int = 1,
-    maximum: int = 8,
-) -> None:
-    if value is None:
-        return
-    try:
-        gem_index = int(value)
-    except (TypeError, ValueError):
-        validation.is_valid = False
-        validation.errors.append(f"{name} GEM index must be an integer")
-        return
-    if gem_index < minimum or gem_index > maximum:
-        validation.is_valid = False
-        validation.errors.append(
-            f"{name} GEM index {gem_index} is outside supported range {minimum}-{maximum}"
-        )
-
-
 def validate_config_pack_comprehensive(
     db: Session,
     olt_id: str | UUID,
@@ -541,19 +518,6 @@ def validate_config_pack_comprehensive(
         validation.errors.append(
             "Missing management IP pool - ONTs cannot receive a managed ACS address"
         )
-
-    _validate_gem_index(
-        validation,
-        name="Internet",
-        value=config_pack.internet_gem_index,
-    )
-    _validate_gem_index(
-        validation,
-        name="Management",
-        value=config_pack.mgmt_gem_index,
-    )
-    _validate_gem_index(validation, name="VoIP", value=config_pack.voip_gem_index)
-    _validate_gem_index(validation, name="IPTV", value=config_pack.iptv_gem_index)
 
     if (
         config_pack.tr069_acs_server_id

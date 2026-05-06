@@ -76,7 +76,17 @@ def test_desired_config_strips_olt_config_pack_owned_bloat():
 
 def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     from app.models.catalog import RegionZone
-    from app.models.network import OLTDevice, OntAssignment, OntUnit, Vlan, VlanPurpose
+    from app.models.network import (
+        OLTDevice,
+        OltLineProfile,
+        OltLineProfileGemMapping,
+        OltOnuTypeProfileMapping,
+        OltServiceProfile,
+        OntAssignment,
+        OntUnit,
+        Vlan,
+        VlanPurpose,
+    )
     from app.models.tr069 import Tr069AcsServer
     from app.services.network.effective_ont_config import resolve_effective_ont_config
 
@@ -109,12 +119,9 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     db_session.flush()
     # Set config_pack JSON (source of truth for OLT config pack)
     olt.config_pack = {
-        "line_profile_id": 10,
-        "service_profile_id": 20,
         "tr069_olt_profile_id": 30,
         "internet_config_ip_index": 0,
         "wan_config_profile_id": 5,
-        "internet_gem_index": 1,
         "cr_username": "pack-cr-user",
         "cr_password": "pack-cr-pass",
         "internet_vlan_id": str(internet_vlan.id),
@@ -123,6 +130,7 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-002",
+        model="EG8145V5",
         olt_device_id=olt.id,
         desired_config={
             "wan": {
@@ -148,6 +156,42 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     )
     db_session.add(ont)
     db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=10, name="LINE"),
+            OltServiceProfile(olt_id=olt.id, profile_id=20, name="EG8145V5"),
+        ]
+    )
+    db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfileGemMapping(
+                olt_id=olt.id,
+                line_profile_id=10,
+                source="service_port",
+                source_key="service-port:vlan:100:gem:1",
+                gem_index=1,
+                vlan_id=100,
+                usage_count=12,
+            ),
+            OltLineProfileGemMapping(
+                olt_id=olt.id,
+                line_profile_id=10,
+                source="service_port",
+                source_key="service-port:vlan:200:gem:2",
+                gem_index=2,
+                vlan_id=200,
+                usage_count=12,
+            ),
+            OltOnuTypeProfileMapping(
+                olt_id=olt.id,
+                equipment_id="EG8145V5",
+                line_profile_id=10,
+                service_profile_id=20,
+            ),
+        ]
+    )
+    db_session.flush()
     db_session.add(
         OntAssignment(
             ont_unit_id=ont.id,
@@ -164,8 +208,8 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     assert values["wan_vlan"] == 100
     assert values["mgmt_vlan"] == 200
     assert values["wan_gem_index"] == 1
+    assert values["mgmt_gem_index"] == 2
     assert values["authorization_line_profile_id"] == 10
-    assert values["authorization_service_profile_id"] == 20
     assert values["tr069_acs_server_id"] == str(acs.id)
     assert values["tr069_olt_profile_id"] == 30
     assert values["cr_username"] == "pack-cr-user"

@@ -23,6 +23,41 @@
     </div>
 
     <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Imported GEM Mappings</h3>
+        {% if gem_mappings %}
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <caption class="sr-only">Imported line profile GEM mappings</caption>
+                <thead class="bg-slate-50 dark:bg-slate-800">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Line</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Source</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">VLAN</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">GEM</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Priority</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Usage</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                    {% for mapping in gem_mappings %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ mapping.line_profile_id }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ mapping.source }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ mapping.vlan_id or "-" }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ mapping.gem_index }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ mapping.priority if mapping.priority is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ mapping.usage_count }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        {{ empty_state("No GEM Mappings", "Run Import OLT State from a running configuration that includes lineprofile or service-port GEM rows.", icon="settings") }}
+        {% endif %}
+    </div>
+
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Equipment Profile Mappings</h3>

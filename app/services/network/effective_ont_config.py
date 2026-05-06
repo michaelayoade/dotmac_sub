@@ -13,7 +13,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import IPv4Address, OLTDevice, OntAssignment, OntUnit
+from app.models.network import (
+    IPv4Address,
+    OLTDevice,
+    OltLineProfileGemMapping,
+    OltOntRegistration,
+    OltOnuTypeProfileMapping,
+    OntAssignment,
+    OntUnit,
+)
 from app.services.network.ont_management_ipam import get_ont_management_ip_record
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
 from app.services.network.ont_desired_config import desired_config, get_desired_config_value
@@ -39,6 +47,71 @@ def _get_active_assignment(ont: OntUnit) -> OntAssignment | None:
         if getattr(assignment, "active", False):
             return assignment
     return None
+
+
+def _resolve_imported_line_profile_id(
+    db: Session,
+    ont: OntUnit | None,
+    olt_id: object | None,
+) -> int | None:
+    if ont is None or olt_id is None:
+        return None
+
+    serial_number = str(getattr(ont, "serial_number", "") or "").strip()
+    if serial_number:
+        registration = db.scalars(
+            select(OltOntRegistration)
+            .where(OltOntRegistration.olt_id == olt_id)
+            .where(OltOntRegistration.serial_number == serial_number)
+            .where(OltOntRegistration.is_active.is_(True))
+            .where(OltOntRegistration.line_profile_id.isnot(None))
+            .limit(1)
+        ).first()
+        if registration is not None:
+            return int(registration.line_profile_id)
+
+    equipment_id = str(getattr(ont, "model", "") or "").strip()
+    if not equipment_id:
+        onu_type = getattr(ont, "onu_type", None)
+        equipment_id = str(getattr(onu_type, "name", "") or "").strip()
+    if not equipment_id:
+        return None
+
+    mapping = db.scalars(
+        select(OltOnuTypeProfileMapping)
+        .where(OltOnuTypeProfileMapping.olt_id == olt_id)
+        .where(OltOnuTypeProfileMapping.equipment_id == equipment_id)
+        .limit(1)
+    ).first()
+    if mapping is None:
+        return None
+    return int(mapping.line_profile_id)
+
+
+def _resolve_imported_vlan_gem_index(
+    db: Session,
+    *,
+    olt_id: object | None,
+    line_profile_id: int | None,
+    vlan_tag: int | None,
+) -> int | None:
+    if olt_id is None or line_profile_id is None or vlan_tag is None:
+        return None
+    mapping = db.scalars(
+        select(OltLineProfileGemMapping)
+        .where(OltLineProfileGemMapping.olt_id == olt_id)
+        .where(OltLineProfileGemMapping.line_profile_id == line_profile_id)
+        .where(OltLineProfileGemMapping.vlan_id == vlan_tag)
+        .order_by(
+            OltLineProfileGemMapping.source.desc(),
+            OltLineProfileGemMapping.usage_count.desc(),
+            OltLineProfileGemMapping.gem_index,
+        )
+        .limit(1)
+    ).first()
+    if mapping is None:
+        return None
+    return int(mapping.gem_index)
 
 
 def _values_from_assignment(
@@ -119,6 +192,20 @@ def _values_from_assignment(
     # Extract VLAN info (both ID and tag for compatibility)
     wan_vlan = config_pack.internet_vlan if config_pack else None
     mgmt_vlan = config_pack.management_vlan if config_pack else None
+    olt_id = config_pack.olt_id if config_pack else getattr(ont, "olt_device_id", None)
+    imported_line_profile_id = _resolve_imported_line_profile_id(db, ont, olt_id)
+    imported_wan_gem_index = _resolve_imported_vlan_gem_index(
+        db,
+        olt_id=olt_id,
+        line_profile_id=imported_line_profile_id,
+        vlan_tag=wan_vlan.tag if wan_vlan else None,
+    )
+    imported_mgmt_gem_index = _resolve_imported_vlan_gem_index(
+        db,
+        olt_id=olt_id,
+        line_profile_id=imported_line_profile_id,
+        vlan_tag=mgmt_vlan.tag if mgmt_vlan else None,
+    )
 
     return {
         "config_method": None,
@@ -134,13 +221,14 @@ def _values_from_assignment(
         "wan_static_gateway": asn_static_gateway,
         "wan_static_dns": asn_static_dns,
         "wan_instance_index": cfg("wan", "instance_index", default=1),
-        "wan_gem_index": config_pack.internet_gem_index if config_pack else None,
+        "wan_gem_index": imported_wan_gem_index,
         "mgmt_ip_mode": asn_mgmt_ip_mode,
         "mgmt_vlan": mgmt_vlan.tag if mgmt_vlan else None,
         "mgmt_vlan_id": str(mgmt_vlan.id) if mgmt_vlan and mgmt_vlan.id else None,
         "mgmt_ip_address": asn_mgmt_ip_address,
         "mgmt_subnet": asn_mgmt_subnet,
         "mgmt_gateway": asn_mgmt_gateway,
+        "mgmt_gem_index": imported_mgmt_gem_index,
         "lan_ip": asn_lan_ip,
         "lan_subnet": asn_lan_subnet,
         "lan_dhcp_enabled": asn_lan_dhcp_enabled,
@@ -177,7 +265,7 @@ def _values_from_assignment(
         "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else None,
         "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else None,
         "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
-        "authorization_line_profile_id": config_pack.line_profile_id if config_pack else None,
+        "authorization_line_profile_id": imported_line_profile_id,
         "authorization_service_profile_id": config_pack.service_profile_id if config_pack else None,
         "primary_wan_service": cfg("wan", "primary_service"),
     }

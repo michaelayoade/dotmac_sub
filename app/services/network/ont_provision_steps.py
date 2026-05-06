@@ -1216,10 +1216,14 @@ def provision_with_reconciliation(
 
     # 2. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
     if mgmt_vlan:
+        raw_mgmt_gem_index = values.get("mgmt_gem_index")
         mgmt_spec = create_batched_mgmt_spec_from_config_pack(
             config_pack,
             ctx.fsp,
             ctx.olt_ont_id,
+            mgmt_gem_index=(
+                int(raw_mgmt_gem_index) if raw_mgmt_gem_index is not None else None
+            ),
             allocated_ip=values.get("mgmt_ip_address"),
             subnet_mask=values.get("mgmt_subnet"),
             gateway=values.get("mgmt_gateway"),

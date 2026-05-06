@@ -91,10 +91,6 @@ def _build_config_pack(values: Mapping[str, Any]) -> dict[str, object]:
         "wan_config_profile_id": values.get("default_wan_config_profile_id"),
         "cr_username": values.get("default_cr_username"),
         "cr_password": encrypted_cr_password,
-        "internet_gem_index": values.get("default_internet_gem_index"),
-        "mgmt_gem_index": values.get("default_mgmt_gem_index"),
-        "voip_gem_index": values.get("default_voip_gem_index"),
-        "iptv_gem_index": values.get("default_iptv_gem_index"),
         "pppoe_wcd_index": values.get("pppoe_wcd_index"),
         "mgmt_wcd_index": values.get("mgmt_wcd_index"),
         "voip_wcd_index": values.get("voip_wcd_index"),
@@ -121,8 +117,6 @@ def _validate_active_olt_preconfiguration(
         ("tr069_acs_server_id", "TR-069 ACS server"),
         ("default_tr069_olt_profile_id", "TR-069 OLT profile ID"),
         ("mgmt_ip_pool_id", "management IP pool"),
-        ("default_internet_gem_index", "internet GEM index"),
-        ("default_mgmt_gem_index", "management GEM index"),
     ]
     missing = [label for key, label in required_fields if not values.get(key)]
     if missing:
@@ -207,19 +201,6 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "tr069_vlan_id": _parse_uuid_or_none(str(form.get("tr069_vlan_id", ""))),
         "voip_vlan_id": _parse_uuid_or_none(str(form.get("voip_vlan_id", ""))),
         "iptv_vlan_id": _parse_uuid_or_none(str(form.get("iptv_vlan_id", ""))),
-        # GEM indices
-        "default_internet_gem_index": _parse_int_or_none(
-            str(form.get("default_internet_gem_index", ""))
-        ),
-        "default_mgmt_gem_index": _parse_int_or_none(
-            str(form.get("default_mgmt_gem_index", ""))
-        ),
-        "default_voip_gem_index": _parse_int_or_none(
-            str(form.get("default_voip_gem_index", ""))
-        ),
-        "default_iptv_gem_index": _parse_int_or_none(
-            str(form.get("default_iptv_gem_index", ""))
-        ),
         # Provisioning knobs
         "default_tr069_olt_profile_id": _parse_int_or_none(
             str(form.get("default_tr069_olt_profile_id", ""))
@@ -548,10 +529,6 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         tr069_vlan_id=pack.get("tr069_vlan_id"),
         voip_vlan_id=pack.get("voip_vlan_id"),
         iptv_vlan_id=pack.get("iptv_vlan_id"),
-        default_internet_gem_index=pack.get("internet_gem_index"),
-        default_mgmt_gem_index=pack.get("mgmt_gem_index"),
-        default_voip_gem_index=pack.get("voip_gem_index"),
-        default_iptv_gem_index=pack.get("iptv_gem_index"),
         default_tr069_olt_profile_id=pack.get("tr069_olt_profile_id"),
         default_internet_config_ip_index=pack.get("internet_config_ip_index"),
         default_wan_config_profile_id=pack.get("wan_config_profile_id"),

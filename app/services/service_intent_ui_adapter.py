@@ -80,7 +80,6 @@ class ServiceIntentUiAdapter:
         service_ports: list[object] | None = None,
     ) -> dict[str, object]:
         """Return OLT config pack + ONT desired-config service-port defaults."""
-        config_pack = None
         effective_values: dict[str, object] = {}
         if db is not None:
             from app.services.network.effective_ont_config import (
@@ -91,22 +90,10 @@ class ServiceIntentUiAdapter:
             effective_values = (
                 effective.get("values", {}) if isinstance(effective, dict) else {}
             )
-            config_pack = effective.get("config_pack") if isinstance(effective, dict) else None
 
         vlan_id = effective_values.get("wan_vlan")
         gem_index = effective_values.get("wan_gem_index")
         gem_choices = [int(gem_index)] if gem_index is not None else []
-        if config_pack:
-            gem_choices = sorted(
-                int(value)
-                for value in {
-                    config_pack.internet_gem_index,
-                    config_pack.mgmt_gem_index,
-                    config_pack.voip_gem_index,
-                    config_pack.iptv_gem_index,
-                }
-                if value is not None
-            )
 
         actual_vlans = {
             getattr(port, "vlan_id", None)

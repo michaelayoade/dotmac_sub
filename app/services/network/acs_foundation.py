@@ -63,7 +63,7 @@ def apply_acs_foundation(
 
     mgmt_ip = effective_values.get("mgmt_ip_address")
     mgmt_vlan_tag = _int_or_none(effective_values.get("mgmt_vlan"))
-    mgmt_gem_index = _int_or_none(getattr(config_pack, "mgmt_gem_index", None))
+    mgmt_gem_index = _int_or_none(effective_values.get("mgmt_gem_index"))
     mgmt_subnet = effective_values.get("mgmt_subnet")
     mgmt_gateway = effective_values.get("mgmt_gateway")
     tr069_profile_id = _int_or_none(effective_values.get("tr069_olt_profile_id"))

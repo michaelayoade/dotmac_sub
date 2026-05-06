@@ -840,6 +840,7 @@ def test_acs_connectivity_does_not_auto_normalize_wan_after_inform(
                 "tr069_acs_server_id": str(acs_server.id),
                 "tr069_olt_profile_id": 7,
                 "mgmt_vlan": 201,
+                "mgmt_gem_index": 2,
                 "internet_config_ip_index": 0,
                 "wan_config_profile_id": 9,
             },
@@ -926,6 +927,7 @@ def test_acs_connection_request_credentials_are_not_required_during_authorizatio
                 "tr069_acs_server_id": str(acs_server.id),
                 "tr069_olt_profile_id": 7,
                 "mgmt_vlan": 201,
+                "mgmt_gem_index": 2,
             },
         },
     )
@@ -996,6 +998,7 @@ def test_acs_connectivity_requires_acs_bootstrap_when_authorization_waits(
                 "tr069_acs_server_id": str(acs_server.id),
                 "tr069_olt_profile_id": 7,
                 "mgmt_vlan": 201,
+                "mgmt_gem_index": 2,
             },
         },
     )
@@ -1069,6 +1072,7 @@ def test_acs_connectivity_failure_is_synchronous(
                 "mgmt_subnet": "255.255.255.0",
                 "mgmt_gateway": "10.10.10.1",
                 "mgmt_vlan": 100,
+                "mgmt_gem_index": 2,
             },
         },
     )

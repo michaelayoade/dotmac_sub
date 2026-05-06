@@ -906,6 +906,50 @@ class OltLineProfile(Base):
     olt = relationship("OLTDevice")
 
 
+class OltLineProfileGemMapping(Base):
+    """Imported GEM mapping rows for an OLT line profile."""
+
+    __tablename__ = "olt_line_profile_gem_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_id",
+            "line_profile_id",
+            "source_key",
+            name="uq_olt_line_profile_gem_mappings_source",
+        ),
+        ForeignKeyConstraint(
+            ["olt_id", "line_profile_id"],
+            ["olt_line_profiles.olt_id", "olt_line_profiles.profile_id"],
+            name="fk_olt_line_profile_gem_mapping_line_profile",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    line_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    gem_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    mapping_index: Mapped[int | None] = mapped_column(Integer)
+    tcont_index: Mapped[int | None] = mapped_column(Integer)
+    vlan_id: Mapped[int | None] = mapped_column(Integer)
+    priority: Mapped[int | None] = mapped_column(Integer)
+    eth_port: Mapped[int | None] = mapped_column(Integer)
+    usage_count: Mapped[int] = mapped_column(Integer, default=0)
+    raw_config: Mapped[str | None] = mapped_column(Text)
+    last_imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    olt = relationship("OLTDevice")
+
+
 class OltServiceProfile(Base):
     """Imported OLT-local GPON service profile."""
 

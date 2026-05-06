@@ -474,7 +474,6 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         """Should create DHCP spec when no static IP provided."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
-        config_pack.mgmt_gem_index = 2
         config_pack.internet_config_ip_index = 0
         config_pack.wan_config_profile_id = 1
         config_pack.tr069_olt_profile_id = 5
@@ -483,11 +482,13 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
             config_pack,
             fsp="0/1/0",
             ont_id_on_olt=10,
+            mgmt_gem_index=2,
         )
 
         assert spec.fsp == "0/1/0"
         assert spec.ont_id_on_olt == 10
         assert spec.mgmt_vlan_tag == 201
+        assert spec.mgmt_gem_index == 2
         assert spec.ip_mode == "dhcp"
         assert spec.ip_address is None
 
@@ -495,7 +496,6 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         """Should create static spec when IP provided."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
-        config_pack.mgmt_gem_index = 2
         config_pack.internet_config_ip_index = 0
         config_pack.wan_config_profile_id = 1
         config_pack.tr069_olt_profile_id = 5
@@ -504,6 +504,7 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
             config_pack,
             fsp="0/1/0",
             ont_id_on_olt=10,
+            mgmt_gem_index=2,
             allocated_ip="10.0.0.100",
             subnet_mask="255.255.255.0",
             gateway="10.0.0.1",
@@ -518,7 +519,6 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         """Should use DHCP if not all static params provided."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
-        config_pack.mgmt_gem_index = 2
         config_pack.internet_config_ip_index = None
         config_pack.wan_config_profile_id = None
         config_pack.tr069_olt_profile_id = None
@@ -527,6 +527,7 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
             config_pack,
             fsp="0/1/0",
             ont_id_on_olt=10,
+            mgmt_gem_index=2,
             allocated_ip="10.0.0.100",  # Only IP, no mask/gateway
         )
 
@@ -536,7 +537,6 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         """Should preserve wan_config_profile_id=0 as valid profile."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
-        config_pack.mgmt_gem_index = 2
         config_pack.internet_config_ip_index = 0
         config_pack.wan_config_profile_id = 0  # Valid profile ID
         config_pack.tr069_olt_profile_id = 5
@@ -545,6 +545,7 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
             config_pack,
             fsp="0/1/0",
             ont_id_on_olt=10,
+            mgmt_gem_index=2,
         )
 
         assert spec.wan_config_profile_id == 0
@@ -554,7 +555,6 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         """Should treat None wan_config_profile_id as skip."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
-        config_pack.mgmt_gem_index = 2
         config_pack.internet_config_ip_index = 0
         config_pack.wan_config_profile_id = None  # Not configured
         config_pack.tr069_olt_profile_id = 5
@@ -563,6 +563,7 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
             config_pack,
             fsp="0/1/0",
             ont_id_on_olt=10,
+            mgmt_gem_index=2,
         )
 
         assert spec.wan_config_profile_id is None

@@ -137,18 +137,6 @@
                     </select>
                 </div>
                 <div>
-                    <label for="default_internet_gem_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">Internet GEM</label>
-                    <input type="number" name="default_internet_gem_index" id="default_internet_gem_index" min="0" max="15"
-                        value="{{ olt.default_internet_gem_index if olt.default_internet_gem_index is not none else 1 }}"
-                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                </div>
-                <div>
-                    <label for="default_mgmt_gem_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">Mgmt GEM</label>
-                    <input type="number" name="default_mgmt_gem_index" id="default_mgmt_gem_index" min="0" max="15"
-                        value="{{ olt.default_mgmt_gem_index if olt.default_mgmt_gem_index is not none else 2 }}"
-                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                </div>
-                <div>
                     <label for="tr069_acs_server_id" class="text-xs font-medium text-slate-600 dark:text-slate-400">ACS Server</label>
                     <select name="tr069_acs_server_id" id="tr069_acs_server_id"
                         class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -336,18 +324,6 @@
                             <option value="{{ vlan.id }}" {% if olt.iptv_vlan_id and olt.iptv_vlan_id|string == vlan.id|string %}selected{% endif %}>{{ vlan.tag }}</option>
                             {% endfor %}
                         </select>
-                    </div>
-                    <div>
-                        <label for="default_voip_gem_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">VoIP GEM</label>
-                        <input type="number" name="default_voip_gem_index" id="default_voip_gem_index" min="0" max="15"
-                            value="{{ olt.default_voip_gem_index if olt.default_voip_gem_index is not none else 3 }}"
-                            class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-                    <div>
-                        <label for="default_iptv_gem_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">IPTV GEM</label>
-                        <input type="number" name="default_iptv_gem_index" id="default_iptv_gem_index" min="0" max="15"
-                            value="{{ olt.default_iptv_gem_index if olt.default_iptv_gem_index is not none else 4 }}"
-                            class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                     {% endif %}
                     <div class="col-span-2">

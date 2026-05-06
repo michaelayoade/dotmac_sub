@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import (
     OLTDevice,
+    OltLineProfileGemMapping,
     OltLineProfile,
     OltOntRegistration,
     OltOnuTypeProfileMapping,
@@ -48,6 +49,26 @@ _ONT_ADD_RE = re.compile(
 _TR069_BIND_RE = re.compile(
     r"\bont\s+tr069-server-config\s+(?P<port>\d+)\s+(?P<ont_id>\d+)"
     r"\s+profile-id\s+(?P<profile_id>\d+)",
+    re.IGNORECASE,
+)
+_LINE_PROFILE_BLOCK_RE = re.compile(
+    r"ont-lineprofile\s+gpon\s+profile-id\s+(?P<profile_id>\d+)"
+    r"(?:\s+profile-name\s+\"(?P<name>[^\"]*)\")?"
+    r"(?P<body>.*?)(?=^\s*ont-lineprofile\s+gpon\s+profile-id\s+\d+|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+_GEM_ADD_RE = re.compile(
+    r"\bgem\s+add\s+(?P<gem>\d+)\s+\S+\s+tcont\s+(?P<tcont>\d+)",
+    re.IGNORECASE,
+)
+_GEM_MAPPING_RE = re.compile(
+    r"\bgem\s+mapping\s+(?P<gem>\d+)\s+(?P<mapping>\d+)\s+"
+    r"(?:(?:vlan\s+(?P<vlan>\d+))|(?:priority\s+(?P<priority>\d+))|(?:eth\s+(?P<eth>\d+)))",
+    re.IGNORECASE,
+)
+_SERVICE_PORT_RE = re.compile(
+    r"\bservice-port\s+\d+\s+vlan\s+(?P<vlan>\d+)\s+gpon\s+"
+    r"(?P<fsp>\d+/\d+/\d+)\s+ont\s+(?P<ont_id>\d+)\s+gemport\s+(?P<gem>\d+)",
     re.IGNORECASE,
 )
 
@@ -118,6 +139,131 @@ def _plain_serial_or_none(value: str | None) -> str | None:
     if re.fullmatch(r"[0-9A-F]{12,32}", clean):
         return clean
     return None
+
+
+def _import_line_profile_gem_mappings_from_config(
+    db: Session,
+    olt: OLTDevice,
+    config_text: str,
+    imported_at: datetime,
+) -> int:
+    """Import configured GEM mappings from lineprofile config blocks."""
+    imported = 0
+    for profile_match in _LINE_PROFILE_BLOCK_RE.finditer(config_text):
+        line_profile_id = int(profile_match.group("profile_id"))
+        body = profile_match.group("body")
+        tcont_by_gem = {
+            int(match.group("gem")): int(match.group("tcont"))
+            for match in _GEM_ADD_RE.finditer(body)
+        }
+        for mapping_match in _GEM_MAPPING_RE.finditer(body):
+            gem_index = int(mapping_match.group("gem"))
+            mapping_index = int(mapping_match.group("mapping"))
+            vlan_id = (
+                int(mapping_match.group("vlan"))
+                if mapping_match.group("vlan") is not None
+                else None
+            )
+            priority = (
+                int(mapping_match.group("priority"))
+                if mapping_match.group("priority") is not None
+                else None
+            )
+            eth_port = (
+                int(mapping_match.group("eth"))
+                if mapping_match.group("eth") is not None
+                else None
+            )
+            if vlan_id is not None:
+                source_key = f"line:vlan:{vlan_id}:gem:{gem_index}:map:{mapping_index}"
+            elif priority is not None:
+                source_key = (
+                    f"line:priority:{priority}:gem:{gem_index}:map:{mapping_index}"
+                )
+            else:
+                source_key = f"line:eth:{eth_port}:gem:{gem_index}:map:{mapping_index}"
+
+            _upsert_by_keys(
+                db,
+                OltLineProfileGemMapping,
+                {
+                    "olt_id": olt.id,
+                    "line_profile_id": line_profile_id,
+                    "source_key": source_key,
+                },
+                {
+                    "source": "line_profile",
+                    "gem_index": gem_index,
+                    "mapping_index": mapping_index,
+                    "tcont_index": tcont_by_gem.get(gem_index),
+                    "vlan_id": vlan_id,
+                    "priority": priority,
+                    "eth_port": eth_port,
+                    "usage_count": 0,
+                    "raw_config": mapping_match.group(0).strip(),
+                    "last_imported_at": imported_at,
+                },
+            )
+            imported += 1
+    return imported
+
+
+def _import_service_port_gem_mappings_from_config(
+    db: Session,
+    olt: OLTDevice,
+    config_text: str,
+    imported_at: datetime,
+) -> int:
+    """Import observed service-port VLAN/GEM usage per line profile."""
+    registration_by_location = {
+        (registration.fsp, registration.ont_id_on_olt): registration
+        for registration in db.scalars(
+            select(OltOntRegistration)
+            .where(OltOntRegistration.olt_id == olt.id)
+            .where(OltOntRegistration.is_active.is_(True))
+            .where(OltOntRegistration.line_profile_id.isnot(None))
+        ).all()
+    }
+    counts: Counter[tuple[int, int, int]] = Counter()
+    for match in _SERVICE_PORT_RE.finditer(config_text):
+        fsp = match.group("fsp")
+        ont_id = int(match.group("ont_id"))
+        registration = registration_by_location.get((fsp, ont_id))
+        if registration is None or registration.line_profile_id is None:
+            continue
+        counts[
+            (
+                int(registration.line_profile_id),
+                int(match.group("vlan")),
+                int(match.group("gem")),
+            )
+        ] += 1
+
+    imported = 0
+    for (line_profile_id, vlan_id, gem_index), usage_count in counts.items():
+        _upsert_by_keys(
+            db,
+            OltLineProfileGemMapping,
+            {
+                "olt_id": olt.id,
+                "line_profile_id": line_profile_id,
+                "source_key": f"service-port:vlan:{vlan_id}:gem:{gem_index}",
+            },
+            {
+                "source": "service_port",
+                "gem_index": gem_index,
+                "mapping_index": None,
+                "tcont_index": None,
+                "vlan_id": vlan_id,
+                "priority": None,
+                "eth_port": None,
+                "usage_count": int(usage_count),
+                "raw_config": None,
+                "last_imported_at": imported_at,
+            },
+        )
+        imported += 1
+    return imported
 
 
 def _import_profile_mappings(
@@ -331,6 +477,13 @@ def import_olt_state_from_dump(
                 },
             )
 
+        gem_mapping_count = _import_line_profile_gem_mappings_from_config(
+            db,
+            olt,
+            running_config,
+            imported_at,
+        )
+
         for profile in service_profiles:
             _upsert_by_keys(
                 db,
@@ -445,10 +598,19 @@ def import_olt_state_from_dump(
                 },
             )
             mapping_count += 1
+        gem_mapping_count += _import_service_port_gem_mappings_from_config(
+            db,
+            olt,
+            running_config,
+            imported_at,
+        )
         db.flush()
         return OltStateImportResult(
             success=True,
-            message="OLT state imported from dump.",
+            message=(
+                "OLT state imported from dump "
+                f"({gem_mapping_count} GEM mapping rows)."
+            ),
             olt_id=str(olt.id),
             line_profiles=len(line_profiles),
             service_profiles=len(service_profiles),
@@ -527,6 +689,12 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                     "raw_config": detail,
                     "last_imported_at": imported_at,
                 },
+            )
+            _import_line_profile_gem_mappings_from_config(
+                db,
+                olt,
+                detail,
+                imported_at,
             )
             line_count += 1
 

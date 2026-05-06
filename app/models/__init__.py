@@ -219,6 +219,7 @@ from app.models.network import (  # noqa: F401
     OltCardPort,
     OltConfigBackup,
     OltConfigBackupType,
+    OltLineProfileGemMapping,
     OltLineProfile,
     OltOntRegistration,
     OltOnuTypeProfileMapping,

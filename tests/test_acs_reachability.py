@@ -227,7 +227,7 @@ def test_config_pack_comprehensive_requires_management_ip_pool(db_session):
     assert any("Missing management IP pool" in error for error in validation.errors)
 
 
-def test_config_pack_comprehensive_rejects_invalid_gem_index(db_session):
+def test_config_pack_comprehensive_ignores_legacy_gem_index(db_session):
     olt, acs, management_vlan, pool = _acs_ready_olt(db_session)
     internet_vlan = Vlan(
         region_id=management_vlan.region_id,
@@ -253,5 +253,5 @@ def test_config_pack_comprehensive_rejects_invalid_gem_index(db_session):
 
     validation = validate_config_pack_comprehensive(db_session, olt.id)
 
-    assert validation.is_valid is False
-    assert any("Internet GEM index 9" in error for error in validation.errors)
+    assert validation.is_valid is True
+    assert not any("GEM index" in error for error in validation.errors)

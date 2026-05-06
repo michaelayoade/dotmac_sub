@@ -339,6 +339,7 @@ def create_batched_mgmt_spec_from_config_pack(
     fsp: str,
     ont_id_on_olt: int,
     *,
+    mgmt_gem_index: int | None = None,
     allocated_ip: str | None = None,
     subnet_mask: str | None = None,
     gateway: str | None = None,
@@ -349,6 +350,7 @@ def create_batched_mgmt_spec_from_config_pack(
         config_pack: OltConfigPack instance
         fsp: Frame/Slot/Port string
         ont_id_on_olt: ONT ID on the OLT
+        mgmt_gem_index: Imported management GEM index for the resolved profile
         allocated_ip: Allocated management IP (for static mode)
         subnet_mask: Subnet mask (for static mode)
         gateway: Gateway IP (for static mode)
@@ -368,7 +370,7 @@ def create_batched_mgmt_spec_from_config_pack(
         fsp=fsp,
         ont_id_on_olt=ont_id_on_olt,
         mgmt_vlan_tag=mgmt_vlan_tag,
-        mgmt_gem_index=config_pack.mgmt_gem_index,
+        mgmt_gem_index=mgmt_gem_index,
         ip_mode=ip_mode,
         ip_address=allocated_ip,
         subnet_mask=subnet_mask,
