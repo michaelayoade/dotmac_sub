@@ -314,44 +314,6 @@ def test_olt_ssh_connection(
     return ok, message, policy_key
 
 
-def test_olt_netconf_connection(
-    db: Session, olt_id: str, *, request: Request | None = None
-) -> tuple[bool, str, list[str]]:
-    from app.services.network import olt_netconf
-
-    olt = get_olt_or_none(db, olt_id)
-    capabilities: list[str]
-    if not olt:
-        ok, message, capabilities = False, "OLT not found", []
-    else:
-        ok, message, capabilities = olt_netconf.test_connection(olt)
-    log_olt_audit_event(
-        db,
-        request=request,
-        action="test_netconf_connection",
-        entity_id=olt_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-            "capabilities_count": len(capabilities),
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
-    return ok, message, capabilities
-
-
-def get_olt_netconf_config(
-    db: Session, olt_id: str, *, filter_xpath: str | None = None
-) -> tuple[bool, str, str]:
-    from app.services.network import olt_netconf
-
-    olt = get_olt_or_none(db, olt_id)
-    if not olt:
-        return False, "OLT not found", ""
-    return olt_netconf.get_running_config(olt, filter_xpath=filter_xpath)
-
-
 def get_olt_firmware_images(db: Session, olt_id: str) -> list:
     from app.models.network import OltFirmwareImage
 

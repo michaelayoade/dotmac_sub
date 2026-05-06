@@ -187,47 +187,7 @@ def configure_ont_iphost(
     subnet: str | None = None,
     gateway: str | None = None,
 ) -> tuple[bool, str]:
-    """Configure ONT management IP (IPHOST) via OLT.
-
-    Prefers NETCONF when enabled (more reliable for long commands), falls
-    back to SSH CLI if NETCONF is unavailable or fails with schema errors.
-    """
-    # Try NETCONF first if enabled - it avoids SSH terminal escape sequence issues
-    if olt.netconf_enabled:
-        try:
-            from app.services.network import olt_netconf_ont
-
-            ok, msg = olt_netconf_ont.configure_ont_iphost(
-                olt,
-                fsp,
-                ont_id,
-                vlan_id=vlan_id,
-                ip_mode=ip_mode,
-                priority=priority,
-                ip_address=ip_address,
-                subnet=subnet,
-                gateway=gateway,
-            )
-            if ok:
-                return ok, msg
-            # If NETCONF failed with schema/namespace issues, fall back to SSH
-            if "namespace" in msg.lower() or "schema" in msg.lower():
-                logger.info(
-                    "NETCONF IPHOST not supported on OLT %s, falling back to SSH: %s",
-                    olt.name,
-                    msg,
-                )
-            else:
-                # Other NETCONF errors - return the error
-                return ok, msg
-        except Exception as exc:
-            logger.warning(
-                "NETCONF IPHOST failed on OLT %s, falling back to SSH: %s",
-                olt.name,
-                exc,
-            )
-
-    # Fall back to SSH CLI - use batch function with single config
+    """Configure ONT management IP (IPHOST) via OLT SSH CLI."""
     from app.services.network import olt_ssh as core
 
     ok, err = core._validate_fsp(fsp)

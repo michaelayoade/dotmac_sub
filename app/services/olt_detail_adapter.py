@@ -125,10 +125,6 @@ class OltDetailAdapter:
                     "Saved" if getattr(olt, "ssh_password", None) else "Not configured"
                 ),
             },
-            "netconf": {
-                "enabled": bool(getattr(olt, "netconf_enabled", False)),
-                "port": getattr(olt, "netconf_port", None),
-            },
             "snmp": {
                 "linked": monitoring_device is not None,
                 "enabled": snmp_enabled,
@@ -175,11 +171,6 @@ class OltDetailAdapter:
                     "method": "POST",
                     "visible": True,
                 },
-                "test_netconf": {
-                    "url": f"{base}/test-netconf",
-                    "method": "POST",
-                    "visible": bool(getattr(olt, "netconf_enabled", False)),
-                },
                 "refresh_telemetry": {
                     "url": f"{base}/refresh-telemetry",
                     "method": "POST",
@@ -218,7 +209,6 @@ class OltDetailAdapter:
                 "ont_status_by_serial": f"{base}/ont-status-by-serial",
                 "ssh_get_config": f"{base}/ssh-get-config",
                 "ssh_backup": f"{base}/backups/ssh-backup",
-                "netconf_get_config": f"{base}/netconf-get-config",
             },
         }
 

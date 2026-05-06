@@ -82,85 +82,13 @@ class OltProtocolAdapter:
         service_profile_id: int | None = None,
         description: str = "",
     ) -> OltOperationResult:
-        """Authorize ONT on the OLT.
-
-        Tries NETCONF first when enabled (faster, no CLI parsing),
-        falls back to SSH if NETCONF fails.
-        """
-        # Try NETCONF if enabled
-        if self._olt.netconf_enabled and line_profile_id and service_profile_id:
-            result = self._try_netconf_authorize(
-                fsp,
-                serial_number,
-                line_profile_id=line_profile_id,
-                service_profile_id=service_profile_id,
-            )
-            if result.success:
-                return result
-            # NETCONF failed, fall back to SSH
-            fallback_reason = result.message
-
-        else:
-            fallback_reason = None
-
-        # Use SSH
-        result = self._ssh_authorize(
+        """Authorize ONT on the OLT via SSH."""
+        return self._ssh_authorize(
             fsp,
             serial_number,
             line_profile_id=line_profile_id,
             service_profile_id=service_profile_id,
         )
-        if fallback_reason:
-            result.fallback_reason = f"NETCONF failed: {fallback_reason}"
-        return result
-
-    def _try_netconf_authorize(
-        self,
-        fsp: str,
-        serial_number: str,
-        *,
-        line_profile_id: int,
-        service_profile_id: int,
-    ) -> OltOperationResult:
-        """Try to authorize ONT via NETCONF."""
-        from app.services.network.olt_netconf_ont import (
-            authorize_ont as nc_authorize,
-        )
-        from app.services.network.olt_netconf_ont import (
-            can_authorize_via_netconf,
-        )
-
-        # Check if NETCONF is available with GPON support
-        can_use, reason = can_authorize_via_netconf(self._olt)
-        if not can_use:
-            return OltOperationResult(success=False, message=reason)
-
-        logger.info(
-            "Attempting ONT authorization via NETCONF: olt=%s fsp=%s serial=%s",
-            self._olt.name,
-            fsp,
-            serial_number,
-        )
-
-        try:
-            ok, message, ont_id = nc_authorize(
-                self._olt,
-                fsp,
-                serial_number,
-                line_profile_id=line_profile_id,
-                service_profile_id=service_profile_id,
-            )
-            return OltOperationResult(
-                success=ok,
-                message=message,
-                ont_id=ont_id,
-            )
-        except Exception as exc:
-            logger.warning("NETCONF authorize_ont failed: %s", exc)
-            return OltOperationResult(
-                success=False,
-                message=f"NETCONF authorization failed: {exc}",
-            )
 
     def _ssh_authorize(
         self,

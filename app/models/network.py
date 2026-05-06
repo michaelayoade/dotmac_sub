@@ -718,8 +718,6 @@ class OLTDevice(Base):
     snmp_bulk_max_repetitions: Mapped[int | None] = mapped_column(Integer, default=None)
     # Tiered polling state (persists across restarts)
     poll_cycle_number: Mapped[int | None] = mapped_column(Integer, default=0)
-    netconf_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    netconf_port: Mapped[int | None] = mapped_column(Integer, default=830)
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id")
     )
@@ -2166,6 +2164,11 @@ class OnuType(Base):
     # -------------------------------------------------------------------------
     # ACS Config Pack: TR-069 parameter paths and device-specific defaults
     # -------------------------------------------------------------------------
+    # Link to code adapter for transforms (security mode mappings, etc.)
+    adapter_name: Mapped[str | None] = mapped_column(
+        String(80),
+        doc="Code adapter name for transforms (e.g., 'huawei-hg8245h')",
+    )
     # TR-069 data model variant (affects parameter paths)
     tr069_data_model: Mapped[str | None] = mapped_column(
         String(20),
@@ -2203,6 +2206,31 @@ class OnuType(Base):
     )
     wan_connection_type_path: Mapped[str | None] = mapped_column(
         String(255), doc="TR-069 path for WAN connection type"
+    )
+
+    # LAN TR-069 parameter paths (model-specific)
+    lan_ip_address_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for LAN IP address"
+    )
+    lan_subnet_mask_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for LAN subnet mask"
+    )
+    lan_dhcp_enabled_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for DHCP server enable"
+    )
+    lan_dhcp_start_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for DHCP pool start address"
+    )
+    lan_dhcp_end_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for DHCP pool end address"
+    )
+
+    # Access/management TR-069 parameter paths (model-specific)
+    remote_access_enabled_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for remote access enable"
+    )
+    http_management_enabled_path: Mapped[str | None] = mapped_column(
+        String(255), doc="TR-069 path for HTTP management enable"
     )
 
     # Default WiFi settings for this device type

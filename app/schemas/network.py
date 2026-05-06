@@ -382,8 +382,6 @@ class OLTDeviceBase(BaseModel):
     snmp_version: str | None = Field(default="v2c", max_length=10)
     snmp_ro_community: str | None = Field(default=None, max_length=255)
     snmp_rw_community: str | None = Field(default=None, max_length=255)
-    netconf_enabled: bool = False
-    netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
     supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None
@@ -418,8 +416,6 @@ class OLTDeviceUpdate(BaseModel):
     snmp_version: str | None = Field(default=None, max_length=10)
     snmp_ro_community: str | None = Field(default=None, max_length=255)
     snmp_rw_community: str | None = Field(default=None, max_length=255)
-    netconf_enabled: bool | None = None
-    netconf_port: int | None = None
     tr069_acs_server_id: UUID | None = None
     supported_pon_types: str | None = Field(default=None, max_length=120)
     notes: str | None = None

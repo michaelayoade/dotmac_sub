@@ -137,7 +137,6 @@ def _validate_active_olt_preconfiguration(
 def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
     """Parse OLT form values."""
     ssh_port_raw = str(form.get("ssh_port", "")).strip()
-    netconf_port_raw = str(form.get("netconf_port", "")).strip()
     snmp_port_raw = str(form.get("snmp_port", "")).strip()
     return {
         "name": form.get("name", "").strip(),
@@ -151,10 +150,6 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "ssh_port": int(ssh_port_raw)
         if ssh_port_raw.isdigit()
         else ssh_port_raw or None,
-        "netconf_enabled": form.get("netconf_enabled") == "true",
-        "netconf_port": int(netconf_port_raw)
-        if netconf_port_raw.isdigit()
-        else netconf_port_raw or None,
         "tr069_acs_server_id": form.get("tr069_acs_server_id", "").strip() or None,
         "snmp_enabled": form.get("snmp_enabled") == "true",
         "snmp_port": int(snmp_port_raw)
@@ -237,23 +232,15 @@ def validate_values(
     if not values.get("name"):
         return "Name is required"
     ssh_port = values.get("ssh_port")
-    netconf_enabled = bool(values.get("netconf_enabled"))
-    netconf_port = values.get("netconf_port")
     if ssh_port is not None and (
         not isinstance(ssh_port, int) or ssh_port < 1 or ssh_port > 65535
     ):
         return "SSH port must be between 1 and 65535"
-    if netconf_port is not None and (
-        not isinstance(netconf_port, int) or netconf_port < 1 or netconf_port > 65535
-    ):
-        return "NETCONF port must be between 1 and 65535"
     snmp_port = values.get("snmp_port")
     if snmp_port is not None and (
         not isinstance(snmp_port, int) or snmp_port < 1 or snmp_port > 65535
     ):
         return "SNMP port must be between 1 and 65535"
-    if netconf_enabled and not values.get("ssh_username"):
-        return "SSH username is required when NETCONF is enabled"
     hostname = values.get("hostname")
     mgmt_ip = values.get("mgmt_ip")
     if hostname:
@@ -315,8 +302,6 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
             "snmp_version": values.get("snmp_version"),
             "snmp_ro_community": _encrypt_if_set(values, "snmp_community"),
             "snmp_rw_community": _encrypt_if_set(values, "snmp_rw_community"),
-            "netconf_enabled": bool(values.get("netconf_enabled")),
-            "netconf_port": values.get("netconf_port"),
             "tr069_acs_server_id": values.get("tr069_acs_server_id"),
             "supported_pon_types": values.get("supported_pon_types"),
             "status": values.get("status"),
@@ -349,8 +334,6 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "snmp_version": values.get("snmp_version"),
         "snmp_ro_community": _encrypt_if_set(values, "snmp_community"),
         "snmp_rw_community": _encrypt_if_set(values, "snmp_rw_community"),
-        "netconf_enabled": values.get("netconf_enabled"),
-        "netconf_port": values.get("netconf_port"),
         "tr069_acs_server_id": values.get("tr069_acs_server_id"),
         "notes": values.get("notes"),
         "is_active": values.get("is_active"),
@@ -477,8 +460,6 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         ssh_username=olt.ssh_username,
         ssh_password="",  # nosec
         ssh_port=olt.ssh_port,
-        netconf_enabled=olt.netconf_enabled,
-        netconf_port=olt.netconf_port,
         tr069_acs_server_id=olt.tr069_acs_server_id,
         notes=olt.notes,
         is_active=olt.is_active,
