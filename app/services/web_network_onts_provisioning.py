@@ -26,6 +26,10 @@ from app.services.common import coerce_uuid
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import set_desired_config_values
+from app.services.network.ont_management_ipam import (
+    allocate_ont_management_ip,
+    release_ont_management_ip,
+)
 from app.services.network.ont_provisioning.preflight import validate_prerequisites
 from app.services.network.ont_provisioning.result import StepResult
 
@@ -512,9 +516,7 @@ def save_provision_settings(
         effective.get("values", {}) if isinstance(effective, dict) else {}
     )
     internet_vlan = getattr(config_pack, "internet_vlan", None)
-    internet_vlan_id = (
-        str(getattr(internet_vlan, "id", "") or "").strip() or None
-    )
+    internet_vlan_id = str(getattr(internet_vlan, "id", "") or "").strip() or None
 
     if wan_protocol_value == "static" and static_ip_pool_id_value:
         scope_error = _ip_pool_scope_for_ont_error(
@@ -555,28 +557,41 @@ def save_provision_settings(
         )
 
     onu_mode_value = (
-        onu_mode_value
-        or str(effective_values.get("onu_mode") or "").strip()
+        onu_mode_value or str(effective_values.get("onu_mode") or "").strip()
     )
     mgmt_ip_mode_value = (
-        mgmt_ip_mode_value
-        or str(effective_values.get("mgmt_ip_mode") or "").strip()
+        mgmt_ip_mode_value or str(effective_values.get("mgmt_ip_mode") or "").strip()
     )
-    mgmt_ip_address_value = mgmt_ip_address_value or str(
-        effective_values.get("mgmt_ip_address") or ""
-    ).strip() or None
+    mgmt_ip_address_value = (
+        mgmt_ip_address_value
+        or str(effective_values.get("mgmt_ip_address") or "").strip()
+        or None
+    )
+    mgmt_subnet_value = (
+        mgmt_subnet_value
+        or str(effective_values.get("mgmt_subnet") or "").strip()
+        or None
+    )
+    mgmt_gateway_value = (
+        mgmt_gateway_value
+        or str(effective_values.get("mgmt_gateway") or "").strip()
+        or None
+    )
     wan_protocol_value = (
-        wan_protocol_value
-        or str(effective_values.get("wan_mode") or "").strip()
+        wan_protocol_value or str(effective_values.get("wan_mode") or "").strip()
     )
     pppoe_username_value = (
         pppoe_username_value
         or str(effective_values.get("pppoe_username") or "").strip()
         or None
     )
-    lan_ip_value = lan_ip_value or str(effective_values.get("lan_ip") or "").strip() or None
+    lan_ip_value = (
+        lan_ip_value or str(effective_values.get("lan_ip") or "").strip() or None
+    )
     lan_subnet_value = (
-        lan_subnet_value or str(effective_values.get("lan_subnet") or "").strip() or None
+        lan_subnet_value
+        or str(effective_values.get("lan_subnet") or "").strip()
+        or None
     )
     if dhcp_enabled_value is None:
         resolved_dhcp_enabled = effective_values.get("lan_dhcp_enabled")
@@ -600,16 +615,14 @@ def save_provision_settings(
             else None
         )
     wifi_ssid_value = (
-        wifi_ssid_value
-        or str(effective_values.get("wifi_ssid") or "").strip()
+        wifi_ssid_value or str(effective_values.get("wifi_ssid") or "").strip()
     )
     wifi_security_mode_value = (
         wifi_security_mode_value
         or str(effective_values.get("wifi_security_mode") or "").strip()
     )
     wifi_channel_value = (
-        wifi_channel_value
-        or str(effective_values.get("wifi_channel") or "").strip()
+        wifi_channel_value or str(effective_values.get("wifi_channel") or "").strip()
     )
 
     field_issues = validate_provision_form_fields(
@@ -658,6 +671,24 @@ def save_provision_settings(
             status_code=422,
             content={"success": False, "message": "Invalid management IP mode"},
         )
+    if mgmt_ip_mode_value == "static_ip":
+        try:
+            mgmt_allocation = allocate_ont_management_ip(
+                db,
+                ont=ont,
+                requested_ip=mgmt_ip_address_value,
+            )
+        except ValueError as exc:
+            db.rollback()
+            return JsonActionResult(
+                status_code=422,
+                content={"success": False, "message": str(exc)},
+            )
+        mgmt_ip_address_value = mgmt_allocation.address
+        mgmt_subnet_value = mgmt_subnet_value or mgmt_allocation.subnet
+        mgmt_gateway_value = mgmt_gateway_value or mgmt_allocation.gateway
+    elif mgmt_ip_mode_value in {"inactive", "dhcp"}:
+        release_ont_management_ip(db, ont=ont, mode=mgmt_ip_mode_value)
     if mgmt_ip_mode_value == "static_ip" and not (
         mgmt_ip_address_value and mgmt_subnet_value and mgmt_gateway_value
     ):
@@ -740,14 +771,18 @@ def save_provision_settings(
         desired_updates = {
             "wan.onu_mode": onu_mode_value,
             "wan.mode": wan_mode_value,
-            "wan.static_ip": static_ip_value if wan_protocol_value == "static" else None,
+            "wan.static_ip": static_ip_value
+            if wan_protocol_value == "static"
+            else None,
             "wan.static_subnet": (
                 static_subnet_value if wan_protocol_value == "static" else None
             ),
             "wan.static_gateway": (
                 static_gateway_value if wan_protocol_value == "static" else None
             ),
-            "wan.static_dns": static_dns_value if wan_protocol_value == "static" else None,
+            "wan.static_dns": static_dns_value
+            if wan_protocol_value == "static"
+            else None,
             "wan.pppoe_username": (
                 pppoe_username_value if wan_protocol_value == "pppoe" else None
             ),
@@ -761,6 +796,16 @@ def save_provision_settings(
             "management.gateway": (
                 mgmt_gateway_value if mgmt_ip_mode_value == "static_ip" else None
             ),
+            "management.vlan": (
+                str(effective_values.get("mgmt_vlan") or "").strip() or None
+            )
+            if mgmt_ip_mode_value == "static_ip"
+            else None,
+            "management.vlan_id": (
+                str(effective_values.get("mgmt_vlan_id") or "").strip() or None
+            )
+            if mgmt_ip_mode_value == "static_ip"
+            else None,
             "lan.ip": lan_ip_value,
             "lan.subnet": lan_subnet_value,
             "lan.dhcp_enabled": dhcp_enabled_value,

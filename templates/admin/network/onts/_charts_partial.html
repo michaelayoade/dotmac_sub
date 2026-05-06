@@ -11,11 +11,12 @@
         </span>
         <button
             type="button"
-            hx-get="/admin/network/onts/{{ ont_id }}/charts?time_range={{ time_range }}"
+            hx-post="/admin/network/onts/{{ ont_id }}/charts/refresh?time_range={{ time_range }}"
             hx-target="#charts-content"
             hx-swap="innerHTML"
             hx-indicator="#charts-refresh-indicator"
             hx-disabled-elt="this"
+            hx-headers='{"X-CSRF-Token": "{{ request.state.csrf_token }}"}'
             class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
         >Refresh</button>
         <div class="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">

@@ -783,6 +783,7 @@ class TestReturnToInventoryWebAction:
         mock_client.delete_device.assert_called_once_with("ABC-ONT-HWTC12345678")
         db_session.refresh(tr069_device)
         assert tr069_device.ont_unit_id is None
+        assert tr069_device.genieacs_device_id is None
 
     def test_genieacs_delete_failure_stops_after_olt_cleanup(
         self, db_session, sample_ont, sample_olt, sample_assignment
@@ -888,6 +889,61 @@ class TestReturnToInventoryWebAction:
         assert result.success is True
         mock_client.delete_device.assert_called_once_with("ABC-ONT-HWTC12345678")
         assert mock_client.list_devices.call_count >= 1
+
+    def test_return_to_inventory_clears_same_serial_local_acs_identity(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
+        """Return cleanup clears stale same-serial local ACS identity rows."""
+        from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+        from app.services.network.ont_inventory import return_ont_to_inventory
+
+        acs_server = Tr069AcsServer(
+            name="Return ACS Local Identity",
+            base_url="http://genieacs.example:7557",
+            is_active=True,
+        )
+        db_session.add(acs_server)
+        db_session.flush()
+        tr069_device = Tr069CpeDevice(
+            serial_number=sample_ont.serial_number,
+            acs_server_id=acs_server.id,
+            genieacs_device_id="ABC-ONT-HWTC12345678",
+            connection_request_url="http://192.0.2.10:7547/",
+            is_active=True,
+        )
+        db_session.add(tr069_device)
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+        mock_client = MagicMock()
+        mock_client.list_devices.return_value = []
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.genieacs_client.create_genieacs_client",
+                return_value=mock_client,
+            ),
+            patch("app.services.network.ont_inventory.emit_event"),
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is True
+        db_session.refresh(tr069_device)
+        assert tr069_device.genieacs_device_id is None
+        assert tr069_device.connection_request_url is None
 
     def test_olt_cleanup_failure_stops_before_acs_delete(
         self, db_session, sample_ont, sample_olt, sample_assignment

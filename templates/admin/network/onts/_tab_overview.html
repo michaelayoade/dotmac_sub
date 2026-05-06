@@ -42,7 +42,11 @@
             {% endif %}
             {% else %}
             <div class="mt-2 text-xl font-bold text-slate-400 dark:text-slate-500">Unassigned</div>
-            <a href="/admin/network/onts/{{ ont.id }}/assign" class="mt-1 inline-block text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Assign subscriber &rarr;</a>
+            <a href="/admin/network/onts/{{ ont.id }}/assign"
+               hx-get="/admin/network/onts/{{ ont.id }}/assign-modal"
+               hx-target="#modal-container"
+               hx-swap="innerHTML"
+               class="mt-1 inline-block text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Assign subscriber &rarr;</a>
             {% endif %}
         </div>
 
@@ -82,7 +86,9 @@
             <div class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ signal_info.acs_last_inform_at.strftime('%b %d, %H:%M') if signal_info.acs_last_inform_at else 'Never' }}</div>
             {% endif %}
             {% if signal_info.connection_request_status %}
-            <div class="mt-1 text-xs {{ signal_info.connection_request_class }}">{{ signal_info.connection_request_display }}</div>
+            {% set cr_status = signal_info.connection_request_status %}
+            {% set cr_text_class = 'text-emerald-600 dark:text-emerald-300' if cr_status == 'successful' else ('text-blue-600 dark:text-blue-300' if cr_status == 'ready' else ('text-amber-600 dark:text-amber-300' if cr_status == 'in_progress' else ('text-rose-600 dark:text-rose-300' if cr_status == 'failed' else 'text-slate-500 dark:text-slate-400'))) %}
+            <div class="mt-1 text-xs font-medium {{ cr_text_class }}">{{ signal_info.connection_request_display }}</div>
             {% endif %}
             {% else %}
             <div class="mt-2 text-xl font-bold text-slate-400 dark:text-slate-500">Unknown</div>
@@ -196,7 +202,7 @@
     {% endif %}
 
     {# ==================== DEVICE INFO CARD ==================== #}
-    <details class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800" open>
+    <details class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
         <summary class="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center justify-between">
             <span class="flex items-center gap-2">
                 <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
@@ -243,7 +249,7 @@
     </details>
 
     {# ==================== RUNTIME STATUS CARD ==================== #}
-    {% if observed_runtime_summary and observed_runtime_summary.has_runtime %}
+    {% if observed_runtime_summary %}
     <details class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800" open>
         <summary class="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center justify-between">
             <span class="flex items-center gap-2">
@@ -258,32 +264,18 @@
             </span>
         </summary>
         <div class="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+            {% if observed_runtime_summary.runtime_fields %}
             <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {% for field in observed_runtime_summary.runtime_fields %}
                 <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">WAN IP</dt>
-                    <dd class="mt-1 text-sm font-mono font-medium text-slate-900 dark:text-white">{{ observed_runtime_summary.wan_ip or '-' }}</dd>
+                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ field.label }}</dt>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white{% if field.monospace %} font-mono{% endif %}{% if field.numeric %} font-bold tabular-nums{% endif %}">{{ field.value }}</dd>
                 </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">PPPoE User</dt>
-                    <dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ observed_runtime_summary.pppoe_user or '-' }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">PPPoE Status</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ observed_runtime_summary.pppoe_status or '-' }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">LAN IP</dt>
-                    <dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ observed_runtime_summary.lan_ip or '-' }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">WiFi Clients</dt>
-                    <dd class="mt-1 text-sm font-bold tabular-nums text-slate-900 dark:text-white">{{ observed_runtime_summary.wifi_clients if observed_runtime_summary.wifi_clients is not none else '-' }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Connected Devices</dt>
-                    <dd class="mt-1 text-sm font-bold tabular-nums text-slate-900 dark:text-white">{{ observed_runtime_summary.customer_devices if observed_runtime_summary.customer_devices is not none else '-' }}</dd>
-                </div>
+                {% endfor %}
             </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No runtime details returned by ACS.</p>
+            {% endif %}
         </div>
     </details>
     {% endif %}

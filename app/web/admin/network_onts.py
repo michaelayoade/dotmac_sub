@@ -76,6 +76,19 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
     }
 
 
+def _configure_push_scope_sections(
+    push_scope: str | None,
+) -> tuple[bool, bool, bool, bool]:
+    """Return WAN/LAN/management/WiFi inclusion flags for a configure submit."""
+    push_scope_value = (push_scope or "management").strip().lower()
+    return (
+        push_scope_value in {"all", "wan"},
+        push_scope_value in {"all", "lan"},
+        push_scope_value in {"all", "management", "mgmt"},
+        push_scope_value in {"all", "wifi"},
+    )
+
+
 def _log_ont_action_result(
     *,
     request: Request | None,
@@ -608,35 +621,33 @@ def ont_configure_submit(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Handle ONT configure form submission."""
-    push_scope_value = (push_scope or "management").strip().lower()
-    push_wan = push_scope_value in {"all", "wan"}
-    push_lan = push_scope_value in {"all", "lan"}
-    push_mgmt = push_scope_value in {"all", "management", "mgmt"}
-    push_wifi = push_scope_value in {"all", "wifi"}
+    push_wan, push_lan, push_mgmt, push_wifi = _configure_push_scope_sections(
+        push_scope
+    )
     result = web_network_ont_actions_service.update_ont_config(
         db,
         ont_id,
-        wan_mode=wan_mode or None,
-        ip_protocol=ip_protocol or None,
-        wan_static_ip=wan_static_ip or None,
-        wan_static_subnet=wan_static_subnet or None,
-        wan_static_gateway=wan_static_gateway or None,
-        wan_static_dns=wan_static_dns or None,
-        pppoe_username=pppoe_username or None,
-        pppoe_password=pppoe_password or None,
-        mgmt_ip_mode=mgmt_ip_mode or None,
-        mgmt_ip_address=mgmt_ip_address,
-        mgmt_remote_access=mgmt_remote_access,
-        lan_gateway_ip=lan_gateway_ip or None,
-        lan_subnet_mask=lan_subnet_mask or None,
-        lan_dhcp_enabled=lan_dhcp_enabled,
-        lan_dhcp_start=lan_dhcp_start or None,
-        lan_dhcp_end=lan_dhcp_end or None,
-        wifi_enabled=wifi_enabled,
-        wifi_ssid=wifi_ssid or None,
-        wifi_channel=wifi_channel or None,
-        wifi_security_mode=wifi_security_mode or None,
-        wifi_password=wifi_password or None,
+        wan_mode=(wan_mode or None) if push_wan else None,
+        ip_protocol=(ip_protocol or None) if push_wan else None,
+        wan_static_ip=(wan_static_ip or None) if push_wan else None,
+        wan_static_subnet=(wan_static_subnet or None) if push_wan else None,
+        wan_static_gateway=(wan_static_gateway or None) if push_wan else None,
+        wan_static_dns=(wan_static_dns or None) if push_wan else None,
+        pppoe_username=(pppoe_username or None) if push_wan else None,
+        pppoe_password=(pppoe_password or None) if push_wan else None,
+        mgmt_ip_mode=(mgmt_ip_mode or None) if push_mgmt else None,
+        mgmt_ip_address=mgmt_ip_address if push_mgmt else None,
+        mgmt_remote_access=mgmt_remote_access if push_mgmt else None,
+        lan_gateway_ip=(lan_gateway_ip or None) if push_lan else None,
+        lan_subnet_mask=(lan_subnet_mask or None) if push_lan else None,
+        lan_dhcp_enabled=lan_dhcp_enabled if push_lan else None,
+        lan_dhcp_start=(lan_dhcp_start or None) if push_lan else None,
+        lan_dhcp_end=(lan_dhcp_end or None) if push_lan else None,
+        wifi_enabled=wifi_enabled if push_wifi else None,
+        wifi_ssid=(wifi_ssid or None) if push_wifi else None,
+        wifi_channel=(wifi_channel or None) if push_wifi else None,
+        wifi_security_mode=(wifi_security_mode or None) if push_wifi else None,
+        wifi_password=(wifi_password or None) if push_wifi else None,
         push_to_device=push_to_device,
         push_wan=push_wan,
         push_lan=push_lan,
@@ -651,7 +662,7 @@ def ont_configure_submit(
         action="Configure ONT",
         ok=result.success,
         message=result.message,
-        metadata={"push_to_device": push_to_device},
+        metadata={"push_to_device": push_to_device, "push_scope": push_scope},
     )
 
     # Return updated form with success/error message

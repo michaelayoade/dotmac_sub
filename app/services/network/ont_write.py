@@ -192,6 +192,29 @@ class OntWriteService:
                 success=False,
                 message="Management VLAN is not configured in the OLT config pack.",
             )
+        if mgmt_ip_mode == MgmtIpMode.static_ip.value:
+            from app.services.network.ont_management_ipam import (
+                allocate_ont_management_ip,
+            )
+
+            try:
+                allocation = allocate_ont_management_ip(
+                    db,
+                    ont=ont,
+                    olt=ctx.olt,
+                    requested_ip=mgmt_ip_address,
+                )
+            except ValueError as exc:
+                return ActionResult(success=False, message=str(exc))
+            mgmt_ip_address = allocation.address
+            mgmt_subnet = mgmt_subnet or allocation.subnet
+            mgmt_gateway = mgmt_gateway or allocation.gateway
+        elif mgmt_ip_mode in {MgmtIpMode.dhcp.value, MgmtIpMode.inactive.value}:
+            from app.services.network.ont_management_ipam import (
+                release_ont_management_ip,
+            )
+
+            release_ont_management_ip(db, ont=ont, mode=mgmt_ip_mode)
 
         try:
             from app.services.network.olt_protocol_adapters import get_protocol_adapter

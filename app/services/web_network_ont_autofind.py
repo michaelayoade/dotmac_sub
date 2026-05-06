@@ -381,6 +381,7 @@ def build_unconfigured_onts_page_data(
             "fsp": candidate.fsp,
             "serial_number": candidate.serial_number,
             "serial_hex": candidate.serial_hex,
+            "ont_unit_id": str(candidate.ont_unit_id) if candidate.ont_unit_id else "",
             "vendor_id": candidate.vendor_id,
             "model": candidate.model,
             "mac": candidate.mac,

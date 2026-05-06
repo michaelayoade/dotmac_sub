@@ -66,8 +66,6 @@
 <form hx-post="/admin/network/onts/{{ ont_id }}/configure"
       hx-target="#configure-content"
       hx-swap="innerHTML"
-      hx-indicator=".config-spinner"
-      hx-disabled-elt="button[type=submit]"
       class="space-y-3"
       x-data="{
           wanMode: '{{ wan_mode_val }}',
@@ -152,6 +150,8 @@
                 </template>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="management"
+                            hx-indicator="find .config-spinner"
+                            hx-disabled-elt="this"
                             class="inline-flex items-center gap-1 rounded border border-cyan-300 bg-cyan-50 px-2.5 py-1.5 text-xs font-medium text-cyan-700 shadow-sm hover:bg-cyan-100 disabled:opacity-50 dark:border-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50">
                         <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply Mgmt
@@ -206,6 +206,17 @@
                         {% endfor %}
                     </select>
                 </div>
+                <div class="w-32">
+                    <label class="mb-1 block text-xs text-slate-600 dark:text-slate-400">NAT</label>
+                    <div class="flex min-h-[34px] items-center rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
+                        <span class="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300"
+                              :class="wanMode === 'setup_via_onu' ? 'text-amber-700 dark:text-amber-300' : (wanMode ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-300')">
+                            <span class="h-1.5 w-1.5 rounded-full"
+                                  :class="wanMode === 'setup_via_onu' ? 'bg-amber-500' : (wanMode ? 'bg-emerald-500' : 'bg-slate-400')"></span>
+                            <span x-text="wanMode === 'setup_via_onu' ? 'Disabled' : (wanMode ? 'Enabled' : 'Default')">{{ 'Disabled' if wan_mode_val == 'setup_via_onu' else ('Enabled' if wan_mode_val else 'Default') }}</span>
+                        </span>
+                    </div>
+                </div>
                 <template x-if="wanMode === 'pppoe'">
                     <div class="flex items-end gap-2">
                         <div class="w-40">
@@ -251,6 +262,8 @@
                 </template>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="wan"
+                            hx-indicator="find .config-spinner"
+                            hx-disabled-elt="this"
                             class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
                         <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply WAN
@@ -314,6 +327,8 @@
                 </div>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="lan"
+                            hx-indicator="find .config-spinner"
+                            hx-disabled-elt="this"
                             class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
                         <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply LAN
@@ -374,6 +389,8 @@
                 </div>
                 <div class="ml-auto">
                     <button type="submit" name="push_scope" value="wifi"
+                            hx-indicator="find .config-spinner"
+                            hx-disabled-elt="this"
                             class="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
                         <svg class="config-spinner htmx-indicator h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                         Apply WiFi
@@ -390,6 +407,8 @@
         <button type="submit"
                 name="push_scope"
                 value="all"
+                hx-indicator="find .config-spinner"
+                hx-disabled-elt="this"
                 class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-cyan-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 disabled:opacity-50 dark:focus:ring-offset-slate-900">
             <svg class="config-spinner htmx-indicator h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
             Apply All

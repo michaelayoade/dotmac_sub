@@ -367,6 +367,63 @@ def test_set_wifi_config_keeps_ssid_strict_but_tolerates_omitted_optional_readba
     ]
 
 
+def test_set_wifi_config_does_not_walk_to_other_ssid_instances_on_timeout(
+    monkeypatch,
+) -> None:
+    attempts: list[dict[str, str]] = []
+    cache = {
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "Old",
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable": True,
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Status": "Up",
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.7.SSID": "Placeholder",
+    }
+
+    class FakeClient:
+        def set_parameter_values(
+            self,
+            _device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
+            attempts.append(dict(params))
+            raise GenieACSError("setParameterValues task timed out")
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+
+    result = ont_action_wifi.set_wifi_config(None, "ont-1", ssid="New")
+
+    assert result.success is False
+    assert attempts == [
+        {"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "New"}
+    ]
+
+
 def test_normalize_port_name_uses_canonical_pon_hint() -> None:
     assert core_devices_views._normalize_port_name("GPON 0/1/0") == "0/1/0"
     assert core_devices_views._normalize_port_name("0/1/0") == "0/1/0"

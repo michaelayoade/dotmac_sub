@@ -179,6 +179,36 @@ def _lan_ports_partial_response(
     return response
 
 
+def _refresh_runtime_for_partial(
+    db: Session,
+    ont_id: str,
+    *,
+    request: Request,
+) -> tuple[bool, str]:
+    """Refresh ONT runtime before returning an HTMX status partial."""
+    result = web_network_ont_actions_service.execute_refresh(
+        db,
+        ont_id,
+        request=request,
+    )
+    success = bool(getattr(result, "success", False))
+    message = str(getattr(result, "message", "Refresh failed."))
+    if success:
+        try:
+            from app.services.genieacs_service_intent import genieacs_service_intent
+
+            genieacs_service_intent.refresh_observed_summary_for_ont(
+                db,
+                ont_id=ont_id,
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            success = False
+            message = f"Runtime refresh completed, but observed data reload failed: {exc}"
+    return success, message
+
+
 def _ethernet_ports_partial_response(
     request: Request,
     db: Session,
@@ -198,6 +228,76 @@ def _ethernet_ports_partial_response(
     context["ethernet_ports"] = observed.get("ethernet_ports", [])
     response = templates.TemplateResponse(
         "admin/network/onts/_ethernet_ports_partial.html", context
+    )
+    if toast_message:
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": toast_message, "type": toast_type}},
+            ensure_ascii=True,
+        )
+    return response
+
+
+def _host_has_display_details(host: dict[str, object]) -> bool:
+    """Return true when a LAN host row contains useful display data."""
+    for key in (
+        "host_name",
+        "HostName",
+        "ip_address",
+        "IPAddress",
+        "mac_address",
+        "MACAddress",
+        "interface_type",
+        "InterfaceType",
+    ):
+        value = host.get(key)
+        if str(value or "").strip():
+            return True
+    return False
+
+
+def _hosts_partial_response(
+    request: Request,
+    db: Session,
+    ont_id: str,
+    *,
+    toast_message: str | None = None,
+    toast_type: str = "success",
+) -> HTMLResponse:
+    """Return the connected hosts partial with blank ACS placeholders removed."""
+    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
+        db, ont_id=ont_id
+    )
+    observed = observed_intent.get("observed", {})
+    observed = observed if isinstance(observed, dict) else {}
+    lan_hosts = observed.get("lan_hosts", [])
+
+    hosts = []
+    placeholder_count = 0
+    for host in lan_hosts if isinstance(lan_hosts, list) else []:
+        if not isinstance(host, dict):
+            continue
+        if not _host_has_display_details(host):
+            placeholder_count += 1
+            continue
+        hosts.append(
+            {
+                "hostname": host.get("host_name") or host.get("HostName") or "-",
+                "mac_address": host.get("mac_address") or host.get("MACAddress") or "-",
+                "ip_address": host.get("ip_address") or host.get("IPAddress") or "-",
+                "interface": host.get("interface_type")
+                or host.get("InterfaceType")
+                or "-",
+                "active": str(host.get("active", "")).lower()
+                not in {"false", "0", "no"},
+            }
+        )
+
+    context = _base_context(request, db, active_page="onts")
+    context["hosts"] = hosts
+    context["ont_id"] = ont_id
+    context["host_placeholder_count"] = placeholder_count
+    response = templates.TemplateResponse(
+        "admin/network/onts/_hosts_table.html", context
     )
     if toast_message:
         response.headers["HX-Trigger"] = json.dumps(
@@ -1014,6 +1114,72 @@ def ont_charts(
     )
 
 
+@router.post(
+    "/onts/{ont_id}/charts/refresh",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_charts_refresh(
+    request: Request,
+    ont_id: str,
+    time_range: str = "24h",
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Refresh ONT runtime and return the charts partial."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    refresh_ok, refresh_msg = _refresh_runtime_for_partial(
+        db,
+        ont_id,
+        request=request,
+    )
+    data = web_network_ont_charts_service.charts_tab_data(db, ont_id, time_range)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    response = templates.TemplateResponse(
+        "admin/network/onts/_charts_partial.html", context
+    )
+    response.headers["HX-Trigger"] = json.dumps(
+        {
+            "showToast": {
+                "message": refresh_msg,
+                "type": "success" if refresh_ok else "error",
+            }
+        },
+        ensure_ascii=True,
+    )
+    return response
+
+
+@router.post(
+    "/onts/{ont_id}/lan-ports-status/refresh",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_lan_ports_status_refresh(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Refresh ONT runtime and return the LAN port status partial."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    refresh_ok, refresh_msg = _refresh_runtime_for_partial(
+        db,
+        ont_id,
+        request=request,
+    )
+    return _lan_ports_partial_response(
+        request,
+        db,
+        ont_id,
+        toast_message=refresh_msg,
+        toast_type="success" if refresh_ok else "error",
+    )
+
+
 @router.get(
     "/onts/{ont_id}/topology",
     response_class=HTMLResponse,
@@ -1657,31 +1823,32 @@ def ont_hosts_tab(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """HTMX partial: Connected hosts table for the Hosts tab."""
-    observed_intent = service_intent_ui_adapter.load_acs_observed_service_intent(
-        db, ont_id=ont_id
+    return _hosts_partial_response(request, db, ont_id)
+
+
+@router.post(
+    "/onts/{ont_id}/hosts/refresh",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_hosts_refresh(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Refresh ONT runtime and return the connected hosts partial."""
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    refresh_ok, refresh_msg = _refresh_runtime_for_partial(
+        db,
+        ont_id,
+        request=request,
     )
-    observed = observed_intent.get("observed", {})
-    observed = observed if isinstance(observed, dict) else {}
-    lan_hosts = observed.get("lan_hosts", [])
-
-    # Normalize host data for template
-    hosts = []
-    for host in lan_hosts if isinstance(lan_hosts, list) else []:
-        if not isinstance(host, dict):
-            continue
-        hosts.append({
-            "hostname": host.get("host_name") or host.get("HostName") or "-",
-            "mac_address": host.get("mac_address") or host.get("MACAddress") or "-",
-            "ip_address": host.get("ip_address") or host.get("IPAddress") or "-",
-            "interface": host.get("interface_type") or host.get("InterfaceType") or "-",
-            "active": str(host.get("active", "")).lower() not in {"false", "0", "no"},
-        })
-
-    context = _base_context(request, db, active_page="onts")
-    context["hosts"] = hosts
-    context["ont_id"] = ont_id
-    return templates.TemplateResponse(
-        "admin/network/onts/_hosts_table.html", context
+    return _hosts_partial_response(
+        request,
+        db,
+        ont_id,
+        toast_message=refresh_msg,
+        toast_type="success" if refresh_ok else "error",
     )
 
 

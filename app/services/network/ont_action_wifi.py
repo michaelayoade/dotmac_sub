@@ -20,25 +20,23 @@ logger = logging.getLogger(__name__)
 
 # TR-069 parameter suffixes by data model root
 _WIFI_SSID_CANDIDATE_PATHS = {
-    "Device": [f"WiFi.SSID.{idx}.SSID" for idx in range(1, 9)],
-    "InternetGatewayDevice": [
-        f"LANDevice.1.WLANConfiguration.{idx}.SSID" for idx in range(1, 9)
-    ],
+    "Device": ["WiFi.SSID.{idx}.SSID"],
+    "InternetGatewayDevice": ["LANDevice.1.WLANConfiguration.{idx}.SSID"],
 }
 
 _WIFI_ENABLE_PATHS = {
-    "Device": "WiFi.SSID.1.Enable",
-    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.Enable",
+    "Device": "WiFi.SSID.{idx}.Enable",
+    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.{idx}.Enable",
 }
 
 _WIFI_CHANNEL_PATHS = {
     "Device": "WiFi.Radio.1.Channel",
-    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.Channel",
+    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.{idx}.Channel",
 }
 
 _WIFI_SECURITY_PATHS = {
     "Device": "WiFi.AccessPoint.1.Security.ModeEnabled",
-    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.BeaconType",
+    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.{idx}.BeaconType",
 }
 
 # Security-mode value normalization by data-model root. The UI/callers use
@@ -170,6 +168,80 @@ def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
             device_id,
             exc_info=True,
         )
+
+
+def _node_at_path(device: dict[str, Any], path: str) -> Any:
+    node: Any = device
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+        if node is None:
+            return None
+    return node
+
+
+def _node_value(device: dict[str, Any], path: str) -> Any:
+    node = _node_at_path(device, path)
+    if isinstance(node, dict) and "_value" in node:
+        return node.get("_value")
+    return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "enabled", "up"}
+
+
+def _wifi_suffix(path_template: str, instance: int) -> str:
+    return path_template.format(idx=instance)
+
+
+def _detect_wifi_instance(client: Any, device_id: str, root: str) -> int:
+    """Return the WLAN instance to manage.
+
+    Some Huawei TR-098 ONTs expose placeholder SSID objects that accept queued
+    tasks but are not the customer-facing radio. Pick the active cached WLAN
+    object and never walk across instances after a timeout; a timeout on the
+    active SSID must surface as a failed apply, not a write to SSID 7.
+    """
+    try:
+        device = client.get_device(device_id)
+    except Exception:
+        logger.debug("WiFi instance detection cache read failed for %s", device_id)
+        return 1
+
+    if not isinstance(device, dict):
+        return 1
+
+    if root == "Device":
+        base = "Device.WiFi.SSID.{idx}"
+    else:
+        base = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.{idx}"
+
+    candidates: list[tuple[int, int]] = []
+    for idx in range(1, 9):
+        prefix = base.format(idx=idx)
+        ssid = _node_value(device, f"{prefix}.SSID")
+        enabled = _node_value(device, f"{prefix}.Enable")
+        status = _node_value(device, f"{prefix}.Status")
+        if ssid is None and enabled is None and status is None:
+            continue
+        score = 0
+        if ssid not in (None, ""):
+            score += 2
+        if _truthy(enabled):
+            score += 4
+        if str(status or "").strip().lower() == "up":
+            score += 3
+        if idx == 1:
+            score += 1
+        candidates.append((score, idx))
+
+    if not candidates:
+        return 1
+    return max(candidates)[1]
 
 
 def _set_first_supported_path(
@@ -316,12 +388,16 @@ def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
+    wifi_instance = _detect_wifi_instance(client, device_id, root)
     try:
         result = _set_first_supported_path(
             client,
             device_id,
             root,
-            _WIFI_SSID_CANDIDATE_PATHS[root],
+            [
+                _wifi_suffix(path, wifi_instance)
+                for path in _WIFI_SSID_CANDIDATE_PATHS[root]
+            ],
             ssid,
         )
         logger.info("WiFi SSID set on ONT %s to '%s'", ont.serial_number, ssid)
@@ -398,6 +474,7 @@ def set_wifi_config(
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
+    wifi_instance = _detect_wifi_instance(client, device_id, root)
 
     changed: list[str] = []
     if enabled is not None:
@@ -423,7 +500,10 @@ def set_wifi_config(
                 client,
                 device_id,
                 root,
-                _WIFI_SSID_CANDIDATE_PATHS[root],
+                [
+                    _wifi_suffix(path, wifi_instance)
+                    for path in _WIFI_SSID_CANDIDATE_PATHS[root]
+                ],
                 ssid,
             )
         if enabled is not None:
@@ -431,7 +511,7 @@ def set_wifi_config(
                 client,
                 device_id,
                 root,
-                _WIFI_ENABLE_PATHS[root],
+                _wifi_suffix(_WIFI_ENABLE_PATHS[root], wifi_instance),
                 "true" if enabled else "false",
                 "enable",
                 allow_unverified=allow_unverified_optional,
@@ -443,7 +523,7 @@ def set_wifi_config(
                 client,
                 device_id,
                 root,
-                _WIFI_CHANNEL_PATHS[root],
+                _wifi_suffix(_WIFI_CHANNEL_PATHS[root], wifi_instance),
                 str(channel),
                 "channel",
                 allow_unverified=allow_unverified_optional,
@@ -456,7 +536,7 @@ def set_wifi_config(
                 client,
                 device_id,
                 root,
-                _WIFI_SECURITY_PATHS[root],
+                _wifi_suffix(_WIFI_SECURITY_PATHS[root], wifi_instance),
                 normalized_mode,
                 "security",
                 allow_unverified=allow_unverified_optional,

@@ -97,6 +97,26 @@ def _resolve_unlinked_tr069_match(
     return device
 
 
+def _is_genieacs_device_not_found(exc: Exception, device_id: str | None = None) -> bool:
+    text = str(exc)
+    if "Device not found:" not in text:
+        return False
+    return not device_id or str(device_id) in text
+
+
+def _verified_genieacs_device_id(
+    client: GenieACSClient,
+    device_id: str | None,
+) -> str | None:
+    """Return the live GenieACS device id only if GenieACS still has it."""
+    clean_id = str(device_id or "").strip()
+    if not clean_id:
+        return None
+    device = client.get_device(clean_id)
+    live_id = str(device.get("_id") or "").strip()
+    return live_id or clean_id
+
+
 def clear_stale_genieacs_device_id(
     db: Session,
     ont: OntUnit,
@@ -123,6 +143,7 @@ def clear_stale_genieacs_device_id(
         ).inc()
         return False
     device.genieacs_device_id = None
+    device.connection_request_url = None
     try:
         db.flush()
     except Exception:
@@ -323,16 +344,39 @@ def resolve_genieacs_with_reason(
             desired_server = acs_resolution.server
             if desired_server is None or linked.acs_server_id == desired_server.id:
                 client = create_genieacs_client(server.base_url)
-                return (
-                    client,
-                    linked.genieacs_device_id,
-                ), "resolved_via_linked_tr069_device"
-            logger.info(
-                "Ignoring stale linked TR-069 device for ONT %s: linked ACS %s, desired ACS %s",
-                ont.id,
-                linked.acs_server_id,
-                desired_server.id,
-            )
+                linked_device_id = str(linked.genieacs_device_id)
+                try:
+                    live_device_id = _verified_genieacs_device_id(
+                        client,
+                        linked_device_id,
+                    )
+                except GenieACSError as exc:
+                    if _is_genieacs_device_not_found(exc, linked_device_id):
+                        clear_stale_genieacs_device_id(db, ont, linked_device_id)
+                    else:
+                        logger.debug(
+                            "GenieACS verification failed for linked ONT %s device %s",
+                            ont.id,
+                            linked_device_id,
+                            exc_info=True,
+                        )
+                    live_device_id = None
+                if live_device_id:
+                    _cache_genieacs_device_id(db, linked, live_device_id)
+                    return (
+                        client,
+                        live_device_id,
+                    ), "resolved_via_linked_tr069_device"
+            if (
+                desired_server is not None
+                and linked.acs_server_id != desired_server.id
+            ):
+                logger.info(
+                    "Ignoring stale linked TR-069 device for ONT %s: linked ACS %s, desired ACS %s",
+                    ont.id,
+                    linked.acs_server_id,
+                    desired_server.id,
+                )
     if linked and linked.acs_server_id:
         logger.debug(
             "Linked TR-069 placeholder for ONT %s has no GenieACS device id yet",
@@ -358,10 +402,29 @@ def resolve_genieacs_with_reason(
         )
         if matched and matched.genieacs_device_id:
             client = create_genieacs_client(server.base_url)
-            return (
-                client,
-                str(matched.genieacs_device_id),
-            ), "resolved_via_unlinked_tr069_serial_match"
+            matched_device_id = str(matched.genieacs_device_id)
+            try:
+                live_device_id = _verified_genieacs_device_id(
+                    client,
+                    matched_device_id,
+                )
+            except GenieACSError as exc:
+                if _is_genieacs_device_not_found(exc, matched_device_id):
+                    clear_stale_genieacs_device_id(db, ont, matched_device_id)
+                else:
+                    logger.debug(
+                        "GenieACS verification failed for serial-matched ONT %s device %s",
+                        ont.id,
+                        matched_device_id,
+                        exc_info=True,
+                    )
+                live_device_id = None
+            if live_device_id:
+                _cache_genieacs_device_id(db, matched, live_device_id)
+                return (
+                    client,
+                    live_device_id,
+                ), "resolved_via_unlinked_tr069_serial_match"
 
     for server, reason in servers_to_try:
         client = create_genieacs_client(server.base_url)

@@ -137,8 +137,8 @@ def _set_pppoe_config_omci(
             },
         )
 
-    wan_profile_id = _int_or_none(effective_values.get("wan_config_profile_id")) or 0
-    if wan_profile_id:
+    wan_profile_id = _int_or_none(effective_values.get("wan_config_profile_id"))
+    if wan_profile_id is not None:
         wan_result = adapter.configure_wan_config(
             ctx.fsp,
             ctx.olt_ont_id,

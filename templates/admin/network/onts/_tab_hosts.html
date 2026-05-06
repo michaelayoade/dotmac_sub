@@ -13,10 +13,12 @@
                 {% endif %}
             </div>
             <button type="button"
-                    hx-get="/admin/network/onts/{{ ont.id }}/hosts"
+                    hx-post="/admin/network/onts/{{ ont.id }}/hosts/refresh"
                     hx-target="#hosts-table-content"
                     hx-swap="innerHTML"
                     hx-indicator="#hosts-refresh-spinner"
+                    hx-disabled-elt="this"
+                    hx-headers='{"X-CSRF-Token": "{{ request.state.csrf_token }}"}'
                     class="inline-flex items-center gap-1.5 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">
                 <svg id="hosts-refresh-spinner" class="htmx-indicator h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

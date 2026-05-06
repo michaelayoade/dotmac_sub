@@ -41,6 +41,13 @@ def parse_fsp_parts(fsp: str) -> tuple[str | None, str | None]:
     return f"{parts[0]}/{parts[1]}", parts[2]
 
 
+def _was_returned_to_inventory(assignment: OntAssignment) -> bool:
+    reason = str(getattr(assignment, "release_reason", "") or "")
+    return getattr(assignment, "released_at", None) is not None or reason.startswith(
+        "returned_to_inventory"
+    )
+
+
 def align_ont_assignment_to_authoritative_fsp(
     db: Session,
     *,
@@ -106,7 +113,11 @@ def align_ont_assignment_to_authoritative_fsp(
         )
         .with_for_update()
     ).first()
-    if latest_assignment is not None and reactivate_existing_assignment:
+    if (
+        latest_assignment is not None
+        and reactivate_existing_assignment
+        and not _was_returned_to_inventory(latest_assignment)
+    ):
         latest_assignment.pon_port_id = pon_port.id
         latest_assignment.active = True
         if latest_assignment.assigned_at is None:

@@ -330,6 +330,43 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     network_service.ont_assignments.create(db=db, payload=payload)
 
 
+def claim_existing_assignment(
+    db: Session, ont, assignment, values: dict[str, object]
+) -> None:
+    """Attach subscriber details to an active assignment created by authorization."""
+    pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
+    pon_port_id = (
+        coerce_uuid(pon_port_id_str)
+        if pon_port_id_str
+        else getattr(assignment, "pon_port_id", None)
+    )
+
+    subscriber_id_str = str(values["account_id"]) if values.get("account_id") else None
+
+    if values.get("service_address_id"):
+        service_address_id_str = str(values["service_address_id"])
+    elif subscriber_id_str is not None:
+        service_address_id_str = resolve_service_address_for_subscriber(
+            db, subscriber_id_str
+        )
+    else:
+        service_address_id_str = None
+
+    assignment.released_at = None
+    assignment.release_reason = None
+    payload = OntAssignmentUpdate(
+        pon_port_id=pon_port_id,
+        subscriber_id=coerce_uuid(subscriber_id_str) if subscriber_id_str else None,
+        service_address_id=(
+            coerce_uuid(service_address_id_str) if service_address_id_str else None
+        ),
+        assigned_at=getattr(assignment, "assigned_at", None) or datetime.now(UTC),
+        active=True,
+        notes=str(values.get("notes")) if values.get("notes") else None,
+    )
+    network_service.ont_assignments.update(db, str(assignment.id), payload)
+
+
 def form_payload(
     values: dict[str, object], db: Session | None = None
 ) -> dict[str, object]:
@@ -434,13 +471,21 @@ def create_assignment_from_form(db: Session, ont_id: str, form) -> AssignmentFor
 
     values = parse_form_values(form)
     error = validate_form_values(values)
-    if not error and has_active_assignment(db, ont_id):
+    active_assignment = active_assignment_for_ont_id(db, ont.id)
+    if (
+        not error
+        and active_assignment is not None
+        and getattr(active_assignment, "subscriber_id", None) is not None
+    ):
         error = "This ONT is already assigned"
     if error:
         return AssignmentFormResult(ont=ont, values=values, error=error)
 
     try:
-        create_assignment(db, ont, values)
+        if active_assignment is not None:
+            claim_existing_assignment(db, ont, active_assignment, values)
+        else:
+            create_assignment(db, ont, values)
     except IntegrityError as exc:
         db.rollback()
         msg = (

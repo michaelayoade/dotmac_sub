@@ -9,6 +9,10 @@ from app.services import network as network_service
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_desired_config import set_desired_config_values
+from app.services.network.ont_management_ipam import (
+    allocate_ont_management_ip,
+    release_ont_management_ip,
+)
 from app.services.web_network_ont_actions._common import (
     _is_input_error,
     _log_action_audit,
@@ -26,11 +30,14 @@ def _delivery_pending_result(result: ActionResult) -> ActionResult:
     if result.success or _is_input_error(result.message):
         return result
 
+    data = dict(result.data or {})
+    if data.get("delivery_pending") is False:
+        return result
+
     text = (result.message or "").lower()
     if "no acs server configured" in text:
         return result
 
-    data = dict(result.data or {})
     data["delivery_pending"] = True
     data.setdefault("waiting_reason", "next_inform")
     reason = (result.message or "Device is not reachable through ACS.").strip()
@@ -111,10 +118,40 @@ def update_ont_config(
             desired_updates["wan.static_dns"] = wan_static_dns.strip() or None
         if pppoe_username is not None:
             desired_updates["wan.pppoe_username"] = pppoe_username.strip() or None
+        management_mode = mgmt_ip_mode.strip() if mgmt_ip_mode is not None else None
+        management_address = (
+            mgmt_ip_address.strip() if mgmt_ip_address is not None else None
+        )
+        management_allocation = None
+        if management_mode == "static_ip":
+            try:
+                management_allocation = allocate_ont_management_ip(
+                    db,
+                    ont=ont,
+                    requested_ip=management_address,
+                )
+            except ValueError as exc:
+                db.rollback()
+                return ActionResult(success=False, message=str(exc))
+            management_address = management_allocation.address
+        elif management_mode in {"inactive", "dhcp"}:
+            release_ont_management_ip(db, ont=ont, mode=management_mode)
         if mgmt_ip_mode is not None:
-            desired_updates["management.ip_mode"] = mgmt_ip_mode.strip() or None
+            desired_updates["management.ip_mode"] = management_mode or None
         if mgmt_ip_address is not None:
-            desired_updates["management.ip_address"] = mgmt_ip_address.strip() or None
+            desired_updates["management.ip_address"] = management_address or None
+        if management_mode == "static_ip" and management_allocation is not None:
+            desired_updates["management.subnet"] = (
+                management_allocation.subnet
+            )
+            desired_updates["management.gateway"] = (
+                management_allocation.gateway
+            )
+        elif management_mode in {"inactive", "dhcp"}:
+            desired_updates["management.subnet"] = None
+            desired_updates["management.gateway"] = None
+            desired_updates["management.vlan"] = None
+            desired_updates["management.vlan_id"] = None
         if mgmt_access_enabled is not None:
             desired_updates["access.mgmt_remote"] = mgmt_access_enabled
         if lan_gateway_ip is not None:
@@ -152,6 +189,12 @@ def update_ont_config(
     push_waiting = False
 
     if push_to_device:
+        # Remote ACS writes can block while the CPE is slow to consume tasks.
+        # Persist the desired intent before those calls so the request does not
+        # hold an idle database transaction open for the duration of TR-069
+        # polling.
+        db.commit()
+
         wan_push_requested = push_wan and any(
             value is not None
             for value in (

@@ -690,15 +690,30 @@ def update_mgmt_ip_from_form(
 
     before_snapshot = model_to_dict(ont)
     mgmt_ip_mode = form_str(form, "mgmt_ip_mode").strip() or None
+    mgmt_ip_address = form_str(form, "mgmt_ip_address").strip() or None
+    if mgmt_ip_mode == "static_ip":
+        from app.services.network.ont_management_ipam import allocate_ont_management_ip
+
+        try:
+            allocation = allocate_ont_management_ip(
+                db,
+                ont=ont,
+                requested_ip=mgmt_ip_address,
+            )
+        except ValueError as exc:
+            return OntFormResult(ont=ont, form_model=ont, error=str(exc))
+        mgmt_ip_address = allocation.address
+    elif mgmt_ip_mode in {"inactive", "dhcp"}:
+        from app.services.network.ont_management_ipam import release_ont_management_ip
+
+        release_ont_management_ip(db, ont=ont, mode=mgmt_ip_mode)
     set_desired_config_values(
         ont,
         {
             "management.ip_mode": mgmt_ip_mode,
-            "management.ip_address": (
-                form_str(form, "mgmt_ip_address").strip()
-                if mgmt_ip_mode == "static_ip"
-                else None
-            ),
+            "management.ip_address": mgmt_ip_address
+            if mgmt_ip_mode == "static_ip"
+            else None,
         },
     )
     set_desired_config_values(

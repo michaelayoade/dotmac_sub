@@ -210,11 +210,11 @@
             </div>
         </div>
 
-        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <span><span class="text-slate-500 dark:text-slate-400">Active</span> <strong class="text-emerald-700 dark:text-emerald-300">{{ unconfigured_stats.active_candidates }}</strong></span>
-            <span><span class="text-slate-500 dark:text-slate-400">History</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.history_candidates }}</strong></span>
-            <span><span class="text-slate-500 dark:text-slate-400">OLTs</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.olts_with_candidates }}</strong></span>
-            <span><span class="text-slate-500 dark:text-slate-400">Last seen</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.last_seen_at.strftime('%Y-%m-%d %H:%M') if unconfigured_stats.last_seen_at else '-' }}</strong></span>
+        <div class="grid gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center lg:gap-x-6 lg:gap-y-2 dark:border-slate-700 dark:bg-slate-800">
+            <span class="flex items-center justify-between gap-3 sm:justify-start"><span class="text-slate-500 dark:text-slate-400">Active</span> <strong class="text-emerald-700 dark:text-emerald-300">{{ unconfigured_stats.active_candidates }}</strong></span>
+            <span class="flex items-center justify-between gap-3 sm:justify-start"><span class="text-slate-500 dark:text-slate-400">History</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.history_candidates }}</strong></span>
+            <span class="flex items-center justify-between gap-3 sm:justify-start"><span class="text-slate-500 dark:text-slate-400">OLTs</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.olts_with_candidates }}</strong></span>
+            <span class="flex items-center justify-between gap-3 sm:justify-start sm:col-span-2 lg:col-span-1"><span class="text-slate-500 dark:text-slate-400">Last seen</span> <strong class="whitespace-nowrap text-slate-900 dark:text-white">{{ unconfigured_stats.last_seen_at.strftime('%Y-%m-%d %H:%M') if unconfigured_stats.last_seen_at else '-' }}</strong></span>
         </div>
 
         {% call filter_bar() %}
@@ -274,7 +274,7 @@
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for entry in unconfigured_entries %}
-                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/20">
+                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-900/60">
                             <td class="px-3 py-2 text-sm text-slate-900 dark:text-white">{{ entry.olt_name }}</td>
                             <td class="px-3 py-2 font-mono text-sm text-slate-700 dark:text-slate-300">{{ entry.fsp }}</td>
                             <td class="px-3 py-2">
@@ -308,6 +308,9 @@
                                 {% if entry.is_active %}
                                 <form method="POST" action="/admin/network/olts/{{ entry.olt_id }}/authorize-ont" class="inline-flex items-center gap-2" x-data="{ submitting: false }" @submit="submitting = true">
                                     {% include "components/forms/csrf_input.html" %}
+                                    {% if entry.ont_unit_id %}
+                                    <input type="hidden" name="ont_id" value="{{ entry.ont_unit_id }}">
+                                    {% endif %}
                                     <input type="hidden" name="fsp" value="{{ entry.fsp }}">
                                     <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
                                     <input type="hidden" name="return_to" value="/admin/network/onts?view=unconfigured">
@@ -447,7 +450,7 @@
                         {% for ont in onts %}
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
-                        <tr class="group cursor-pointer hover:bg-slate-50 focus-within:bg-slate-50 dark:hover:bg-slate-700/20 dark:focus-within:bg-slate-700/20"
+                        <tr class="group cursor-pointer hover:bg-slate-50 focus-within:bg-slate-50 dark:hover:bg-slate-900/60 dark:focus-within:bg-slate-900/60"
                             data-ont-detail-url="/admin/network/onts/{{ ont.id }}"
                             tabindex="0"
                             role="link"
@@ -638,7 +641,7 @@
                         {% for ont in diagnostics_onts %}
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
-                        <tr class="group cursor-pointer hover:bg-slate-50 focus-within:bg-slate-50 dark:hover:bg-slate-700/20 dark:focus-within:bg-slate-700/20"
+                        <tr class="group cursor-pointer hover:bg-slate-50 focus-within:bg-slate-50 dark:hover:bg-slate-900/60 dark:focus-within:bg-slate-900/60"
                             data-ont-detail-url="/admin/network/onts/{{ ont.id }}"
                             tabindex="0"
                             role="link"

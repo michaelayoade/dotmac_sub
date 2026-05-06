@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
@@ -120,6 +120,10 @@ def _assignment_form_context(
         }
     )
     return context
+
+
+def _is_htmx_request(request: Request) -> bool:
+    return request.headers.get("HX-Request", "").lower() == "true"
 
 
 @router.get(
@@ -385,6 +389,37 @@ def ont_assign_new(
     return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
 
+@router.get(
+    "/onts/{ont_id}/assign-modal",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_assign_modal(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    result = web_network_ont_assignments_service.get_ont_for_assignment_form(db, ont_id)
+    if result.not_found:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": result.not_found_message},
+            status_code=404,
+        )
+
+    assert result.ont is not None
+    context = _assignment_form_context(
+        request,
+        db,
+        ont=result.ont,
+        action_url=f"/admin/network/onts/{result.ont.id}/assign",
+        mode="create",
+    )
+    return templates.TemplateResponse(
+        "admin/network/onts/_assign_subscriber_modal.html", context
+    )
+
+
 @router.post(
     "/onts/{ont_id}/assign",
     response_class=HTMLResponse,
@@ -393,6 +428,32 @@ def ont_assign_new(
 def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     return_to = _form_str(form, "return_to")
+    is_modal = _form_str(form, "assignment_modal") == "1" or _is_htmx_request(request)
+    if is_modal and not _form_str(form, "account_id"):
+        loaded = web_network_ont_assignments_service.get_ont_for_assignment_form(
+            db, ont_id
+        )
+        if loaded.not_found:
+            return templates.TemplateResponse(
+                "admin/errors/404.html",
+                {"request": request, "message": "ONT not found"},
+                status_code=404,
+            )
+        assert loaded.ont is not None
+        context = _assignment_form_context(
+            request,
+            db,
+            ont=loaded.ont,
+            action_url=f"/admin/network/onts/{loaded.ont.id}/assign",
+            error="Select a subscriber account.",
+            form=web_network_ont_assignments_service.form_payload(
+                {"account_id": None}, db
+            ),
+            mode="create",
+        )
+        return templates.TemplateResponse(
+            "admin/network/onts/_assign_subscriber_modal.html", context
+        )
     result = web_network_ont_assignments_service.create_assignment_from_form(
         db,
         ont_id,
@@ -420,6 +481,10 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
         )
         if return_to in ("provision",):
             context["return_to"] = return_to
+        if is_modal:
+            return templates.TemplateResponse(
+                "admin/network/onts/_assign_subscriber_modal.html", context
+            )
         return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
     assert result.ont is not None
@@ -428,6 +493,17 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
         return RedirectResponse(
             url=f"/admin/network/onts/{result.ont.id}/provision?status=success&message=ONT+assignment+created.",
             status_code=303,
+        )
+    if is_modal:
+        return Response(
+            status_code=204,
+            headers={
+                "HX-Redirect": (
+                    f"/admin/network/onts/{result.ont.id}"
+                    "?feedback_status=success"
+                    "&feedback_message=ONT+assignment+created."
+                )
+            },
         )
     return _ont_redirect(
         str(result.ont.id),
