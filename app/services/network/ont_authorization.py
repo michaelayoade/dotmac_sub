@@ -9,6 +9,7 @@ before returning.
 from __future__ import annotations
 
 import logging
+import ipaddress
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -49,6 +50,24 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
+
+
+def _subnet_mask_from_cidr(cidr: str | None) -> str | None:
+    if not cidr:
+        return None
+    try:
+        return str(ipaddress.ip_network(str(cidr), strict=False).netmask)
+    except ValueError:
+        return None
+
+
+def _management_pool_subnet(pool: object) -> str:
+    return _subnet_mask_from_cidr(getattr(pool, "cidr", None)) or "255.255.255.0"
+
+
+def _management_pool_gateway(pool: object) -> str | None:
+    gateway = str(getattr(pool, "gateway", "") or "").strip()
+    return gateway or None
 
 
 @dataclass
@@ -351,6 +370,7 @@ def allocate_management_ip_for_ont(
         be established without a management address.
     """
     from app.models.network import IpPool, IPv4Address
+    from app.services.network.ont_management_ipam import allocate_ont_management_ip
 
     ont = db.get(OntUnit, ont_unit_id)
     if ont is None:
@@ -359,6 +379,16 @@ def allocate_management_ip_for_ont(
     olt = db.get(OLTDevice, olt_id)
     if olt is None:
         return False, "OLT not found.", None
+
+    try:
+        allocation = allocate_ont_management_ip(db, ont=ont, olt=olt)
+    except ValueError as exc:
+        return False, str(exc), None
+    return (
+        True,
+        f"Allocated management IP {allocation.address}.",
+        allocation.address,
+    )
 
     assignment = _get_or_create_active_assignment(db, ont)
 
@@ -388,6 +418,8 @@ def allocate_management_ip_for_ont(
         )
 
         if in_current_pool and not owned_by_other_ont:
+            mgmt_subnet = _management_pool_subnet(locked_pool)
+            mgmt_gateway = _management_pool_gateway(locked_pool)
             if record is None:
                 record = IPv4Address(
                     address=existing_ip,
@@ -402,6 +434,18 @@ def allocate_management_ip_for_ont(
                 record.notes = f"ont:{ont_unit_id}"
             record.ont_unit_id = ont.id
             record.allocation_type = "management"
+            assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+            assignment.mgmt_subnet = mgmt_subnet
+            assignment.mgmt_gateway = mgmt_gateway
+            set_desired_config_values(
+                ont,
+                {
+                    "management.ip_address": existing_ip,
+                    "management.ip_mode": "static_ip",
+                    "management.subnet": mgmt_subnet,
+                    "management.gateway": mgmt_gateway,
+                },
+            )
             db.flush()
             return True, f"ONT already has management IP {existing_ip}.", existing_ip
 
@@ -414,12 +458,16 @@ def allocate_management_ip_for_ont(
             record.ont_unit_id = None
             record.allocation_type = None
         assignment.mgmt_ip_address = None
+        assignment.mgmt_subnet = None
+        assignment.mgmt_gateway = None
         assignment.mgmt_ip_mode = MgmtIpMode.inactive
         set_desired_config_values(
             ont,
             {
                 "management.ip_address": None,
                 "management.ip_mode": "inactive",
+                "management.subnet": None,
+                "management.gateway": None,
             },
         )
         db.flush()
@@ -457,13 +505,19 @@ def allocate_management_ip_for_ont(
     record.ont_unit_id = ont.id
     record.allocation_type = "management"
 
+    mgmt_subnet = _management_pool_subnet(locked_pool)
+    mgmt_gateway = _management_pool_gateway(locked_pool)
     assignment.mgmt_ip_address = next_ip
     assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+    assignment.mgmt_subnet = mgmt_subnet
+    assignment.mgmt_gateway = mgmt_gateway
     set_desired_config_values(
         ont,
         {
             "management.ip_address": next_ip,
             "management.ip_mode": "static_ip",
+            "management.subnet": mgmt_subnet,
+            "management.gateway": mgmt_gateway,
         },
     )
     _advance_pool_cache_after_allocation(db, pool=locked_pool, allocated_ip=next_ip)

@@ -472,13 +472,13 @@ def _provision_wan_service_instances(
                     "message": inet_result.message,
                 }
             )
-            wan_profile_id = int(effective_values.get("wan_config_profile_id") or 0)
-            if wan_profile_id:
+            wan_profile_id = effective_values.get("wan_config_profile_id")
+            if wan_profile_id is not None:
                 wan_result = adapter.configure_wan_config(
                     ctx.fsp,
                     ctx.olt_ont_id,
                     ip_index=ip_index,
-                    profile_id=wan_profile_id,
+                    profile_id=int(wan_profile_id),
                 )
                 steps.append(
                     {
@@ -1046,96 +1046,13 @@ def _ensure_static_management_ip_from_profile(
     if not pool_id:
         return False, "Static management IP mode requires a management IP pool."
 
-    import ipaddress
+    from app.services.network.ont_management_ipam import allocate_ont_management_ip
 
-    from sqlalchemy import select as sa_select
-
-    from app.models.network import IpBlock, IpPool, IPv4Address, IPVersion
-
-    pool = db.get(IpPool, pool_id)
-    if pool is None:
-        return False, f"Management IP pool {pool_id} not found."
-    if not getattr(pool, "is_active", True):
-        return False, f"Management IP pool '{pool.name}' is inactive."
-    if getattr(pool, "ip_version", None) not in (None, IPVersion.ipv4):
-        return False, f"Management IP pool '{pool.name}' is not IPv4."
-
-    blocks = list(
-        db.scalars(
-            sa_select(IpBlock)
-            .where(IpBlock.pool_id == pool.id)
-            .where(IpBlock.is_active.is_(True))
-        ).all()
-    )
-    cidrs = [block.cidr for block in blocks] or [pool.cidr]
-    used = {
-        str(address)
-        for address in db.scalars(
-            sa_select(IPv4Address.address).where(IPv4Address.pool_id == pool.id)
-        ).all()
-    }
-    gateway = str(pool.gateway or "").strip()
-    if gateway:
-        used.add(gateway)
-
-    selected_ip = None
-    for cidr in cidrs:
-        try:
-            network = ipaddress.ip_network(str(cidr), strict=False)
-        except ValueError:
-            continue
-        if network.version != 4:
-            continue
-        for ip in network.hosts():
-            candidate = str(ip)
-            if candidate not in used:
-                selected_ip = candidate
-                break
-        if selected_ip:
-            break
-
-    if selected_ip is None:
-        pool.next_available_ip = None
-        pool.available_count = 0
-        db.flush()
-        return False, f"No available IPs in management pool '{pool.name}'."
-
-    db.add(
-        IPv4Address(
-            address=selected_ip,
-            pool_id=pool.id,
-            is_reserved=True,
-            notes=f"Management IP for ONT {ont.serial_number}",
-        )
-    )
-    set_desired_config_values(
-        ont,
-        {
-            "management.ip_mode": "static_ip",
-            "management.ip_address": selected_ip,
-        },
-    )
-
-    remaining = 0
-    next_available = None
-    used.add(selected_ip)
-    for cidr in cidrs:
-        try:
-            network = ipaddress.ip_network(str(cidr), strict=False)
-        except ValueError:
-            continue
-        if network.version != 4:
-            continue
-        for ip in network.hosts():
-            candidate = str(ip)
-            if candidate not in used:
-                remaining += 1
-                if next_available is None:
-                    next_available = candidate
-    pool.next_available_ip = next_available
-    pool.available_count = remaining
-    db.flush()
-    return True, f"Reserved static management IP {selected_ip} from '{pool.name}'."
+    try:
+        allocation = allocate_ont_management_ip(db, ont=ont, pool_id=pool_id)
+    except ValueError as exc:
+        return False, str(exc)
+    return True, f"Reserved static management IP {allocation.address}."
 
 
 # ---------------------------------------------------------------------------

@@ -81,8 +81,10 @@ class OltConfigPack:
     iptv_vlan: VlanConfig = field(default_factory=VlanConfig)
 
     # OLT-side provisioning knobs
-    internet_config_ip_index: int = 0
-    wan_config_profile_id: int = 0
+    # None = skip command (e.g., OLT firmware doesn't support it)
+    # 0+ = valid ip-index for ont internet-config command
+    internet_config_ip_index: int | None = None
+    wan_config_profile_id: int | None = None  # None = skip wan-config; 0+ = valid profile
 
     # GEM port indices by purpose
     internet_gem_index: int = 1
@@ -197,6 +199,10 @@ def resolve_olt_config_pack(
     Reads from the config_pack JSON column (source of truth) and resolves
     VLAN UUIDs to VlanConfig objects.
 
+    Also checks OLT capability flags to gate unsupported commands:
+    - supports_ont_internet_config=False → internet_config_ip_index=None
+    - supports_ont_wan_config=False → wan_config_profile_id=None
+
     Args:
         db: Database session
         olt_id: OLT device ID (string or UUID)
@@ -211,6 +217,24 @@ def resolve_olt_config_pack(
         return None
 
     pack = olt.config_pack or {}
+
+    # Resolve internet_config_ip_index based on OLT capability
+    # If OLT doesn't support ont internet-config, force None regardless of pack value
+    if olt.supports_ont_internet_config:
+        # OLT supports the command - use pack value or default to 0
+        internet_config_ip_index = pack.get("internet_config_ip_index")
+        if internet_config_ip_index is None:
+            internet_config_ip_index = 0  # Default for supported OLTs
+    else:
+        # OLT doesn't support ont internet-config - force skip
+        internet_config_ip_index = None
+
+    # Resolve wan_config_profile_id based on OLT capability
+    if olt.supports_ont_wan_config:
+        wan_config_profile_id = pack.get("wan_config_profile_id")
+    else:
+        # OLT doesn't support ont wan-config - force skip
+        wan_config_profile_id = None
 
     return OltConfigPack(
         olt_id=str(olt.id),
@@ -229,9 +253,9 @@ def resolve_olt_config_pack(
         tr069_vlan=_resolve_vlan(db, pack.get("tr069_vlan_id")),
         voip_vlan=_resolve_vlan(db, pack.get("voip_vlan_id")),
         iptv_vlan=_resolve_vlan(db, pack.get("iptv_vlan_id")),
-        # Provisioning knobs
-        internet_config_ip_index=pack.get("internet_config_ip_index") or 0,
-        wan_config_profile_id=pack.get("wan_config_profile_id") or 0,
+        # Provisioning knobs (capability-gated above)
+        internet_config_ip_index=internet_config_ip_index,
+        wan_config_profile_id=wan_config_profile_id,
         # GEM indices
         internet_gem_index=pack.get("internet_gem_index") or 1,
         mgmt_gem_index=pack.get("mgmt_gem_index") or 2,
