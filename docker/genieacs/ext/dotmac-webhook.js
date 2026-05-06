@@ -117,6 +117,85 @@ exports.informWebhook = function (args, callback) {
 };
 
 /**
+ * Get service configuration for a device from DotMac
+ *
+ * Called from bootstrap provision to restore TR-069 config after ONT reboot.
+ * TR-069 config is volatile - lost on reboot. OMCI config (mgmt IP, VLANs)
+ * persists on OLT. This fetches TR-069-only settings:
+ *   - WiFi (SSID, password, channel, security)
+ *   - WAN (PPPoE credentials, DHCP/static mode)
+ *   - LAN (IP, subnet, DHCP server)
+ *   - Access (remote management, HTTP)
+ *
+ * Arguments from provision:
+ *   args[0] - serial_number
+ *
+ * Returns full config object or null if device not found:
+ *   { wifi: {...}, wan: {...}, lan: {...}, access: {...} }
+ */
+exports.getServiceConfig = function (args, callback) {
+  const serialNumber = args[0];
+
+  if (!serialNumber) {
+    callback(null, null);
+    return;
+  }
+
+  const configUrl = (process.env.DOTMAC_WEBHOOK_URL || "http://app:8000/api/v1/tr069/inform")
+    .replace("/inform", "/device-config/" + encodeURIComponent(serialNumber));
+
+  const urlParts = parseUrl(configUrl);
+  const httpModule = urlParts.protocol === "https:" ? https : http;
+
+  const req = httpModule.get(
+    {
+      hostname: urlParts.hostname,
+      port: urlParts.port,
+      path: urlParts.path,
+      headers: {
+        "User-Agent": "GenieACS-DotMac-Extension/1.0",
+        "Accept": "application/json",
+      },
+      timeout: 10000,
+    },
+    (res) => {
+      let body = "";
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => {
+        if (res.statusCode === 200) {
+          try {
+            const config = JSON.parse(body);
+            callback(null, config);
+          } catch (e) {
+            console.error("Failed to parse service config response: " + e.message);
+            callback(null, null);
+          }
+        } else if (res.statusCode === 404) {
+          // Device not found or no config - this is normal
+          callback(null, null);
+        } else {
+          console.error("Service config fetch HTTP " + res.statusCode + ": " + body);
+          callback(null, null);
+        }
+      });
+    }
+  );
+
+  req.on("error", (err) => {
+    console.error("Service config fetch error: " + err.message);
+    callback(null, null);
+  });
+
+  req.on("timeout", () => {
+    req.destroy();
+    console.error("Service config fetch timeout");
+    callback(null, null);
+  });
+};
+
+/**
  * Health check function - verify webhook endpoint is reachable
  */
 exports.healthCheck = function (args, callback) {
