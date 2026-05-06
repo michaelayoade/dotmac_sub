@@ -56,6 +56,7 @@ from app.models.network import (
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber
 from app.services.credential_crypto import encrypt_credential
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.radius import ensure_radius_users_for_subscription
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -695,7 +696,7 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
             else:
                 ont = OntUnit(
                     serial_number=row.serial_number,
-                    model=row.model or None,
+                    model=normalize_ont_equipment_id(row.model),
                     vendor=_derive_vendor(row.serial_number, olt),
                     is_active=True,
                     olt_device_id=olt.id,
@@ -723,7 +724,7 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
                 db.flush()
                 rollback_entry["created_ont_id"] = str(ont.id)
 
-            ont.model = row.model or ont.model
+            ont.model = normalize_ont_equipment_id(row.model) or ont.model
             ont.vendor = _derive_vendor(row.serial_number, olt) or ont.vendor
             ont.olt_device_id = olt.id
             ont.pon_type = (

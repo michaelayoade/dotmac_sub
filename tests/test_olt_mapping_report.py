@@ -102,3 +102,23 @@ def test_mapping_report_uses_onu_type_name_when_ont_model_is_missing(db_session)
 
     assert report[0].missing_count == 1
     assert report[0].missing[0].equipment_id == "HS8546V5"
+
+
+def test_mapping_report_ignores_olt_chassis_model_inventory_values(db_session):
+    olt = OLTDevice(name="Chassis Model OLT", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add(
+        OntUnit(
+            serial_number="MAP-CHASSIS",
+            olt_device_id=olt.id,
+            model="MA5800-X2",
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    report = build_olt_mapping_coverage_report(db_session, olt_id=str(olt.id))
+
+    assert report[0].observed_equipment_count == 0
+    assert report[0].missing_count == 0

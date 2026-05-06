@@ -20,6 +20,7 @@ from app.models.network import (
     OltOnuTypeProfileMapping,
     OnuType,
 )
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_ssh_profiles import OltProfileEntry, _parse_profile_table
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ def resolve_authorization_profiles_from_import(
     equipment_id: str | None,
 ) -> tuple[bool, str, AuthorizationProfileResolution | None]:
     """Resolve authorization profiles from imported OLT state only."""
-    normalized_equipment_id = str(equipment_id or "").strip()
+    normalized_equipment_id = normalize_ont_equipment_id(equipment_id)
     if not normalized_equipment_id:
         return (
             False,

@@ -10,6 +10,7 @@ from app.models.network import (
     OltOntRegistration,
     OltOnuTypeProfileMapping,
     OltServiceProfile,
+    OntUnit,
 )
 from app.services.network.olt_profile_resolution import (
     OntCapabilityCounts,
@@ -271,3 +272,70 @@ quit
     assert mapping.equipment_id == "EG8145V5"
     assert mapping.line_profile_id == 40
     assert mapping.service_profile_id == 41
+
+
+def test_import_olt_state_from_dump_maps_inventory_model_to_imported_registration(
+    db_session,
+    tmp_path,
+):
+    olt = OLTDevice(name="Inventory Backed Import OLT", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add(
+        OntUnit(
+            serial_number="HWTC7D4638C3",
+            vendor_serial_number="485754437D4638C3",
+            model="HG8145V5",
+            olt_device_id=olt.id,
+            board="0/2",
+            port="10",
+            external_id="0/2/10.12",
+            is_active=True,
+        )
+    )
+    db_session.flush()
+    (tmp_path / "10_ont_lineprofile_all.txt").write_text(
+        """
+$ display ont-lineprofile gpon all
+  -----------------------------------------------------------------------------
+  Profile-ID  Profile-name                                Binding times
+  -----------------------------------------------------------------------------
+  40          SMARTOLT_FLEXIBLE_GPON                      1
+  -----------------------------------------------------------------------------
+  Total: 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "11_ont_srvprofile_all.txt").write_text(
+        """
+$ display ont-srvprofile gpon all
+  -----------------------------------------------------------------------------
+  Profile-ID  Profile-name                                Binding times
+  -----------------------------------------------------------------------------
+  9           EG8145V5                                    1
+  -----------------------------------------------------------------------------
+  Total: 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "99_running_config.txt").write_text(
+        """
+interface gpon 0/2
+ ont add 10 12 sn-auth "%#%#encrypted%#%#" omci
+ont-lineprofile-id 40 ont-srvprofile-id 9 desc "OPTIMA_LTD"
+quit
+""",
+        encoding="utf-8",
+    )
+
+    result = import_olt_state_from_dump(db_session, str(olt.id), tmp_path)
+
+    assert result.success is True
+    mapping = db_session.scalars(
+        select(OltOnuTypeProfileMapping).where(
+            OltOnuTypeProfileMapping.olt_id == olt.id,
+            OltOnuTypeProfileMapping.equipment_id == "HG8145V5",
+        )
+    ).one()
+    assert mapping.line_profile_id == 40
+    assert mapping.service_profile_id == 9

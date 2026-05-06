@@ -26,8 +26,10 @@ from app.models.network import (
     OltOnuTypeProfileMapping,
     OltServiceProfile,
     OnuType,
+    OntUnit,
     PonPort,
 )
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.huawei_command_profiles import get_huawei_command_profile
 from app.services.network.olt_profile_resolution import (
     parse_line_profile_tr069_enabled,
@@ -35,6 +37,11 @@ from app.services.network.olt_profile_resolution import (
 )
 from app.services.network.olt_ssh_profiles import _parse_profile_table
 from app.services.network.parsers import parse_ont_info, parse_ont_info_detail
+from app.services.network.serial_utils import (
+    normalize as normalize_serial,
+    parse_ont_id_on_olt,
+    search_candidates as serial_search_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +388,96 @@ def _import_named_service_profile_mappings(
     return imported
 
 
+def _import_inventory_profile_mappings(
+    db: Session,
+    olt: OLTDevice,
+    imported_at: datetime,
+    warnings: list[str],
+) -> int:
+    """Derive mappings by joining inventory equipment IDs to imported OLT rows."""
+    registrations = db.scalars(
+        select(OltOntRegistration)
+        .where(OltOntRegistration.olt_id == olt.id)
+        .where(OltOntRegistration.is_active.is_(True))
+        .where(OltOntRegistration.line_profile_id.isnot(None))
+        .where(OltOntRegistration.service_profile_id.isnot(None))
+    ).all()
+    registrations_by_location = {
+        (registration.fsp, registration.ont_id_on_olt): registration
+        for registration in registrations
+    }
+    registrations_by_serial: dict[str, OltOntRegistration] = {}
+    for registration in registrations:
+        for candidate in serial_search_candidates(registration.serial_number):
+            registrations_by_serial[normalize_serial(candidate)] = registration
+
+    counts: dict[str, Counter[tuple[int, int]]] = {}
+    for ont in db.scalars(
+        select(OntUnit)
+        .where(OntUnit.olt_device_id == olt.id)
+        .where(OntUnit.is_active.is_(True))
+    ):
+        equipment_id = normalize_ont_equipment_id(ont.model)
+        if not equipment_id:
+            continue
+
+        registration = None
+        for serial_value in (ont.serial_number, ont.vendor_serial_number):
+            for candidate in serial_search_candidates(serial_value):
+                registration = registrations_by_serial.get(normalize_serial(candidate))
+                if registration is not None:
+                    break
+            if registration is not None:
+                break
+
+        if registration is None and ont.board and ont.port:
+            ont_id = parse_ont_id_on_olt(ont.external_id)
+            if ont_id is not None:
+                registration = registrations_by_location.get(
+                    (f"{ont.board}/{ont.port}", ont_id)
+                )
+
+        if registration is None:
+            continue
+
+        pair = (
+            int(registration.line_profile_id),
+            int(registration.service_profile_id),
+        )
+        counts.setdefault(equipment_id, Counter())[pair] += 1
+
+    onu_types = _onu_type_id_by_equipment(db)
+    imported = 0
+    for equipment_id, profile_counts in counts.items():
+        if len(profile_counts) > 1:
+            profile_pairs = ", ".join(
+                f"line {line}/service {service} ({count})"
+                for (line, service), count in sorted(profile_counts.items())
+            )
+            warnings.append(
+                "Ambiguous inventory-backed profile mapping for "
+                f"{equipment_id}: {profile_pairs}."
+            )
+            continue
+        (line_profile_id, service_profile_id), count = next(
+            iter(profile_counts.items())
+        )
+        _upsert_by_keys(
+            db,
+            OltOnuTypeProfileMapping,
+            {"olt_id": olt.id, "equipment_id": equipment_id},
+            {
+                "onu_type_id": onu_types.get(equipment_id.upper()),
+                "line_profile_id": line_profile_id,
+                "service_profile_id": service_profile_id,
+                "source_registration_count": int(count),
+                "last_imported_at": imported_at,
+            },
+        )
+        imported += 1
+    return imported
+
+
 def _read_dump_file(dump_dir: Path, filename: str) -> str:
     path = dump_dir / filename
     if not path.exists():
@@ -605,6 +702,13 @@ def import_olt_state_from_dump(
             imported_at,
         )
         db.flush()
+        mapping_count += _import_inventory_profile_mappings(
+            db,
+            olt,
+            imported_at,
+            warnings,
+        )
+        db.flush()
         return OltStateImportResult(
             success=True,
             message=(
@@ -825,7 +929,14 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                     row.is_active = False
                     row.last_imported_at = imported_at
 
+        db.flush()
         mapping_count = _import_profile_mappings(db, olt, imported_at, warnings)
+        mapping_count += _import_inventory_profile_mappings(
+            db,
+            olt,
+            imported_at,
+            warnings,
+        )
         db.flush()
         return OltStateImportResult(
             success=True,

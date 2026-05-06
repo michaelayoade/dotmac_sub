@@ -21,6 +21,7 @@ from app.models.network import (
     OntAssignment,
     OntUnit,
 )
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.ont_management_ipam import get_ont_management_ip_record
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
 from app.services.network.ont_desired_config import desired_config, get_desired_config_value
@@ -56,10 +57,10 @@ def _resolve_imported_line_profile_id(
     if ont is None or olt_id is None:
         return None, None
 
-    equipment_id = str(getattr(ont, "model", "") or "").strip()
+    equipment_id = normalize_ont_equipment_id(getattr(ont, "model", None))
     if not equipment_id:
         onu_type = getattr(ont, "onu_type", None)
-        equipment_id = str(getattr(onu_type, "name", "") or "").strip()
+        equipment_id = normalize_ont_equipment_id(getattr(onu_type, "name", None))
     if not equipment_id:
         return None, None
 

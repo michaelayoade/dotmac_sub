@@ -13,6 +13,7 @@ from app.models.network import (
     OltOnuTypeProfileMapping,
     OntUnit,
 )
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 
 
 @dataclass(frozen=True)
@@ -46,12 +47,11 @@ class OltMappingCoverage:
 
 
 def _equipment_id_from_ont(ont: OntUnit) -> str | None:
-    equipment_id = str(getattr(ont, "model", "") or "").strip()
+    equipment_id = normalize_ont_equipment_id(getattr(ont, "model", None))
     if equipment_id:
         return equipment_id
     onu_type = getattr(ont, "onu_type", None)
-    equipment_id = str(getattr(onu_type, "name", "") or "").strip()
-    return equipment_id or None
+    return normalize_ont_equipment_id(getattr(onu_type, "name", None))
 
 
 def _selected_olts(
@@ -109,19 +109,20 @@ def build_olt_mapping_coverage_report(
             .where(OltOntRegistration.is_active.is_(True))
             .where(OltOntRegistration.equipment_id.isnot(None))
         ):
-            equipment_id = str(registration.equipment_id or "").strip()
+            equipment_id = normalize_ont_equipment_id(registration.equipment_id)
             if equipment_id:
                 registration_counts[equipment_id] = (
                     registration_counts.get(equipment_id, 0) + 1
                 )
 
         mapped = {
-            mapping.equipment_id
+            equipment_id
             for mapping in db.scalars(
                 select(OltOnuTypeProfileMapping).where(
                     OltOnuTypeProfileMapping.olt_id == olt.id
                 )
             )
+            if (equipment_id := normalize_ont_equipment_id(mapping.equipment_id))
         }
         observed = set(inventory_counts) | set(registration_counts)
         missing = [

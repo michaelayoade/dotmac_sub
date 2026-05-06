@@ -35,6 +35,7 @@ from app.services.network.ont_desired_config import (
     get_desired_config_value,
     set_desired_config_values,
 )
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
     normalize as normalize_serial,
@@ -605,7 +606,7 @@ def _authorization_model_hint(
         )
     ).first()
     if existing and getattr(existing, "model", None):
-        return str(existing.model)
+        return normalize_ont_equipment_id(existing.model)
 
     candidate = get_autofind_candidate_by_serial(
         db,
@@ -615,11 +616,11 @@ def _authorization_model_hint(
     )
     candidate_model = getattr(candidate, "model", None)
     if candidate_model:
-        return str(candidate_model)
+        return normalize_ont_equipment_id(candidate_model)
 
     candidate_ont = getattr(candidate, "ont_unit", None)
     if candidate_ont and getattr(candidate_ont, "model", None):
-        return str(candidate_ont.model)
+        return normalize_ont_equipment_id(candidate_ont.model)
 
     return None
 

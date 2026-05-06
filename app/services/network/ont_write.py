@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_action_common import (
@@ -531,10 +532,12 @@ class OntWriteService:
                 resolve_authorization_profiles_from_import,
             )
 
-            equipment_id = str(getattr(ont, "model", "") or "").strip()
+            equipment_id = normalize_ont_equipment_id(getattr(ont, "model", None))
             if not equipment_id:
                 onu_type = getattr(ont, "onu_type", None)
-                equipment_id = str(getattr(onu_type, "name", "") or "").strip()
+                equipment_id = normalize_ont_equipment_id(
+                    getattr(onu_type, "name", None)
+                )
             profiles_ok, profiles_msg, resolved = resolve_authorization_profiles_from_import(
                 db,
                 ctx.olt,
