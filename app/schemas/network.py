@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -397,6 +398,11 @@ class OLTDeviceBase(BaseModel):
     # OMCI Capability Flags (firmware-specific command support)
     supports_ont_internet_config: bool = True
     supports_ont_wan_config: bool = True
+    supports_ont_home_gateway_config: bool = False
+    wan_provisioning_mode: Literal[
+        "tr069_only", "home_gateway_config", "omci_wan_config"
+    ] = "omci_wan_config"
+    capabilities_source: Literal["auto", "manual"] = "auto"
 
 
 class OLTDeviceCreate(OLTDeviceBase):
@@ -435,6 +441,11 @@ class OLTDeviceUpdate(BaseModel):
     # OMCI Capability Flags (firmware-specific command support)
     supports_ont_internet_config: bool | None = None
     supports_ont_wan_config: bool | None = None
+    supports_ont_home_gateway_config: bool | None = None
+    wan_provisioning_mode: (
+        Literal["tr069_only", "home_gateway_config", "omci_wan_config"] | None
+    ) = None
+    capabilities_source: Literal["auto", "manual"] | None = None
 
 
 class OLTDeviceRead(OLTDeviceBase):

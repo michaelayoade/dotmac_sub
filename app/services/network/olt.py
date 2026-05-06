@@ -89,10 +89,8 @@ def _payload_data(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any
 
 def _infer_olt_capabilities(data: dict[str, Any], explicit_fields: set[str]) -> None:
     """Fill firmware-derived OLT capabilities unless the caller overrides them."""
-    if (
-        "supports_ont_internet_config" in explicit_fields
-        and "supports_ont_wan_config" in explicit_fields
-    ):
+    source = str(data.get("capabilities_source") or "auto")
+    if source == "manual":
         return
 
     from app.services.adapters.olt_types import olt_type_registry
@@ -101,12 +99,20 @@ def _infer_olt_capabilities(data: dict[str, Any], explicit_fields: set[str]) -> 
         model=data.get("model"),
         firmware=data.get("firmware_version") or data.get("software_version"),
     )
+    if "capabilities_source" not in explicit_fields:
+        data["capabilities_source"] = "auto"
     if "supports_ont_internet_config" not in explicit_fields:
         data["supports_ont_internet_config"] = (
             capabilities.supports_ont_internet_config
         )
     if "supports_ont_wan_config" not in explicit_fields:
         data["supports_ont_wan_config"] = capabilities.supports_ont_wan_config
+    if "supports_ont_home_gateway_config" not in explicit_fields:
+        data["supports_ont_home_gateway_config"] = (
+            capabilities.supports_ont_home_gateway_config
+        )
+    if "wan_provisioning_mode" not in explicit_fields:
+        data["wan_provisioning_mode"] = capabilities.wan_provisioning_mode
 
 
 def _canonical_pon_name_from_card_port(
@@ -346,7 +352,12 @@ class OLTDevices(CRUDManager[OLTDevice]):
         )
         explicit_fields = _payload_fields_set(payload)
         data = _payload_data(payload, exclude_unset=True)
-        if {"model", "firmware_version", "software_version"} & explicit_fields:
+        if {
+            "model",
+            "firmware_version",
+            "software_version",
+            "capabilities_source",
+        } & explicit_fields:
             capability_context = {
                 "model": data.get("model", existing.model),
                 "firmware_version": data.get(
@@ -354,6 +365,10 @@ class OLTDevices(CRUDManager[OLTDevice]):
                 ),
                 "software_version": data.get(
                     "software_version", existing.software_version
+                ),
+                "capabilities_source": data.get(
+                    "capabilities_source",
+                    getattr(existing, "capabilities_source", "auto"),
                 ),
             }
             capability_context.update(
@@ -364,6 +379,9 @@ class OLTDevices(CRUDManager[OLTDevice]):
                     in {
                         "supports_ont_internet_config",
                         "supports_ont_wan_config",
+                        "supports_ont_home_gateway_config",
+                        "wan_provisioning_mode",
+                        "capabilities_source",
                     }
                 }
             )
@@ -374,6 +392,9 @@ class OLTDevices(CRUDManager[OLTDevice]):
                     for key in (
                         "supports_ont_internet_config",
                         "supports_ont_wan_config",
+                        "supports_ont_home_gateway_config",
+                        "wan_provisioning_mode",
+                        "capabilities_source",
                     )
                     if key in capability_context and key not in explicit_fields
                 }

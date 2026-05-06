@@ -446,7 +446,21 @@ def _provision_wan_service_instances(
         )
         return steps, needs_input, hard_failures
 
-    if wan_mode == "pppoe" and get_pppoe_provisioning_method(db) != "tr069":
+    pppoe_provisioning_method = get_pppoe_provisioning_method(db)
+    wan_provisioning_mode = str(
+        effective_values.get("wan_provisioning_mode") or "omci_wan_config"
+    )
+    omci_wan_supported = (
+        wan_provisioning_mode == "omci_wan_config"
+        and effective_values.get("internet_config_ip_index") is not None
+        and effective_values.get("wan_config_profile_id") is not None
+    )
+
+    if (
+        wan_mode == "pppoe"
+        and pppoe_provisioning_method != "tr069"
+        and omci_wan_supported
+    ):
         omci_vlan = effective_values.get("pppoe_omci_vlan") or wan_vlan_int
         pppoe_username = effective_values.get("pppoe_username")
         pppoe_password = _decrypt_optional_secret(effective_values.get("pppoe_password"))
@@ -459,7 +473,7 @@ def _provision_wan_service_instances(
                 hard_failures.append(f"resolve_olt_context: {err}")
                 return steps, needs_input, hard_failures
             adapter = get_protocol_adapter(ctx.olt)
-            ip_index = int(effective_values.get("internet_config_ip_index") or instance_index)
+            ip_index = int(effective_values.get("internet_config_ip_index"))
             inet_result = adapter.configure_internet_config(
                 ctx.fsp,
                 ctx.olt_ont_id,
@@ -487,7 +501,7 @@ def _provision_wan_service_instances(
                         "message": wan_result.message,
                     }
                 )
-                if not wan_result.success and get_pppoe_provisioning_method(db) == "omci":
+                if not wan_result.success and pppoe_provisioning_method == "omci":
                     hard_failures.append(f"configure_wan_olt: {wan_result.message}")
                     return steps, needs_input, hard_failures
             pppoe_result = adapter.configure_pppoe(
@@ -508,9 +522,24 @@ def _provision_wan_service_instances(
             )
             if pppoe_result.success:
                 return steps, needs_input, hard_failures
-            if get_pppoe_provisioning_method(db) == "omci":
+            if pppoe_provisioning_method == "omci":
                 hard_failures.append(f"configure_pppoe_omci: {pppoe_result.message}")
                 return steps, needs_input, hard_failures
+    elif (
+        wan_mode == "pppoe"
+        and pppoe_provisioning_method == "omci"
+        and not omci_wan_supported
+    ):
+        steps.append(
+            {
+                "step": "configure_pppoe_omci:skipped",
+                "success": True,
+                "message": (
+                    f"OLT WAN provisioning mode {wan_provisioning_mode} does not "
+                    "support wan-config/internet-config; falling back to DotMac ACS."
+                ),
+            }
+        )
 
     detected_index = instance_index
     if wan_mode == "pppoe" and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice":

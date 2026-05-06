@@ -6,6 +6,8 @@ CLI commands are attempted during ONT provisioning.
 Key capabilities:
 - supports_ont_internet_config: MA5608T V800R013 does NOT support this
 - supports_ont_wan_config: MA5608T V800R013 does NOT support this
+- supports_ont_home_gateway_config: MA5608T V800R015 uses this instead
+  of wan-config/internet-config
 """
 
 from __future__ import annotations
@@ -13,17 +15,34 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
+
+
+class WanProvisioningMode(StrEnum):
+    """OLT-side WAN provisioning strategy."""
+
+    TR069_ONLY = "tr069_only"
+    HOME_GATEWAY_CONFIG = "home_gateway_config"
+    OMCI_WAN_CONFIG = "omci_wan_config"
 
 
 @dataclass
 class OltCapabilities:
     """Firmware-specific OLT command capabilities."""
 
+    wan_provisioning_mode: str = WanProvisioningMode.OMCI_WAN_CONFIG.value
+
     # OMCI provisioning commands
     supports_ont_internet_config: bool = True
     supports_ont_wan_config: bool = True
+    supports_ont_home_gateway_config: bool = False
+
+    # Huawei command grammar/transport behavior
+    command_profile_name: str | None = None
+    requires_slow_send: bool = False
+    supports_slash_fsp_display: bool = False
 
     # Other capability flags can be added here
     supports_ont_wifi_config: bool = False  # MA5800 V100R019+ only

@@ -4,13 +4,15 @@ Defines firmware-specific capabilities for Huawei OLT models.
 
 Key findings:
 - MA5608T V800R013*: Does NOT support ont internet-config, ont wan-config
-- MA5800 V800R019+: Supports all commands
+- MA5608T V800R015*: Supports home-gateway-config, not wan/internet-config
+- MA5608T V800R018+: Supports wan-config, internet-config, home-gateway-config
 - MA5800 V100R019+: Does NOT support ont wifi-config (no OMCI WiFi)
 """
 
 from app.services.adapters.olt_types.base import (
     OltCapabilities,
     OltTypeAdapter,
+    WanProvisioningMode,
     olt_type_registry,
 )
 
@@ -29,8 +31,13 @@ ma5608t_v800r013 = OltTypeAdapter(
     model_patterns=["MA5608T"],
     firmware_patterns=[r"V800R013"],
     capabilities=OltCapabilities(
+        wan_provisioning_mode=WanProvisioningMode.TR069_ONLY.value,
         supports_ont_internet_config=False,
         supports_ont_wan_config=False,
+        supports_ont_home_gateway_config=False,
+        command_profile_name="huawei-ma5608t-v800r013",
+        requires_slow_send=True,
+        supports_slash_fsp_display=False,
         supports_ont_wifi_config=False,
         supports_ont_port_vlan=True,
         supports_traffic_table=True,
@@ -41,26 +48,60 @@ olt_type_registry.register(ma5608t_v800r013)
 
 
 # =============================================================================
-# MA5608T V800R017+ - Extended capabilities
+# MA5608T V800R015 - Home-gateway-config only
 # =============================================================================
-# Newer MA5608T firmware may support internet-config/wan-config.
-# Register this AFTER v800r013 so specific version matches first.
+# Karsana V800R015 supports ont home-gateway-config but not
+# ont internet-config or ont wan-config.
 
-ma5608t_v800r017 = OltTypeAdapter(
-    name="huawei-ma5608t-v800r017",
+ma5608t_v800r015 = OltTypeAdapter(
+    name="huawei-ma5608t-v800r015",
     vendor="Huawei",
     model_patterns=["MA5608T"],
-    firmware_patterns=[r"V800R017", r"V800R018", r"V800R019", r"V800R02"],
+    firmware_patterns=[r"V800R015"],
     capabilities=OltCapabilities(
-        supports_ont_internet_config=True,
-        supports_ont_wan_config=True,
+        wan_provisioning_mode=WanProvisioningMode.HOME_GATEWAY_CONFIG.value,
+        supports_ont_internet_config=False,
+        supports_ont_wan_config=False,
+        supports_ont_home_gateway_config=True,
+        command_profile_name="huawei-ma5608t-v800r015",
+        requires_slow_send=True,
+        supports_slash_fsp_display=False,
         supports_ont_wifi_config=False,
         supports_ont_port_vlan=True,
         supports_traffic_table=True,
     ),
-    notes="MA5608T V800R017+ - full OMCI provisioning support.",
+    notes="MA5608T V800R015 - use home-gateway-config; skip wan/internet-config.",
 )
-olt_type_registry.register(ma5608t_v800r017)
+olt_type_registry.register(ma5608t_v800r015)
+
+
+# =============================================================================
+# MA5608T V800R018+ - Extended capabilities
+# =============================================================================
+# V800R018 is the first verified MA5608T train in this fleet with
+# internet-config and wan-config support. Register after older specific
+# versions so V800R013/V800R015 do not fall into the full-capability bucket.
+
+ma5608t_v800r018 = OltTypeAdapter(
+    name="huawei-ma5608t-v800r018",
+    vendor="Huawei",
+    model_patterns=["MA5608T"],
+    firmware_patterns=[r"V800R018", r"V800R019", r"V800R02"],
+    capabilities=OltCapabilities(
+        wan_provisioning_mode=WanProvisioningMode.OMCI_WAN_CONFIG.value,
+        supports_ont_internet_config=True,
+        supports_ont_wan_config=True,
+        supports_ont_home_gateway_config=True,
+        command_profile_name="huawei-ma5608t-v800r018",
+        requires_slow_send=True,
+        supports_slash_fsp_display=False,
+        supports_ont_wifi_config=False,
+        supports_ont_port_vlan=True,
+        supports_traffic_table=True,
+    ),
+    notes="MA5608T V800R018+ - full verified OMCI WAN provisioning support.",
+)
+olt_type_registry.register(ma5608t_v800r018)
 
 
 # =============================================================================
@@ -75,8 +116,13 @@ ma5800_v800r019 = OltTypeAdapter(
     model_patterns=["MA5800"],
     firmware_patterns=[r"V800R019", r"V800R02", r"V800R03"],
     capabilities=OltCapabilities(
+        wan_provisioning_mode=WanProvisioningMode.OMCI_WAN_CONFIG.value,
         supports_ont_internet_config=True,
         supports_ont_wan_config=True,
+        supports_ont_home_gateway_config=False,
+        command_profile_name="huawei-ma5800-v800r019",
+        requires_slow_send=False,
+        supports_slash_fsp_display=True,
         supports_ont_wifi_config=False,  # Requires V100R019+
         supports_ont_port_vlan=True,
         supports_traffic_table=True,
@@ -99,8 +145,13 @@ ma5800_v100r019 = OltTypeAdapter(
     model_patterns=["MA5800"],
     firmware_patterns=[r"V100R019", r"V100R02"],
     capabilities=OltCapabilities(
+        wan_provisioning_mode=WanProvisioningMode.OMCI_WAN_CONFIG.value,
         supports_ont_internet_config=True,
         supports_ont_wan_config=True,
+        supports_ont_home_gateway_config=False,
+        command_profile_name="huawei-ma5800-v100r019",
+        requires_slow_send=False,
+        supports_slash_fsp_display=True,
         supports_ont_wifi_config=False,  # Command exists but needs ONT support
         supports_ont_port_vlan=True,
         supports_traffic_table=True,
@@ -121,12 +172,17 @@ huawei_generic = OltTypeAdapter(
     model_patterns=["MA5"],  # Matches any MA5xxx
     firmware_patterns=[],  # Any firmware
     capabilities=OltCapabilities(
-        supports_ont_internet_config=True,
-        supports_ont_wan_config=True,
+        wan_provisioning_mode=WanProvisioningMode.TR069_ONLY.value,
+        supports_ont_internet_config=False,
+        supports_ont_wan_config=False,
+        supports_ont_home_gateway_config=False,
+        command_profile_name="huawei-generic",
+        requires_slow_send=True,
+        supports_slash_fsp_display=False,
         supports_ont_wifi_config=False,
         supports_ont_port_vlan=True,
         supports_traffic_table=True,
     ),
-    notes="Generic Huawei OLT - assumes standard capabilities.",
+    notes="Generic Huawei OLT - conservative fallback; verify before OMCI WAN.",
 )
 olt_type_registry.register(huawei_generic)

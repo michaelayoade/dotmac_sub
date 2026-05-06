@@ -176,6 +176,21 @@ class TestBuildManagementCommandBatch:
         assert "mask 255.255.255.0" in iphost_cmd
         assert "gateway 10.0.0.1" in iphost_cmd
 
+    def test_static_ip_mode_requires_complete_network_fields(self):
+        """Static IPHOST must fail instead of silently falling back to DHCP."""
+        spec = BatchedMgmtSpec(
+            fsp="0/2/1",
+            ont_id_on_olt=10,
+            mgmt_vlan_tag=201,
+            ip_mode="static",
+            ip_address="10.0.0.100",
+            subnet_mask="255.255.255.0",
+            gateway=None,
+        )
+
+        with pytest.raises(ValueError, match="missing gateway"):
+            build_management_command_batch(spec)
+
     def test_dhcp_mode(self):
         """DHCP mode should generate simpler iphost command."""
         spec = BatchedMgmtSpec(
@@ -276,6 +291,24 @@ class TestExecuteBatchedManagementSetup:
 
         assert result.success is True
         assert "No management configuration specified" in result.error_message
+
+    def test_incomplete_static_iphost_fails_before_ssh(self):
+        """Incomplete static management config is a hard failure."""
+        spec = BatchedMgmtSpec(
+            fsp="0/1/0",
+            ont_id_on_olt=1,
+            mgmt_vlan_tag=201,
+            ip_mode="static",
+            ip_address="10.0.0.100",
+            subnet_mask="255.255.255.0",
+        )
+        olt = MagicMock()
+
+        result = execute_batched_management_setup(olt, spec)
+
+        assert result.success is False
+        assert "missing gateway" in result.message
+        assert result.steps_failed == ["configure_iphost"]
 
     @patch("app.services.network.olt_ssh_session.olt_session")
     def test_successful_execution(self, mock_session_ctx):
@@ -476,13 +509,31 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
 
         assert spec.ip_mode == "dhcp"
 
-    def test_null_wan_config_profile(self):
-        """Should handle 0 wan_config_profile_id."""
+    def test_zero_wan_config_profile(self):
+        """Should preserve wan_config_profile_id=0 as valid profile."""
         config_pack = MagicMock()
         config_pack.management_vlan.tag = 201
         config_pack.mgmt_gem_index = 2
         config_pack.internet_config_ip_index = 0
-        config_pack.wan_config_profile_id = 0
+        config_pack.wan_config_profile_id = 0  # Valid profile ID
+        config_pack.tr069_olt_profile_id = 5
+
+        spec = create_batched_mgmt_spec_from_config_pack(
+            config_pack,
+            fsp="0/1/0",
+            ont_id_on_olt=10,
+        )
+
+        assert spec.wan_config_profile_id == 0
+        assert spec.has_wan_config is True
+
+    def test_none_wan_config_profile(self):
+        """Should treat None wan_config_profile_id as skip."""
+        config_pack = MagicMock()
+        config_pack.management_vlan.tag = 201
+        config_pack.mgmt_gem_index = 2
+        config_pack.internet_config_ip_index = 0
+        config_pack.wan_config_profile_id = None  # Not configured
         config_pack.tr069_olt_profile_id = 5
 
         spec = create_batched_mgmt_spec_from_config_pack(
@@ -492,3 +543,4 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
         )
 
         assert spec.wan_config_profile_id is None
+        assert spec.has_wan_config is False

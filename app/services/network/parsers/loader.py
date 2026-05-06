@@ -402,6 +402,55 @@ class OntInfoEntry:
     vendor_id: str = ""
     model: str = ""
     software_version: str = ""
+    equipment_id: str = ""
+    service_profile_id: int | None = None
+    line_profile_id: int | None = None
+    last_down_cause: str = ""
+    tr069_profile_id: int | None = None
+
+
+def parse_ont_info_detail(output: str) -> OntInfoEntry | None:
+    """Parse key-value `display ont info` output for a single ONT."""
+    kv: dict[str, str] = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        kv[key.strip().lower()] = value.strip()
+
+    if not kv:
+        return None
+
+    def get_int(*keys: str) -> int | None:
+        for key in keys:
+            raw = kv.get(key)
+            if raw is None:
+                continue
+            match = re.search(r"\d+", raw)
+            if match:
+                return int(match.group(0))
+        return None
+
+    fsp = kv.get("fsp", "") or kv.get("f/s/p", "")
+    ont_id = get_int("ont id", "ont-id") or 0
+    return OntInfoEntry(
+        fsp=fsp,
+        ont_id=ont_id,
+        serial_number=kv.get("sn", "") or kv.get("serial number", ""),
+        control_flag=kv.get("control flag", ""),
+        run_state=kv.get("run state", ""),
+        config_state=kv.get("config state", ""),
+        match_state=kv.get("match state", ""),
+        description=kv.get("description", ""),
+        vendor_id=kv.get("vendor id", ""),
+        model=kv.get("ont equipmentid", "") or kv.get("equipment-id", ""),
+        software_version=kv.get("main software version", ""),
+        equipment_id=kv.get("equipment-id", "") or kv.get("ont equipmentid", ""),
+        service_profile_id=get_int("service profile id"),
+        line_profile_id=get_int("line profile id"),
+        last_down_cause=kv.get("last down cause", ""),
+        tr069_profile_id=get_int("tr069 server profile", "tr-069 server profile"),
+    )
 
 
 def parse_ont_info(

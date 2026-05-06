@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
@@ -85,6 +86,8 @@ class OltConfigPack:
     # 0+ = valid ip-index for ont internet-config command
     internet_config_ip_index: int | None = None
     wan_config_profile_id: int | None = None  # None = skip wan-config; 0+ = valid profile
+    wan_provisioning_mode: str = "omci_wan_config"
+    supports_ont_home_gateway_config: bool = False
 
     # GEM port indices by purpose
     internet_gem_index: int = 1
@@ -164,6 +167,8 @@ class OltConfigPack:
             },
             "internet_config_ip_index": self.internet_config_ip_index,
             "wan_config_profile_id": self.wan_config_profile_id,
+            "wan_provisioning_mode": self.wan_provisioning_mode,
+            "supports_ont_home_gateway_config": self.supports_ont_home_gateway_config,
             "internet_gem_index": self.internet_gem_index,
             "mgmt_gem_index": self.mgmt_gem_index,
             "voip_gem_index": self.voip_gem_index,
@@ -188,6 +193,46 @@ def _resolve_vlan(db: Session, vlan_id: str | None) -> VlanConfig:
 
     vlan = db.get(Vlan, vlan_id)
     return VlanConfig.from_vlan(vlan)
+
+
+def _resolve_tr069_olt_profile_id(db: Session, olt: object, pack: dict) -> int | None:
+    raw_profile_id = pack.get("tr069_olt_profile_id")
+    if raw_profile_id is not None:
+        return raw_profile_id
+
+    acs_server_id = getattr(olt, "tr069_acs_server_id", None)
+    snapshot = getattr(olt, "tr069_profiles_snapshot", None) or {}
+    profiles_payload = snapshot.get("profiles") if isinstance(snapshot, dict) else None
+    if not acs_server_id or not isinstance(profiles_payload, list):
+        return None
+
+    from app.models.tr069 import Tr069AcsServer
+    from app.services.network.tr069_profile_matching import match_tr069_profile
+
+    server = db.get(Tr069AcsServer, acs_server_id)
+    if server is None or not server.cwmp_url:
+        return None
+    profiles = [
+        SimpleNamespace(
+            profile_id=item.get("profile_id"),
+            name=item.get("name", ""),
+            acs_url=item.get("acs_url", ""),
+            acs_username=item.get("acs_username", ""),
+        )
+        for item in profiles_payload
+        if isinstance(item, dict)
+    ]
+    match = match_tr069_profile(
+        profiles,
+        acs_url=server.cwmp_url,
+        acs_username=server.cwmp_username or "",
+    )
+    if match is None:
+        return None
+    try:
+        return int(match.profile_id)
+    except (TypeError, ValueError):
+        return None
 
 
 def resolve_olt_config_pack(
@@ -217,10 +262,20 @@ def resolve_olt_config_pack(
         return None
 
     pack = olt.config_pack or {}
+    tr069_olt_profile_id = _resolve_tr069_olt_profile_id(db, olt, pack)
 
-    # Resolve internet_config_ip_index based on OLT capability
-    # If OLT doesn't support ont internet-config, force None regardless of pack value
-    if olt.supports_ont_internet_config:
+    wan_provisioning_mode = str(
+        getattr(olt, "wan_provisioning_mode", None) or "omci_wan_config"
+    )
+    supports_omci_wan = (
+        wan_provisioning_mode == "omci_wan_config"
+        and bool(getattr(olt, "supports_ont_internet_config", False))
+        and bool(getattr(olt, "supports_ont_wan_config", False))
+    )
+
+    # Resolve internet_config_ip_index based on the OLT WAN provisioning strategy.
+    # If the OLT doesn't support ont internet-config, force None regardless of pack value.
+    if supports_omci_wan:
         # OLT supports the command - use pack value or default to 0
         internet_config_ip_index = pack.get("internet_config_ip_index")
         if internet_config_ip_index is None:
@@ -230,7 +285,7 @@ def resolve_olt_config_pack(
         internet_config_ip_index = None
 
     # Resolve wan_config_profile_id based on OLT capability
-    if olt.supports_ont_wan_config:
+    if supports_omci_wan:
         wan_config_profile_id = pack.get("wan_config_profile_id")
     else:
         # OLT doesn't support ont wan-config - force skip
@@ -246,7 +301,7 @@ def resolve_olt_config_pack(
         tr069_acs_server_id=(
             str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
         ),
-        tr069_olt_profile_id=pack.get("tr069_olt_profile_id"),
+        tr069_olt_profile_id=tr069_olt_profile_id,
         # VLANs (resolve UUID strings to VlanConfig)
         internet_vlan=_resolve_vlan(db, pack.get("internet_vlan_id")),
         management_vlan=_resolve_vlan(db, pack.get("management_vlan_id")),
@@ -256,6 +311,10 @@ def resolve_olt_config_pack(
         # Provisioning knobs (capability-gated above)
         internet_config_ip_index=internet_config_ip_index,
         wan_config_profile_id=wan_config_profile_id,
+        wan_provisioning_mode=wan_provisioning_mode,
+        supports_ont_home_gateway_config=bool(
+            getattr(olt, "supports_ont_home_gateway_config", False)
+        ),
         # GEM indices
         internet_gem_index=pack.get("internet_gem_index") or 1,
         mgmt_gem_index=pack.get("mgmt_gem_index") or 2,

@@ -6,6 +6,7 @@ from app.services.network.parsers.loader import (
     parse_autofind,
     parse_key_value,
     parse_ont_info,
+    parse_ont_info_detail,
     parse_profile_table,
     parse_service_port_table,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "parse_autofind",
     "parse_key_value",
     "parse_ont_info",
+    "parse_ont_info_detail",
     "parse_profile_table",
     "parse_service_port_table",
 ]

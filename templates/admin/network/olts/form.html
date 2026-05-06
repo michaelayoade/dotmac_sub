@@ -63,6 +63,18 @@
                         class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
                 <div>
+                    <label for="firmware_version" class="text-xs font-medium text-slate-600 dark:text-slate-400">Firmware</label>
+                    <input type="text" name="firmware_version" id="firmware_version" maxlength="120"
+                        value="{{ olt.firmware_version if olt and olt.firmware_version else '' }}"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="software_version" class="text-xs font-medium text-slate-600 dark:text-slate-400">Software</label>
+                    <input type="text" name="software_version" id="software_version" maxlength="120"
+                        value="{{ olt.software_version if olt and olt.software_version else '' }}"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
                     <label for="status" class="text-xs font-medium text-slate-600 dark:text-slate-400">Status</label>
                     {% set current_status = (olt.status if olt else 'active') %}
                     <select name="status" id="status"
@@ -184,6 +196,21 @@
             {# Capability Flags #}
             <div class="mt-4 pt-3 border-t border-slate-200 dark:border-slate-700">
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">OMCI Capability Flags</p>
+                <label class="mb-3 flex items-center gap-2">
+                    <input type="checkbox" name="manual_capability_override" value="true"
+                        {% if olt.manual_capability_override %}checked{% endif %}
+                        class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:border-slate-600 dark:bg-slate-700">
+                    <span class="text-xs text-slate-600 dark:text-slate-400">Manually override firmware-detected capabilities</span>
+                </label>
+                <div class="mb-3 max-w-xs">
+                    <label for="wan_provisioning_mode" class="text-xs font-medium text-slate-600 dark:text-slate-400">WAN provisioning mode</label>
+                    <select name="wan_provisioning_mode" id="wan_provisioning_mode"
+                        class="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="tr069_only" {% if olt.wan_provisioning_mode == 'tr069_only' %}selected{% endif %}>TR-069 only</option>
+                        <option value="home_gateway_config" {% if olt.wan_provisioning_mode == 'home_gateway_config' %}selected{% endif %}>home-gateway-config</option>
+                        <option value="omci_wan_config" {% if olt.wan_provisioning_mode == 'omci_wan_config' %}selected{% endif %}>wan-config + internet-config</option>
+                    </select>
+                </div>
                 <div class="flex flex-wrap gap-x-6 gap-y-2">
                     <label class="flex items-center gap-2">
                         <input type="checkbox" name="supports_ont_internet_config" value="true"
@@ -197,8 +224,14 @@
                             class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:border-slate-600 dark:bg-slate-700">
                         <span class="text-xs text-slate-600 dark:text-slate-400">ont wan-config</span>
                     </label>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" name="supports_ont_home_gateway_config" value="true"
+                            {% if olt.supports_ont_home_gateway_config %}checked{% endif %}
+                            class="h-4 w-4 rounded border-slate-300 text-primary-600 dark:border-slate-600 dark:bg-slate-700">
+                        <span class="text-xs text-slate-600 dark:text-slate-400">ont home-gateway-config</span>
+                    </label>
                 </div>
-                <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Uncheck for MA5608T V800R013 - these commands are not supported</p>
+                <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">MA5608T V800R013 is TR-069 only; V800R015 uses home-gateway-config; V800R018+ can use wan-config.</p>
             </div>
         </div>
         {% endif %}

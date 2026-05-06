@@ -23,6 +23,7 @@ from app.services.adapters.olt_types.base import (
     OltCapabilities,
     OltTypeAdapter,
     OltTypeRegistry,
+    WanProvisioningMode,
     olt_type_registry,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "OltCapabilities",
     "OltTypeAdapter",
     "OltTypeRegistry",
+    "WanProvisioningMode",
     "olt_type_registry",
 ]

@@ -145,6 +145,8 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "vendor": form.get("vendor", "").strip() or None,
         "model": form.get("model", "").strip() or None,
         "serial_number": form.get("serial_number", "").strip() or None,
+        "firmware_version": form.get("firmware_version", "").strip() or None,
+        "software_version": form.get("software_version", "").strip() or None,
         "ssh_username": form.get("ssh_username", "").strip() or None,
         "ssh_password": form.get("ssh_password", "").strip() or None,
         "ssh_port": int(ssh_port_raw)
@@ -176,12 +178,17 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "status": form.get("status", "").strip() or "active",
         "notes": form.get("notes", "").strip() or None,
         "is_active": form.get("is_active") == "true",
-        # -------------------------------------------------------------------------
-        # OMCI Capability Flags (for firmware-specific command support)
-        # -------------------------------------------------------------------------
+        "manual_capability_override": form.get("manual_capability_override")
+        == "true",
         "supports_ont_internet_config": form.get("supports_ont_internet_config")
         == "true",
         "supports_ont_wan_config": form.get("supports_ont_wan_config") == "true",
+        "supports_ont_home_gateway_config": form.get(
+            "supports_ont_home_gateway_config"
+        )
+        == "true",
+        "wan_provisioning_mode": form.get("wan_provisioning_mode")
+        or "omci_wan_config",
         # -------------------------------------------------------------------------
         # Config Pack fields (ONT Provisioning Defaults)
         # -------------------------------------------------------------------------
@@ -292,33 +299,48 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
     encrypted_password = encrypt_credential(
         ssh_password if isinstance(ssh_password, str) else None
     )
-    return OLTDeviceCreate.model_validate(
-        {
-            "name": values.get("name"),
-            "hostname": values.get("hostname"),
-            "mgmt_ip": values.get("mgmt_ip"),
-            "vendor": values.get("vendor"),
-            "model": values.get("model"),
-            "serial_number": values.get("serial_number"),
-            "ssh_username": values.get("ssh_username"),
-            "ssh_password": encrypted_password,
-            "ssh_port": values.get("ssh_port"),
-            "snmp_enabled": bool(values.get("snmp_enabled")),
-            "snmp_port": values.get("snmp_port"),
-            "snmp_version": values.get("snmp_version"),
-            "snmp_ro_community": _encrypt_if_set(values, "snmp_community"),
-            "snmp_rw_community": _encrypt_if_set(values, "snmp_rw_community"),
-            "tr069_acs_server_id": values.get("tr069_acs_server_id"),
-            "supported_pon_types": values.get("supported_pon_types"),
-            "status": values.get("status"),
-            "notes": values.get("notes"),
-            "is_active": values.get("is_active"),
-            "config_pack": _build_config_pack(values),
-            "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
-            "supports_ont_internet_config": values.get("supports_ont_internet_config"),
-            "supports_ont_wan_config": values.get("supports_ont_wan_config"),
-        }
-    )
+    data = {
+        "name": values.get("name"),
+        "hostname": values.get("hostname"),
+        "mgmt_ip": values.get("mgmt_ip"),
+        "vendor": values.get("vendor"),
+        "model": values.get("model"),
+        "serial_number": values.get("serial_number"),
+        "firmware_version": values.get("firmware_version"),
+        "software_version": values.get("software_version"),
+        "ssh_username": values.get("ssh_username"),
+        "ssh_password": encrypted_password,
+        "ssh_port": values.get("ssh_port"),
+        "snmp_enabled": bool(values.get("snmp_enabled")),
+        "snmp_port": values.get("snmp_port"),
+        "snmp_version": values.get("snmp_version"),
+        "snmp_ro_community": _encrypt_if_set(values, "snmp_community"),
+        "snmp_rw_community": _encrypt_if_set(values, "snmp_rw_community"),
+        "tr069_acs_server_id": values.get("tr069_acs_server_id"),
+        "supported_pon_types": values.get("supported_pon_types"),
+        "status": values.get("status"),
+        "notes": values.get("notes"),
+        "is_active": values.get("is_active"),
+        "config_pack": _build_config_pack(values),
+        "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
+    }
+    if values.get("manual_capability_override"):
+        data.update(
+            {
+                "supports_ont_internet_config": values.get(
+                    "supports_ont_internet_config"
+                ),
+                "supports_ont_wan_config": values.get("supports_ont_wan_config"),
+                "supports_ont_home_gateway_config": values.get(
+                    "supports_ont_home_gateway_config"
+                ),
+                "wan_provisioning_mode": values.get("wan_provisioning_mode"),
+                "capabilities_source": "manual",
+            }
+        )
+    else:
+        data["capabilities_source"] = "auto"
+    return OLTDeviceCreate.model_validate(data)
 
 
 def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
@@ -334,6 +356,8 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "vendor": values.get("vendor"),
         "model": values.get("model"),
         "serial_number": values.get("serial_number"),
+        "firmware_version": values.get("firmware_version"),
+        "software_version": values.get("software_version"),
         "ssh_username": values.get("ssh_username"),
         "ssh_password": encrypted_password,
         "ssh_port": values.get("ssh_port"),
@@ -349,10 +373,23 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "config_pack": _build_config_pack(values),
         # Management IP pool FK (not in config_pack)
         "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
-        # OMCI Capability Flags
-        "supports_ont_internet_config": values.get("supports_ont_internet_config"),
-        "supports_ont_wan_config": values.get("supports_ont_wan_config"),
     }
+    if values.get("manual_capability_override"):
+        data.update(
+            {
+                "supports_ont_internet_config": values.get(
+                    "supports_ont_internet_config"
+                ),
+                "supports_ont_wan_config": values.get("supports_ont_wan_config"),
+                "supports_ont_home_gateway_config": values.get(
+                    "supports_ont_home_gateway_config"
+                ),
+                "wan_provisioning_mode": values.get("wan_provisioning_mode"),
+                "capabilities_source": "manual",
+            }
+        )
+    else:
+        data["capabilities_source"] = "auto"
     if "supported_pon_types" in values:
         data["supported_pon_types"] = values["supported_pon_types"]
     if "status" in values and values["status"] is not None:
@@ -524,6 +561,13 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         # OMCI Capability Flags
         supports_ont_internet_config=getattr(olt, "supports_ont_internet_config", True),
         supports_ont_wan_config=getattr(olt, "supports_ont_wan_config", True),
+        supports_ont_home_gateway_config=getattr(
+            olt, "supports_ont_home_gateway_config", False
+        ),
+        wan_provisioning_mode=getattr(olt, "wan_provisioning_mode", "omci_wan_config"),
+        capabilities_source=getattr(olt, "capabilities_source", "auto"),
+        manual_capability_override=getattr(olt, "capabilities_source", "auto")
+        == "manual",
     )
 
 

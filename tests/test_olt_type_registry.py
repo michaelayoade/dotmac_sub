@@ -1,8 +1,10 @@
 """Tests for OLT type adapter registry and capability flags."""
 
-import pytest
-
-from app.services.adapters.olt_types import olt_type_registry, OltCapabilities
+from app.services.adapters.olt_types import (
+    OltCapabilities,
+    WanProvisioningMode,
+    olt_type_registry,
+)
 
 
 class TestOltTypeRegistry:
@@ -12,7 +14,8 @@ class TestOltTypeRegistry:
         """Verify Huawei adapters are registered."""
         names = olt_type_registry.names()
         assert "huawei-ma5608t-v800r013" in names
-        assert "huawei-ma5608t-v800r017" in names
+        assert "huawei-ma5608t-v800r015" in names
+        assert "huawei-ma5608t-v800r018" in names
         assert "huawei-ma5800-v800r019" in names
 
     def test_ma5608t_v800r013_limited_capabilities(self):
@@ -23,16 +26,35 @@ class TestOltTypeRegistry:
         )
         assert caps.supports_ont_internet_config is False
         assert caps.supports_ont_wan_config is False
+        assert caps.supports_ont_home_gateway_config is False
         assert caps.supports_ont_port_vlan is True
+        assert caps.wan_provisioning_mode == WanProvisioningMode.TR069_ONLY.value
+        assert caps.requires_slow_send is True
 
-    def test_ma5608t_v800r017_full_capabilities(self):
-        """MA5608T V800R017+ should have full capabilities."""
+    def test_ma5608t_v800r015_home_gateway_only(self):
+        """MA5608T V800R015 should use home-gateway-config only."""
         caps = olt_type_registry.get_capabilities(
             model="MA5608T",
-            firmware="V800R017C10",
+            firmware="MA5600V800R015C00 SPH102 HP1007",
+        )
+        assert caps.supports_ont_internet_config is False
+        assert caps.supports_ont_wan_config is False
+        assert caps.supports_ont_home_gateway_config is True
+        assert (
+            caps.wan_provisioning_mode
+            == WanProvisioningMode.HOME_GATEWAY_CONFIG.value
+        )
+
+    def test_ma5608t_v800r018_full_capabilities(self):
+        """MA5608T V800R018+ should have full verified OMCI WAN support."""
+        caps = olt_type_registry.get_capabilities(
+            model="MA5608T",
+            firmware="V800R018C10",
         )
         assert caps.supports_ont_internet_config is True
         assert caps.supports_ont_wan_config is True
+        assert caps.supports_ont_home_gateway_config is True
+        assert caps.wan_provisioning_mode == WanProvisioningMode.OMCI_WAN_CONFIG.value
 
     def test_ma5800_v800r019_full_capabilities(self):
         """MA5800 V800R019 should have full capabilities."""
@@ -82,13 +104,13 @@ class TestOltTypeRegistry:
         assert adapter is not None
         assert adapter.name == "huawei-ma5608t-v800r013"
 
-        # V800R017 should match v800r017 adapter
+        # V800R018 should match v800r018 adapter
         adapter = olt_type_registry.find(
             model="MA5608T",
-            firmware="V800R017",
+            firmware="V800R018",
         )
         assert adapter is not None
-        assert adapter.name == "huawei-ma5608t-v800r017"
+        assert adapter.name == "huawei-ma5608t-v800r018"
 
 
 class TestOltCapabilities:
@@ -99,9 +121,11 @@ class TestOltCapabilities:
         caps = OltCapabilities()
         assert caps.supports_ont_internet_config is True
         assert caps.supports_ont_wan_config is True
+        assert caps.supports_ont_home_gateway_config is False
         assert caps.supports_ont_wifi_config is False  # Conservative default
         assert caps.supports_ont_port_vlan is True
         assert caps.supports_traffic_table is True
+        assert caps.wan_provisioning_mode == WanProvisioningMode.OMCI_WAN_CONFIG.value
 
     def test_limited_capabilities(self):
         """Can create limited capability set."""

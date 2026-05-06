@@ -7,11 +7,14 @@ Architecture:
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OntAssignment, OntUnit
+from app.models.network import IPv4Address, OLTDevice, OntAssignment, OntUnit
+from app.services.network.ont_management_ipam import get_ont_management_ip_record
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
 from app.services.network.ont_desired_config import desired_config, get_desired_config_value
 
@@ -39,9 +42,11 @@ def _get_active_assignment(ont: OntUnit) -> OntAssignment | None:
 
 
 def _values_from_assignment(
+    db: Session,
     config_pack: OltConfigPack | None,
     assignment: OntAssignment | None = None,
     config: dict[str, Any] | None = None,
+    ont: OntUnit | None = None,
 ) -> dict[str, Any]:
     """Build effective config values from desired_config plus OLT defaults."""
     _ = assignment
@@ -72,6 +77,26 @@ def _values_from_assignment(
     asn_mgmt_ip_address = cfg("management", "ip_address")
     asn_mgmt_subnet = cfg("management", "subnet")
     asn_mgmt_gateway = cfg("management", "gateway")
+    ipam_management_record = get_ont_management_ip_record(db, ont) if ont else None
+    if ipam_management_record is not None:
+        asn_mgmt_ip_mode = "static_ip"
+        asn_mgmt_ip_address = str(ipam_management_record.address)
+        pool = getattr(ipam_management_record, "pool", None)
+        if pool is not None:
+            try:
+                asn_mgmt_subnet = str(
+                    ipaddress.ip_network(str(pool.cidr), strict=False).netmask
+                )
+            except ValueError:
+                pass
+            asn_mgmt_gateway = str(getattr(pool, "gateway", "") or "").strip() or None
+    if asn_mgmt_ip_address and (not asn_mgmt_subnet or not asn_mgmt_gateway):
+        pool_subnet, pool_gateway = _resolve_management_pool_network(
+            db,
+            str(asn_mgmt_ip_address),
+        )
+        asn_mgmt_subnet = asn_mgmt_subnet or pool_subnet
+        asn_mgmt_gateway = asn_mgmt_gateway or pool_gateway
 
     asn_lan_ip = cfg("lan", "ip")
     asn_lan_subnet = cfg("lan", "subnet")
@@ -143,6 +168,10 @@ def _values_from_assignment(
         "cr_password": config_pack.cr_password if config_pack else None,
         "internet_config_ip_index": config_pack.internet_config_ip_index if config_pack else None,
         "wan_config_profile_id": config_pack.wan_config_profile_id if config_pack else None,
+        "wan_provisioning_mode": config_pack.wan_provisioning_mode if config_pack else "omci_wan_config",
+        "supports_ont_home_gateway_config": (
+            config_pack.supports_ont_home_gateway_config if config_pack else False
+        ),
         "pppoe_omci_vlan": None,
         # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i})
         "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else 2,
@@ -152,6 +181,29 @@ def _values_from_assignment(
         "authorization_service_profile_id": config_pack.service_profile_id if config_pack else None,
         "primary_wan_service": cfg("wan", "primary_service"),
     }
+
+
+def _resolve_management_pool_network(
+    db: Session,
+    address: str,
+) -> tuple[str | None, str | None]:
+    record = db.scalars(
+        select(IPv4Address).where(IPv4Address.address == address).limit(1)
+    ).first()
+    pool = getattr(record, "pool", None) if record is not None else None
+    if pool is None:
+        return None, None
+
+    subnet = None
+    cidr = getattr(pool, "cidr", None)
+    if cidr:
+        try:
+            subnet = str(ipaddress.ip_network(str(cidr), strict=False).netmask)
+        except ValueError:
+            subnet = None
+
+    gateway = str(getattr(pool, "gateway", "") or "").strip() or None
+    return subnet, gateway
 
 
 def _explicit_keys(config: dict[str, Any]) -> list[str]:
@@ -188,7 +240,7 @@ def resolve_effective_ont_config(
         "config_pack": config_pack,
         "assignment": assignment,
         "desired_config_keys": _explicit_keys(config),
-        "values": _values_from_assignment(config_pack, assignment, config),
+        "values": _values_from_assignment(db, config_pack, assignment, config, ont),
     }
 
 

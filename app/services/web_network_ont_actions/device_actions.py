@@ -376,7 +376,11 @@ def fetch_olt_running_config(
             error_msg = msg
 
         # Also try to get ONT info
-        cmd2 = f"display ont info {fsp} {onu_id}"
+        from app.services.network.huawei_command_profiles import (
+            get_huawei_command_profile,
+        )
+
+        cmd2 = get_huawei_command_profile(olt).display_ont_info(fsp, int(onu_id))
         ok2, _, output2 = run_cli_command(olt, cmd2)
         if ok2 and output2.strip():
             config_lines.append(f"# ONT Info ({cmd2})")

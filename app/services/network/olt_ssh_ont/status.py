@@ -27,8 +27,6 @@ def get_ont_status(
     if not ok:
         return False, err, None
 
-    parts = fsp.split("/")
-
     try:
         transport, channel, _policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
@@ -40,7 +38,11 @@ def get_ont_status(
         channel.send("screen-length 0 temporary\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
-        cmd = f"display ont info {parts[0]} {parts[1]} {parts[2]} {ont_id}"
+        from app.services.network.huawei_command_profiles import (
+            get_huawei_command_profile,
+        )
+
+        cmd = get_huawei_command_profile(olt).display_ont_info(fsp, ont_id)
         output = core._run_huawei_cmd(channel, cmd)
 
         if core.is_error_output(output):

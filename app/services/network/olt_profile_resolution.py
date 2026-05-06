@@ -174,6 +174,18 @@ def choose_service_profile(
     if not profiles:
         return None
 
+    clean_model = _clean_model(model)
+    if clean_model:
+        name_matches = [
+            profile for profile in profiles if _clean_model(profile.name) == clean_model
+        ]
+        if name_matches:
+            return sorted(
+                name_matches,
+                key=lambda profile: (profile.binding_count, -profile.profile_id),
+                reverse=True,
+            )[0]
+
     requested = {
         "ethernet_ports": capability.ethernet_ports,
         "voip_ports": capability.voip_ports,
@@ -198,18 +210,6 @@ def choose_service_profile(
             key=lambda profile: (profile.binding_count, -profile.profile_id),
             reverse=True,
         )[0]
-
-    clean_model = _clean_model(model)
-    if clean_model:
-        name_matches = [
-            profile for profile in profiles if _clean_model(profile.name) == clean_model
-        ]
-        if name_matches:
-            return sorted(
-                name_matches,
-                key=lambda profile: (profile.binding_count, -profile.profile_id),
-                reverse=True,
-            )[0]
 
     return sorted(
         profiles,
@@ -405,11 +405,21 @@ def _parse_match_state(output: str) -> str:
     return match.group(1).strip().lower() if match else ""
 
 
+def _parse_equipment_id(output: str) -> str:
+    match = re.search(
+        r"\bEquipment[- ]ID\s*:\s*([A-Za-z0-9_.-]+)",
+        output,
+        re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else ""
+
+
 def ensure_ont_service_profile_match(
     olt: OLTDevice,
     *,
     fsp: str,
     ont_id: int,
+    model: str | None = None,
 ) -> tuple[bool, str]:
     """Fix service-profile mismatch after authorization using live capability."""
     from app.services.network import olt_ssh as core
@@ -473,6 +483,7 @@ def ensure_ont_service_profile_match(
         service_profile = choose_service_profile(
             service_details,
             capability=capability,
+            model=_parse_equipment_id(info) or model,
         )
         if service_profile is None:
             return (

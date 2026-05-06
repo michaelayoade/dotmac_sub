@@ -691,6 +691,15 @@ class OLTDevice(Base):
     __table_args__ = (
         UniqueConstraint("hostname", name="uq_olt_devices_hostname"),
         UniqueConstraint("mgmt_ip", name="uq_olt_devices_mgmt_ip"),
+        CheckConstraint(
+            "wan_provisioning_mode IN "
+            "('tr069_only', 'home_gateway_config', 'omci_wan_config')",
+            name="ck_olt_devices_wan_provisioning_mode",
+        ),
+        CheckConstraint(
+            "capabilities_source IN ('auto', 'manual')",
+            name="ck_olt_devices_capabilities_source",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -790,6 +799,21 @@ class OLTDevice(Base):
         Boolean,
         default=True,
         doc="False for MA5608T V800R013* - skip ont wan-config command",
+    )
+    supports_ont_home_gateway_config: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        doc="True for OLTs that use ont home-gateway-config instead of wan-config",
+    )
+    wan_provisioning_mode: Mapped[str] = mapped_column(
+        String(40),
+        default="omci_wan_config",
+        doc="tr069_only, home_gateway_config, or omci_wan_config",
+    )
+    capabilities_source: Mapped[str] = mapped_column(
+        String(20),
+        default="auto",
+        doc="auto when inferred from firmware, manual when operator overridden",
     )
 
     # -------------------------------------------------------------------------
