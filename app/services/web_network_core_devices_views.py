@@ -1707,10 +1707,27 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     connection_request_info = _connection_request_state_by_ont_id(db, [ont.id]).get(
         str(ont.id), {}
     )
+    linked_tr069 = (
+        db.query(Tr069CpeDevice)
+        .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .order_by(Tr069CpeDevice.last_inform_at.desc().nullslast())
+        .first()
+    )
     status_val = zabbix_signal.status
     status_display_val = status_val
     status_source = "zabbix"
-    normalized_acs_last_inform_at = getattr(ont, "acs_last_inform_at", None)
+    normalized_acs_last_inform_at = getattr(ont, "acs_last_inform_at", None) or (
+        getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
+    )
+    acs_status = None
+    acs_status_class = ACS_STATUS_CLASSES["unknown"]
+    if linked_tr069 and getattr(linked_tr069, "genieacs_device_id", None):
+        acs_status = "informed"
+        acs_status_class = ACS_STATUS_CLASSES["online"]
+    elif linked_tr069:
+        acs_status = "linked"
+        acs_status_class = ACS_STATUS_CLASSES["unmanaged"]
     reason = getattr(ont, "offline_reason", None)
     reason_val = reason.value if reason else None
     effective_last_seen_at = zabbix_signal.updated_at
@@ -1740,6 +1757,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "status_source_class": ACS_STATUS_CLASSES.get(
             status_source, ACS_STATUS_CLASSES["unknown"]
         ),
+        "acs_status": acs_status,
+        "acs_status_class": acs_status_class,
         "last_seen_at": effective_last_seen_at,
         "acs_last_inform_at": normalized_acs_last_inform_at,
         "connection_request_status": connection_request_info.get(
@@ -2033,6 +2052,14 @@ def _safe_int(value: object) -> int | None:
         return None
 
 
+def _runtime_value_present(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
 def _acs_observed_runtime_summary(
     acs_observed_intent: dict[str, object], *, db: Session, ont: object
 ) -> dict[str, object]:
@@ -2049,6 +2076,14 @@ def _acs_observed_runtime_summary(
 
     observed = acs_observed_intent.get("observed", {})
     observed = observed if isinstance(observed, dict) else {}
+    observed_wan = observed.get("wan", {})
+    observed_wan = observed_wan if isinstance(observed_wan, dict) else {}
+    observed_lan = observed.get("lan", {})
+    observed_lan = observed_lan if isinstance(observed_lan, dict) else {}
+    observed_wifi = observed.get("wifi", {})
+    observed_wifi = observed_wifi if isinstance(observed_wifi, dict) else {}
+    observed_system = observed.get("system", {})
+    observed_system = observed_system if isinstance(observed_system, dict) else {}
     lan_hosts = observed.get("lan_hosts", [])
     lan_hosts = lan_hosts if isinstance(lan_hosts, list) else []
 
@@ -2056,44 +2091,102 @@ def _acs_observed_runtime_summary(
     if wifi_clients is None:
         wifi_clients = _safe_int(getattr(ont, "observed_wifi_clients", None))
 
-    customer_devices = None
+    active_devices = None
     if lan_hosts:
-        customer_devices = _lan_host_connected_count(lan_hosts)
+        active_devices = _lan_host_connected_count(lan_hosts)
+    total_devices = len(lan_hosts) if lan_hosts else None
+    if total_devices is None:
+        total_devices = _safe_int(tracked_raw("lan.connected_hosts"))
+    if total_devices is None:
+        total_devices = _safe_int(getattr(ont, "observed_lan_hosts", None))
+    customer_devices = active_devices
     if customer_devices is None:
-        customer_devices = _safe_int(tracked_raw("lan.connected_hosts"))
-    if customer_devices is None:
-        customer_devices = _safe_int(getattr(ont, "observed_lan_hosts", None))
+        customer_devices = total_devices
     if customer_devices is None:
         customer_devices = wifi_clients
+
+    wan_ip = (
+        tracked_raw("wan.wan_ip")
+        or observed_wan.get("wan_ip")
+        or getattr(ont, "observed_wan_ip", None)
+    )
+    pppoe_user = (
+        tracked_raw("wan.pppoe_username")
+        or observed_wan.get("pppoe_username")
+        or values.get("pppoe_username")
+    )
+    pppoe_status = (
+        tracked_raw("wan.status")
+        or observed_wan.get("status")
+        or getattr(ont, "observed_pppoe_status", None)
+    )
+    lan_ip = tracked_raw("lan.lan_ip") or observed_lan.get("lan_ip")
+    lan_mode = tracked_raw("lan.dhcp_enabled") or observed_lan.get("dhcp_enabled")
+    ssid = observed_wifi.get("ssid")
+    wifi_enabled = observed_wifi.get("enabled")
+    wifi_channel = observed_wifi.get("channel")
+    firmware = observed_system.get("firmware")
+    uptime = observed_system.get("uptime")
+
     fetched_at = acs_observed_intent.get("fetched_at")
     updated_at_display = "-"
     if isinstance(fetched_at, datetime):
         updated_at_display = fetched_at.strftime("%Y-%m-%d %H:%M")
     elif fetched_at:
         updated_at_display = str(fetched_at)
-    has_runtime = bool(
-        acs_observed_intent.get("available")
-        or tracked_raw("system.mac_address")
-        or tracked_raw("wan.wan_ip")
-        or tracked_raw("wan.pppoe_username")
-        or tracked_raw("wan.status")
-        or tracked_raw("lan.lan_ip")
-        or wifi_clients is not None
-        or customer_devices is not None
-        or fetched_at
-    )
+
+    def runtime_field(
+        label: str,
+        value: object,
+        *,
+        monospace: bool = False,
+        numeric: bool = False,
+    ) -> dict[str, object] | None:
+        if not _runtime_value_present(value):
+            return None
+        return {
+            "label": label,
+            "value": _display_bool(value) if isinstance(value, bool) else value,
+            "monospace": monospace,
+            "numeric": numeric,
+        }
+
+    runtime_fields = [
+        runtime_field("WAN IP", wan_ip, monospace=True),
+        runtime_field("PPPoE User", pppoe_user, monospace=True),
+        runtime_field("PPPoE Status", pppoe_status),
+        runtime_field("LAN IP", lan_ip, monospace=True),
+        runtime_field("LAN DHCP", lan_mode),
+        runtime_field("SSID", ssid),
+        runtime_field("WiFi", wifi_enabled),
+        runtime_field("WiFi Channel", wifi_channel, numeric=True),
+        runtime_field("WiFi Clients", wifi_clients, numeric=True),
+        runtime_field("Active Devices", active_devices, numeric=True),
+        runtime_field(
+            "Known Devices",
+            total_devices if total_devices != active_devices else None,
+            numeric=True,
+        ),
+        runtime_field("Firmware", firmware),
+        runtime_field("Uptime", uptime),
+    ]
+    runtime_fields = [field for field in runtime_fields if field is not None]
+    has_runtime = bool(runtime_fields or acs_observed_intent.get("available") or fetched_at)
 
     return {
         "has_runtime": has_runtime,
         "mac_address": tracked_raw("system.mac_address") or getattr(ont, "mac_address", None),
-        "wan_ip": tracked_raw("wan.wan_ip"),
-        "pppoe_user": tracked_raw("wan.pppoe_username") or values.get("pppoe_username"),
-        "pppoe_status": tracked_raw("wan.status"),
+        "wan_ip": wan_ip,
+        "pppoe_user": pppoe_user,
+        "pppoe_status": pppoe_status,
         "wan_mode": values.get("wan_mode"),
-        "lan_mode": tracked_raw("lan.dhcp_enabled"),
-        "lan_ip": tracked_raw("lan.lan_ip"),
+        "lan_mode": lan_mode,
+        "lan_ip": lan_ip,
         "wifi_clients": wifi_clients,
         "customer_devices": customer_devices,
+        "active_devices": active_devices,
+        "total_devices": total_devices,
+        "runtime_fields": runtime_fields,
         "updated_at": fetched_at,
         "updated_at_display": updated_at_display,
     }

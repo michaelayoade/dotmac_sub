@@ -44,21 +44,18 @@ def _customer_display_identifier(*values: str | None) -> str | None:
 
 
 def _business_customer_clause():
+    metadata_category = func.lower(
+        func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+    )
     return (
-        func.lower(
-            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
-        )
-        == SubscriberCategory.business.value
+        (metadata_category == SubscriberCategory.business.value)
+        | (func.trim(func.coalesce(Subscriber.company_name, "")) != "")
+        | (func.trim(func.coalesce(Subscriber.legal_name, "")) != "")
     )
 
 
 def _individual_customer_clause():
-    return (
-        func.lower(
-            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
-        )
-        != SubscriberCategory.business.value
-    )
+    return not_(_business_customer_clause())
 
 
 def build_contacts_index_context(
@@ -82,7 +79,7 @@ def build_contacts_index_context(
     # Filter by business vs individual
     if entity_type == "business":
         query = query.filter(_business_customer_clause())
-    elif entity_type == "individual":
+    elif entity_type in {"individual", "person"}:
         query = query.filter(_individual_customer_clause())
 
     if status:
@@ -297,7 +294,7 @@ def build_customers_index_context(
     # Optional: filter to business vs individual customers
     if customer_type == "business":
         query = query.filter(_business_customer_clause())
-    elif customer_type == "individual":
+    elif customer_type in {"individual", "person"}:
         query = query.filter(_individual_customer_clause())
 
     if _status_filter is not None:
@@ -347,7 +344,7 @@ def build_customers_index_context(
     )
     if customer_type == "business":
         count_query = count_query.filter(_business_customer_clause())
-    elif customer_type == "individual":
+    elif customer_type in {"individual", "person"}:
         count_query = count_query.filter(_individual_customer_clause())
     if _status_filter is not None:
         count_query = count_query.filter(_status_filter)
@@ -381,6 +378,18 @@ def build_customers_index_context(
     total = count_query.scalar() or 0
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
 
+    stats_base_query = (
+        db.query(Subscriber.id)
+        .filter(Subscriber.user_type != UserType.system_user)
+        .filter(_not_deleted2)
+    )
+    total_businesses = (
+        stats_base_query.filter(_business_customer_clause()).count() or 0
+    )
+    total_people = (
+        stats_base_query.filter(_individual_customer_clause()).count() or 0
+    )
+
     # Load filter dropdown options
     nas_options = (
         db.query(NasDevice.id, NasDevice.name)
@@ -394,6 +403,8 @@ def build_customers_index_context(
         "customers": customers,
         "stats": {
             "total_customers": total,
+            "total_people": total_people,
+            "total_organizations": total_businesses,
         },
         "page": page,
         "per_page": per_page,

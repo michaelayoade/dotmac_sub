@@ -95,8 +95,8 @@ def _build_config_pack(values: Mapping[str, Any]) -> dict[str, object]:
         "mgmt_gem_index": values.get("default_mgmt_gem_index"),
         "voip_gem_index": values.get("default_voip_gem_index"),
         "iptv_gem_index": values.get("default_iptv_gem_index"),
-        "pppoe_wcd_index": values.get("pppoe_wcd_index", 2),
-        "mgmt_wcd_index": values.get("mgmt_wcd_index", 1),
+        "pppoe_wcd_index": values.get("pppoe_wcd_index"),
+        "mgmt_wcd_index": values.get("mgmt_wcd_index"),
         "voip_wcd_index": values.get("voip_wcd_index"),
     }
 

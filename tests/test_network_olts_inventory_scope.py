@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from starlette.requests import Request
 
+from app.models.network import OLTDevice, OntUnit
+from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import UserType
 
 
@@ -38,11 +40,7 @@ def test_direct_ont_authorize_rejects_mismatched_olt(monkeypatch) -> None:
     def _unexpected_queue(*_args, **_kwargs):
         raise AssertionError("mismatched direct ONT authorization must not authorize")
 
-    monkeypatch.setattr(
-        network_olts_inventory.olt_operations_service,
-        "authorize_ont",
-        _unexpected_queue,
-    )
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _unexpected_queue)
 
     response = network_olts_inventory.olt_authorize_ont(
         _request(),
@@ -55,6 +53,67 @@ def test_direct_ont_authorize_rejects_mismatched_olt(monkeypatch) -> None:
 
     assert response.status_code == 303
     assert "authorization+scope+check+failed" in response.headers["location"].lower()
+
+
+def test_returned_inventory_ont_authorize_allows_active_candidate(
+    db_session, monkeypatch
+) -> None:
+    from app.web.admin import network_olts_inventory
+
+    olt = OLTDevice(name="Scope OLT", mgmt_ip="10.0.0.10", is_active=True)
+    ont = OntUnit(serial_number="HWTC600AC29C", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.flush()
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        ont_unit_id=ont.id,
+        fsp="0/2/1",
+        serial_number="HWTC-600AC29C",
+        serial_hex="48575443600AC29C",
+        is_active=True,
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    captured: dict[str, object] = {}
+
+    def _fake_enqueue(*_args, **kwargs):
+        captured.update(kwargs.get("kwargs") or {})
+        return SimpleNamespace(queued=True)
+
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "_authorization_detail_redirect_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        network_olts_inventory.web_admin_service,
+        "get_current_user",
+        lambda _request: {"name": "Alice Admin"},
+    )
+
+    request = _request()
+    request.state.auth = {
+        "principal_id": str(uuid4()),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": ["network:write"],
+    }
+    response = network_olts_inventory.olt_authorize_ont(
+        request,
+        str(olt.id),
+        fsp="0/2/1",
+        serial_number="HWTC-600AC29C",
+        ont_id=str(ont.id),
+        return_to="/admin/network/onts?view=unconfigured",
+        preset_id="",
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert "Authorization+started" in response.headers["location"]
+    assert captured["scoped_ont_id"] == str(ont.id)
 
 
 def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
@@ -73,11 +132,7 @@ def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
     def _unexpected_queue(*_args, **_kwargs):
         raise AssertionError("unscoped reseller authorization must not authorize")
 
-    monkeypatch.setattr(
-        network_olts_inventory.olt_operations_service,
-        "authorize_ont",
-        _unexpected_queue,
-    )
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _unexpected_queue)
 
     request = _request()
     request.state.auth = {
@@ -105,11 +160,7 @@ def test_authorize_without_request_auth_is_rejected(monkeypatch) -> None:
     def _unexpected_queue(*_args, **_kwargs):
         raise AssertionError("missing-auth authorization must not authorize")
 
-    monkeypatch.setattr(
-        network_olts_inventory.olt_operations_service,
-        "authorize_ont",
-        _unexpected_queue,
-    )
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _unexpected_queue)
 
     response = network_olts_inventory.olt_authorize_ont(
         _request(),

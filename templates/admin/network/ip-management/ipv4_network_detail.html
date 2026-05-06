@@ -72,6 +72,7 @@
                             class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="all">All statuses</option>
                         <option value="assigned">Assigned</option>
+                        <option value="ont_management">ONT Mgmt</option>
                         <option value="reserved">Reserved</option>
                         <option value="available">Available</option>
                     </select>
@@ -103,6 +104,8 @@
                         <td class="px-4 py-3">
                             {% if row.status == 'assigned' %}
                             <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Assigned</span>
+                            {% elif row.status == 'ont_management' %}
+                            <span class="inline-flex rounded-full bg-cyan-100 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">ONT Mgmt</span>
                             {% elif row.status == 'reserved' %}
                             <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Reserved</span>
                             {% else %}
@@ -116,6 +119,8 @@
                         <td class="px-4 py-3 text-right">
                             {% if row.status == 'reserved' %}
                             <span class="text-xs text-slate-400">Reserved</span>
+                            {% elif row.status == 'ont_management' %}
+                            <span class="text-xs text-slate-400">Managed by IPAM</span>
                             {% elif row.status == 'assigned' %}
                             <a href="/admin/network/ip-management/ipv4-assign?pool_id={{ pool.id }}&ip={{ row.ip_address }}{% if is_block and block %}&block_id={{ block.id }}{% endif %}&return_to={{ request.url.path }}"
                                class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">

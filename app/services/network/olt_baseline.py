@@ -125,11 +125,11 @@ def ensure_olt_baseline(
             profile.updated_at = datetime.now(UTC)
             changed_db = True
 
-    wan_profile_id = int(profile.wan_config_profile_id or 0)
+    wan_profile_id = profile.wan_config_profile_id
     if dry_run:
         profile_msg = (
             f"ensure ONT WAN profile {wan_profile_id}"
-            if wan_profile_id
+            if wan_profile_id is not None
             else "skip ONT WAN profile; use PPPoE ipconfig/internet-config"
         )
         return OltBaselineResult(

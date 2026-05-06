@@ -52,8 +52,10 @@ from app.tasks.olt_queue import (
 )
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_provisioning import (
+    authorize_ont as authorize_ont_task,
     provision_ont,
     queue_bulk_provisioning,
+    return_ont_to_inventory as return_ont_to_inventory_task,
 )
 from app.tasks.provisioning import (
     retry_pending_compensation_failures,
@@ -178,6 +180,8 @@ __all__ = [
     "update_subscriber_counts",
     "check_nas_health",
     "execute_ont_bulk_action",
+    "authorize_ont_task",
+    "return_ont_to_inventory_task",
     "evaluate_alert_rules",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",

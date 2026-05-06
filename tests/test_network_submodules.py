@@ -9,6 +9,7 @@ Covers CRUD operations and utility functions for:
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
@@ -16,7 +17,13 @@ from sqlalchemy import select
 
 from app.models.catalog import NasDeviceStatus, NasVendor
 from app.models.event_store import EventStore
-from app.models.network import CPEDevice, DeviceStatus, DeviceType, IPVersion
+from app.models.network import (
+    CPEDevice,
+    DeviceStatus,
+    DeviceType,
+    IPVersion,
+    OntAssignment,
+)
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.catalog import NasDeviceCreate, NasDeviceUpdate
@@ -1088,6 +1095,8 @@ class TestOntAssignmentsCRUD:
             OLTDeviceCreate(
                 name=f"Asg OLT {uuid.uuid4().hex[:6]}",
                 hostname=f"asg-olt-{uuid.uuid4().hex[:6]}.local",
+                is_active=False,
+                status="inactive",
             ),
         )
         pon = network_service.pon_ports.create(
@@ -1128,7 +1137,6 @@ class TestOntAssignmentsCRUD:
 
     def test_alignment_can_update_topology_without_creating_assignment(self, db_session):
         """Telemetry reconciliation may create PON topology without customer assignment."""
-        from app.models.network import OntAssignment
         from app.services.network.ont_assignment_alignment import (
             align_ont_assignment_to_authoritative_fsp,
         )
@@ -1149,6 +1157,71 @@ class TestOntAssignmentsCRUD:
         assert result is None
         assert ont.olt_device_id == pon.olt_id
         assert db_session.query(OntAssignment).filter_by(ont_unit_id=ont.id).count() == 0
+
+    def test_alignment_does_not_reactivate_returned_inventory_assignment(
+        self, db_session
+    ):
+        """Authorization should not reuse an assignment closed by inventory return."""
+        from app.services.network.ont_assignment_alignment import (
+            align_ont_assignment_to_authoritative_fsp,
+        )
+
+        ont, pon = self._make_ont_and_pon(db_session)
+        old_assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id),
+        )
+        old_assignment.active = False
+        old_assignment.released_at = datetime.now(UTC)
+        old_assignment.release_reason = "returned_to_inventory"
+        db_session.commit()
+
+        result = align_ont_assignment_to_authoritative_fsp(
+            db_session,
+            ont=ont,
+            olt_id=pon.olt_id,
+            fsp="0/1/1",
+        )
+
+        assert result is not None
+        assert result.created is True
+        assert result.assignment.id != old_assignment.id
+        assert old_assignment.active is False
+
+    def test_assign_form_claims_active_assignment_without_subscriber(
+        self, db_session, subscriber
+    ):
+        """A topology-only active assignment should accept the subscriber form."""
+        from app.services import web_network_ont_assignments
+
+        ont, pon = self._make_ont_and_pon(db_session)
+        assignment = OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            active=True,
+            assigned_at=datetime.now(UTC),
+            released_at=datetime.now(UTC),
+            release_reason="returned_to_inventory",
+        )
+        db_session.add(assignment)
+        db_session.commit()
+
+        result = web_network_ont_assignments.create_assignment_from_form(
+            db_session,
+            str(ont.id),
+            {
+                "pon_port_id": str(pon.id),
+                "account_id": str(subscriber.id),
+                "service_address_id": "",
+                "notes": "",
+            },
+        )
+
+        db_session.refresh(assignment)
+        assert result.error is None
+        assert assignment.subscriber_id == subscriber.id
+        assert assignment.released_at is None
+        assert assignment.release_reason is None
 
     def test_create_ont_assignment_auto_creates_matching_cpe(
         self, db_session, subscriber
@@ -1325,7 +1398,12 @@ class TestOntAssignmentsCRUD:
         ont, pon = self._make_ont_and_pon(db_session)
         foreign_olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Foreign OLT", hostname="foreign-olt.local"),
+            OLTDeviceCreate(
+                name="Foreign OLT",
+                hostname="foreign-olt.local",
+                is_active=False,
+                status="inactive",
+            ),
         )
         foreign_pon = network_service.pon_ports.create(
             db_session,
@@ -1415,7 +1493,12 @@ class TestOntAssignmentsCRUD:
         ont, pon = self._make_ont_and_pon(db_session)
         other_olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Other Asg OLT", hostname="other-asg-olt.local"),
+            OLTDeviceCreate(
+                name="Other Asg OLT",
+                hostname="other-asg-olt.local",
+                is_active=False,
+                status="inactive",
+            ),
         )
         other_pon = network_service.pon_ports.create(
             db_session,
@@ -1447,7 +1530,10 @@ class TestOntAssignmentsCRUD:
         foreign_olt = network_service.olt_devices.create(
             db_session,
             OLTDeviceCreate(
-                name="Foreign Update OLT", hostname="foreign-update-olt.local"
+                name="Foreign Update OLT",
+                hostname="foreign-update-olt.local",
+                is_active=False,
+                status="inactive",
             ),
         )
         foreign_pon = network_service.pon_ports.create(

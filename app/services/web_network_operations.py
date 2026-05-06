@@ -49,13 +49,13 @@ def _operation_title(op: Any) -> str:
 
 
 STATUS_CLASSES: dict[str, str] = {
-    "pending": "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200",
-    "running": "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200",
-    "waiting": "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200",
-    "succeeded": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200",
-    "warning": "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200",
-    "failed": "bg-rose-100 text-rose-800 dark:bg-rose-900/60 dark:text-rose-200",
-    "canceled": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+    "pending": "bg-blue-100 text-blue-800 ring-1 ring-blue-200 dark:bg-blue-400/15 dark:text-blue-50 dark:ring-blue-300/40",
+    "running": "bg-blue-100 text-blue-800 ring-1 ring-blue-200 dark:bg-blue-400/15 dark:text-blue-50 dark:ring-blue-300/40",
+    "waiting": "bg-amber-100 text-amber-800 ring-1 ring-amber-200 dark:bg-amber-400/15 dark:text-amber-50 dark:ring-amber-300/40",
+    "succeeded": "bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200 dark:bg-emerald-400/15 dark:text-emerald-50 dark:ring-emerald-300/40",
+    "warning": "bg-amber-100 text-amber-800 ring-1 ring-amber-200 dark:bg-amber-400/15 dark:text-amber-50 dark:ring-amber-300/40",
+    "failed": "bg-rose-100 text-rose-800 ring-1 ring-rose-200 dark:bg-rose-400/15 dark:text-rose-50 dark:ring-rose-300/40",
+    "canceled": "bg-slate-100 text-slate-700 ring-1 ring-slate-200 dark:bg-slate-400/15 dark:text-slate-50 dark:ring-slate-300/30",
 }
 
 STATUS_DISPLAY: dict[str, str] = {

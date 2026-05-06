@@ -389,7 +389,9 @@ class ZabbixMetricsAdapter(MetricsReader):
         Returns dict mapping signal type to item ID.
         """
         try:
-            items = self.client.get_items(host_ids=[host_id], limit=1000)
+            # Passing no metric to ZabbixClient.get_items defaults to a net.if
+            # search, which excludes ONT signal keys before this matcher runs.
+            items = self.client.get_items(host_ids=[host_id], metric="", limit=10000)
             result: dict[str, str] = {}
 
             for item in items:

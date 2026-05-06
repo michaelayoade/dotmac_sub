@@ -95,6 +95,26 @@ def _active_assignment(record) -> IPAssignment | None:
     return None
 
 
+def _is_ont_management_allocation(record) -> bool:
+    return bool(
+        record
+        and getattr(record, "ont_unit_id", None) is not None
+        and str(getattr(record, "allocation_type", "") or "") == "management"
+    )
+
+
+def _ipam_row_status(record) -> str:
+    if not record:
+        return "available"
+    if _active_assignment(record):
+        return "assigned"
+    if _is_ont_management_allocation(record):
+        return "ont_management"
+    if getattr(record, "is_reserved", False):
+        return "reserved"
+    return "available"
+
+
 def _query_count(db, model, where_clause=None) -> int:
     from sqlalchemy import func, select
 
@@ -471,11 +491,16 @@ def _build_pool_and_block_utilization(
         else:
             total = _ipv6_capacity_count(str(pool.cidr))
             records = ipv6_by_pool.get(pool_id, [])
-        used = sum(1 for record in records if _active_assignment(record))
+        used = sum(
+            1
+            for record in records
+            if _active_assignment(record) or _is_ont_management_allocation(record)
+        )
         reserved = sum(
             1
             for record in records
             if getattr(record, "is_reserved", False) and not _active_assignment(record)
+            and not _is_ont_management_allocation(record)
         )
         available = max(total - used - reserved, 0)
         percent = int(round((used / total) * 100)) if total > 0 else 0
@@ -532,7 +557,7 @@ def _build_pool_and_block_utilization(
             if address not in network:
                 continue
             tracked += 1
-            if _active_assignment(record):
+            if _active_assignment(record) or _is_ont_management_allocation(record):
                 used += 1
             elif getattr(record, "is_reserved", False):
                 reserved += 1
@@ -594,13 +619,11 @@ def _build_ipv4_range_rows(
         assignment = _active_assignment(record) if record else None
         subscriber = getattr(assignment, "subscriber", None) if assignment else None
         subscription = getattr(assignment, "subscription", None) if assignment else None
-        status = "available"
-        if record and getattr(record, "is_reserved", False) and not assignment:
-            status = "reserved"
-            reserved_count += 1
-        elif assignment:
-            status = "assigned"
+        status = _ipam_row_status(record)
+        if status in {"assigned", "ont_management"}:
             assigned_count += 1
+        elif status == "reserved":
+            reserved_count += 1
         else:
             available_count += 1
 

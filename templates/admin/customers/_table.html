@@ -31,6 +31,7 @@
             <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                 {% if customers %}
                 {% for customer in customers %}
+                {% set customer_path = '/admin/customers/business/' ~ customer.id if customer.is_business else '/admin/customers/person/' ~ customer.id %}
                 <tr class="group transition-colors hover:bg-slate-50/60 dark:hover:bg-slate-700/30"
                     data-customer-id="{{ customer.id }}"
                     data-customer-type="{{ customer.type }}">
@@ -44,7 +45,7 @@
                                class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:ring-offset-slate-800" />
                     </td>
                     <td class="whitespace-nowrap px-4 py-4">
-                        <a href="/admin/customers/person/{{ customer.id }}" class="flex items-center gap-3 group/link">
+                        <a href="{{ customer_path }}" class="flex items-center gap-3 group/link">
                             <div class="relative flex-shrink-0">
                                 {% if customer.is_business %}
                                 <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-purple-100 to-purple-50 text-purple-600 ring-2 ring-white shadow-sm transition group-hover/link:shadow dark:from-purple-900/40 dark:to-purple-900/20 dark:text-purple-400 dark:ring-slate-800">
@@ -161,7 +162,7 @@
                     </td>
                     <td class="sticky right-0 z-10 whitespace-nowrap bg-white px-4 py-4 dark:bg-slate-800">
                         <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                            <a href="/admin/customers/person/{{ customer.id }}"
+                            <a href="{{ customer_path }}"
                                class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
                                title="View details">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -169,7 +170,7 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
                                 </svg>
                             </a>
-                            <a href="/admin/customers/person/{{ customer.id }}/edit"
+                            <a href="{{ customer_path }}/edit"
                                class="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-amber-600 dark:hover:bg-slate-700 dark:hover:text-amber-400"
                                title="Edit">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -195,7 +196,7 @@
                                     {% endif %}
                                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
                                     {% if customer.is_active %}
-                                    <button hx-post="/admin/customers/person/{{ customer.id }}/deactivate"
+                                    <button hx-post="{{ customer_path }}/deactivate"
                                             hx-confirm="Deactivate this customer?"
                                             @click="open = false"
                                             class="flex w-full items-center gap-2 px-3 py-2 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20">
@@ -203,7 +204,7 @@
                                         Deactivate
                                     </button>
                                     {% else %}
-                                    <button hx-delete="/admin/customers/person/{{ customer.id }}"
+                                    <button hx-delete="{{ customer_path }}"
                                             hx-confirm="Delete this customer? This action cannot be undone."
                                             hx-target="closest tr"
                                             hx-swap="outerHTML swap:0.5s"

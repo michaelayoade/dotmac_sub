@@ -84,6 +84,52 @@ def test_pool_utilization_counts_only_active_assignments(monkeypatch):
     assert util["percent"] == 50
 
 
+def test_pool_utilization_counts_ont_management_allocations_as_used(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Mgmt Range",
+        ip_version=IPVersion.ipv4,
+        cidr="10.0.1.0/30",
+        is_active=True,
+    )
+    managed = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.0.1.1",
+        pool_id=pool.id,
+        is_reserved=True,
+        ont_unit_id=uuid.uuid4(),
+        allocation_type="management",
+    )
+    reserved = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.0.1.2",
+        pool_id=pool.id,
+        is_reserved=True,
+    )
+    managed.assignment = None
+    reserved.assignment = None
+
+    db = FakeSession({IPv4Address: [managed, reserved]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_pools,
+        "list",
+        lambda **_kwargs: [pool],
+    )
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_blocks,
+        "list",
+        lambda **_kwargs: [],
+    )
+
+    state = web_network_ip.build_ip_pools_data(db)
+    util = state["pool_utilization"][str(pool.id)]
+
+    assert util["used"] == 1
+    assert util["assigned"] == 1
+    assert util["reserved"] == 1
+    assert util["available"] == 0
+
+
 def test_reconcile_ipv4_pool_memberships_maps_existing_addresses_to_pool(monkeypatch):
     pool = IpPool(
         id=uuid.uuid4(),
@@ -179,3 +225,45 @@ def test_ipv4_block_detail_marks_assigned_reserved_and_available(monkeypatch):
     assert state["stats"]["assigned"] == 1
     assert state["stats"]["reserved"] == 1
     assert state["stats"]["available"] == 0
+
+
+def test_ipv4_block_detail_marks_ont_management_allocation(monkeypatch):
+    pool = IpPool(
+        id=uuid.uuid4(),
+        name="Mgmt Range Detail",
+        ip_version=IPVersion.ipv4,
+        cidr="10.20.31.0/30",
+        is_active=True,
+    )
+    block = IpBlock(
+        id=uuid.uuid4(),
+        pool_id=pool.id,
+        cidr="10.20.31.0/30",
+        is_active=True,
+    )
+    block.pool = pool
+    managed = IPv4Address(
+        id=uuid.uuid4(),
+        address="10.20.31.1",
+        pool_id=pool.id,
+        is_reserved=True,
+        ont_unit_id=uuid.uuid4(),
+        allocation_type="management",
+    )
+    managed.assignment = None
+
+    db = FakeSession({IPv4Address: [managed]})
+    monkeypatch.setattr(
+        web_network_ip.network_service.ip_blocks,
+        "get",
+        lambda **_kwargs: block,
+    )
+
+    state = web_network_ip.build_ipv4_block_detail_data(
+        db, block_id=str(block.id), limit=10
+    )
+
+    assert state is not None
+    rows = {row["ip_address"]: row["status"] for row in state["ip_rows"]}
+    assert rows["10.20.31.1"] == "ont_management"
+    assert state["stats"]["assigned"] == 1

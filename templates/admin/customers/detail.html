@@ -867,7 +867,7 @@
                                         {% endif %}
                                     </div>
                                     <div>
-                                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</p>
+                                        <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
                                         <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                                             {% if subscription.login %}
                                             <span class="flex items-center gap-1">
@@ -1300,7 +1300,7 @@
                             </div>
                             <div>
                                 <div class="flex items-center gap-2">
-                                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</p>
+                                    <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
                                     {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
                                     {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
                                 </div>
@@ -1352,6 +1352,7 @@
                                 {% else %}
                                 <p class="text-xs text-slate-400 dark:text-slate-500">Price not set</p>
                                 {% endif %}
+                                <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="mt-2 inline-flex text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">View details</a>
                             </div>
                             {% if sub_status == 'active' %}
                             <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">

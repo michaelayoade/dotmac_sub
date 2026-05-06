@@ -41,6 +41,7 @@ celery_app.conf.task_routes = {
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
     "app.tasks.tr069.apply_saved_ont_service_config": {"queue": "acs"},
     "app.tasks.tr069.apply_acs_config": {"queue": "acs"},
+    "app.tasks.ont_provisioning.authorize_ont": {"queue": "tr069"},
     "app.tasks.ont_provisioning.provision_ont": {"queue": "tr069"},
     "app.tasks.ont_provisioning.queue_bulk_provisioning": {"queue": "tr069"},
     # OLT queue processing (circuit breaker recovery) - route to tr069 queue

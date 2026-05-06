@@ -14,12 +14,14 @@ from sqlalchemy.orm import Query, Session
 
 from app.models.catalog import CatalogOffer, NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.network import OntAssignment, OntUnit
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import (
     Reseller,
     Subscriber,
     SubscriberCategory,
     SubscriberStatus,
+    UserType,
 )
 from app.models.table_column_config import TableColumnConfig
 from app.models.table_column_default_config import TableColumnDefaultConfig
@@ -40,6 +42,8 @@ ReservedParamKeys = {
     "table_key",
     "q",
     "_ts",
+    "nas_id",
+    "pop_site_id",
 }
 
 ExpressionResolver = Callable[[type], Any]
@@ -537,6 +541,31 @@ class TableConfigurationService:
         return query
 
     @staticmethod
+    def _apply_customers_page_filters(
+        query: Query, request_params: dict[str, Any]
+    ) -> Query:
+        """Apply filters from the admin customers page that are not table columns."""
+        nas_id = str(request_params.get("nas_id") or "").strip()
+        if nas_id:
+            query = query.filter(
+                Subscriber.subscriptions.any(
+                    Subscription.provisioning_nas_device_id == nas_id
+                )
+            )
+
+        pop_site_id = str(request_params.get("pop_site_id") or "").strip()
+        if pop_site_id:
+            query = query.filter(
+                Subscriber.subscriptions.any(
+                    Subscription.provisioning_nas_device.has(
+                        NasDevice.pop_site_id == pop_site_id
+                    )
+                )
+            )
+
+        return query
+
+    @staticmethod
     def apply_query_config(
         db: Session,
         user_id: UUID,
@@ -567,16 +596,23 @@ class TableConfigurationService:
             from app.services.subscriber import splynx_deleted_import_clause
 
             query = query.filter(~splynx_deleted_import_clause())
+            query = query.filter(Subscriber.user_type != UserType.system_user)
 
         q = request_params.get("q")
         if isinstance(q, str) and q.strip():
-            like_term = f"%{q.strip()}%"
+            search_term = q.strip()
+            like_term = f"%{search_term}%"
             search_columns = []
             for field_name in (
                 "first_name",
                 "last_name",
+                "display_name",
+                "company_name",
+                "legal_name",
                 "email",
+                "phone",
                 "subscriber_number",
+                "account_number",
                 "name",
                 "code",
             ):
@@ -585,7 +621,46 @@ class TableConfigurationService:
                     if hasattr(field, "ilike"):
                         search_columns.append(field.ilike(like_term))
             if search_columns:
+                if definition.model is Subscriber:
+                    ont_like_terms = [like_term]
+                    normalized_serial_term = "".join(
+                        char for char in search_term.upper() if char.isalnum()
+                    )
+                    if normalized_serial_term.startswith("HWTC") and len(
+                        normalized_serial_term
+                    ) > 4:
+                        ont_like_terms.append(f"%{normalized_serial_term[4:]}%")
+                    search_columns.extend(
+                        [
+                            Subscriber.subscriptions.any(
+                                Subscription.login.ilike(like_term)
+                            ),
+                            Subscriber.subscriptions.any(
+                                Subscription.ipv4_address.ilike(like_term)
+                            ),
+                            Subscriber.ont_assignments.any(
+                                OntAssignment.ont_unit.has(
+                                    or_(
+                                        *[
+                                            OntUnit.serial_number.ilike(term)
+                                            for term in ont_like_terms
+                                        ],
+                                        *[
+                                            OntUnit.vendor_serial_number.ilike(term)
+                                            for term in ont_like_terms
+                                        ],
+                                        OntUnit.external_id.ilike(like_term),
+                                    )
+                                )
+                            ),
+                        ]
+                    )
                 query = query.filter(or_(*search_columns))
+
+        if table_key == "customers":
+            query = TableConfigurationService._apply_customers_page_filters(
+                query, request_params
+            )
 
         query = TableConfigurationService._apply_scalar_filters(
             query,
@@ -663,7 +738,11 @@ def _category_value_expression(model: type) -> Any:
 
 
 def _is_business_expression(model: type) -> Any:
-    return _category_value_expression(model) == SubscriberCategory.business.value
+    return or_(
+        _category_value_expression(model) == SubscriberCategory.business.value,
+        func.trim(func.coalesce(model.company_name, "")) != "",
+        func.trim(func.coalesce(model.legal_name, "")) != "",
+    )
 
 
 def _activation_state_expression(model: type) -> Any:
