@@ -11,11 +11,13 @@ from app.models.network import (
     IPVersion,
     MgmtIpMode,
     OLTDevice,
+    OntAssignment,
     OntUnit,
 )
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import encrypt_credential
 from app.services.network import acs_foundation, ont_authorization
+from app.services.network.ont_desired_config import desired_config
 
 
 def test_authorization_follow_up_applies_acs_foundation_inline(
@@ -345,9 +347,21 @@ def test_management_ip_allocation_uses_valid_cached_next_ip(
     assert ok is True
     assert allocated_ip == "172.16.203.2"
     assert "Allocated management IP" in message
+    assignment = db_session.query(OntAssignment).filter_by(ont_unit_id=ont.id).one()
+    assert assignment.mgmt_ip_mode == MgmtIpMode.static_ip
+    assert assignment.mgmt_ip_address == "172.16.203.2"
+    assert assignment.mgmt_subnet == "255.255.255.0"
+    assert assignment.mgmt_gateway == "172.16.203.1"
+    assert desired_config(ont)["management"] == {
+        "ip_address": "172.16.203.2",
+        "ip_mode": "static_ip",
+        "subnet": "255.255.255.0",
+        "gateway": "172.16.203.1",
+    }
     db_session.refresh(pool)
     assert pool.next_available_ip == "172.16.203.3"
-    assert pool.available_count == 1
+    # /29 block has 6 usable hosts (.1-.6), minus gateway (.1) and allocated (.2) = 4 remaining
+    assert pool.available_count == 4
 
 
 def test_management_ip_allocation_refreshes_stale_cached_next_ip(
