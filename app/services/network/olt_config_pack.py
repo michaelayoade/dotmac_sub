@@ -90,10 +90,10 @@ class OltConfigPack:
     supports_ont_home_gateway_config: bool = False
 
     # GEM port indices by purpose
-    internet_gem_index: int = 1
-    mgmt_gem_index: int = 2
-    voip_gem_index: int = 3
-    iptv_gem_index: int = 4
+    internet_gem_index: int | None = None
+    mgmt_gem_index: int | None = None
+    voip_gem_index: int | None = None
+    iptv_gem_index: int | None = None
 
     # TR-069 connection request credentials
     cr_username: str | None = None
@@ -107,8 +107,8 @@ class OltConfigPack:
 
     # TR-069 WAN Connection Device indices (OLT-provisioning-specific)
     # Mapping: OLT ip-index N → TR-069 WANConnectionDevice.(N+1)
-    pppoe_wcd_index: int = 2  # PPPoE typically uses ip-index 1 → WCD2
-    mgmt_wcd_index: int = 1  # Management typically uses ip-index 0 → WCD1
+    pppoe_wcd_index: int | None = None
+    mgmt_wcd_index: int | None = None
     voip_wcd_index: int | None = None  # VoIP WCD if provisioned
 
     @property
@@ -275,14 +275,9 @@ def resolve_olt_config_pack(
 
     # Resolve internet_config_ip_index based on the OLT WAN provisioning strategy.
     # If the OLT doesn't support ont internet-config, force None regardless of pack value.
-    if supports_omci_wan:
-        # OLT supports the command - use pack value or default to 0
-        internet_config_ip_index = pack.get("internet_config_ip_index")
-        if internet_config_ip_index is None:
-            internet_config_ip_index = 0  # Default for supported OLTs
-    else:
-        # OLT doesn't support ont internet-config - force skip
-        internet_config_ip_index = None
+    internet_config_ip_index = (
+        pack.get("internet_config_ip_index") if supports_omci_wan else None
+    )
 
     # Resolve wan_config_profile_id based on OLT capability
     if supports_omci_wan:
@@ -316,10 +311,10 @@ def resolve_olt_config_pack(
             getattr(olt, "supports_ont_home_gateway_config", False)
         ),
         # GEM indices
-        internet_gem_index=pack.get("internet_gem_index") or 1,
-        mgmt_gem_index=pack.get("mgmt_gem_index") or 2,
-        voip_gem_index=pack.get("voip_gem_index") or 3,
-        iptv_gem_index=pack.get("iptv_gem_index") or 4,
+        internet_gem_index=pack.get("internet_gem_index"),
+        mgmt_gem_index=pack.get("mgmt_gem_index"),
+        voip_gem_index=pack.get("voip_gem_index"),
+        iptv_gem_index=pack.get("iptv_gem_index"),
         # Connection request credentials
         cr_username=pack.get("cr_username"),
         cr_password=pack.get("cr_password"),
@@ -329,8 +324,8 @@ def resolve_olt_config_pack(
         internet_traffic_table_inbound=pack.get("internet_traffic_table_inbound"),
         internet_traffic_table_outbound=pack.get("internet_traffic_table_outbound"),
         # TR-069 WCD indices
-        pppoe_wcd_index=pack.get("pppoe_wcd_index") or 2,
-        mgmt_wcd_index=pack.get("mgmt_wcd_index") or 1,
+        pppoe_wcd_index=pack.get("pppoe_wcd_index"),
+        mgmt_wcd_index=pack.get("mgmt_wcd_index"),
         voip_wcd_index=pack.get("voip_wcd_index"),
     )
 

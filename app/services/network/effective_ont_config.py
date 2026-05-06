@@ -174,8 +174,8 @@ def _values_from_assignment(
         ),
         "pppoe_omci_vlan": None,
         # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i})
-        "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else 2,
-        "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else 1,
+        "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else None,
+        "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else None,
         "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
         "authorization_line_profile_id": config_pack.line_profile_id if config_pack else None,
         "authorization_service_profile_id": config_pack.service_profile_id if config_pack else None,

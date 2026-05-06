@@ -426,9 +426,15 @@ def _provision_wan_service_instances(
     wan_mode = str(effective_values.get("wan_mode") or "").strip().lower()
     wan_vlan = effective_values.get("wan_vlan")
     wan_vlan_int = int(wan_vlan) if wan_vlan not in (None, "") else None
-    # Use OLT-derived WCD index as default for PPPoE (from config pack)
-    pppoe_wcd_default = effective_values.get("pppoe_wcd_index") or 2
-    instance_index = int(effective_values.get("wan_instance_index") or pppoe_wcd_default)
+    raw_instance_index = effective_values.get("wan_instance_index")
+    raw_pppoe_wcd_index = effective_values.get("pppoe_wcd_index")
+    instance_index = (
+        int(raw_instance_index)
+        if raw_instance_index not in (None, "")
+        else int(raw_pppoe_wcd_index)
+        if raw_pppoe_wcd_index not in (None, "")
+        else None
+    )
     steps: list[dict[str, object]] = []
     needs_input: list[str] = []
     hard_failures: list[str] = []
@@ -443,6 +449,11 @@ def _provision_wan_service_instances(
                 "success": True,
                 "message": "Bridge WAN is configured on the OLT service port.",
             }
+        )
+        return steps, needs_input, hard_failures
+    if instance_index is None:
+        needs_input.append(
+            "WAN instance index is not configured in desired_config or OLT config pack."
         )
         return steps, needs_input, hard_failures
 
@@ -1145,9 +1156,19 @@ def provision_with_reconciliation(
 
     # Build preview data
     wan_vlan = values.get("wan_vlan")
-    wan_gem = int(values.get("wan_gem_index") or 1)
+    raw_wan_gem = values.get("wan_gem_index")
     mgmt_vlan = values.get("mgmt_vlan")
     tr069_profile = values.get("tr069_olt_profile_id")
+
+    if wan_vlan and raw_wan_gem is None:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult(
+            "provision",
+            False,
+            "WAN VLAN is configured but internet GEM index is missing",
+            ms,
+        )
+    wan_gem = int(raw_wan_gem) if raw_wan_gem is not None else None
 
     if dry_run:
         ms = int((time.monotonic() - t0) * 1000)
@@ -1175,7 +1196,7 @@ def provision_with_reconciliation(
         result = adapter.create_service_port(
             ctx.fsp,
             ctx.olt_ont_id,
-            gem_index=wan_gem,
+            gem_index=int(wan_gem),
             vlan_id=int(wan_vlan),
         )
         if not result.success:
@@ -1320,16 +1341,30 @@ def preview_reconciliation(
     # Build service port list
     service_ports = []
     if wan_vlan:
+        wan_gem_index = values.get("wan_gem_index")
+        if wan_gem_index is None:
+            return {
+                "error": "WAN VLAN is configured but internet GEM index is missing",
+                "has_changes": False,
+                "is_valid": False,
+            }
         service_ports.append({
             "purpose": "internet",
             "vlan_id": int(wan_vlan),
-            "gem_index": int(values.get("wan_gem_index") or 1),
+            "gem_index": int(wan_gem_index),
         })
     if mgmt_vlan:
+        mgmt_gem_index = values.get("mgmt_gem_index")
+        if mgmt_gem_index is None:
+            return {
+                "error": "Management VLAN is configured but management GEM index is missing",
+                "has_changes": False,
+                "is_valid": False,
+            }
         service_ports.append({
             "purpose": "management",
             "vlan_id": int(mgmt_vlan),
-            "gem_index": int(values.get("mgmt_gem_index") or 2),
+            "gem_index": int(mgmt_gem_index),
         })
 
     return {

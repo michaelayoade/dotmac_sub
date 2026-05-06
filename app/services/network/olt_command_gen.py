@@ -291,11 +291,15 @@ class HuaweiCommandGenerator:
         """Generate wan-config command for route+NAT mode."""
         if spec.wan_config_profile_id is None:
             return []
+        if spec.internet_config_ip_index is None:
+            raise ValueError(
+                "WAN config requires explicit internet_config_ip_index"
+            )
 
         enter_cmd = f"interface gpon {context.frame_slot}"
         wc_cmd = (
             f"ont wan-config {context.port} {context.ont_id} "
-            f"ip-index {spec.internet_config_ip_index or 0} "
+            f"ip-index {spec.internet_config_ip_index} "
             f"profile-id {spec.wan_config_profile_id}"
         )
         return [

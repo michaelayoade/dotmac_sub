@@ -165,6 +165,14 @@ def _auto_bind_tr069_after_authorize(
         profile_id = profile.profile_id if profile else None
 
         if profile_id is None:
+            inform_interval = payload.get("inform_interval")
+            if inform_interval is None:
+                logger.warning(
+                    "Skipping TR-069 profile auto-create for OLT %s: "
+                    "linked ACS has no inform interval",
+                    olt.name,
+                )
+                return
             profile_name = f"ACS {_safe_profile_name(str(payload.get('name') or ''))}"
             ok, msg = create_tr069_server_profile(
                 olt,
@@ -172,7 +180,7 @@ def _auto_bind_tr069_after_authorize(
                 acs_url=str(payload["acs_url"]),
                 username=target_username,
                 password=str(payload.get("password") or ""),
-                inform_interval=int(str(payload.get("inform_interval") or 300)),
+                inform_interval=int(str(inform_interval)),
             )
             if not ok:
                 logger.warning(

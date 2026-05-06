@@ -63,8 +63,8 @@ def apply_acs_foundation(
 
     mgmt_ip = effective_values.get("mgmt_ip_address")
     mgmt_vlan_tag = _int_or_none(effective_values.get("mgmt_vlan"))
-    mgmt_gem_index = _int_or_none(getattr(config_pack, "mgmt_gem_index", None)) or 2
-    mgmt_subnet = effective_values.get("mgmt_subnet") or "255.255.255.0"
+    mgmt_gem_index = _int_or_none(getattr(config_pack, "mgmt_gem_index", None))
+    mgmt_subnet = effective_values.get("mgmt_subnet")
     mgmt_gateway = effective_values.get("mgmt_gateway")
     tr069_profile_id = _int_or_none(effective_values.get("tr069_olt_profile_id"))
     acs_server_id = effective_values.get("tr069_acs_server_id")
@@ -101,6 +101,31 @@ def apply_acs_foundation(
         )
         steps.append({
             "name": "Resolve ACS management path",
+            "success": False,
+            "message": message,
+        })
+        raise RuntimeError(message)
+
+    if mgmt_vlan_tag is not None and mgmt_gem_index is None:
+        message = (
+            "Management VLAN is configured, but no management GEM index was "
+            "resolved from the OLT config pack. Import or configure OLT state "
+            "before applying ACS foundation."
+        )
+        steps.append({
+            "name": "Resolve ACS management path",
+            "success": False,
+            "message": message,
+        })
+        raise RuntimeError(message)
+
+    if mgmt_ip and not mgmt_subnet:
+        message = (
+            "Static management IP is configured, but no management subnet was "
+            "resolved. Refusing to default the IPHOST subnet."
+        )
+        steps.append({
+            "name": "Resolve management IP",
             "success": False,
             "message": message,
         })

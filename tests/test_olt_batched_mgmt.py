@@ -23,7 +23,7 @@ class TestBatchedMgmtSpec:
         assert spec.fsp == "0/1/0"
         assert spec.ont_id_on_olt == 5
         assert spec.mgmt_vlan_tag is None
-        assert spec.mgmt_gem_index == 2
+        assert spec.mgmt_gem_index is None
         assert spec.ip_mode == "dhcp"
 
     def test_full_spec(self):
@@ -153,12 +153,24 @@ class TestBuildManagementCommandBatch:
         assert "gpon 0/1/0 ont 5" in sp_cmd
         assert "gemport 2" in sp_cmd
 
+    def test_service_port_requires_explicit_gem_index(self):
+        """Management service-port must not default the GEM index."""
+        spec = BatchedMgmtSpec(
+            fsp="0/1/0",
+            ont_id_on_olt=5,
+            mgmt_vlan_tag=201,
+        )
+
+        with pytest.raises(ValueError, match="explicit management GEM index"):
+            build_management_command_batch(spec)
+
     def test_static_ip_mode(self):
         """Static IP mode should generate correct iphost command."""
         spec = BatchedMgmtSpec(
             fsp="0/2/1",
             ont_id_on_olt=10,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             ip_mode="static",
             ip_address="10.0.0.100",
             subnet_mask="255.255.255.0",
@@ -182,6 +194,7 @@ class TestBuildManagementCommandBatch:
             fsp="0/2/1",
             ont_id_on_olt=10,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             ip_mode="static",
             ip_address="10.0.0.100",
             subnet_mask="255.255.255.0",
@@ -197,6 +210,7 @@ class TestBuildManagementCommandBatch:
             fsp="0/2/1",
             ont_id_on_olt=10,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             ip_mode="dhcp",
         )
         commands = build_management_command_batch(spec)
@@ -215,6 +229,7 @@ class TestBuildManagementCommandBatch:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             internet_config_ip_index=0,
             wan_config_profile_id=1,
             tr069_profile_id=2,
@@ -237,6 +252,7 @@ class TestBuildManagementCommandBatch:
             fsp="0/3/2",
             ont_id_on_olt=15,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             tr069_profile_id=1,
         )
         commands = build_management_command_batch(spec)
@@ -271,6 +287,7 @@ class TestBuildManagementCommandBatch:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             internet_config_ip_index=0,
             wan_config_profile_id=1,
         )
@@ -298,6 +315,7 @@ class TestExecuteBatchedManagementSetup:
             fsp="0/1/0",
             ont_id_on_olt=1,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             ip_mode="static",
             ip_address="10.0.0.100",
             subnet_mask="255.255.255.0",
@@ -317,6 +335,7 @@ class TestExecuteBatchedManagementSetup:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             tr069_profile_id=1,
         )
         olt = MagicMock()
@@ -343,6 +362,7 @@ class TestExecuteBatchedManagementSetup:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
         )
         olt = MagicMock()
         olt.name = "Test-OLT"
@@ -368,6 +388,7 @@ class TestExecuteBatchedManagementSetup:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
             internet_config_ip_index=0,  # Non-critical
         )
         olt = MagicMock()
@@ -401,6 +422,7 @@ class TestExecuteBatchedManagementSetup:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,  # iphost is critical
+            mgmt_gem_index=2,
         )
         olt = MagicMock()
         olt.name = "Test-OLT"
@@ -432,6 +454,7 @@ class TestExecuteBatchedManagementSetup:
             fsp="0/1/0",
             ont_id_on_olt=5,
             mgmt_vlan_tag=201,
+            mgmt_gem_index=2,
         )
         olt = MagicMock()
         olt.name = "Test-OLT"

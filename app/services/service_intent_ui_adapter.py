@@ -94,16 +94,18 @@ class ServiceIntentUiAdapter:
             config_pack = effective.get("config_pack") if isinstance(effective, dict) else None
 
         vlan_id = effective_values.get("wan_vlan")
-        gem_index = effective_values.get("wan_gem_index") or 1
-        gem_choices = [int(gem_index)]
+        gem_index = effective_values.get("wan_gem_index")
+        gem_choices = [int(gem_index)] if gem_index is not None else []
         if config_pack:
             gem_choices = sorted(
-                {
-                    int(config_pack.internet_gem_index),
-                    int(config_pack.mgmt_gem_index),
-                    int(config_pack.voip_gem_index),
-                    int(config_pack.iptv_gem_index),
+                int(value)
+                for value in {
+                    config_pack.internet_gem_index,
+                    config_pack.mgmt_gem_index,
+                    config_pack.voip_gem_index,
+                    config_pack.iptv_gem_index,
                 }
+                if value is not None
             )
 
         actual_vlans = {
@@ -117,7 +119,7 @@ class ServiceIntentUiAdapter:
 
         return {
             "primary_vlan_id": vlan_id,
-            "primary_gem_index": int(gem_index or 1),
+            "primary_gem_index": int(gem_index) if gem_index is not None else None,
             "primary_user_vlan": None,
             "primary_tag_transform": "default",
             "gem_choices": gem_choices,
@@ -129,7 +131,7 @@ class ServiceIntentUiAdapter:
                     "service_type": "internet",
                     "s_vlan": vlan_id,
                     "c_vlan": None,
-                    "gem_port_id": int(gem_index or 1),
+                    "gem_port_id": int(gem_index) if gem_index is not None else None,
                     "connection_type": effective_values.get("wan_mode"),
                 }
             ]

@@ -185,9 +185,12 @@ def suggest_compatible_line_profiles(
     if pack is None:
         return False, "OLT config pack could not be resolved", []
     required_gems = {
-        int(pack.internet_gem_index or 1),
-        int(pack.mgmt_gem_index or 2),
+        int(value)
+        for value in (pack.internet_gem_index, pack.mgmt_gem_index)
+        if value is not None
     }
+    if not required_gems:
+        return False, "OLT config pack has no explicit internet/management GEM indexes", []
 
     ok, message, transport, channel, policy = _open_enabled_olt_shell(olt)
     if not ok or transport is None or channel is None or policy is None:
@@ -314,14 +317,14 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
             f"Live line profile {pack.line_profile_id} does not have TR-069 management enabled"
         )
 
-    configured_ip_index = int(pack.internet_config_ip_index or 0)
     if (
-        line_detail.tr069_ip_index is not None
-        and line_detail.tr069_ip_index != configured_ip_index
+        pack.internet_config_ip_index is not None
+        and line_detail.tr069_ip_index is not None
+        and line_detail.tr069_ip_index != int(pack.internet_config_ip_index)
     ):
         audit.warnings.append(
             f"Live line profile TR-069 IP index is {line_detail.tr069_ip_index}, "
-            f"but config pack internet_config_ip_index is {configured_ip_index}"
+            f"but config pack internet_config_ip_index is {pack.internet_config_ip_index}"
         )
 
     if not tr069_detail.exists:

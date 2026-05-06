@@ -38,7 +38,7 @@ class BatchedMgmtSpec:
 
     # Management service-port configuration
     mgmt_vlan_tag: int | None = None
-    mgmt_gem_index: int = 2  # Standard GEM for management
+    mgmt_gem_index: int | None = None
 
     # IPHOST configuration
     ip_mode: str = "dhcp"  # "dhcp" or "static"
@@ -118,6 +118,10 @@ def build_management_command_batch(
 
     # Phase 1: Service-port (global config mode)
     if spec.has_service_port:
+        if spec.mgmt_gem_index is None:
+            raise ValueError(
+                "Management service-port requires an explicit management GEM index"
+            )
         sp_cmd = (
             f"service-port vlan {spec.mgmt_vlan_tag} "
             f"gpon {spec.fsp} ont {spec.ont_id_on_olt} "
@@ -132,7 +136,22 @@ def build_management_command_batch(
 
     # IPHOST configuration
     if spec.has_iphost:
-        if spec.ip_mode == "static" and spec.ip_address and spec.subnet_mask and spec.gateway:
+        ip_mode = str(spec.ip_mode or "").strip().lower()
+        if ip_mode in {"static", "static_ip"}:
+            missing = [
+                label
+                for label, value in (
+                    ("ip_address", spec.ip_address),
+                    ("subnet_mask", spec.subnet_mask),
+                    ("gateway", spec.gateway),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(
+                    "Static management IP configuration is incomplete; missing "
+                    + ", ".join(missing)
+                )
             iphost_cmd = (
                 f"ont ipconfig {port} {spec.ont_id_on_olt} "
                 f"ip-index {spec.ip_index} static "
@@ -208,7 +227,12 @@ def execute_batched_management_setup(
     from app.services.network.olt_ssh_session import CliMode, olt_session
 
     result = BatchedMgmtResult(success=False)
-    commands = build_management_command_batch(spec)
+    try:
+        commands = build_management_command_batch(spec)
+    except ValueError as exc:
+        result.error_message = str(exc)
+        result.steps_failed.append("configure_iphost")
+        return result
 
     if not commands:
         result.success = True
@@ -351,6 +375,6 @@ def create_batched_mgmt_spec_from_config_pack(
         gateway=gateway,
         ip_index=0,
         internet_config_ip_index=config_pack.internet_config_ip_index,
-        wan_config_profile_id=config_pack.wan_config_profile_id or None,
+        wan_config_profile_id=config_pack.wan_config_profile_id,
         tr069_profile_id=config_pack.tr069_olt_profile_id,
     )

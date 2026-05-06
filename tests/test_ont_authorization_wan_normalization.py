@@ -522,11 +522,15 @@ def test_authorization_cleans_stale_registration_before_retry(
         lambda validation: "Config pack is complete and ready for provisioning",
     )
     monkeypatch.setattr(
-        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_db",
-        lambda db, olt: (
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_import",
+        lambda db, olt, *, equipment_id=None: (
             True,
             "Using OLT authorization profiles.",
-            SimpleNamespace(line_profile_id=10, service_profile_id=20),
+            SimpleNamespace(
+                line_profile_id=10,
+                service_profile_id=20,
+                message="Using OLT authorization profiles.",
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -588,11 +592,15 @@ def test_authorization_reports_partial_failure_when_local_record_setup_fails(
         lambda validation: "Config pack is complete and ready for provisioning",
     )
     monkeypatch.setattr(
-        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_db",
-        lambda db, olt: (
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_import",
+        lambda db, olt, *, equipment_id=None: (
             True,
             "Using OLT authorization profiles.",
-            SimpleNamespace(line_profile_id=10, service_profile_id=20),
+            SimpleNamespace(
+                line_profile_id=10,
+                service_profile_id=20,
+                message="Using OLT authorization profiles.",
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -1058,6 +1066,8 @@ def test_acs_connectivity_failure_is_synchronous(
                 "tr069_acs_server_id": str(acs_server.id),
                 "tr069_olt_profile_id": 7,
                 "mgmt_ip_address": "10.10.10.2",
+                "mgmt_subnet": "255.255.255.0",
+                "mgmt_gateway": "10.10.10.1",
                 "mgmt_vlan": 100,
             },
         },
