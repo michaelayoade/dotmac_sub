@@ -6,10 +6,17 @@ import logging
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OntProvisioningProfile
+from app.models.network import (
+    OLTDevice,
+    OltLineProfile,
+    OltOnuTypeProfileMapping,
+    OltServiceProfile,
+    OntProvisioningProfile,
+)
 from app.services.network import olt as olt_service
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -33,6 +40,137 @@ def line_profiles_context(db: Session, olt_id: str) -> dict[str, Any]:
 def tr069_profiles_context(db: Session, olt_id: str) -> dict[str, Any]:
     """Fetch OLT TR-069 server profiles through the profile adapter."""
     return olt_profile_adapter.tr069_profiles_context(db, olt_id)
+
+
+def imported_profile_state_context(db: Session, olt_id: str) -> dict[str, Any]:
+    """Return imported OLT profile state from DB source-of-truth tables."""
+    olt = db.get(OLTDevice, olt_id)
+    if olt is None:
+        return {
+            "olt": None,
+            "line_profiles": [],
+            "service_profiles": [],
+            "profile_mappings": [],
+            "error": "OLT not found",
+        }
+
+    line_profiles = list(
+        db.scalars(
+            select(OltLineProfile)
+            .where(OltLineProfile.olt_id == olt.id)
+            .order_by(OltLineProfile.profile_id)
+        )
+    )
+    service_profiles = list(
+        db.scalars(
+            select(OltServiceProfile)
+            .where(OltServiceProfile.olt_id == olt.id)
+            .order_by(OltServiceProfile.profile_id)
+        )
+    )
+    profile_mappings = list(
+        db.scalars(
+            select(OltOnuTypeProfileMapping)
+            .where(OltOnuTypeProfileMapping.olt_id == olt.id)
+            .order_by(OltOnuTypeProfileMapping.equipment_id)
+        )
+    )
+    return {
+        "olt": olt,
+        "line_profiles": line_profiles,
+        "service_profiles": service_profiles,
+        "profile_mappings": profile_mappings,
+        "error": None,
+    }
+
+
+def save_imported_profile_mapping(
+    db: Session,
+    olt_id: str,
+    *,
+    equipment_id: str,
+    line_profile_id: int,
+    service_profile_id: int,
+) -> tuple[bool, str]:
+    """Create or update an OLT equipment mapping using imported profiles only."""
+    olt = db.get(OLTDevice, olt_id)
+    if olt is None:
+        return False, "OLT not found"
+
+    clean_equipment_id = equipment_id.strip()
+    if not clean_equipment_id:
+        return False, "Equipment ID is required"
+
+    line_profile = db.scalars(
+        select(OltLineProfile)
+        .where(OltLineProfile.olt_id == olt.id)
+        .where(OltLineProfile.profile_id == line_profile_id)
+    ).first()
+    if line_profile is None:
+        return (
+            False,
+            f"Line profile {line_profile_id} has not been imported for {olt.name}",
+        )
+
+    service_profile = db.scalars(
+        select(OltServiceProfile)
+        .where(OltServiceProfile.olt_id == olt.id)
+        .where(OltServiceProfile.profile_id == service_profile_id)
+    ).first()
+    if service_profile is None:
+        return (
+            False,
+            f"Service profile {service_profile_id} has not been imported for {olt.name}",
+        )
+
+    mapping = db.scalars(
+        select(OltOnuTypeProfileMapping)
+        .where(OltOnuTypeProfileMapping.olt_id == olt.id)
+        .where(OltOnuTypeProfileMapping.equipment_id == clean_equipment_id)
+    ).first()
+    created = mapping is None
+    if mapping is None:
+        mapping = OltOnuTypeProfileMapping(
+            olt_id=olt.id,
+            equipment_id=clean_equipment_id,
+            line_profile_id=line_profile_id,
+            service_profile_id=service_profile_id,
+            source_registration_count=0,
+        )
+        db.add(mapping)
+    else:
+        mapping.line_profile_id = line_profile_id
+        mapping.service_profile_id = service_profile_id
+
+    db.flush()
+    action = "Created" if created else "Updated"
+    return (
+        True,
+        (
+            f"{action} mapping for {clean_equipment_id}: "
+            f"line {line_profile_id}, service {service_profile_id}"
+        ),
+    )
+
+
+def delete_imported_profile_mapping(
+    db: Session,
+    olt_id: str,
+    mapping_id: str,
+) -> tuple[bool, str]:
+    """Delete an explicit imported equipment mapping."""
+    olt = db.get(OLTDevice, olt_id)
+    if olt is None:
+        return False, "OLT not found"
+
+    mapping = db.get(OltOnuTypeProfileMapping, mapping_id)
+    if mapping is None or str(mapping.olt_id) != str(olt.id):
+        return False, "Mapping not found"
+
+    equipment_id = mapping.equipment_id
+    db.delete(mapping)
+    db.flush()
+    return True, f"Deleted mapping for {equipment_id}"
 
 
 def propagate_acs_to_onts(

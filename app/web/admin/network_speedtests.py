@@ -127,7 +127,9 @@ def speedtests_create(request: Request, db: Session = Depends(get_db)):
                 "speedtest": result.form_model,
                 "action_url": "/admin/network/speedtests",
                 "error": result.error,
-                **web_network_speedtests_service.speedtest_form_reference_data(db),
+                **web_network_speedtests_service.speedtest_form_reference_data(
+                    db, subscriber_id=values.get("subscriber_id")
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/speedtests/form.html", context)

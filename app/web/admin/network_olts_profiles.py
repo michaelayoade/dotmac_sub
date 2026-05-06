@@ -273,6 +273,84 @@ def olt_line_profiles(
 
 
 @router.get(
+    "/olts/{olt_id}/profiles/imported",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_imported_profiles(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: imported OLT profiles and equipment mappings."""
+    data = web_network_olt_profiles_service.imported_profile_state_context(db, olt_id)
+    context = _base_context(request, db, active_page="olts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/olts/_imported_profiles.html",
+        context,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/profiles/imported/mappings",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_imported_profile_mapping_save(
+    olt_id: str,
+    equipment_id: str = Form(""),
+    line_profile_id: int = Form(...),
+    service_profile_id: int = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Create or update an explicit equipment-to-profile mapping."""
+    ok, message = web_network_olt_profiles_service.save_imported_profile_mapping(
+        db,
+        olt_id,
+        equipment_id=equipment_id,
+        line_profile_id=line_profile_id,
+        service_profile_id=service_profile_id,
+    )
+    if ok:
+        db.commit()
+    else:
+        db.rollback()
+    status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=imported-profiles"
+        f"&sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/profiles/imported/mappings/{mapping_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_imported_profile_mapping_delete(
+    olt_id: str,
+    mapping_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Delete an explicit equipment-to-profile mapping."""
+    ok, message = web_network_olt_profiles_service.delete_imported_profile_mapping(
+        db,
+        olt_id,
+        mapping_id,
+    )
+    if ok:
+        db.commit()
+    else:
+        db.rollback()
+    status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=imported-profiles"
+        f"&sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.get(
     "/olts/{olt_id}/profiles/tr069",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],

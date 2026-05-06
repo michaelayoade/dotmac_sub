@@ -1,0 +1,159 @@
+{# Imported OLT profile source-of-truth panel #}
+{% from "components/ui/macros.html" import empty_state %}
+
+{% if error %}
+<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/30 dark:bg-amber-900/10 dark:text-amber-300">
+    {{ error }}
+</div>
+{% else %}
+<div class="space-y-6">
+    <div class="grid gap-4 md:grid-cols-3">
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Line profiles</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ line_profiles | length }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Service profiles</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ service_profiles | length }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Equipment mappings</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ profile_mappings | length }}</p>
+        </div>
+    </div>
+
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Equipment Profile Mappings</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Provisioning uses these DB mappings directly. Profile IDs must already exist in the imported OLT state.</p>
+            </div>
+        </div>
+        <form method="POST" action="/admin/network/olts/{{ olt.id }}/profiles/imported/mappings" class="mb-4 grid gap-3 md:grid-cols-[1fr_160px_180px_auto]">
+            {% include "components/forms/csrf_input.html" %}
+            <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Equipment ID</label>
+                <input name="equipment_id" required placeholder="EG8145V5" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Line profile</label>
+                <select name="line_profile_id" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    {% for profile in line_profiles %}
+                    <option value="{{ profile.profile_id }}">{{ profile.profile_id }}{% if profile.name %} - {{ profile.name }}{% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Service profile</label>
+                <select name="service_profile_id" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    {% for profile in service_profiles %}
+                    <option value="{{ profile.profile_id }}">{{ profile.profile_id }}{% if profile.name %} - {{ profile.name }}{% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" {% if not line_profiles or not service_profiles %}disabled{% endif %}>
+                    Save
+                </button>
+            </div>
+        </form>
+
+        {% if profile_mappings %}
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <caption class="sr-only">Imported OLT equipment mappings</caption>
+                <thead class="bg-slate-50 dark:bg-slate-800">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Equipment</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Line profile</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Service profile</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Source ONTs</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                    {% for mapping in profile_mappings %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ mapping.equipment_id }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-slate-700 dark:text-slate-300">{{ mapping.line_profile_id }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-slate-700 dark:text-slate-300">{{ mapping.service_profile_id }}</td>
+                        <td class="px-4 py-3 text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ mapping.source_registration_count }}</td>
+                        <td class="px-4 py-3 text-right">
+                            <form method="POST" action="/admin/network/olts/{{ olt.id }}/profiles/imported/mappings/{{ mapping.id }}/delete" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="text-xs font-medium text-rose-600 hover:text-rose-800 dark:text-rose-400">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        {{ empty_state("No Equipment Mappings", "Import OLT state or create an explicit mapping after profiles have been imported.", icon="settings") }}
+        {% endif %}
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <div>
+            <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Imported Line Profiles</h3>
+            {% if line_profiles %}
+            <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <caption class="sr-only">Imported line profiles</caption>
+                    <thead class="bg-slate-50 dark:bg-slate-800">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ID</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Bindings</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                        {% for profile in line_profiles %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ profile.profile_id }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ profile.name or "-" }}</td>
+                            <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ profile.binding_count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            {{ empty_state("No Line Profiles", "Run Import OLT State after the OLT has profiles configured.", icon="settings") }}
+            {% endif %}
+        </div>
+
+        <div>
+            <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Imported Service Profiles</h3>
+            {% if service_profiles %}
+            <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <caption class="sr-only">Imported service profiles</caption>
+                    <thead class="bg-slate-50 dark:bg-slate-800">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ID</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
+                            <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Ports</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                        {% for profile in service_profiles %}
+                        <tr>
+                            <td class="px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ profile.profile_id }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ profile.name or "-" }}</td>
+                            <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">
+                                {{ profile.ethernet_ports or 0 }}E / {{ profile.voip_ports or 0 }}P / {{ profile.catv_ports or 0 }}C
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            {{ empty_state("No Service Profiles", "Run Import OLT State after the OLT has profiles configured.", icon="settings") }}
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}

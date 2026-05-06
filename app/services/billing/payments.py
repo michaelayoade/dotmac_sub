@@ -336,6 +336,62 @@ def _create_payment_ledger_entry(
     return entry
 
 
+def _find_payment_allocation(
+    db: Session,
+    payment: Payment,
+    invoice: Invoice,
+) -> PaymentAllocation | None:
+    """Return the existing allocation for a payment/invoice pair, if present."""
+    return (
+        db.query(PaymentAllocation)
+        .filter(PaymentAllocation.payment_id == payment.id)
+        .filter(PaymentAllocation.invoice_id == invoice.id)
+        .first()
+    )
+
+
+def _apply_payment_allocation(
+    db: Session,
+    payment: Payment,
+    invoice: Invoice,
+    amount: Decimal,
+    *,
+    memo: str | None = None,
+) -> tuple[PaymentAllocation, Decimal]:
+    """Create or reuse one payment allocation and its invoice ledger entry.
+
+    Returns the allocation plus the amount that should reduce the payment's
+    remaining allocatable balance.
+    """
+    existing = _find_payment_allocation(db, payment, invoice)
+    if existing:
+        applied_amount = round_money(to_decimal(existing.amount))
+        _create_payment_ledger_entry(db, payment, invoice, applied_amount)
+        return existing, applied_amount
+
+    applied_amount = round_money(to_decimal(amount))
+    allocation = PaymentAllocation(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=applied_amount,
+        memo=memo,
+    )
+    db.add(allocation)
+    _create_payment_ledger_entry(db, payment, invoice, applied_amount)
+    return allocation, applied_amount
+
+
+def _record_unallocated_payment_credit(
+    db: Session,
+    payment: Payment,
+    remaining: Decimal,
+) -> None:
+    """Create the unallocated account-credit ledger entry for payment remainder."""
+    remaining = round_money(to_decimal(remaining))
+    if remaining > 0:
+        _create_payment_ledger_entry(db, payment, None, remaining)
+
+
 def _create_refund_ledger_entry(
     db: Session,
     payment: Payment,
@@ -412,39 +468,19 @@ class Payments(ListResponseMixin):
             if amount <= 0:
                 continue
 
-            # Idempotency check: skip if allocation already exists
-            existing_allocation = (
-                db.query(PaymentAllocation)
-                .filter(PaymentAllocation.payment_id == payment.id)
-                .filter(PaymentAllocation.invoice_id == invoice.id)
-                .first()
+            allocation, applied_amount = _apply_payment_allocation(
+                db,
+                payment,
+                invoice,
+                amount,
             )
-            if existing_allocation:
-                # Allocation already exists - use its amount and skip creating
-                remaining = round_money(
-                    remaining - round_money(to_decimal(existing_allocation.amount))
-                )
-                allocations.append(existing_allocation)
-                continue
-
-            allocation = PaymentAllocation(
-                payment_id=payment.id,
-                invoice_id=invoice.id,
-                amount=amount,
-            )
-            db.add(allocation)
             allocations.append(allocation)
 
-            # Create ledger entry for this allocation
-            _create_payment_ledger_entry(db, payment, invoice, amount)
-
-            remaining = round_money(remaining - amount)
+            remaining = round_money(remaining - applied_amount)
             if remaining <= 0:
                 break
 
-        # If there's remaining unallocated amount, create a credit ledger entry
-        if remaining > 0:
-            _create_payment_ledger_entry(db, payment, None, remaining)
+        _record_unallocated_payment_credit(db, payment, remaining)
 
         return allocations
 
@@ -480,35 +516,18 @@ class Payments(ListResponseMixin):
                 )
             _validate_invoice_currency(invoice, payment.currency)
 
-            # Idempotency check: skip if allocation already exists
-            existing = (
-                db.query(PaymentAllocation)
-                .filter(PaymentAllocation.payment_id == payment.id)
-                .filter(PaymentAllocation.invoice_id == allocation.invoice_id)
-                .first()
-            )
-            if existing:
-                created.append(existing)
-                remaining = round_money(remaining - existing.amount)
-                continue
-
-            entry = PaymentAllocation(
-                payment_id=payment.id,
-                invoice_id=allocation.invoice_id,
-                amount=allocation.amount,
+            entry, applied_amount = _apply_payment_allocation(
+                db,
+                payment,
+                invoice,
+                allocation.amount,
                 memo=allocation.memo,
             )
-            db.add(entry)
             created.append(entry)
 
-            # Create ledger entry for this allocation
-            _create_payment_ledger_entry(db, payment, invoice, allocation.amount)
+            remaining = round_money(remaining - applied_amount)
 
-            remaining = round_money(remaining - allocation.amount)
-
-        # If there's remaining unallocated amount, create a credit ledger entry
-        if remaining > 0:
-            _create_payment_ledger_entry(db, payment, None, remaining)
+        _record_unallocated_payment_credit(db, payment, remaining)
 
         return created
 

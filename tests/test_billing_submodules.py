@@ -19,6 +19,7 @@ from app.models.billing import (
     BillingRun,
     BillingRunStatus,
     CollectionAccountType,
+    LedgerEntry,
     Invoice,
     InvoiceStatus,
     LedgerEntryType,
@@ -1268,6 +1269,59 @@ class TestPaymentWithAllocations:
         # Invoice should be paid
         db_session.refresh(invoice)
         assert invoice.balance_due == Decimal("0.00")
+        ledger = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id == invoice.id)
+            .filter(LedgerEntry.source == LedgerSource.payment)
+            .one()
+        )
+        assert ledger.entry_type == LedgerEntryType.credit
+        assert ledger.amount == Decimal("100.00")
+
+    def test_explicit_allocation_records_unallocated_remainder_credit(
+        self, db_session, subscriber
+    ):
+        invoice = _make_invoice(
+            db_session,
+            subscriber.id,
+            subtotal=Decimal("60.00"),
+            total=Decimal("60.00"),
+            balance_due=Decimal("60.00"),
+            status=InvoiceStatus.issued,
+        )
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("100.00"),
+                currency="USD",
+                status=PaymentStatus.succeeded,
+                allocations=[
+                    PaymentAllocationApply(
+                        invoice_id=invoice.id,
+                        amount=Decimal("60.00"),
+                    ),
+                ],
+            ),
+        )
+
+        invoice_ledger = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id == invoice.id)
+            .filter(LedgerEntry.source == LedgerSource.payment)
+            .one()
+        )
+        credit_ledger = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.invoice_id.is_(None))
+            .filter(LedgerEntry.source == LedgerSource.payment)
+            .one()
+        )
+        assert invoice_ledger.amount == Decimal("60.00")
+        assert credit_ledger.amount == Decimal("40.00")
 
     def test_partial_allocation(self, db_session, subscriber):
         """Allocate less than the invoice balance."""

@@ -16,7 +16,7 @@ from app.models.network_monitoring import (
     SpeedTestResult,
     SpeedTestSource,
 )
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.audit_helpers import log_audit_event
 from app.services.common import coerce_uuid, validate_enum
 
@@ -113,17 +113,46 @@ def validate_speedtest_values(values: dict[str, object]) -> str | None:
     return None
 
 
+def _subscriber_typeahead_label(subscriber: Subscriber | None) -> str:
+    if not subscriber:
+        return ""
+    if subscriber.category == SubscriberCategory.business:
+        label = (
+            subscriber.company_name
+            or subscriber.display_name
+            or subscriber.full_name
+            or "Subscriber"
+        )
+        if subscriber.domain:
+            return f"{label} ({subscriber.domain})"
+        return str(label)
+    label = f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
+    if subscriber.email:
+        return f"{label} ({subscriber.email})"
+    if subscriber.account_number:
+        return f"{label} ({subscriber.account_number})"
+    return label or subscriber.full_name or "Subscriber"
+
+
+def subscriber_typeahead_label(db: Session, subscriber_id: object | None) -> str:
+    raw_id = str(subscriber_id or "").strip()
+    if not raw_id:
+        return ""
+    try:
+        subscriber_uuid = coerce_uuid(raw_id)
+    except (TypeError, ValueError):
+        return ""
+    subscriber = db.query(Subscriber).filter(Subscriber.id == subscriber_uuid).first()
+    return _subscriber_typeahead_label(subscriber)
+
+
 def speedtest_form_snapshot(values: dict[str, object]) -> dict[str, object]:
     return dict(values)
 
 
-def speedtest_form_reference_data(db: Session) -> dict[str, object]:
-    subscribers = (
-        db.query(Subscriber)
-        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
-        .limit(500)
-        .all()
-    )
+def speedtest_form_reference_data(
+    db: Session, *, subscriber_id: object | None = None
+) -> dict[str, object]:
     subscriptions = (
         db.query(Subscription).order_by(Subscription.created_at.desc()).limit(500).all()
     )
@@ -132,7 +161,8 @@ def speedtest_form_reference_data(db: Session) -> dict[str, object]:
     )
     pop_sites = db.query(PopSite).order_by(PopSite.name.asc()).limit(500).all()
     return {
-        "subscribers": subscribers,
+        "subscribers": [],
+        "selected_subscriber_label": subscriber_typeahead_label(db, subscriber_id),
         "subscriptions": subscriptions,
         "devices": devices,
         "pop_sites": pop_sites,
@@ -462,11 +492,14 @@ def list_page_data_safe(
                 "Run database migrations, then reload this page."
             )
         try:
-            reference_data = speedtest_form_reference_data(db)
+            reference_data = speedtest_form_reference_data(
+                db, subscriber_id=subscriber_id
+            )
         except Exception:
             db.rollback()
             reference_data = {
                 "subscribers": [],
+                "selected_subscriber_label": "",
                 "subscriptions": [],
                 "devices": [],
                 "pop_sites": [],
@@ -638,7 +671,7 @@ def list_page_data(
             "date_to": str(date_to or "").strip(),
         },
         "invalid_filter_error": invalid_filter_error,
-        **speedtest_form_reference_data(db),
+        **speedtest_form_reference_data(db, subscriber_id=subscriber_filter),
     }
 
 
