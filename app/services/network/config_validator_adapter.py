@@ -234,8 +234,6 @@ class OntConfig:
     serial_number: str | None = None
     fsp: str | None = None
     ont_id: int | None = None
-    line_profile_id: int | None = None
-    service_profile_id: int | None = None
     description: str | None = None
 
 
@@ -292,8 +290,6 @@ class AuthorizationConfig:
 
     serial_number: str | None = None
     fsp: str | None = None
-    line_profile_id: int | None = None
-    service_profile_id: int | None = None
     force_reauthorize: bool = False
 
 
@@ -758,15 +754,6 @@ class NetworkConfigValidator(BaseConfigValidator):
         if config.ont_id is not None:
             self._validate_ont_id(config.ont_id, result)
 
-        # Profile validation
-        if config.line_profile_id is not None:
-            if config.line_profile_id < 0:
-                result.add_error("line_profile_id", "Line profile ID must be non-negative")
-
-        if config.service_profile_id is not None:
-            if config.service_profile_id < 0:
-                result.add_error("service_profile_id", "Service profile ID must be non-negative")
-
         # Description validation
         if config.description:
             if any(c in config.description for c in _DANGEROUS_CHARS):
@@ -961,26 +948,12 @@ class NetworkConfigValidator(BaseConfigValidator):
         self._validate_serial(config.serial_number, result)
         self._validate_fsp(config.fsp, result)
 
-        # Profile validation
-        if config.line_profile_id is not None:
-            if config.line_profile_id < 0:
-                result.add_error("line_profile_id", "Line profile ID must be non-negative")
-            else:
-                result.validated_data["line_profile_id"] = config.line_profile_id
-
-        if config.service_profile_id is not None:
-            if config.service_profile_id < 0:
-                result.add_error("service_profile_id", "Service profile ID must be non-negative")
-            else:
-                result.validated_data["service_profile_id"] = config.service_profile_id
-
         result.validated_data["force_reauthorize"] = config.force_reauthorize
 
         # OLT-specific validation
         if olt and db:
             self._validate_olt_has_vendor_model(olt, result)
             self._validate_olt_has_credentials(olt, result)
-            self._validate_olt_has_authorization_profiles(db, olt, result)
             if config.fsp:
                 self._validate_pon_port_exists(db, olt, config.fsp, result)
 
@@ -1061,15 +1034,6 @@ class NetworkConfigValidator(BaseConfigValidator):
                 "OLT model is required for authorization",
                 code="NO_MODEL",
             )
-
-    def _validate_olt_has_authorization_profiles(
-        self,
-        db: Session,
-        olt: OLTDevice,
-        result: ConfigValidationResult,
-    ) -> None:
-        """Authorization profiles are resolved from imported ONT type mappings."""
-        del db, olt, result
 
     def _validate_pon_port_exists(
         self,
