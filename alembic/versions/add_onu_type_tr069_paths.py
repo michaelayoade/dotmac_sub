@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "add_onu_type_tr069_paths"
-down_revision = "ffdddc71211e"
+down_revision = "087_drop_olt_netconf_columns"
 branch_labels = None
 depends_on = None
 
