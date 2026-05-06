@@ -5,11 +5,11 @@ This script connects to each OLT via SSH and creates a WAN profile
 with NAT enabled, which is required for OMCI-first provisioning.
 
 Usage:
-    python scripts/create_wan_profiles.py [--dry-run] [--profile-id N] [--olt NAME]
+    python scripts/create_wan_profiles.py [--dry-run] --profile-id N [--olt NAME]
 
 Options:
     --dry-run       Show what would be done without making changes
-    --profile-id N  WAN profile ID to create (default: 10)
+    --profile-id N  WAN profile ID to create (required; choose from the OLT plan)
     --olt NAME      Only process the specified OLT (can be repeated)
 """
 
@@ -219,8 +219,8 @@ def main():
     parser.add_argument(
         "--profile-id",
         type=int,
-        default=10,
-        help="WAN profile ID to create (default: 10)",
+        required=True,
+        help="WAN profile ID to create",
     )
     parser.add_argument(
         "--profile-name",

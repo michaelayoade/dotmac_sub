@@ -151,7 +151,7 @@ def validate_olt_readiness(
         report.issues.append(
             ValidationIssue(
                 category="vlan",
-                message="Missing default management VLAN",
+                message="Missing configured management VLAN",
                 severity=IssueSeverity.warning,
                 code="NO_DEFAULT_MGMT_VLAN",
             )
@@ -160,7 +160,7 @@ def validate_olt_readiness(
         report.issues.append(
             ValidationIssue(
                 category="vlan",
-                message="Missing default internet VLAN",
+                message="Missing configured internet VLAN",
                 severity=IssueSeverity.warning,
                 code="NO_DEFAULT_INTERNET_VLAN",
             )

@@ -15,12 +15,9 @@ from app.models.network import (
     WanConnectionType,
     WanServiceType,
 )
-from app.services.network.olt_ssh_profiles import ensure_wan_srvprofile
 from app.services.network.provisioning_settings import get_olt_write_mode_enabled
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_WAN_SRVPROFILE_NAME = "PPPoE-Internet"
 
 
 @dataclass
@@ -72,7 +69,7 @@ def ensure_olt_baseline(
     *,
     dry_run: bool = False,
 ) -> OltBaselineResult:
-    """Ensure one OLT has DB intent and OLT-side WAN baseline config."""
+    """Validate one OLT has DB intent without creating OLT-side profiles."""
     olt = db.get(OLTDevice, olt_id)
     if olt is None:
         return OltBaselineResult(
@@ -126,7 +123,7 @@ def ensure_olt_baseline(
     wan_profile_id = profile.wan_config_profile_id
     if dry_run:
         profile_msg = (
-            f"ensure ONT WAN profile {wan_profile_id}"
+            f"require imported ONT WAN profile {wan_profile_id}"
             if wan_profile_id is not None
             else "skip ONT WAN profile; use PPPoE ipconfig/internet-config"
         )
@@ -172,19 +169,17 @@ def ensure_olt_baseline(
             warnings=warnings,
         )
 
-    ok, msg = ensure_wan_srvprofile(
-        olt,
-        profile_id=wan_profile_id,
-        profile_name=DEFAULT_WAN_SRVPROFILE_NAME,
-        vlan_id=int(profile.pppoe_omci_vlan or internet_vlan),
-    )
     return OltBaselineResult(
         olt_id=str(olt.id),
         olt_name=olt.name,
-        success=ok,
-        message=msg,
+        success=False,
+        message=(
+            f"ONT WAN profile {wan_profile_id} is configured in DB intent, but "
+            "the app no longer creates OLT profiles. Import OLT state and map an "
+            "existing profile, or create the profile directly on the OLT first."
+        ),
         changed_db=changed_db,
-        changed_olt=ok and "already exists" not in msg.lower(),
+        changed_olt=False,
         dry_run=False,
         warnings=warnings,
     )
@@ -212,7 +207,7 @@ def sync_all_olt_baselines(
         )
         results.append(result)
         logger.info(
-            "OLT baseline sync %s: success=%s changed_db=%s changed_olt=%s message=%s",
+            "OLT baseline check %s: success=%s changed_db=%s changed_olt=%s message=%s",
             olt.name,
             result.success,
             result.changed_db,

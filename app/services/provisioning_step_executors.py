@@ -33,7 +33,7 @@ def execute_create_olt_service_port(
 
     Config keys:
         vlan_id: VLAN ID (required if not resolvable from profile)
-        gem_index: GEM port index (default: 1)
+        gem_index: GEM port index (required; resolved from imported OLT state upstream)
     """
     config = config or {}
     ont_unit_id = context.get("ont_unit_id")
