@@ -9,6 +9,148 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(name="app.tasks.ont_provisioning.authorize_ont")
+def authorize_ont(
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    *,
+    force_reauthorize: bool = False,
+    preset_id: str | None = None,
+    scoped_ont_id: str | None = None,
+    initiated_by: str | None = None,
+) -> dict[str, Any]:
+    """Authorize an ONT outside the web request timeout path."""
+    operation_id: str | None = None
+    target_id = str(scoped_ont_id or olt_id)
+
+    with db_session_adapter.session() as db:
+        try:
+            from app.models.network_operation import (
+                NetworkOperationTargetType,
+                NetworkOperationType,
+            )
+            from app.services.network.ont_authorization import (
+                authorize_ont as run_authorization,
+            )
+            from app.services.network_operations import network_operations
+
+            target_type = (
+                NetworkOperationTargetType.ont
+                if scoped_ont_id
+                else NetworkOperationTargetType.olt
+            )
+            op = network_operations.start(
+                db,
+                NetworkOperationType.ont_authorize,
+                target_type,
+                target_id,
+                correlation_key=f"ont_authorize:{olt_id}:{fsp}:{serial_number}",
+                input_payload={
+                    "olt_id": olt_id,
+                    "fsp": fsp,
+                    "serial_number": serial_number,
+                    "force_reauthorize": force_reauthorize,
+                    "preset_id": preset_id,
+                    "scoped_ont_id": scoped_ont_id,
+                },
+                initiated_by=initiated_by or "system",
+            )
+            operation_id = str(op.id)
+            network_operations.mark_running(db, operation_id)
+            db.commit()
+
+            result = run_authorization(
+                db,
+                olt_id,
+                fsp,
+                serial_number,
+                force_reauthorize=force_reauthorize,
+                preset_id=preset_id,
+                request=None,
+            )
+            payload = result.to_dict()
+            payload["operation_id"] = operation_id
+
+            if result.success:
+                network_operations.mark_succeeded(
+                    db, operation_id, output_payload=payload
+                )
+            elif result.partial_success:
+                network_operations.mark_warning(
+                    db,
+                    operation_id,
+                    result.message,
+                    output_payload=payload,
+                )
+            else:
+                network_operations.mark_failed(
+                    db,
+                    operation_id,
+                    result.message,
+                    output_payload=payload,
+                )
+            db.commit()
+            return payload
+        except Exception as exc:
+            logger.exception(
+                "Background ONT authorization failed olt_id=%s fsp=%s serial=%s",
+                olt_id,
+                fsp,
+                serial_number,
+            )
+            if operation_id:
+                try:
+                    from app.services.network_operations import network_operations
+
+                    network_operations.mark_failed(db, operation_id, str(exc))
+                    db.commit()
+                except Exception:
+                    logger.exception(
+                        "Failed to mark ONT authorization operation failed"
+                    )
+            return {
+                "success": False,
+                "message": f"Authorization task error: {exc}",
+                "operation_id": operation_id,
+                "olt_id": olt_id,
+                "fsp": fsp,
+                "serial_number": serial_number,
+            }
+
+
+@celery_app.task(name="app.tasks.ont_provisioning.return_ont_to_inventory")
+def return_ont_to_inventory(
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+) -> dict[str, Any]:
+    """Return an ONT to inventory outside the web request timeout path."""
+    del initiated_by  # Reserved for richer audit propagation.
+    with db_session_adapter.session() as db:
+        try:
+            from app.services.web_network_ont_actions.inventory import (
+                return_to_inventory_for_web,
+            )
+
+            result = return_to_inventory_for_web(db, ont_id, request=None)
+            db.commit()
+            return {
+                "success": result.success,
+                "message": result.message,
+                "data": result.data or {},
+                "ont_id": ont_id,
+            }
+        except Exception as exc:
+            logger.exception("Background return-to-inventory failed for ONT %s", ont_id)
+            db.rollback()
+            return {
+                "success": False,
+                "message": f"Return-to-inventory task error: {exc}",
+                "ont_id": ont_id,
+            }
+
+
 @celery_app.task(name="app.tasks.ont_provisioning.provision_ont")
 def provision_ont(
     ont_id: str,

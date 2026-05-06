@@ -33,6 +33,7 @@ class ManagementIpAllocation:
     gateway: str | None
     pool_id: object | None = None
     record: IPv4Address | None = None
+    reused: bool = False
 
 
 def _reservation_notes_for_ont(ont_id: object) -> set[str]:
@@ -70,9 +71,7 @@ def _pool_contains(db: Session, pool: IpPool, address: str) -> bool:
 
 
 def _pool_subnet(db: Session, pool: IpPool) -> str | None:
-    networks = _pool_networks(db, pool)
-    if networks:
-        return str(networks[0].netmask)
+    del db
     try:
         return str(ipaddress.ip_network(str(pool.cidr), strict=False).netmask)
     except ValueError:
@@ -94,6 +93,16 @@ def _get_active_assignment(db: Session, ont: OntUnit) -> OntAssignment | None:
         .where(OntAssignment.active.is_(True))
         .limit(1)
     ).first()
+
+
+def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
+    assignment = _get_active_assignment(db, ont)
+    if assignment is not None:
+        return assignment
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db.add(assignment)
+    db.flush()
+    return assignment
 
 
 def _set_legacy_cache(
@@ -181,7 +190,8 @@ def _find_pool_for_address(
     scoped = [
         pool
         for pool in candidates
-        if olt_id is not None and str(getattr(pool, "olt_device_id", "") or "") == str(olt_id)
+        if olt_id is not None
+        and str(getattr(pool, "olt_device_id", "") or "") == str(olt_id)
     ]
     for pool in [*scoped, *candidates]:
         if _pool_contains(db, pool, address):
@@ -236,7 +246,11 @@ def _used_management_ips(db: Session, pool: IpPool) -> set[str]:
 
 def _next_available_ip(db: Session, pool: IpPool) -> str | None:
     cached = str(getattr(pool, "next_available_ip", "") or "").strip()
-    if cached and _pool_contains(db, pool, cached) and cached not in _used_management_ips(db, pool):
+    if (
+        cached
+        and _pool_contains(db, pool, cached)
+        and cached not in _used_management_ips(db, pool)
+    ):
         return cached
 
     used = _used_management_ips(db, pool)
@@ -342,9 +356,13 @@ def allocate_ont_management_ip(
             pool_id=pool_id,
         )
         if pool is None:
-            raise ValueError("Selected management IP is not in an available IPAM pool.")
+            raise ValueError(
+                "Selected management IP is not in an available IPAM pool."
+            )
     else:
-        effective_pool_id = pool_id or (getattr(olt, "mgmt_ip_pool_id", None) if olt else None)
+        effective_pool_id = pool_id or (
+            getattr(olt, "mgmt_ip_pool_id", None) if olt else None
+        )
         if not effective_pool_id:
             raise ValueError("No management IP pool configured for this ONT.")
         pool = db.get(IpPool, effective_pool_id)
@@ -355,9 +373,13 @@ def allocate_ont_management_ip(
         select(IpPool).where(IpPool.id == pool.id).with_for_update()
     ).first()
     pool = locked_pool or pool
-    if getattr(pool, "ip_version", None) not in (IPVersion.ipv4, IPVersion.ipv4.value):
+    if getattr(pool, "ip_version", None) not in (
+        IPVersion.ipv4,
+        IPVersion.ipv4.value,
+    ):
         raise ValueError("Management IP pool must be IPv4.")
 
+    assignment = _get_or_create_active_assignment(db, ont)
     existing = get_ont_management_ip_record(db, ont)
     if existing is not None and str(existing.pool_id) == str(pool.id):
         if not selected or str(existing.address) == selected:
@@ -367,12 +389,14 @@ def allocate_ont_management_ip(
                 gateway=_pool_gateway(pool),
                 pool_id=pool.id,
                 record=existing,
+                reused=True,
             )
-            _set_legacy_cache(ont, _get_active_assignment(db, ont), allocation=allocation, mode="static_ip")
+            _set_legacy_cache(
+                ont, assignment, allocation=allocation, mode="static_ip"
+            )
             db.flush()
             return allocation
 
-    assignment = _get_active_assignment(db, ont)
     legacy_ip = (
         str(getattr(assignment, "mgmt_ip_address", "") or "").strip()
         if assignment is not None
@@ -394,7 +418,11 @@ def allocate_ont_management_ip(
         raise ValueError("Selected management IP is not available in this pool.")
     ok, record = _candidate_is_available(db, address=selected, pool=pool, ont=ont)
     if not ok:
-        if record is not None and record.pool_id is not None and str(record.pool_id) != str(pool.id):
+        if (
+            record is not None
+            and record.pool_id is not None
+            and str(record.pool_id) != str(pool.id)
+        ):
             raise ValueError(f"Management IP {selected} belongs to a different pool.")
         raise ValueError("Selected management IP is already allocated.")
 
@@ -415,8 +443,10 @@ def allocate_ont_management_ip(
         gateway=_pool_gateway(pool),
         pool_id=pool.id,
         record=record,
+        reused=bool(legacy_ip and legacy_ip == selected),
     )
-    _set_legacy_cache(ont, _get_active_assignment(db, ont), allocation=allocation, mode="static_ip")
+    _set_legacy_cache(ont, assignment, allocation=allocation, mode="static_ip")
+    db.flush()
     _advance_pool_cache(db, pool)
     db.flush()
     logger.info(
@@ -440,4 +470,9 @@ def sync_desired_management_ip_from_ipam(db: Session, *, ont: OntUnit) -> None:
         pool_id=getattr(record, "pool_id", None),
         record=record,
     )
-    _set_legacy_cache(ont, _get_active_assignment(db, ont), allocation=allocation, mode="static_ip")
+    _set_legacy_cache(
+        ont,
+        _get_active_assignment(db, ont),
+        allocation=allocation,
+        mode="static_ip",
+    )

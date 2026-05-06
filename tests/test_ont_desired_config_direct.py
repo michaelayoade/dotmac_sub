@@ -207,6 +207,46 @@ def test_effective_config_ignores_legacy_ont_flat_config_fields(db_session):
     assert values["tr069_olt_profile_id"] is None
 
 
+def test_effective_config_backfills_management_network_from_ip_pool(db_session):
+    from app.models.network import IpPool, IPv4Address, IPVersion, OntUnit
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+
+    pool = IpPool(
+        name="Resolved Mgmt Pool",
+        cidr="172.16.201.0/24",
+        gateway="172.16.201.1",
+        ip_version=IPVersion.ipv4,
+        is_active=True,
+    )
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-MGMT-POOL",
+        desired_config={
+            "management": {
+                "ip_mode": "static_ip",
+                "ip_address": "172.16.201.145",
+            }
+        },
+    )
+    db_session.add_all([pool, ont])
+    db_session.flush()
+    db_session.add(
+        IPv4Address(
+            address="172.16.201.145",
+            pool_id=pool.id,
+            is_reserved=True,
+            ont_unit_id=ont.id,
+            allocation_type="management",
+        )
+    )
+    db_session.flush()
+
+    values = resolve_effective_ont_config(db_session, ont)["values"]
+
+    assert values["mgmt_ip_address"] == "172.16.201.145"
+    assert values["mgmt_subnet"] == "255.255.255.0"
+    assert values["mgmt_gateway"] == "172.16.201.1"
+
+
 def test_direct_orchestrator_stops_after_reconciliation_failure(db_session, monkeypatch):
     from app.services.network.ont_provisioning.orchestrator import (
         provision_ont_from_desired_config,
@@ -879,6 +919,130 @@ def test_web_wan_config_uses_requested_vlan_when_config_pack_missing(
 
     assert result.success is True
     assert captured["wan_vlan"] == 999
+
+
+def test_web_wan_config_routes_pppoe_to_omci_when_enabled(db_session, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models.catalog import RegionZone
+    from app.models.network import OLTDevice, OntUnit, Vlan, VlanPurpose
+    from app.services.web_network_ont_actions.config_setters import set_wan_config
+
+    region = RegionZone(name="WAN OMCI Region", code="wan-omci-region")
+    olt = OLTDevice(name="WAN OMCI OLT")
+    db_session.add_all([region, olt])
+    db_session.flush()
+
+    internet_vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        name="Internet",
+        tag=203,
+        purpose=VlanPurpose.internet,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "internet_vlan_id": str(internet_vlan.id),
+        "pppoe_wcd_index": 2,
+        "internet_config_ip_index": 0,
+    }
+
+    ont = OntUnit(serial_number="OMCI-WAN-001", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakeAdapter:
+        def configure_internet_config(self, fsp, ont_id, *, ip_index=0):
+            calls.append(
+                (
+                    "internet",
+                    {"fsp": fsp, "ont_id": ont_id, "ip_index": ip_index},
+                )
+            )
+            return SimpleNamespace(success=True, message="internet ok")
+
+        def configure_pppoe(
+            self,
+            fsp,
+            ont_id,
+            *,
+            ip_index,
+            vlan_id,
+            username,
+            password,
+        ):
+            calls.append(
+                (
+                    "pppoe",
+                    {
+                        "fsp": fsp,
+                        "ont_id": ont_id,
+                        "ip_index": ip_index,
+                        "vlan_id": vlan_id,
+                        "username": username,
+                        "password": password,
+                    },
+                )
+            )
+            return SimpleNamespace(success=True, message="pppoe ok")
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters.get_olt_write_mode_enabled",
+        lambda db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters.get_pppoe_provisioning_method",
+        lambda db: "auto",
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.context.resolve_olt_context",
+        lambda db, ont_id: (
+            SimpleNamespace(olt=olt, fsp="0/2/11", olt_ont_id=13),
+            "",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        lambda olt: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._log_action_audit",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._persist_ont_plan_step",
+        lambda *args, **kwargs: None,
+    )
+
+    result = set_wan_config(
+        db_session,
+        str(ont.id),
+        wan_mode="pppoe",
+        pppoe_username="100025868",
+        pppoe_password="secret",
+        instance_index=1,
+    )
+
+    assert result.success is True
+    assert result.waiting is True
+    assert result.data["delivery_transport"] == "olt_omci"
+    assert calls == [
+        ("internet", {"fsp": "0/2/11", "ont_id": 13, "ip_index": 1}),
+        (
+            "pppoe",
+            {
+                "fsp": "0/2/11",
+                "ont_id": 13,
+                "ip_index": 1,
+                "vlan_id": 203,
+                "username": "100025868",
+                "password": "secret",
+            },
+        ),
+    ]
 
 
 def test_ont_config_form_has_single_operator_path():

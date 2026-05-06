@@ -1,6 +1,16 @@
 from __future__ import annotations
 
 
+def test_configure_push_scope_sections_are_individual() -> None:
+    from app.web.admin.network_onts import _configure_push_scope_sections
+
+    assert _configure_push_scope_sections("wifi") == (False, False, False, True)
+    assert _configure_push_scope_sections("wan") == (True, False, False, False)
+    assert _configure_push_scope_sections("lan") == (False, True, False, False)
+    assert _configure_push_scope_sections("management") == (False, False, True, False)
+    assert _configure_push_scope_sections("all") == (True, True, True, True)
+
+
 def test_update_ont_config_reports_pending_when_acs_delivery_is_unavailable(
     db_session, monkeypatch
 ) -> None:
@@ -199,6 +209,94 @@ def test_update_ont_config_pushes_static_wan_fields(db_session, monkeypatch) -> 
     assert calls[0]["subnet_mask"] == "255.255.255.252"
     assert calls[0]["gateway"] == "100.64.1.1"
     assert calls[0]["dns_servers"] == "1.1.1.1"
+
+
+def test_update_ont_config_does_not_convert_omci_failure_to_pending(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network import OntUnit
+    from app.services.network.ont_action_common import ActionResult
+    from app.services.web_network_ont_actions.db_config import update_ont_config
+
+    ont = OntUnit(serial_number="OMCI-WAN-FAIL", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+
+    def fake_set_wan_config(*args, **kwargs):
+        return ActionResult(
+            success=False,
+            message="WAN PPPoE OMCI apply failed: OLT rejected",
+            data={"delivery_transport": "olt_omci", "delivery_pending": False},
+        )
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.db_config.set_wan_config",
+        fake_set_wan_config,
+    )
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        wan_mode="pppoe",
+        pppoe_username="100025868",
+        pppoe_password="secret",
+        push_to_device=True,
+        push_wan=True,
+        push_lan=False,
+        push_mgmt=False,
+        push_wifi=False,
+    )
+
+    assert result.success is False
+    assert result.waiting is False
+    assert "WAN PPPoE OMCI apply failed" in result.message
+
+
+def test_update_ont_config_persists_static_management_pool_values(db_session) -> None:
+    from app.models.network import IpPool, IPv4Address, IPVersion, OntUnit
+    from app.services.web_network_ont_actions.db_config import update_ont_config
+
+    pool = IpPool(
+        name="Management 201",
+        cidr="172.16.201.0/24",
+        gateway="172.16.201.1",
+        ip_version=IPVersion.ipv4,
+        is_active=True,
+    )
+    ont = OntUnit(serial_number="MGMT-FULL-PERSIST", is_active=True)
+    db_session.add_all([pool, ont])
+    db_session.flush()
+    db_session.add(
+        IPv4Address(
+            address="172.16.201.140",
+            pool_id=pool.id,
+            is_reserved=True,
+            ont_unit_id=ont.id,
+            allocation_type="management",
+        )
+    )
+    db_session.commit()
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        mgmt_ip_mode="static_ip",
+        mgmt_ip_address="172.16.201.140",
+        push_to_device=False,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.desired_config["management"] == {
+        "ip_mode": "static_ip",
+        "ip_address": "172.16.201.140",
+        "subnet": "255.255.255.0",
+        "gateway": "172.16.201.1",
+    }
+    record = db_session.query(IPv4Address).filter_by(address="172.16.201.140").one()
+    assert record.ont_unit_id == ont.id
+    assert record.allocation_type == "management"
+    assert record.is_reserved is True
 
 
 def test_saved_wifi_only_desired_config_qualifies_for_apply_on_inform(

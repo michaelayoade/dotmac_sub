@@ -164,7 +164,10 @@ def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], lis
     """Delete GenieACS device records linked to an ONT before inventory return."""
     from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
     from app.services.genieacs_client import GenieACSError, create_genieacs_client
-    from app.services.network._resolve import _serial_search_candidates
+    from app.services.network._resolve import (
+        _normalized_serial_expr,
+        _serial_search_candidates,
+    )
 
     completed: list[str] = []
     errors: list[str] = []
@@ -199,9 +202,20 @@ def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], lis
             errors.append(f"Failed to delete ACS device {genieacs_device_id}: {exc}")
             return False
 
+    def _clear_local_acs_identity(device: Tr069CpeDevice) -> bool:
+        changed = False
+        if getattr(device, "genieacs_device_id", None):
+            device.genieacs_device_id = None
+            changed = True
+        if getattr(device, "connection_request_url", None):
+            device.connection_request_url = None
+            changed = True
+        return changed
+
     linked_devices = db.scalars(
         select(Tr069CpeDevice).where(Tr069CpeDevice.ont_unit_id == ont.id)
     ).all()
+    local_devices_to_clear = {device.id: device for device in linked_devices}
     for device in linked_devices:
         genieacs_device_id = str(getattr(device, "genieacs_device_id", "") or "").strip()
         if not genieacs_device_id:
@@ -216,6 +230,42 @@ def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], lis
             return False, completed, errors
 
     serial_candidates = _serial_search_candidates(getattr(ont, "serial_number", None))
+    if serial_candidates:
+        normalized_candidates = [
+            re.sub(r"[^A-Za-z0-9]+", "", candidate).upper()
+            for candidate in serial_candidates
+        ]
+        normalized_candidates = [
+            candidate for candidate in dict.fromkeys(normalized_candidates) if candidate
+        ]
+        local_conditions = [
+            _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(
+                normalized_candidates
+            )
+        ]
+        for candidate in normalized_candidates:
+            local_conditions.append(
+                Tr069CpeDevice.genieacs_device_id.ilike(f"%-{candidate}")
+            )
+        matching_local_devices = db.scalars(
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .where(or_(*local_conditions))
+        ).all()
+        for device in matching_local_devices:
+            local_devices_to_clear[device.id] = device
+
+    cleared_local_identities = 0
+    for device in local_devices_to_clear.values():
+        if _clear_local_acs_identity(device):
+            cleared_local_identities += 1
+    if cleared_local_identities:
+        completed.append(
+            "Cleared local ACS identity"
+            if cleared_local_identities == 1
+            else f"Cleared {cleared_local_identities} local ACS identities"
+        )
+
     if not serial_candidates:
         return True, completed, errors
 

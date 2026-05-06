@@ -386,7 +386,11 @@ def allocate_management_ip_for_ont(
         return False, str(exc), None
     return (
         True,
-        f"Allocated management IP {allocation.address}.",
+        (
+            f"ONT already has management IP {allocation.address}."
+            if allocation.reused
+            else f"Allocated management IP {allocation.address}."
+        ),
         allocation.address,
     )
 
@@ -580,6 +584,40 @@ def get_autofind_candidate_by_serial(
         ),
         None,
     )
+
+
+def _authorization_model_hint(
+    db: Session,
+    *,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+) -> str | None:
+    """Return the best known model before writing the ONT to the OLT."""
+    clean_serials = _serial_predicates(serial_number)
+    existing = db.scalars(
+        select(OntUnit).where(
+            normalized_serial_sql(OntUnit.serial_number).in_(clean_serials),
+        )
+    ).first()
+    if existing and getattr(existing, "model", None):
+        return str(existing.model)
+
+    candidate = get_autofind_candidate_by_serial(
+        db,
+        olt_id,
+        serial_number,
+        fsp=fsp,
+    )
+    candidate_model = getattr(candidate, "model", None)
+    if candidate_model:
+        return str(candidate_model)
+
+    candidate_ont = getattr(candidate, "ont_unit", None)
+    if candidate_ont and getattr(candidate_ont, "model", None):
+        return str(candidate_ont.model)
+
+    return None
 
 
 def _resolve_authorized_autofind_candidate(
@@ -957,7 +995,7 @@ def authorize_autofind_ont(
     """Authorize an ONT on an OLT and persist ONT inventory state."""
     from app.services.network.olt_profile_resolution import (
         AuthorizationProfileResolution,
-        resolve_authorization_profiles_from_db,
+        resolve_authorization_profiles_from_import,
     )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.olt_write_reconciliation import verify_ont_absent
@@ -1059,9 +1097,20 @@ def authorize_autofind_ont(
             add_step("Activate ONT", False, preset_msg, activation_started)
             return finish(success=False, message=preset_msg, status="error")
 
+    model_hint = _authorization_model_hint(
+        db,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=normalized_serial,
+    )
+
     if authorization_profiles is None:
         profiles_ok, profiles_msg, authorization_profiles = (
-            resolve_authorization_profiles_from_db(db, olt)
+            resolve_authorization_profiles_from_import(
+                db,
+                olt,
+                equipment_id=model_hint,
+            )
         )
         if not profiles_ok or authorization_profiles is None:
             add_step("Activate ONT", False, profiles_msg, activation_started)
