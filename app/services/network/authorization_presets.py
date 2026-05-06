@@ -98,8 +98,6 @@ class AuthorizationPresets:
         *,
         name: str,
         description: str | None = None,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
         default_vlan_id: str | None = None,
         auto_authorize: bool = False,
         serial_pattern: str | None = None,
@@ -143,8 +141,6 @@ class AuthorizationPresets:
         preset = AuthorizationPreset(
             name=name,
             description=description,
-            line_profile_id=line_profile_id,
-            service_profile_id=service_profile_id,
             default_vlan_id=coerce_uuid(default_vlan_id) if default_vlan_id else None,
             auto_authorize=auto_authorize,
             serial_pattern=serial_pattern,
@@ -165,8 +161,6 @@ class AuthorizationPresets:
         *,
         name: str | None = None,
         description: str | None = None,
-        line_profile_id: int | None = None,
-        service_profile_id: int | None = None,
         default_vlan_id: str | None = None,
         auto_authorize: bool | None = None,
         serial_pattern: str | None = None,
@@ -203,10 +197,6 @@ class AuthorizationPresets:
                 raise ValueError("OLT device not found")
             preset.olt_device_id = olt.id
 
-        if line_profile_id is not None:
-            preset.line_profile_id = line_profile_id
-        if service_profile_id is not None:
-            preset.service_profile_id = service_profile_id
         if auto_authorize is not None:
             preset.auto_authorize = auto_authorize
         if serial_pattern is not None:

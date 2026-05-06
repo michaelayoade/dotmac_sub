@@ -3403,14 +3403,6 @@ class AuthorizationPreset(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
 
-    # OLT-level authorization profile IDs (from OLT CLI)
-    line_profile_id: Mapped[int | None] = mapped_column(
-        Integer, doc="OLT ont-lineprofile profile-id"
-    )
-    service_profile_id: Mapped[int | None] = mapped_column(
-        Integer, doc="OLT ont-srvprofile profile-id"
-    )
-
     # Default VLAN for service-port creation
     default_vlan_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

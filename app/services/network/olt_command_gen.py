@@ -95,8 +95,6 @@ class ProvisioningSpec:
     mgmt_gateway: str = ""
     mgmt_priority: int | None = None
     tr069_profile_id: int | None = None
-    line_profile_id: int | None = None
-    service_profile_id: int | None = None
     internet_config_ip_index: int | None = None
     wan_config_profile_id: int | None = None
     pppoe_omci_vlan: int | None = None
@@ -494,8 +492,6 @@ def build_spec_from_profile(
     wan_config_profile_id: int | None = None
     pppoe_omci_vlan: int | None = None
     mgmt_priority: int | None = None
-    line_profile_id: int | None = None
-    service_profile_id: int | None = None
 
     if hasattr(profile, "internet_config_ip_index"):
         raw_ic = getattr(profile, "internet_config_ip_index", None)
@@ -503,12 +499,6 @@ def build_spec_from_profile(
     if hasattr(profile, "wan_config_profile_id"):
         raw_wc = getattr(profile, "wan_config_profile_id", None)
         wan_config_profile_id = int(raw_wc) if raw_wc is not None else None
-    if hasattr(profile, "authorization_line_profile_id"):
-        raw_line = getattr(profile, "authorization_line_profile_id", None)
-        line_profile_id = int(raw_line) if raw_line is not None else None
-    if hasattr(profile, "authorization_service_profile_id"):
-        raw_service = getattr(profile, "authorization_service_profile_id", None)
-        service_profile_id = int(raw_service) if raw_service is not None else None
     if hasattr(profile, "pppoe_omci_vlan"):
         raw_pv = getattr(profile, "pppoe_omci_vlan", None)
         pppoe_omci_vlan = int(raw_pv) if raw_pv is not None else None
@@ -536,8 +526,6 @@ def build_spec_from_profile(
         mgmt_ip_mode=mgmt_ip_mode,
         mgmt_priority=mgmt_priority,
         tr069_profile_id=tr069_profile_id,
-        line_profile_id=line_profile_id,
-        service_profile_id=service_profile_id,
         internet_config_ip_index=internet_config_ip_index,
         wan_config_profile_id=wan_config_profile_id,
         pppoe_omci_vlan=pppoe_omci_vlan,
