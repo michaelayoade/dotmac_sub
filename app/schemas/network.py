@@ -394,6 +394,10 @@ class OLTDeviceBase(BaseModel):
     # Management IP pool for auto-allocation (FK, not in config_pack)
     mgmt_ip_pool_id: UUID | None = None
 
+    # OMCI Capability Flags (firmware-specific command support)
+    supports_ont_internet_config: bool = True
+    supports_ont_wan_config: bool = True
+
 
 class OLTDeviceCreate(OLTDeviceBase):
     pass
@@ -427,6 +431,10 @@ class OLTDeviceUpdate(BaseModel):
 
     # Management IP pool for auto-allocation (FK, not in config_pack)
     mgmt_ip_pool_id: UUID | None = None
+
+    # OMCI Capability Flags (firmware-specific command support)
+    supports_ont_internet_config: bool | None = None
+    supports_ont_wan_config: bool | None = None
 
 
 class OLTDeviceRead(OLTDeviceBase):

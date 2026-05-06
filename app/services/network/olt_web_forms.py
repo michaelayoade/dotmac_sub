@@ -177,6 +177,12 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "notes": form.get("notes", "").strip() or None,
         "is_active": form.get("is_active") == "true",
         # -------------------------------------------------------------------------
+        # OMCI Capability Flags (for firmware-specific command support)
+        # -------------------------------------------------------------------------
+        "supports_ont_internet_config": form.get("supports_ont_internet_config")
+        == "true",
+        "supports_ont_wan_config": form.get("supports_ont_wan_config") == "true",
+        # -------------------------------------------------------------------------
         # Config Pack fields (ONT Provisioning Defaults)
         # -------------------------------------------------------------------------
         # Authorization profiles
@@ -309,6 +315,8 @@ def create_payload(values: dict[str, object]) -> OLTDeviceCreate:
             "is_active": values.get("is_active"),
             "config_pack": _build_config_pack(values),
             "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
+            "supports_ont_internet_config": values.get("supports_ont_internet_config"),
+            "supports_ont_wan_config": values.get("supports_ont_wan_config"),
         }
     )
 
@@ -341,6 +349,9 @@ def update_payload(values: dict[str, object]) -> OLTDeviceUpdate:
         "config_pack": _build_config_pack(values),
         # Management IP pool FK (not in config_pack)
         "mgmt_ip_pool_id": values.get("mgmt_ip_pool_id"),
+        # OMCI Capability Flags
+        "supports_ont_internet_config": values.get("supports_ont_internet_config"),
+        "supports_ont_wan_config": values.get("supports_ont_wan_config"),
     }
     if "supported_pon_types" in values:
         data["supported_pon_types"] = values["supported_pon_types"]
@@ -510,6 +521,9 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         mgmt_ip_pool_id=getattr(olt, "mgmt_ip_pool_id", None),
         default_cr_username=pack.get("cr_username"),
         default_cr_password=pack.get("cr_password"),
+        # OMCI Capability Flags
+        supports_ont_internet_config=getattr(olt, "supports_ont_internet_config", True),
+        supports_ont_wan_config=getattr(olt, "supports_ont_wan_config", True),
     )
 
 
