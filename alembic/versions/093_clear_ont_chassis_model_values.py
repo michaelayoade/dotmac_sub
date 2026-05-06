@@ -30,7 +30,7 @@ def upgrade() -> None:
             """
             UPDATE ont_units
             SET model = NULL
-            WHERE model ~* '^(MA56(00|08T)|MA58(00|08)(-[A-Z0-9]+)?|MA5600V[A-Z0-9]+|MA5800V[A-Z0-9]+)$'
+            WHERE model ~* '^(HUAWEI[[:space:]]+)?(MA56(00|08T|83T)|MA58(00|08)(-[A-Z0-9]+)?|MA5600V[A-Z0-9]*|MA5800V[A-Z0-9]*)$'
             """
         )
     )

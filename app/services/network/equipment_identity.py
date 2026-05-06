@@ -6,7 +6,12 @@ import re
 
 
 _OLT_CHASSIS_MODEL_RE = re.compile(
-    r"^(?:MA56(?:00|08T)|MA58(?:00|08)(?:-[A-Z0-9]+)?|MA5600V[A-Z0-9]+|MA5800V[A-Z0-9]+)$",
+    r"^(?:HUAWEI\s+)?(?:"
+    r"MA56(?:00|08T|83T)"
+    r"|MA58(?:00|08)(?:-[A-Z0-9]+)?"
+    r"|MA5600V[A-Z0-9]*"
+    r"|MA5800V[A-Z0-9]*"
+    r")$",
     re.IGNORECASE,
 )
 

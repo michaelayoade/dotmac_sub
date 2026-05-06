@@ -15,7 +15,11 @@ from app.services.network import olt_web_forms
 from app.services.network.acs_reachability import (
     validate_olt_acs_management_reachability,
 )
-from app.services.network.olt_config_pack import validate_config_pack_comprehensive
+from app.services.network.olt_config_pack import (
+    resolve_olt_config_pack,
+    validate_config_pack_comprehensive,
+    validate_config_pack_required,
+)
 
 
 def _acs_ready_olt(db_session, *, pool_cidr: str = "172.16.201.0/24"):
@@ -222,6 +226,38 @@ def test_config_pack_comprehensive_requires_management_ip_pool(db_session):
 
     assert validation.is_valid is False
     assert any("Missing management IP pool" in error for error in validation.errors)
+
+
+def test_config_pack_comprehensive_does_not_require_legacy_profile_defaults(db_session):
+    olt, acs, management_vlan, pool = _acs_ready_olt(db_session)
+    internet_vlan = Vlan(
+        region_id=management_vlan.region_id,
+        olt_device_id=olt.id,
+        tag=200,
+        name="Internet",
+        purpose=VlanPurpose.internet,
+        is_active=True,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "internet_vlan_id": str(internet_vlan.id),
+        "management_vlan_id": str(management_vlan.id),
+        "tr069_olt_profile_id": 30,
+    }
+    olt.tr069_acs_server_id = acs.id
+    olt.mgmt_ip_pool_id = pool.id
+    db_session.commit()
+
+    validation = validate_config_pack_comprehensive(db_session, olt.id)
+
+    assert validation.is_valid is True
+    assert not any("profile" in error.lower() for error in validation.errors)
+    assert validate_config_pack_required(olt, raise_on_error=False) == []
+
+    resolved = resolve_olt_config_pack(db_session, olt.id)
+    assert resolved is not None
+    assert resolved.is_complete is True
 
 
 def test_config_pack_comprehensive_ignores_legacy_gem_index(db_session):

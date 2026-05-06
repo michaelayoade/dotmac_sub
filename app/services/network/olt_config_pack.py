@@ -66,7 +66,8 @@ class OltConfigPack:
     olt_id: str
     olt_name: str
 
-    # Authorization profiles (OLT-local IDs)
+    # Legacy authorization profiles. New provisioning resolves these per ONT
+    # equipment ID from OltOnuTypeProfileMapping, not from config_pack.
     line_profile_id: int | None = None
     service_profile_id: int | None = None
 
@@ -135,11 +136,7 @@ class OltConfigPack:
     @property
     def is_complete(self) -> bool:
         """True if all essential config pack fields are populated."""
-        return (
-            self.has_authorization_profiles
-            and self.has_vlans
-            and self.has_tr069_config
-        )
+        return self.has_vlans and self.has_tr069_config
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -432,7 +429,6 @@ def validate_config_pack_comprehensive(
     and errors (blocking). Authorization can proceed with warnings but not errors.
 
     Required fields (ERROR if missing):
-    - Authorization profiles (line/service)
     - Internet VLAN
     - Management VLAN
     - Management IP pool
@@ -616,10 +612,9 @@ def update_config_pack(
     olt.config_pack = pack
 
 
-# Required config_pack keys for provisioning
+# Required config_pack keys for provisioning. Authorization profiles are resolved
+# per equipment ID from imported OLT mappings, not from config_pack defaults.
 REQUIRED_CONFIG_PACK_KEYS = [
-    "line_profile_id",
-    "service_profile_id",
     "internet_vlan_id",
     "management_vlan_id",
     "tr069_olt_profile_id",

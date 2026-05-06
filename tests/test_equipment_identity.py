@@ -9,5 +9,11 @@ def test_normalize_ont_equipment_id_keeps_ont_models():
 def test_normalize_ont_equipment_id_rejects_olt_chassis_models():
     assert normalize_ont_equipment_id("MA5600") is None
     assert normalize_ont_equipment_id("MA5608T") is None
+    assert normalize_ont_equipment_id("MA5683T") is None
     assert normalize_ont_equipment_id("MA5800-X2") is None
+    assert normalize_ont_equipment_id("MA5800-X7") is None
+    assert normalize_ont_equipment_id("MA5800-X15") is None
+    assert normalize_ont_equipment_id("MA5800-X17") is None
+    assert normalize_ont_equipment_id("Huawei MA5800-X2") is None
+    assert normalize_ont_equipment_id("MA5600V") is None
     assert normalize_ont_equipment_id("MA5600V800R013C10") is None

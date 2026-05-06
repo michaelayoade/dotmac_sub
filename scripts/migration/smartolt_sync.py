@@ -21,6 +21,7 @@ from typing import Any
 import requests
 from sqlalchemy import text
 
+from app.services.network.equipment_identity import normalize_ont_equipment_id
 from scripts.migration.db_connections import dotmac_session
 
 logging.basicConfig(
@@ -695,7 +696,7 @@ def sync_onts(
                     {
                         "id": ont_uuid,
                         "sn": o["sn"],
-                        "model": o.get("onu_type_name") or "Unknown",
+                        "model": normalize_ont_equipment_id(o.get("onu_type_name")),
                         "olt_id": olt_uuid,
                         "board": db_board,
                         "port": o["port"],

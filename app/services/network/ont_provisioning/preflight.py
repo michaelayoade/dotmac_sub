@@ -335,7 +335,8 @@ def validate_prerequisites(
         }
     )
 
-    # OLT config pack validation - all required fields must be set on the OLT
+    # OLT config pack validation. Authorization profiles are resolved per ONT
+    # equipment ID from imported OLT mappings, not from config_pack defaults.
     config_pack = resolved_config.get("config_pack")
     if config_pack and config_pack.is_complete:
         checks.append(
@@ -349,8 +350,6 @@ def validate_prerequisites(
     else:
         missing = []
         if config_pack:
-            if not config_pack.has_authorization_profiles:
-                missing.append("auth profiles")
             if not config_pack.has_vlans:
                 missing.append("VLANs")
             if not config_pack.has_tr069_config:
