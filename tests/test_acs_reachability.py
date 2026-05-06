@@ -258,6 +258,8 @@ def test_config_pack_comprehensive_does_not_require_legacy_profile_defaults(db_s
     resolved = resolve_olt_config_pack(db_session, olt.id)
     assert resolved is not None
     assert resolved.is_complete is True
+    assert "line_profile_id" not in resolved.to_dict()
+    assert "service_profile_id" not in resolved.to_dict()
 
 
 def test_config_pack_comprehensive_ignores_legacy_gem_index(db_session):

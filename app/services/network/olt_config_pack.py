@@ -1,9 +1,9 @@
-"""OLT Config Pack resolver for centralized ONT provisioning defaults.
+"""OLT Config Pack resolver for centralized ONT provisioning settings.
 
-The OLT Config Pack provides a single source of truth for all default
-configuration values that ONTs inherit from their parent OLT. This includes:
+The OLT Config Pack resolves OLT-scoped configuration values used during ONT
+provisioning. Authorization line/service profiles are intentionally excluded;
+they are resolved per OLT and ONT equipment ID from imported OLT state.
 
-- Authorization profile IDs (line/service profiles)
 - TR-069 binding profile ID
 - VLAN assignments by purpose (internet, management, TR-069)
 - Provisioning knobs (ip-index, wan-config profile)
@@ -13,7 +13,7 @@ Usage:
     from app.services.network.olt_config_pack import resolve_olt_config_pack
 
     config = resolve_olt_config_pack(db, olt_id)
-    # Use config.line_profile_id, config.internet_vlan_tag, etc.
+    # Use config.internet_vlan, config.tr069_olt_profile_id, etc.
 """
 
 from __future__ import annotations
@@ -66,11 +66,6 @@ class OltConfigPack:
     olt_id: str
     olt_name: str
 
-    # Legacy authorization profiles. New provisioning resolves these per ONT
-    # equipment ID from OltOnuTypeProfileMapping, not from config_pack.
-    line_profile_id: int | None = None
-    service_profile_id: int | None = None
-
     # TR-069 configuration
     tr069_acs_server_id: str | None = None
     tr069_olt_profile_id: int | None = None
@@ -113,11 +108,6 @@ class OltConfigPack:
     voip_wcd_index: int | None = None  # VoIP WCD if provisioned
 
     @property
-    def has_authorization_profiles(self) -> bool:
-        """True if both line and service profiles are configured."""
-        return self.line_profile_id is not None and self.service_profile_id is not None
-
-    @property
     def has_tr069_config(self) -> bool:
         """True if TR-069 ACS and OLT profile are configured."""
         return (
@@ -143,8 +133,6 @@ class OltConfigPack:
         return {
             "olt_id": self.olt_id,
             "olt_name": self.olt_name,
-            "line_profile_id": self.line_profile_id,
-            "service_profile_id": self.service_profile_id,
             "tr069_acs_server_id": self.tr069_acs_server_id,
             "tr069_olt_profile_id": self.tr069_olt_profile_id,
             "internet_vlan": {
@@ -286,9 +274,6 @@ def resolve_olt_config_pack(
     return OltConfigPack(
         olt_id=str(olt.id),
         olt_name=olt.name or "",
-        # Authorization profiles
-        line_profile_id=pack.get("line_profile_id"),
-        service_profile_id=pack.get("service_profile_id"),
         # TR-069 config (ACS server ID is still a FK on OLT, not in JSON)
         tr069_acs_server_id=(
             str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
