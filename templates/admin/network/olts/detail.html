@@ -92,6 +92,12 @@
                 </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
+                <form method="POST" action="/admin/network/olts/{{ olt.id }}/import-state" class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
+                        Import OLT State
+                    </button>
+                </form>
                 <form method="POST" action="/admin/network/olts/{{ olt.id }}/refresh-telemetry" class="inline">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">

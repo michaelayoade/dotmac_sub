@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -871,6 +872,171 @@ class OLTDevice(Base):
 class OltConfigBackupType(enum.Enum):
     auto = "auto"
     manual = "manual"
+
+
+class OltLineProfile(Base):
+    """Imported OLT-local GPON line profile."""
+
+    __tablename__ = "olt_line_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_id",
+            "profile_id",
+            name="uq_olt_line_profiles_olt_profile",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(160))
+    binding_count: Mapped[int] = mapped_column(Integer, default=0)
+    tr069_management_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    raw_config: Mapped[str | None] = mapped_column(Text)
+    last_imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    olt = relationship("OLTDevice")
+
+
+class OltServiceProfile(Base):
+    """Imported OLT-local GPON service profile."""
+
+    __tablename__ = "olt_service_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_id", "profile_id", name="uq_olt_service_profiles_olt_profile"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(160))
+    binding_count: Mapped[int] = mapped_column(Integer, default=0)
+    ethernet_ports: Mapped[int | None] = mapped_column(Integer)
+    voip_ports: Mapped[int | None] = mapped_column(Integer)
+    catv_ports: Mapped[int | None] = mapped_column(Integer)
+    raw_config: Mapped[str | None] = mapped_column(Text)
+    last_imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    olt = relationship("OLTDevice")
+
+
+class OltOntRegistration(Base):
+    """Imported ONT registration observed on an OLT."""
+
+    __tablename__ = "olt_ont_registrations"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_id",
+            "fsp",
+            "ont_id_on_olt",
+            name="uq_olt_ont_registrations_olt_fsp_ont",
+        ),
+        Index(
+            "uq_olt_ont_registrations_active_serial",
+            "olt_id",
+            "serial_number",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        ForeignKeyConstraint(
+            ["olt_id", "line_profile_id"],
+            ["olt_line_profiles.olt_id", "olt_line_profiles.profile_id"],
+            name="fk_olt_ont_registration_line_profile",
+        ),
+        ForeignKeyConstraint(
+            ["olt_id", "service_profile_id"],
+            ["olt_service_profiles.olt_id", "olt_service_profiles.profile_id"],
+            name="fk_olt_ont_registration_service_profile",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    fsp: Mapped[str] = mapped_column(String(32), nullable=False)
+    ont_id_on_olt: Mapped[int] = mapped_column(Integer, nullable=False)
+    serial_number: Mapped[str | None] = mapped_column(String(120))
+    equipment_id: Mapped[str | None] = mapped_column(String(120))
+    line_profile_id: Mapped[int | None] = mapped_column(Integer)
+    service_profile_id: Mapped[int | None] = mapped_column(Integer)
+    tr069_profile_id: Mapped[int | None] = mapped_column(Integer)
+    match_state: Mapped[str | None] = mapped_column(String(40))
+    description: Mapped[str | None] = mapped_column(Text)
+    raw_config: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    olt = relationship("OLTDevice")
+
+
+class OltOnuTypeProfileMapping(Base):
+    """Imported per-OLT mapping from equipment ID to authorization profiles."""
+
+    __tablename__ = "olt_onu_type_profile_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_id",
+            "equipment_id",
+            name="uq_olt_onu_type_profile_mappings_olt_equipment",
+        ),
+        ForeignKeyConstraint(
+            ["olt_id", "line_profile_id"],
+            ["olt_line_profiles.olt_id", "olt_line_profiles.profile_id"],
+            name="fk_olt_onu_mapping_line_profile",
+        ),
+        ForeignKeyConstraint(
+            ["olt_id", "service_profile_id"],
+            ["olt_service_profiles.olt_id", "olt_service_profiles.profile_id"],
+            name="fk_olt_onu_mapping_service_profile",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    equipment_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    onu_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("onu_types.id", ondelete="SET NULL")
+    )
+    line_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    service_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_registration_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    olt = relationship("OLTDevice")
+    onu_type = relationship("OnuType")
 
 
 class OltConfigBackup(Base):

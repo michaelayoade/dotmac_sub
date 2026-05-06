@@ -9,11 +9,13 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.network import (
     OLTDevice,
+    OntUnit,
 )
 from app.services import network as network_service
 from app.services import web_admin as web_admin_service
@@ -29,9 +31,10 @@ from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_topology as olt_web_topology_service
-from app.services.network.action_logging import log_network_action_result
+from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
+from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.ont_scope import can_authorize_ont_from_request
 from app.services.olt_detail_adapter import olt_detail_adapter
 from app.services.queue_adapter import enqueue_task
@@ -91,6 +94,61 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
             ensure_ascii=True,
         )
     }
+
+
+def _authorization_detail_redirect_url(
+    db: Session,
+    *,
+    ont_id: str | None,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    message: str,
+) -> str | None:
+    """Resolve the ONT detail URL to use after an authorization request."""
+    from app.services.network.serial_utils import normalize as normalize_serial
+    from app.services.network.serial_utils import search_candidates
+
+    ont: OntUnit | None = None
+    if ont_id:
+        try:
+            ont = db.get(OntUnit, ont_id)
+        except Exception:
+            ont = None
+
+    if ont is None:
+        serials = {
+            normalize_serial(candidate)
+            for candidate in search_candidates(serial_number)
+            if normalize_serial(candidate)
+        }
+        if serials:
+            board = None
+            port = None
+            parts = [part.strip() for part in str(fsp or "").split("/") if part.strip()]
+            if len(parts) == 3:
+                board = f"{parts[0]}/{parts[1]}"
+                port = parts[2]
+            stmt = select(OntUnit).where(OntUnit.olt_device_id == olt_id)
+            if board and port:
+                stmt = stmt.where(OntUnit.board == board, OntUnit.port == port)
+            candidates = db.scalars(stmt).all()
+            ont = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if normalize_serial(getattr(candidate, "serial_number", ""))
+                    in serials
+                ),
+                None,
+            )
+
+    if ont is None:
+        return None
+    return (
+        f"/admin/network/onts/{ont.id}"
+        f"?status=success&message={quote_plus(message)}"
+    )
 
 
 def _log_olt_action_result(
@@ -835,64 +893,6 @@ def olt_test_ssh_connection(
 
 
 @router.post(
-    "/olts/{olt_id}/test-netconf",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def olt_test_netconf_connection(
-    request: Request, olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
-    ok, message, _capabilities = olt_operations_service.test_olt_netconf_connection(
-        db, olt_id, request=request
-    )
-    _log_olt_action_result(
-        request=request,
-        olt_id=olt_id,
-        action="Test NETCONF Connection",
-        ok=ok,
-        message=message,
-    )
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
-        status_code=303,
-    )
-
-
-@router.post(
-    "/olts/{olt_id}/netconf-get-config",
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def olt_netconf_get_config(
-    request: Request, olt_id: str, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    """Fetch OLT running config via NETCONF and return as formatted HTML."""
-    import html as html_mod
-
-    ok, message, config_xml = olt_operations_service.get_olt_netconf_config(db, olt_id)
-    escaped_msg = html_mod.escape(message)
-    if not ok:
-        _log_olt_action_result(
-            request=request,
-            olt_id=olt_id,
-            action="Get NETCONF Config",
-            ok=ok,
-            message=message,
-        )
-        return HTMLResponse(
-            f'<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
-            f'dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">{escaped_msg}</div>'
-        )
-
-    escaped_xml = html_mod.escape(config_xml)
-    return HTMLResponse(
-        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
-        f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">{escaped_msg}</div>'
-        f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
-        f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_xml}</pre>'
-    )
-
-
-@router.post(
     "/olts/{olt_id}/ssh-get-config",
     dependencies=[Depends(require_permission("network:read"))],
 )
@@ -1167,17 +1167,46 @@ def olt_authorize_ont(
         from uuid import UUID
 
         from app.models.network import OntUnit
+        from app.models.ont_autofind import OltAutofindCandidate
 
         try:
             direct_ont = db.get(OntUnit, UUID(str(ont_id)))
         except ValueError:
             direct_ont = None
+        submitted_serial = normalize_serial(serial_number)
+        direct_serial = normalize_serial(
+            getattr(direct_ont, "serial_number", None) if direct_ont else None
+        )
+        direct_olt_id = (
+            getattr(direct_ont, "olt_device_id", None) if direct_ont else None
+        )
+        direct_match = (
+            direct_ont is not None
+            and str(direct_olt_id) == str(olt_id)
+            and direct_serial == submitted_serial
+        )
+        returned_inventory_match = False
         if (
-            direct_ont is None
-            or str(direct_ont.olt_device_id) != str(olt_id)
-            or str(direct_ont.serial_number or "").strip().upper()
-            != str(serial_number or "").strip().upper()
+            direct_ont is not None
+            and direct_olt_id is None
+            and direct_serial == submitted_serial
         ):
+            candidate = db.scalars(
+                select(OltAutofindCandidate)
+                .where(OltAutofindCandidate.ont_unit_id == direct_ont.id)
+                .where(OltAutofindCandidate.olt_id == olt_id)
+                .where(OltAutofindCandidate.fsp == fsp)
+                .where(OltAutofindCandidate.is_active.is_(True))
+                .limit(1)
+            ).first()
+            if candidate is not None:
+                candidate_serials = {
+                    normalize_serial(getattr(candidate, "serial_number", None)),
+                    normalize_serial(getattr(candidate, "serial_hex", None)),
+                    normalize_serial(getattr(candidate, "equipment_sn", None)),
+                }
+                returned_inventory_match = submitted_serial in candidate_serials
+        if direct_ont is None or not (direct_match or returned_inventory_match):
             error_msg = "ONT authorization scope check failed"
             if is_htmx:
                 return Response(
@@ -1208,49 +1237,76 @@ def olt_authorize_ont(
     # Normalize preset_id: empty string means no preset selected
     effective_preset_id = preset_id.strip() if preset_id else None
     try:
-        # Run authorization synchronously - immediate success or failure
-        from app.services.network.ont_authorization import authorize_ont
-
-        auth_result = authorize_ont(
-            db,
-            olt_id,
-            fsp,
-            serial_number,
-            force_reauthorize=force,
-            preset_id=effective_preset_id,
-            request=request,
+        dispatch = enqueue_task(
+            "app.tasks.ont_provisioning.authorize_ont",
+            kwargs={
+                "olt_id": olt_id,
+                "fsp": fsp,
+                "serial_number": serial_number,
+                "force_reauthorize": force,
+                "preset_id": effective_preset_id,
+                "scoped_ont_id": scoped_ont_id or None,
+                "initiated_by": actor_label(request),
+            },
+            correlation_id=f"ont_authorize:{olt_id}:{fsp}:{serial_number}",
+            source="admin_olt_authorize_ont",
         )
-        auth_ok = auth_result.success
-        auth_msg = auth_result.message
-        ont_unit_id = str(auth_result.ont_unit_id) if auth_result.ont_unit_id else None
     except Exception as exc:
-        db.rollback()
-        logger.error(
-            "ONT authorization failed olt_id=%s fsp=%s serial=%s: %s",
+        logger.exception(
+            "Failed to queue ONT authorization olt_id=%s fsp=%s serial=%s",
             olt_id,
             fsp,
             serial_number,
-            exc,
-            exc_info=True,
         )
-        auth_ok = False
-        auth_msg = f"Authorization failed: {exc}"
-        ont_unit_id = None
-    status = "success" if auth_ok else "error"
+        dispatch = None
+        auth_msg = f"Authorization queue failed: {exc}"
 
-    # On success, redirect to ONT inventory list
-    # User can then select the ONT and configure it via provisioning UI
-    if auth_ok and ont_unit_id:
-        target = f"/admin/network/onts?status=success&message={quote_plus(auth_msg)}"
+    if dispatch and dispatch.queued:
+        auth_msg = (
+            f"Authorization started for ONT {serial_number}. "
+            "The ONT detail page will show progress and next actions."
+        )
+        detail_target = _authorization_detail_redirect_url(
+            db,
+            ont_id=scoped_ont_id or None,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            message=auth_msg,
+        )
+        if detail_target:
+            target = detail_target
+        elif return_to in (
+            "/admin/network/unconfigured-onts",
+            "/admin/network/onts",
+            "/admin/network/onts?view=unconfigured",
+        ):
+            target_base = (
+                "/admin/network/onts?view=unconfigured"
+                if return_to != "/admin/network/onts"
+                else return_to
+            )
+            separator = "&" if "?" in target_base else "?"
+            target = f"{target_base}{separator}status=success&message={quote_plus(auth_msg)}"
+        else:
+            target_base = "/admin/network/onts"
+            separator = "&" if "?" in target_base else "?"
+            target = f"{target_base}{separator}status=success&message={quote_plus(auth_msg)}"
         if is_htmx:
             return Response(
                 status_code=200,
                 headers={
-                    **_toast_headers(auth_msg, status),
+                    **_toast_headers(auth_msg, "success"),
                     "HX-Redirect": target,
                 },
             )
         return RedirectResponse(target, status_code=303)
+
+    auth_msg = (
+        auth_msg
+        if "auth_msg" in locals()
+        else f"Authorization queue failed: {getattr(dispatch, 'error', 'unknown error')}"
+    )
 
     # On failure, redirect back to where user came from with error message
     if return_to in (

@@ -18,6 +18,7 @@ from app.web.request_parsing import parse_form_data_sync
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.olt_state_import import import_olt_state
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.services.network.result_adapter import OperationResult
 
@@ -221,6 +222,37 @@ def olt_backfill_pon_ports(
         db, olt_id, request=request
     )
     return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
+    "/olts/{olt_id}/import-state",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_import_state(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Import OLT profiles and registrations into DB source-of-truth tables."""
+    result = import_olt_state(db, olt_id)
+    if result.success:
+        db.commit()
+    else:
+        db.rollback()
+
+    status = "success" if result.success else "error"
+    message = (
+        f"{result.message} "
+        f"line={result.line_profiles}, service={result.service_profiles}, "
+        f"onts={result.ont_registrations}, mappings={result.profile_mappings}"
+    )
+    if result.warnings:
+        message = f"{message}; warnings={len(result.warnings)}"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status={status}"
+        f"&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
 
 
 @router.get(

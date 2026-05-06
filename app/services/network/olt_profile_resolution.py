@@ -12,9 +12,15 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OntProvisioningProfile, OnuType
+from app.models.network import (
+    OLTDevice,
+    OltOnuTypeProfileMapping,
+    OntProvisioningProfile,
+    OnuType,
+)
 from app.services.network.olt_ssh_profiles import OltProfileEntry, _parse_profile_table
 
 logger = logging.getLogger(__name__)
@@ -302,6 +308,54 @@ def resolve_authorization_profiles_from_db(
                 f"Using OLT config pack for '{olt.name}': "
                 f"line {olt_line_profile}, service {olt_service_profile}."
             ),
+        ),
+    )
+
+
+def resolve_authorization_profiles_from_import(
+    db: Session,
+    olt: OLTDevice,
+    *,
+    equipment_id: str | None,
+) -> tuple[bool, str, AuthorizationProfileResolution | None]:
+    """Resolve authorization profiles from imported OLT state only."""
+    normalized_equipment_id = str(equipment_id or "").strip()
+    if not normalized_equipment_id:
+        return (
+            False,
+            (
+                f"No equipment ID is available for OLT '{olt.name}'. "
+                "Import OLT state and ensure the ONT model/equipment ID is known before authorization."
+            ),
+            None,
+        )
+
+    mapping = db.scalars(
+        select(OltOnuTypeProfileMapping)
+        .where(OltOnuTypeProfileMapping.olt_id == olt.id)
+        .where(OltOnuTypeProfileMapping.equipment_id == normalized_equipment_id)
+    ).first()
+    if mapping is None:
+        return (
+            False,
+            (
+                f"No imported profile mapping for {normalized_equipment_id} on OLT '{olt.name}'. "
+                "Run Import OLT State after the OLT has at least one registered ONT of this equipment type."
+            ),
+            None,
+        )
+
+    message = (
+        f"Resolved imported OLT mapping for {normalized_equipment_id}: "
+        f"line {mapping.line_profile_id}, service {mapping.service_profile_id}."
+    )
+    return (
+        True,
+        message,
+        AuthorizationProfileResolution(
+            line_profile_id=mapping.line_profile_id,
+            service_profile_id=mapping.service_profile_id,
+            message=message,
         ),
     )
 
