@@ -102,7 +102,7 @@ def main() -> int:
                     )
                 for suggestion in suggestions:
                     logger.info(
-                        "  SUGGEST: line_profile_id=%s name=%s gems=%s tr069_ip_index=%s bindings=%s",
+                        "  SUGGEST: imported line profile=%s name=%s gems=%s tr069_ip_index=%s bindings=%s",
                         suggestion.get("profile_id"),
                         suggestion.get("name"),
                         suggestion.get("gem_indexes"),

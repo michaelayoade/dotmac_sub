@@ -32,7 +32,6 @@ from app.models.network import (
     ConfigMethod,
     MgmtIpMode,
     OLTDevice,
-    OntProvisioningProfile,
     OntUnit,
     Vlan,
 )
@@ -259,18 +258,6 @@ def _load_olt_map(db: Session) -> dict[str, OLTDevice]:
     return result
 
 
-def _load_profile_map(db: Session) -> dict[str, OntProvisioningProfile]:
-    profiles = db.scalars(
-        select(OntProvisioningProfile).where(OntProvisioningProfile.is_active.is_(True))
-    ).all()
-    result: dict[str, OntProvisioningProfile] = {}
-    for profile in profiles:
-        olt = profile.olt_device
-        if olt and olt.name:
-            result[str(olt.name).lower().split()[0]] = profile
-    return result
-
-
 def _load_vlan_by_olt_tag(db: Session) -> dict[tuple[str, int], Vlan]:
     rows = db.scalars(select(Vlan).where(Vlan.is_active.is_(True))).all()
     result: dict[tuple[str, int], Vlan] = {}
@@ -295,7 +282,6 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
     db = SessionLocal()
     try:
         olt_by_key = _load_olt_map(db)
-        profile_by_key = _load_profile_map(db)
         vlan_by_olt_tag = _load_vlan_by_olt_tag(db)
         ont_by_serial = _load_ont_by_serial(db)
         parsed_onts: list[ParsedOnt] = []
@@ -308,22 +294,8 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
             "matched_onts": 0,
             "unmatched_onts": 0,
             "updated_onts": 0,
-            "profile_links": 0,
-            "olt_profile_links": 0,
             "vlan_links": 0,
-            "olt_default_profile_links": 0,
         }
-
-        if apply:
-            for key, olt in olt_by_key.items():
-                profile = profile_by_key.get(key)
-                if (
-                    profile
-                    and hasattr(olt, "default_provisioning_profile_id")
-                    and olt.default_provisioning_profile_id != profile.id
-                ):
-                    olt.default_provisioning_profile_id = profile.id
-                    stats["olt_default_profile_links"] += 1
 
         for parsed in parsed_onts:
             ont = ont_by_serial.get(_normalized_serial(parsed.serial)) or ont_by_serial.get(
@@ -334,7 +306,6 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
                 continue
             stats["matched_onts"] += 1
             olt = olt_by_key.get(parsed.olt_key)
-            profile = profile_by_key.get(parsed.olt_key)
             vlan = (
                 vlan_by_olt_tag.get((str(olt.id), parsed.mgmt_vlan_tag))
                 if olt is not None and parsed.mgmt_vlan_tag is not None
@@ -368,10 +339,6 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
             if vlan and ont.mgmt_vlan_id != vlan.id:
                 ont.mgmt_vlan_id = vlan.id
                 stats["vlan_links"] += 1
-                changed = True
-            if profile and ont.provisioning_profile_id is None:
-                ont.provisioning_profile_id = profile.id
-                stats["profile_links"] += 1
                 changed = True
 
             ont.tr069_last_snapshot = parsed.snapshot()
