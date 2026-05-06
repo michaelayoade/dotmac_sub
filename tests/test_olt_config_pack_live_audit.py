@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from app.models.network import OLTDevice
 from app.services.network.olt_config_pack_live_audit import (
     parse_line_profile_detail,
     parse_tr069_profile_detail,
+    suggest_compatible_line_profiles,
 )
 
 LINE_PROFILE_DETAIL = """
@@ -65,3 +67,15 @@ def test_parse_tr069_profile_detail_extracts_profile_fields() -> None:
     assert detail.exists is True
     assert detail.name == "GenieACS"
     assert detail.acs_url == "http://acs.example/cwmp"
+
+
+def test_line_profile_suggestions_are_deprecated(db_session) -> None:
+    olt = OLTDevice(name="Live Audit OLT", config_pack={"tr069_olt_profile_id": 2})
+    db_session.add(olt)
+    db_session.flush()
+
+    ok, message, suggestions = suggest_compatible_line_profiles(db_session, str(olt.id))
+
+    assert ok is False
+    assert suggestions == []
+    assert "Import OLT State" in message

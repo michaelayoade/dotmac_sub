@@ -17,11 +17,7 @@ from sqlalchemy.orm import Session
 from app.models.network import OLTDevice
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.olt_profile_resolution import parse_line_profile_tr069_enabled
-from app.services.network.olt_ssh_profiles import (
-    OltProfileEntry,
-    _parse_profile_table,
-    _parse_tr069_profile_detail,
-)
+from app.services.network.olt_ssh_profiles import _parse_tr069_profile_detail
 
 logger = logging.getLogger(__name__)
 
@@ -145,28 +141,23 @@ def _open_enabled_olt_shell(olt: OLTDevice):
     return True, "Connected.", transport, channel, policy
 
 
-def _run_live_profile_commands(olt: OLTDevice, *, line_profile_id: int, tr069_profile_id: int):
+def _run_live_tr069_profile_command(olt: OLTDevice, *, tr069_profile_id: int):
     from app.services.network import olt_ssh as core
 
     ok, message, transport, channel, policy = _open_enabled_olt_shell(olt)
     if not ok or transport is None or channel is None or policy is None:
-        return False, message, None, None
+        return False, message, None
 
     try:
-        line_output = core._run_huawei_paged_cmd(
-            channel,
-            f"display ont-lineprofile gpon profile-id {line_profile_id}",
-            prompt=policy.prompt_regex,
-        )
         tr069_output = core._run_huawei_paged_cmd(
             channel,
             f"display ont tr069-server-profile profile-id {tr069_profile_id}",
             prompt=policy.prompt_regex,
         )
-        return True, "Live profile commands completed.", line_output, tr069_output
+        return True, "Live TR-069 profile command completed.", tr069_output
     except Exception as exc:
         logger.exception("Live OLT config-pack audit failed for OLT %s", olt.name)
-        return False, f"Live profile read failed: {exc}", None, None
+        return False, f"Live profile read failed: {exc}", None
     finally:
         transport.close()
 
@@ -175,66 +166,19 @@ def suggest_compatible_line_profiles(
     db: Session,
     olt_id: str,
 ) -> tuple[bool, str, list[CompatibleLineProfileSuggestion]]:
-    """Find live line profiles compatible with the saved OLT config pack."""
-    from app.services.network import olt_ssh as core
-
+    """Deprecated: line profiles are now imported into OLT mapping tables."""
     olt = db.get(OLTDevice, str(olt_id))
     if olt is None:
         return False, "OLT device not found", []
     pack = resolve_olt_config_pack(db, str(olt.id))
     if pack is None:
         return False, "OLT config pack could not be resolved", []
-    required_gems = {
-        int(value)
-        for value in (pack.internet_gem_index, pack.mgmt_gem_index)
-        if value is not None
-    }
-    if not required_gems:
-        return False, "OLT config pack has no explicit internet/management GEM indexes", []
-
-    ok, message, transport, channel, policy = _open_enabled_olt_shell(olt)
-    if not ok or transport is None or channel is None or policy is None:
-        return False, message, []
-
-    try:
-        profile_output = core._run_huawei_paged_cmd(
-            channel,
-            "display ont-lineprofile gpon all",
-            prompt=policy.prompt_regex,
-        )
-        profiles: list[OltProfileEntry] = _parse_profile_table(profile_output)
-        suggestions: list[CompatibleLineProfileSuggestion] = []
-        for profile in profiles:
-            detail_output = core._run_huawei_paged_cmd(
-                channel,
-                f"display ont-lineprofile gpon profile-id {profile.profile_id}",
-                prompt=policy.prompt_regex,
-            )
-            detail = parse_line_profile_detail(
-                detail_output,
-                profile_id=profile.profile_id,
-            )
-            if not required_gems.issubset(detail.gem_indexes):
-                continue
-            if not detail.tr069_management_enabled:
-                continue
-            suggestions.append(
-                CompatibleLineProfileSuggestion(
-                    profile_id=profile.profile_id,
-                    name=profile.name,
-                    gem_indexes=detail.gem_indexes,
-                    tr069_management_enabled=detail.tr069_management_enabled,
-                    tr069_ip_index=detail.tr069_ip_index,
-                    binding_count=profile.binding_count,
-                )
-            )
-        suggestions.sort(key=lambda item: (item.binding_count, item.profile_id))
-        return True, f"Found {len(suggestions)} compatible line profile(s)", suggestions
-    except Exception as exc:
-        logger.exception("Compatible line profile scan failed for OLT %s", olt.name)
-        return False, f"Compatible line profile scan failed: {exc}", []
-    finally:
-        transport.close()
+    del pack
+    return (
+        False,
+        "Line profile suggestions are deprecated; run Import OLT State and use imported mapping coverage.",
+        [],
+    )
 
 
 def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAudit:
@@ -259,10 +203,7 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
         return audit
 
     required = {
-        "line_profile_id": pack.line_profile_id,
         "tr069_olt_profile_id": pack.tr069_olt_profile_id,
-        "internet_gem_index": pack.internet_gem_index,
-        "mgmt_gem_index": pack.mgmt_gem_index,
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
@@ -271,65 +212,33 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
         )
         return audit
 
-    ok, message, line_output, tr069_output = _run_live_profile_commands(
+    ok, message, tr069_output = _run_live_tr069_profile_command(
         olt,
-        line_profile_id=int(pack.line_profile_id),
         tr069_profile_id=int(pack.tr069_olt_profile_id),
     )
-    if not ok or line_output is None or tr069_output is None:
+    if not ok or tr069_output is None:
         audit.errors.append(message)
         return audit
 
-    line_detail = parse_line_profile_detail(
-        line_output,
-        profile_id=int(pack.line_profile_id),
-    )
     tr069_detail = parse_tr069_profile_detail(
         tr069_output,
         profile_id=int(pack.tr069_olt_profile_id),
     )
     audit.success = True
     audit.observed = {
-        "line_profile_id": line_detail.profile_id,
-        "line_profile_gem_indexes": sorted(line_detail.gem_indexes),
-        "line_profile_tr069_management_enabled": line_detail.tr069_management_enabled,
-        "line_profile_tr069_ip_index": line_detail.tr069_ip_index,
         "tr069_profile_id": tr069_detail.profile_id,
         "tr069_profile_exists": tr069_detail.exists,
         "tr069_profile_name": tr069_detail.name,
         "tr069_profile_acs_url": tr069_detail.acs_url,
     }
 
-    expected_gems = {
-        "internet_gem_index": int(pack.internet_gem_index),
-        "mgmt_gem_index": int(pack.mgmt_gem_index),
-    }
-    for label, gem_index in expected_gems.items():
-        if gem_index not in line_detail.gem_indexes:
-            audit.errors.append(
-                f"Config pack {label}={gem_index} is not present in live "
-                f"line profile {pack.line_profile_id}; observed GEM indexes: "
-                f"{sorted(line_detail.gem_indexes)}"
-            )
-
-    if not line_detail.tr069_management_enabled:
-        audit.errors.append(
-            f"Live line profile {pack.line_profile_id} does not have TR-069 management enabled"
-        )
-
-    if (
-        pack.internet_config_ip_index is not None
-        and line_detail.tr069_ip_index is not None
-        and line_detail.tr069_ip_index != int(pack.internet_config_ip_index)
-    ):
-        audit.warnings.append(
-            f"Live line profile TR-069 IP index is {line_detail.tr069_ip_index}, "
-            f"but config pack internet_config_ip_index is {pack.internet_config_ip_index}"
-        )
-
     if not tr069_detail.exists:
         audit.errors.append(
             f"Live OLT TR-069 server profile {pack.tr069_olt_profile_id} was not found"
         )
+    audit.warnings.append(
+        "Line/service profile and GEM validation is handled by imported OLT state; "
+        "run scripts/import_olt_state.py and scripts/report_missing_olt_mappings.py."
+    )
 
     return audit

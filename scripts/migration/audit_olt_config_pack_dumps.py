@@ -1,8 +1,7 @@
 """Audit OLT config packs against local running-config dumps.
 
-This validates Dotmac's saved OLT config pack without logging into the OLT.
-With --apply-line-profile-suggestions it updates only the local config_pack
-line_profile_id when a compatible dumped profile is available.
+This validates Dotmac's saved OLT TR-069 profile reference without logging into
+the OLT. Line/service profile and GEM validation now lives in imported OLT state.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--apply-line-profile-suggestions",
         action="store_true",
-        help="Update config_pack.line_profile_id from dump-backed suggestions",
+        help="Deprecated no-op; line profiles are imported into OLT mapping tables",
     )
     return parser.parse_args()
 
@@ -65,7 +64,7 @@ def main() -> int:
         logger.info("Local Dump OLT Config-Pack Audit")
         logger.info("=" * 60)
         if updated:
-            logger.info("Applied %s config-pack line_profile_id update(s).", updated)
+            logger.info("Applied %s deprecated config-pack update(s).", updated)
         for report in reports:
             status = "VALID" if report.is_valid else "INVALID"
             logger.info("\n%s: %s", report.olt_name, status)
@@ -78,7 +77,7 @@ def main() -> int:
             if report.suggested_updates:
                 logger.info("  SUGGEST: %s", report.suggested_updates)
             if not report.errors and not report.warnings:
-                logger.info("  OK: Dumped OLT profiles match the config pack.")
+                logger.info("  OK: Dumped OLT TR-069 profile matches the config pack.")
     return 0 if all(report.is_valid for report in reports) else 1
 
 

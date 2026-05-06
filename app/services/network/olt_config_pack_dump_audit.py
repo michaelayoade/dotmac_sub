@@ -240,10 +240,7 @@ def audit_olt_config_pack_dump(
         return audit
 
     required = {
-        "line_profile_id": pack.line_profile_id,
         "tr069_olt_profile_id": pack.tr069_olt_profile_id,
-        "internet_gem_index": pack.internet_gem_index,
-        "mgmt_gem_index": pack.mgmt_gem_index,
     }
     missing = [name for name, value in required.items() if value is None]
     if missing:
@@ -251,92 +248,31 @@ def audit_olt_config_pack_dump(
         return audit
 
     parsed = parse_olt_dump_profiles(dump_path.read_text(errors="replace"))
-    line_profile_id = int(pack.line_profile_id)
     tr069_profile_id = int(pack.tr069_olt_profile_id)
-    required_gems = {
-        int(pack.internet_gem_index),
-        int(pack.mgmt_gem_index),
-    }
-    profile = parsed.line_profiles.get(line_profile_id)
     audit.success = True
     audit.observed = {
-        "line_profile_id": line_profile_id,
-        "line_profile_exists": profile is not None,
         "tr069_profile_id": tr069_profile_id,
         "tr069_profile_exists": tr069_profile_id in parsed.tr069_profiles,
+        "imported_line_profiles": sorted(parsed.line_profiles),
         "ont_line_profile_counts": dict(parsed.ont_line_profile_counts.most_common()),
     }
-
-    if profile:
-        audit.observed.update(
-            {
-                "line_profile_name": profile.name,
-                "line_profile_gem_indexes": sorted(profile.gem_indexes),
-                "line_profile_tr069_management_enabled": profile.tr069_management_enabled,
-                "line_profile_tr069_ip_index": profile.tr069_ip_index,
-            }
-        )
-        missing_gems = sorted(required_gems - profile.gem_indexes)
-        if missing_gems:
-            audit.errors.append(
-                f"Config pack line_profile_id={line_profile_id} lacks GEM indexes {missing_gems}"
-            )
-        if not profile.tr069_management_enabled:
-            audit.errors.append(
-                f"Config pack line_profile_id={line_profile_id} does not enable TR-069 management"
-            )
-    else:
-        audit.errors.append(
-            f"Config pack line_profile_id={line_profile_id} was not found in dump"
-        )
 
     if tr069_profile_id not in parsed.tr069_profiles:
         audit.errors.append(
             f"Config pack tr069_olt_profile_id={tr069_profile_id} was not found in dump"
         )
 
-    compatible_profiles = [
-        candidate
-        for candidate in parsed.line_profiles.values()
-        if required_gems.issubset(candidate.gem_indexes)
-        and candidate.tr069_management_enabled
-    ]
-    compatible_profiles.sort(
-        key=lambda item: (
-            -parsed.ont_line_profile_counts.get(item.profile_id, 0),
-            item.profile_id,
-        )
+    audit.warnings.append(
+        "Line/service profile and GEM validation is handled by imported OLT state; "
+        "run scripts/import_olt_state.py and scripts/report_missing_olt_mappings.py."
     )
-    if compatible_profiles:
-        best = compatible_profiles[0]
-        if best.profile_id != line_profile_id:
-            audit.suggested_updates["line_profile_id"] = best.profile_id
-            audit.suggested_updates["line_profile_name"] = best.name
-            audit.suggested_updates["line_profile_existing_ont_count"] = (
-                parsed.ont_line_profile_counts.get(best.profile_id, 0)
-            )
     return audit
 
 
 def apply_dump_audit_suggestions(db: Session, audits: list[OltConfigPackDumpAudit]) -> int:
-    """Apply safe config-pack updates suggested by dump audits."""
-    updated = 0
-    for audit in audits:
-        line_profile_id = audit.suggested_updates.get("line_profile_id")
-        if line_profile_id is None:
-            continue
-        olt = db.get(OLTDevice, audit.olt_id)
-        if olt is None:
-            continue
-        pack = dict(olt.config_pack or {})
-        if pack.get("line_profile_id") == line_profile_id:
-            continue
-        pack["line_profile_id"] = line_profile_id
-        olt.config_pack = pack
-        updated += 1
-    if updated:
-        db.commit()
-    return updated
+    """Deprecated no-op: profile defaults are no longer written to config_pack."""
+    del db, audits
+    return 0
 
 
 def active_olt_ids(db: Session) -> list[str]:

@@ -4,12 +4,11 @@ This is a one-time diagnostic script to identify OLTs that are missing
 required configuration values for ONT provisioning.
 
 Required for authorization:
-- line_profile_id
-- service_profile_id
+- imported OLT equipment-to-profile mappings
 
 Required for internet service:
 - internet_vlan (with tag)
-- internet_gem_index
+- imported GEM mappings when OLT-side service-port generation needs GEM indexes
 
 Required for ACS management:
 - management_vlan (with tag)
