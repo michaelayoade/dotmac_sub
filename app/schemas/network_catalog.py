@@ -24,6 +24,7 @@ class OnuTypeBase(BaseModel):
     notes: str | None = None
 
     # ACS Config Pack: TR-069 configuration
+    adapter_name: str | None = None
     tr069_data_model: str | None = None  # tr181 or tr098
     config_method_preference: str | None = None  # tr069, omci, both
 
@@ -38,6 +39,17 @@ class OnuTypeBase(BaseModel):
     wan_pppoe_username_path: str | None = None
     wan_pppoe_password_path: str | None = None
     wan_connection_type_path: str | None = None
+
+    # LAN TR-069 parameter paths
+    lan_ip_address_path: str | None = None
+    lan_subnet_mask_path: str | None = None
+    lan_dhcp_enabled_path: str | None = None
+    lan_dhcp_start_path: str | None = None
+    lan_dhcp_end_path: str | None = None
+
+    # Access/management TR-069 parameter paths
+    remote_access_enabled_path: str | None = None
+    http_management_enabled_path: str | None = None
 
     # Default WiFi settings
     default_wifi_security_mode: str | None = "WPA2-Personal"
@@ -64,6 +76,7 @@ class OnuTypeUpdate(BaseModel):
     notes: str | None = None
 
     # ACS Config Pack fields
+    adapter_name: str | None = None
     tr069_data_model: str | None = None
     config_method_preference: str | None = None
     wifi_ssid_path: str | None = None
@@ -74,6 +87,13 @@ class OnuTypeUpdate(BaseModel):
     wan_pppoe_username_path: str | None = None
     wan_pppoe_password_path: str | None = None
     wan_connection_type_path: str | None = None
+    lan_ip_address_path: str | None = None
+    lan_subnet_mask_path: str | None = None
+    lan_dhcp_enabled_path: str | None = None
+    lan_dhcp_start_path: str | None = None
+    lan_dhcp_end_path: str | None = None
+    remote_access_enabled_path: str | None = None
+    http_management_enabled_path: str | None = None
     default_wifi_security_mode: str | None = None
     default_wifi_channel: str | None = None
     min_firmware_version: str | None = None

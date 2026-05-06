@@ -71,8 +71,6 @@ def apply_acs_foundation(
     internet_config_ip_index = _int_or_none(
         effective_values.get("internet_config_ip_index")
     )
-    if internet_config_ip_index is None and mgmt_vlan_tag is not None:
-        internet_config_ip_index = 0
 
     if olt_config_already_applied:
         steps.append({

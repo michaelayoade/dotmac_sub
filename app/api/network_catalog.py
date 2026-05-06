@@ -98,6 +98,27 @@ def create_onu_type(
         allow_custom_profiles=payload.allow_custom_profiles,
         capability=OnuCapability(payload.capability),
         notes=payload.notes,
+        adapter_name=payload.adapter_name,
+        tr069_data_model=payload.tr069_data_model,
+        config_method_preference=payload.config_method_preference,
+        wifi_ssid_path=payload.wifi_ssid_path,
+        wifi_password_path=payload.wifi_password_path,
+        wifi_enabled_path=payload.wifi_enabled_path,
+        wifi_channel_path=payload.wifi_channel_path,
+        wifi_security_mode_path=payload.wifi_security_mode_path,
+        wan_pppoe_username_path=payload.wan_pppoe_username_path,
+        wan_pppoe_password_path=payload.wan_pppoe_password_path,
+        wan_connection_type_path=payload.wan_connection_type_path,
+        lan_ip_address_path=payload.lan_ip_address_path,
+        lan_subnet_mask_path=payload.lan_subnet_mask_path,
+        lan_dhcp_enabled_path=payload.lan_dhcp_enabled_path,
+        lan_dhcp_start_path=payload.lan_dhcp_start_path,
+        lan_dhcp_end_path=payload.lan_dhcp_end_path,
+        remote_access_enabled_path=payload.remote_access_enabled_path,
+        http_management_enabled_path=payload.http_management_enabled_path,
+        default_wifi_security_mode=payload.default_wifi_security_mode,
+        default_wifi_channel=payload.default_wifi_channel,
+        min_firmware_version=payload.min_firmware_version,
     )
     return OnuTypeRead.model_validate(item)
 
@@ -496,4 +517,3 @@ def delete_parameter_map(
     capability_id: str, map_id: str, db: Session = Depends(get_db)
 ):  # type: ignore[no-untyped-def]
     Tr069ParameterMaps.delete(db, map_id)
-

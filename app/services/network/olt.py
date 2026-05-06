@@ -74,6 +74,41 @@ _ONT_STATUS_LOADS = (
 )
 
 
+def _payload_fields_set(payload: Any) -> set[str]:
+    fields_set = getattr(payload, "model_fields_set", None)
+    return set(fields_set or [])
+
+
+def _payload_data(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(exclude_unset=exclude_unset)
+    if isinstance(payload, dict):
+        return dict(payload)
+    return dict(payload)
+
+
+def _infer_olt_capabilities(data: dict[str, Any], explicit_fields: set[str]) -> None:
+    """Fill firmware-derived OLT capabilities unless the caller overrides them."""
+    if (
+        "supports_ont_internet_config" in explicit_fields
+        and "supports_ont_wan_config" in explicit_fields
+    ):
+        return
+
+    from app.services.adapters.olt_types import olt_type_registry
+
+    capabilities = olt_type_registry.get_capabilities(
+        model=data.get("model"),
+        firmware=data.get("firmware_version") or data.get("software_version"),
+    )
+    if "supports_ont_internet_config" not in explicit_fields:
+        data["supports_ont_internet_config"] = (
+            capabilities.supports_ont_internet_config
+        )
+    if "supports_ont_wan_config" not in explicit_fields:
+        data["supports_ont_wan_config"] = capabilities.supports_ont_wan_config
+
+
 def _canonical_pon_name_from_card_port(
     db: Session,
     card_port: OltCardPort,
@@ -278,7 +313,9 @@ class OLTDevices(CRUDManager[OLTDevice]):
 
     @classmethod
     def create(cls, db: Session, payload) -> OLTDevice:
-        device = super().create(db, payload, commit=False)
+        data = _payload_data(payload, exclude_unset=False)
+        _infer_olt_capabilities(data, _payload_fields_set(payload))
+        device = super().create(db, data, commit=False)
         try:
             cls._require_authorization_ready(db, device)
             db.commit()
@@ -307,7 +344,41 @@ class OLTDevices(CRUDManager[OLTDevice]):
             existing.ssh_username,
             existing.ssh_password,
         )
-        device = super().update(db, device_id, payload, commit=False)
+        explicit_fields = _payload_fields_set(payload)
+        data = _payload_data(payload, exclude_unset=True)
+        if {"model", "firmware_version", "software_version"} & explicit_fields:
+            capability_context = {
+                "model": data.get("model", existing.model),
+                "firmware_version": data.get(
+                    "firmware_version", existing.firmware_version
+                ),
+                "software_version": data.get(
+                    "software_version", existing.software_version
+                ),
+            }
+            capability_context.update(
+                {
+                    key: value
+                    for key, value in data.items()
+                    if key
+                    in {
+                        "supports_ont_internet_config",
+                        "supports_ont_wan_config",
+                    }
+                }
+            )
+            _infer_olt_capabilities(capability_context, explicit_fields)
+            data.update(
+                {
+                    key: capability_context[key]
+                    for key in (
+                        "supports_ont_internet_config",
+                        "supports_ont_wan_config",
+                    )
+                    if key in capability_context and key not in explicit_fields
+                }
+            )
+        device = super().update(db, device_id, data, commit=False)
         try:
             cls._require_authorization_ready(db, device)
             db.commit()
