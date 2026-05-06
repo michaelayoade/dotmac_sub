@@ -776,6 +776,23 @@ class OLTDevice(Base):
     rate_limit_ops_per_minute: Mapped[int | None] = mapped_column(Integer, default=10)
 
     # -------------------------------------------------------------------------
+    # OLT Capabilities: firmware-specific command support
+    # -------------------------------------------------------------------------
+    # These flags gate which OMCI commands are attempted during provisioning.
+    # MA5608T V800R013 does NOT support ont internet-config / ont wan-config.
+    # MA5800 V800R019+ supports both.
+    supports_ont_internet_config: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        doc="False for MA5608T V800R013* - skip ont internet-config command",
+    )
+    supports_ont_wan_config: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        doc="False for MA5608T V800R013* - skip ont wan-config command",
+    )
+
+    # -------------------------------------------------------------------------
     # OLT Config Pack: defaults inherited by all ONTs on this OLT
     # -------------------------------------------------------------------------
 
