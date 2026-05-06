@@ -2635,15 +2635,8 @@ class OntProvisioningProfile(Base):
     wifi_channel: Mapped[str | None] = mapped_column(String(10))
     wifi_band: Mapped[str | None] = mapped_column(String(20))
 
-    # OLT-level provisioning knobs
-    authorization_line_profile_id: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="OLT-local ont-lineprofile profile-id used when authorizing ONTs",
-    )
-    authorization_service_profile_id: Mapped[int | None] = mapped_column(
-        Integer,
-        doc="OLT-local ont-srvprofile profile-id used when authorizing ONTs",
-    )
+    # OLT-level provisioning knobs. Authorization line/service profiles are
+    # resolved from imported OLT state via OltOnuTypeProfileMapping.
     internet_config_ip_index: Mapped[int | None] = mapped_column(
         Integer,
         doc="ip-index for ont internet-config command (activates TCP stack)",
