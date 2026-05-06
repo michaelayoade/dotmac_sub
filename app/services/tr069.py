@@ -361,52 +361,6 @@ def _normalize_utc_timestamp(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-def _queue_service_apply_on_bootstrap(
-    db: Session,
-    *,
-    ont_id: object | None,
-    event_type: str,
-) -> bool:
-    """Queue service config re-apply when ONT sends BOOTSTRAP or BOOT event.
-
-    This restores volatile TR-069 config (WiFi, LAN) after ONT reboot.
-    OMCI config persists on the OLT, but TR-069 config is lost on reboot.
-
-    Args:
-        ont_id: The ONT unit ID.
-        event_type: Normalized event type string ("bootstrap" or "boot").
-
-    Returns:
-        True if task was queued, False otherwise.
-    """
-    if ont_id is None:
-        return False
-    if event_type not in ("bootstrap", "boot"):
-        return False
-    if not _ont_has_saved_service_intent(db, ont_id):
-        logger.debug(
-            "ONT %s has no saved service intent; skipping bootstrap re-apply",
-            ont_id,
-        )
-        return False
-
-    from app.services.queue_adapter import enqueue_task
-
-    logger.info(
-        "ONT %s sent %s event; queuing service config re-apply (WiFi restore)",
-        ont_id,
-        event_type,
-    )
-    dispatch = enqueue_task(
-        "app.tasks.tr069.apply_saved_ont_service_config",
-        args=[str(ont_id), f"{event_type}_reconnect"],
-        correlation_id=f"ont_bootstrap_restore:{ont_id}",
-        source="tr069_inform_bootstrap",
-        countdown=45,  # Allow device to fully initialize after reboot
-    )
-    return dispatch.queued
-
-
 def _queue_saved_service_apply_after_stale_inform(
     db: Session,
     *,
@@ -1793,21 +1747,12 @@ def receive_inform(
     db.commit()
     service_apply_queued = False
     try:
-        # First, check if this is a bootstrap/boot event (ONT reboot)
-        # This restores volatile TR-069 config (WiFi) lost on reboot
-        service_apply_queued = _queue_service_apply_on_bootstrap(
+        service_apply_queued = _queue_saved_service_apply_after_stale_inform(
             db,
             ont_id=ont_id_for_service_apply,
-            event_type=event_str,
+            previous_last_inform_at=previous_last_inform_at,
+            now=now,
         )
-        # If not a bootstrap event, fall back to stale inform check
-        if not service_apply_queued:
-            service_apply_queued = _queue_saved_service_apply_after_stale_inform(
-                db,
-                ont_id=ont_id_for_service_apply,
-                previous_last_inform_at=previous_last_inform_at,
-                now=now,
-            )
     except Exception:
         logger.warning(
             "Failed to queue saved service config apply after inform for ONT %s",
