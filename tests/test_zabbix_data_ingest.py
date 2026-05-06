@@ -101,6 +101,23 @@ def test_ingest_matches_numeric_external_id_with_board_and_port(db_session) -> N
     assert ont.olt_rx_signal_dbm == -20.6
 
 
+def test_ingest_decodes_huawei_onu_rx_offset_value(db_session) -> None:
+    olt = _olt(db_session)
+    ont = _ont(db_session, olt, "ONT-ONU-RX", external_id="0/1/0.5")
+
+    updated = ingest_olt_signal_data(
+        db_session,
+        olt,
+        client=_FakeZabbixClient(
+            [{"key_": "onu.rx.walk", "lastvalue": _walk(_ifindex(7, 0), 5, 7113)}]
+        ),
+    )
+
+    db_session.refresh(ont)
+    assert updated == 1
+    assert ont.onu_rx_signal_dbm == -28.87
+
+
 def test_ingest_clears_invalid_olt_rx_without_leaving_stale_signal(db_session) -> None:
     olt = _olt(db_session)
     ont = _ont(

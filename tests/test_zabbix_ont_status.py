@@ -176,3 +176,35 @@ def test_snapshot_matches_huawei_high_pon_port(monkeypatch) -> None:
 
     assert snapshot["ont-1"].status == "online"
     assert snapshot["ont-1"].olt_rx_dbm == -20.97
+
+
+def test_snapshot_decodes_huawei_onu_rx_offset_value(monkeypatch) -> None:
+    monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
+    status_walk_output = (
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15.4194315264.5 = INTEGER: 1"
+    )
+    onu_rx_walk_output = (
+        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6.4194315264.5 = INTEGER: 7113"
+    )
+
+    snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
+        _olt(),
+        [_ont("ont-1", "0/1/12.5")],
+        client=_FakeZabbixClient(
+            [
+                {
+                    "key_": "ont.status.walk",
+                    "lastvalue": status_walk_output,
+                    "lastclock": "1777747023",
+                },
+                {
+                    "key_": "onu.rx.walk",
+                    "lastvalue": onu_rx_walk_output,
+                    "lastclock": "1777747025",
+                },
+            ]
+        ),
+    )
+
+    assert snapshot["ont-1"].status == "online"
+    assert snapshot["ont-1"].onu_rx_dbm == -28.87

@@ -119,8 +119,11 @@ def _is_status_item(item_key: str) -> bool:
     return "ont.status" in key or "status.walk" in key or "ont.state" in key
 
 
-def _normalize_signal(raw_value: float) -> float | None:
-    dbm = raw_value / 100.0
+def _normalize_signal(raw_value: float, *, is_onu_rx: bool = False) -> float | None:
+    if is_onu_rx and raw_value > 1000:
+        dbm = (raw_value - 10000) / 100.0
+    else:
+        dbm = raw_value / 100.0
     if -50 < dbm < 10:
         return dbm
     return None
@@ -259,7 +262,7 @@ def ingest_olt_signal_data(
                     current["olt_rx"] = dbm
             elif is_onu_rx:
                 current["_saw_onu_rx"] = True
-                dbm = _normalize_signal(raw_value)
+                dbm = _normalize_signal(raw_value, is_onu_rx=True)
                 if dbm is not None:
                     current["onu_rx"] = dbm
             elif is_status:
