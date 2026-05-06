@@ -407,36 +407,32 @@ def test_build_unconfigured_onts_page_data_scopes_authorization_presets(db_sessi
     )
     global_preset = AuthorizationPreset(
         name="Global preset",
-        line_profile_id=10,
-        service_profile_id=20,
         is_active=True,
     )
     olt_preset = AuthorizationPreset(
         name="OLT preset",
-        line_profile_id=11,
-        service_profile_id=21,
         olt_device_id=olt.id,
         is_active=True,
     )
     other_preset = AuthorizationPreset(
         name="Other OLT preset",
-        line_profile_id=12,
-        service_profile_id=22,
         olt_device_id=other_olt.id,
         is_active=True,
     )
-    incomplete_preset = AuthorizationPreset(
-        name="Incomplete preset",
-        line_profile_id=None,
-        service_profile_id=23,
+    no_profile_preset = AuthorizationPreset(
+        name="No profile preset",
         is_active=True,
     )
     db_session.add_all(
-        [candidate, global_preset, olt_preset, other_preset, incomplete_preset]
+        [candidate, global_preset, olt_preset, other_preset, no_profile_preset]
     )
     db_session.commit()
 
     data = autofind_service.build_unconfigured_onts_page_data(db_session)
 
     options = data["entries"][0]["authorization_presets"]
-    assert [option["name"] for option in options] == ["Global preset", "OLT preset"]
+    assert [option["name"] for option in options] == [
+        "Global preset",
+        "No profile preset",
+        "OLT preset",
+    ]

@@ -1105,9 +1105,9 @@ def test_ont_config_form_has_single_operator_path():
     assert "vlans or []" not in source
     assert 'name="push_to_device" value="true"' in source
     assert "Save and apply device changes" in source
-    assert "/wan/probe" in panel
-    assert "/wan/ensure-instance" in panel
-    assert "/wan/normalize" in panel
+    assert "/wan/probe" not in panel
+    assert "/wan/ensure-instance" not in panel
+    assert "/wan/normalize" not in panel
     assert "/wan-remote-access" in panel
     assert "/mgmt-remote-access" in panel
     assert "/web-credentials" in panel

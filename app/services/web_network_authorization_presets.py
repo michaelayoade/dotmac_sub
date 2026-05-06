@@ -136,8 +136,6 @@ def parse_preset_form(form: FormData) -> dict[str, object]:
     return {
         "name": _form_str(form, "name"),
         "description": _form_str(form, "description") or None,
-        "line_profile_id": _form_int(form, "line_profile_id"),
-        "service_profile_id": _form_int(form, "service_profile_id"),
         "default_vlan_id": _form_str(form, "default_vlan_id") or None,
         "auto_authorize": _form_bool(form, "auto_authorize"),
         "serial_pattern": _form_str(form, "serial_pattern") or None,
@@ -162,12 +160,6 @@ def validate_preset_form(values: dict[str, object]) -> str | None:
         except re.error as e:
             return f"Invalid regex pattern: {e}"
 
-    # Validate line/service profile IDs are both set or both unset
-    line_profile_id = values.get("line_profile_id")
-    service_profile_id = values.get("service_profile_id")
-    if (line_profile_id is not None) != (service_profile_id is not None):
-        return "Both line profile ID and service profile ID must be provided together."
-
     return None
 
 
@@ -179,12 +171,6 @@ def handle_create(
         db,
         name=str(form_data["name"]),
         description=str(form_data["description"]) if form_data.get("description") else None,
-        line_profile_id=int(str(form_data["line_profile_id"]))
-        if form_data.get("line_profile_id") is not None
-        else None,
-        service_profile_id=int(str(form_data["service_profile_id"]))
-        if form_data.get("service_profile_id") is not None
-        else None,
         default_vlan_id=str(form_data["default_vlan_id"])
         if form_data.get("default_vlan_id")
         else None,
@@ -213,12 +199,6 @@ def handle_update(
         preset_id,
         name=str(form_data["name"]),
         description=str(form_data["description"]) if form_data.get("description") else None,
-        line_profile_id=int(str(form_data["line_profile_id"]))
-        if form_data.get("line_profile_id") is not None
-        else None,
-        service_profile_id=int(str(form_data["service_profile_id"]))
-        if form_data.get("service_profile_id") is not None
-        else None,
         default_vlan_id=str(form_data["default_vlan_id"])
         if form_data.get("default_vlan_id")
         else None,

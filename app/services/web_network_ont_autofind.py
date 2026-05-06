@@ -342,8 +342,6 @@ def build_unconfigured_onts_page_data(
             select(AuthorizationPreset)
             .where(
                 AuthorizationPreset.is_active.is_(True),
-                AuthorizationPreset.line_profile_id.is_not(None),
-                AuthorizationPreset.service_profile_id.is_not(None),
             )
             .order_by(
                 AuthorizationPreset.is_default.desc(),
