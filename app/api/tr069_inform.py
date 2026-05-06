@@ -6,6 +6,7 @@ Receives callbacks from GenieACS:
 - Device config: WiFi/service config for provision scripts
 """
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -13,10 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services.adapters.ont_types import ont_type_registry
 from app.services.credential_crypto import decrypt_credential
 from app.services.genieacs_service import genieacs_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_serials import find_unique_active_ont_by_serial
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tr069", tags=["tr069-webhooks"])
 
@@ -68,6 +72,36 @@ def receive_inform(
     )
 
 
+def _build_paths_from_onu_type(onu_type: Any) -> dict[str, str]:
+    """Extract TR-069 paths from OnuType record.
+
+    Returns only non-null paths.
+    """
+    paths = {}
+    path_fields = [
+        ("wifi_ssid", "wifi_ssid_path"),
+        ("wifi_password", "wifi_password_path"),
+        ("wifi_enabled", "wifi_enabled_path"),
+        ("wifi_channel", "wifi_channel_path"),
+        ("wifi_security_mode", "wifi_security_mode_path"),
+        ("wan_pppoe_username", "wan_pppoe_username_path"),
+        ("wan_pppoe_password", "wan_pppoe_password_path"),
+        ("wan_connection_type", "wan_connection_type_path"),
+        ("lan_ip_address", "lan_ip_address_path"),
+        ("lan_subnet_mask", "lan_subnet_mask_path"),
+        ("lan_dhcp_enabled", "lan_dhcp_enabled_path"),
+        ("lan_dhcp_start", "lan_dhcp_start_path"),
+        ("lan_dhcp_end", "lan_dhcp_end_path"),
+        ("remote_access_enabled", "remote_access_enabled_path"),
+        ("http_management_enabled", "http_management_enabled_path"),
+    ]
+    for key, attr in path_fields:
+        value = getattr(onu_type, attr, None)
+        if value:
+            paths[key] = value
+    return paths
+
+
 @router.get("/device-config/{serial_number}")
 def get_device_config(
     serial_number: str,
@@ -79,18 +113,44 @@ def get_device_config(
     config that needs to be re-applied after ONT reboot.
 
     TR-069 config is volatile (lost on reboot). OMCI handles persistent
-    config (management IP, VLANs). This returns TR-069-only settings:
-    - WiFi (SSID, password, channel, security)
-    - WAN (PPPoE credentials, DHCP/static mode)
-    - LAN (IP, subnet, DHCP server)
-    - Access (remote management, HTTP, NAT)
+    config (management IP, VLANs). This returns:
+    - TR-069 paths: from OnuType database record
+    - Config values: WiFi, WAN, LAN, Access settings
+    - Transforms: security mode mappings from code adapter
 
     Returns:
-        Full service config, or 404 if device not found.
+        Full service config with paths, or 404 if device not found.
     """
     ont = find_unique_active_ont_by_serial(db, serial_number)
     if not ont:
         raise HTTPException(status_code=404, detail="Device not found")
+
+    # Get OnuType for paths
+    onu_type = ont.onu_type
+    if not onu_type:
+        logger.warning(
+            "ONT %s has no onu_type assigned - cannot determine TR-069 paths",
+            serial_number,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail="ONT has no type assigned - configure onu_type first",
+        )
+
+    # Get paths from OnuType database record
+    paths = _build_paths_from_onu_type(onu_type)
+    if not paths:
+        logger.warning(
+            "OnuType %s has no TR-069 paths configured",
+            onu_type.name,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"OnuType '{onu_type.name}' has no TR-069 paths configured",
+        )
+
+    # Get code adapter for transforms (optional)
+    adapter = ont_type_registry.get(onu_type.adapter_name)
 
     # Resolve effective config (merges OLT defaults + per-ONT overrides)
     effective = resolve_effective_ont_config(db, ont)
@@ -104,17 +164,25 @@ def get_device_config(
         except Exception:
             return value  # Already decrypted or plain text
 
+    def transform_security_mode(mode: str) -> str:
+        """Transform security mode using adapter, or pass through."""
+        if adapter:
+            return adapter.transform_security_mode(mode)
+        return mode
+
     # Build WiFi config
     wifi_config = None
     wifi_ssid = values.get("wifi_ssid")
     wifi_password = values.get("wifi_password")
     if wifi_ssid or wifi_password:
+        security_mode = values.get("wifi_security_mode", "WPA2")
         wifi_config = {
             "ssid": wifi_ssid,
             "password": decrypt_if_needed(wifi_password),
             "enabled": values.get("wifi_enabled", True),
             "channel": values.get("wifi_channel", 0),  # 0 = auto
-            "security_mode": values.get("wifi_security_mode", "WPA2"),
+            "security_mode": security_mode,
+            "security_mode_transformed": transform_security_mode(security_mode),
         }
 
     # Build WAN config (PPPoE/DHCP/Static)
@@ -161,6 +229,13 @@ def get_device_config(
     return {
         "serial_number": serial_number,
         "ont_id": str(ont.id),
+        "onu_type": {
+            "id": str(onu_type.id),
+            "name": onu_type.name,
+            "adapter_name": onu_type.adapter_name,
+            "data_model": onu_type.tr069_data_model,
+        },
+        "paths": paths,
         "wifi": wifi_config,
         "wan": wan_config,
         "lan": lan_config,
