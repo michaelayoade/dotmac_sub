@@ -16,6 +16,7 @@ from app.models.network import (
     PonType,
     VendorModelCapability,
 )
+from app.services.adapters.ont_types import ont_type_registry
 from app.services.common import coerce_uuid
 from app.services.network.onu_types import onu_types
 
@@ -79,6 +80,11 @@ def form_context(
         .where(VendorModelCapability.is_active.is_(True))
         .order_by(VendorModelCapability.vendor, VendorModelCapability.model)
     ).all()
+    # Get available code adapters for transforms dropdown
+    available_adapters = [
+        {"name": a.name, "vendor": a.vendor, "notes": a.notes}
+        for a in ont_type_registry.all()
+    ]
     return {
         "request": request,
         "active_page": "onu-types",
@@ -88,6 +94,7 @@ def form_context(
         "gpon_channels": list(GponChannel),
         "capabilities": list(OnuCapability),
         "vendor_capabilities": vendor_capabilities,
+        "available_adapters": available_adapters,
         "action_url": (
             f"/admin/network/onu-types/{onu_type_id}/edit"
             if onu_type_id
@@ -116,6 +123,7 @@ def parse_form_values(form: FormData) -> dict[str, object]:
         "is_active": _form_str(form, "is_active") == "true",
         "notes": _form_str(form, "notes") or None,
         # ACS Config Pack fields
+        "adapter_name": _form_str(form, "adapter_name") or None,
         "tr069_data_model": _form_str(form, "tr069_data_model") or None,
         "config_method_preference": _form_str(form, "config_method_preference") or None,
         "wifi_ssid_path": _form_str(form, "wifi_ssid_path") or None,
@@ -126,6 +134,13 @@ def parse_form_values(form: FormData) -> dict[str, object]:
         "wan_pppoe_username_path": _form_str(form, "wan_pppoe_username_path") or None,
         "wan_pppoe_password_path": _form_str(form, "wan_pppoe_password_path") or None,
         "wan_connection_type_path": _form_str(form, "wan_connection_type_path") or None,
+        "lan_ip_address_path": _form_str(form, "lan_ip_address_path") or None,
+        "lan_subnet_mask_path": _form_str(form, "lan_subnet_mask_path") or None,
+        "lan_dhcp_enabled_path": _form_str(form, "lan_dhcp_enabled_path") or None,
+        "lan_dhcp_start_path": _form_str(form, "lan_dhcp_start_path") or None,
+        "lan_dhcp_end_path": _form_str(form, "lan_dhcp_end_path") or None,
+        "remote_access_enabled_path": _form_str(form, "remote_access_enabled_path") or None,
+        "http_management_enabled_path": _form_str(form, "http_management_enabled_path") or None,
         "default_wifi_security_mode": _form_str(form, "default_wifi_security_mode") or None,
         "default_wifi_channel": _form_str(form, "default_wifi_channel") or None,
         "min_firmware_version": _form_str(form, "min_firmware_version") or None,
@@ -190,6 +205,7 @@ def handle_create(db: Session, form_data: dict[str, object]) -> OnuType:
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
         # ACS Config Pack
+        adapter_name=str(form_data["adapter_name"]) if form_data.get("adapter_name") else None,
         tr069_data_model=str(form_data["tr069_data_model"]) if form_data.get("tr069_data_model") else None,
         config_method_preference=str(form_data["config_method_preference"]) if form_data.get("config_method_preference") else None,
         wifi_ssid_path=str(form_data["wifi_ssid_path"]) if form_data.get("wifi_ssid_path") else None,
@@ -200,6 +216,13 @@ def handle_create(db: Session, form_data: dict[str, object]) -> OnuType:
         wan_pppoe_username_path=str(form_data["wan_pppoe_username_path"]) if form_data.get("wan_pppoe_username_path") else None,
         wan_pppoe_password_path=str(form_data["wan_pppoe_password_path"]) if form_data.get("wan_pppoe_password_path") else None,
         wan_connection_type_path=str(form_data["wan_connection_type_path"]) if form_data.get("wan_connection_type_path") else None,
+        lan_ip_address_path=str(form_data["lan_ip_address_path"]) if form_data.get("lan_ip_address_path") else None,
+        lan_subnet_mask_path=str(form_data["lan_subnet_mask_path"]) if form_data.get("lan_subnet_mask_path") else None,
+        lan_dhcp_enabled_path=str(form_data["lan_dhcp_enabled_path"]) if form_data.get("lan_dhcp_enabled_path") else None,
+        lan_dhcp_start_path=str(form_data["lan_dhcp_start_path"]) if form_data.get("lan_dhcp_start_path") else None,
+        lan_dhcp_end_path=str(form_data["lan_dhcp_end_path"]) if form_data.get("lan_dhcp_end_path") else None,
+        remote_access_enabled_path=str(form_data["remote_access_enabled_path"]) if form_data.get("remote_access_enabled_path") else None,
+        http_management_enabled_path=str(form_data["http_management_enabled_path"]) if form_data.get("http_management_enabled_path") else None,
         default_wifi_security_mode=str(form_data["default_wifi_security_mode"]) if form_data.get("default_wifi_security_mode") else None,
         default_wifi_channel=str(form_data["default_wifi_channel"]) if form_data.get("default_wifi_channel") else None,
         min_firmware_version=str(form_data["min_firmware_version"]) if form_data.get("min_firmware_version") else None,
@@ -230,6 +253,7 @@ def handle_update(
         is_active=bool(form_data.get("is_active", True)),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
         # ACS Config Pack
+        adapter_name=str(form_data["adapter_name"]) if form_data.get("adapter_name") else None,
         tr069_data_model=str(form_data["tr069_data_model"]) if form_data.get("tr069_data_model") else None,
         config_method_preference=str(form_data["config_method_preference"]) if form_data.get("config_method_preference") else None,
         wifi_ssid_path=str(form_data["wifi_ssid_path"]) if form_data.get("wifi_ssid_path") else None,
@@ -240,6 +264,13 @@ def handle_update(
         wan_pppoe_username_path=str(form_data["wan_pppoe_username_path"]) if form_data.get("wan_pppoe_username_path") else None,
         wan_pppoe_password_path=str(form_data["wan_pppoe_password_path"]) if form_data.get("wan_pppoe_password_path") else None,
         wan_connection_type_path=str(form_data["wan_connection_type_path"]) if form_data.get("wan_connection_type_path") else None,
+        lan_ip_address_path=str(form_data["lan_ip_address_path"]) if form_data.get("lan_ip_address_path") else None,
+        lan_subnet_mask_path=str(form_data["lan_subnet_mask_path"]) if form_data.get("lan_subnet_mask_path") else None,
+        lan_dhcp_enabled_path=str(form_data["lan_dhcp_enabled_path"]) if form_data.get("lan_dhcp_enabled_path") else None,
+        lan_dhcp_start_path=str(form_data["lan_dhcp_start_path"]) if form_data.get("lan_dhcp_start_path") else None,
+        lan_dhcp_end_path=str(form_data["lan_dhcp_end_path"]) if form_data.get("lan_dhcp_end_path") else None,
+        remote_access_enabled_path=str(form_data["remote_access_enabled_path"]) if form_data.get("remote_access_enabled_path") else None,
+        http_management_enabled_path=str(form_data["http_management_enabled_path"]) if form_data.get("http_management_enabled_path") else None,
         default_wifi_security_mode=str(form_data["default_wifi_security_mode"]) if form_data.get("default_wifi_security_mode") else None,
         default_wifi_channel=str(form_data["default_wifi_channel"]) if form_data.get("default_wifi_channel") else None,
         min_firmware_version=str(form_data["min_firmware_version"]) if form_data.get("min_firmware_version") else None,
