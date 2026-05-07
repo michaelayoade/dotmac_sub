@@ -78,6 +78,7 @@ def test_create_active_olt_requires_authorization_ready_data(db_session):
             OLTDeviceCreate(
                 name="OLT-Incomplete",
                 hostname="olt-incomplete.fiber.local",
+                is_active=True,
             ),
         )
 

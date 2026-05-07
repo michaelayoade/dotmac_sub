@@ -285,7 +285,7 @@ class TestOltCrudEvents:
     """Verify OLT CRUD operations emit events."""
 
     def test_create_olt_emits_event(self, db_session) -> None:
-        with patch("app.services.network.olt.emit_event") as mock_emit:
+        with patch("app.services.network.olt_device_crud.emit_event") as mock_emit:
             from app.services.network.olt import OLTDevices
 
             device = OLTDevices.create(
@@ -304,7 +304,7 @@ class TestOltCrudEvents:
             db_session,
             OLTDeviceCreate(name="Before Update"),
         )
-        with patch("app.services.network.olt.emit_event") as mock_emit:
+        with patch("app.services.network.olt_device_crud.emit_event") as mock_emit:
             OLTDevices.update(
                 db_session,
                 str(device.id),
@@ -321,7 +321,7 @@ class TestOltCrudEvents:
             OLTDeviceCreate(name="Pool Reset OLT", ssh_username="old-user"),
         )
         with (
-            patch("app.services.network.olt.emit_event"),
+            patch("app.services.network.olt_device_crud.emit_event"),
             patch("app.services.network.olt_ssh_pool.ssh_pool.invalidate") as mock_invalidate,
         ):
             OLTDevices.update(
@@ -339,7 +339,7 @@ class TestOltCrudEvents:
             db_session,
             OLTDeviceCreate(name="To Delete"),
         )
-        with patch("app.services.network.olt.emit_event") as mock_emit:
+        with patch("app.services.network.olt_device_crud.emit_event") as mock_emit:
             OLTDevices.delete(db_session, str(device.id))
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][1] == EventType.olt_deleted

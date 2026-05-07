@@ -406,7 +406,7 @@ class OLTDeviceBase(BaseModel):
 
 
 class OLTDeviceCreate(OLTDeviceBase):
-    pass
+    is_active: bool = False
 
 
 class OLTDeviceUpdate(BaseModel):
