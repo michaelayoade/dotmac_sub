@@ -947,8 +947,10 @@ def rollback_service_ports(
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.imported_service_ports import (
+        ImportedServicePortStateMissing,
         delete_imported_service_port,
         list_imported_service_ports,
+        require_imported_service_port_state,
     )
 
     t0 = time.monotonic()
@@ -957,12 +959,17 @@ def rollback_service_ports(
         return StepResult("rollback_service_ports", False, err)
 
     adapter = get_protocol_adapter(ctx.olt)
-    ports = list_imported_service_ports(
-        db,
-        olt_id=ctx.olt.id,
-        fsp=ctx.fsp,
-        ont_id_on_olt=ctx.olt_ont_id,
-    )
+    try:
+        require_imported_service_port_state(db, olt_id=ctx.olt.id)
+        ports = list_imported_service_ports(
+            db,
+            olt_id=ctx.olt.id,
+            fsp=ctx.fsp,
+            ont_id_on_olt=ctx.olt_ont_id,
+        )
+    except ImportedServicePortStateMissing as exc:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult("rollback_service_ports", False, str(exc), ms)
     if not ports:
         ms = int((time.monotonic() - t0) * 1000)
         return StepResult(

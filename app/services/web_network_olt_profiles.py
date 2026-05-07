@@ -16,8 +16,10 @@ from app.models.network import (
     OltLineProfile,
     OltOnuTypeProfileMapping,
     OltServiceProfile,
+    OltServicePort,
     OntProvisioningProfile,
 )
+from app.services.network.imported_service_ports import imported_service_port_summary
 from app.services.network import olt as olt_service
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -88,12 +90,23 @@ def imported_profile_state_context(db: Session, olt_id: str) -> dict[str, Any]:
             )
         )
     )
+    service_ports = list(
+        db.scalars(
+            select(OltServicePort)
+            .where(OltServicePort.olt_device_id == olt.id)
+            .order_by(OltServicePort.port_index)
+            .limit(100)
+        )
+    )
+    service_port_summary = imported_service_port_summary(db, olt_id=olt.id)
     return {
         "olt": olt,
         "line_profiles": line_profiles,
         "service_profiles": service_profiles,
         "profile_mappings": profile_mappings,
         "gem_mappings": gem_mappings,
+        "service_ports": service_ports,
+        "service_port_summary": service_port_summary,
         "error": None,
     }
 

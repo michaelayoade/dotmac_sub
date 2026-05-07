@@ -96,6 +96,21 @@ def sample_ont(db_session, sample_olt):
         desired_config={"wan_mode": "pppoe", "vlan": 100},
     )
     db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OltServicePort(
+            olt_device_id=sample_olt.id,
+            port_index=9999,
+            fsp="0/1/9",
+            ont_id_on_olt=999,
+            vlan_id=203,
+            gem_index=1,
+            flow_type="vlan",
+            flow_para="203",
+            state="up",
+            source="test",
+        )
+    )
     db_session.commit()
     return ont
 
@@ -611,7 +626,12 @@ class TestReturnOntToInventory:
         assert result.success is True
         mock_adapter.delete_service_port.assert_called_once_with(100)
         mock_adapter.deauthorize_ont.assert_called_once()
-        assert db_session.query(OltServicePort).count() == 0
+        assert (
+            db_session.query(OltServicePort)
+            .filter(OltServicePort.port_index == 100)
+            .count()
+            == 0
+        )
 
     @pytest.mark.skipif(
         not bool(__import__("os").getenv("TEST_DATABASE_URL")),

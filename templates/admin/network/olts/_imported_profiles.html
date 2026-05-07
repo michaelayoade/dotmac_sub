@@ -7,7 +7,7 @@
 </div>
 {% else %}
 <div class="space-y-6">
-    <div class="grid gap-4 md:grid-cols-3">
+    <div class="grid gap-4 md:grid-cols-4">
         <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Line profiles</p>
             <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ line_profiles | length }}</p>
@@ -19,6 +19,17 @@
         <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Equipment mappings</p>
             <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ profile_mappings | length }}</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Service ports</p>
+            <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ service_port_summary.count | default(0) }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {% if service_port_summary.last_imported_at %}
+                    Imported {{ service_port_summary.last_imported_at.strftime("%Y-%m-%d %H:%M") }}
+                {% else %}
+                    Not imported
+                {% endif %}
+            </p>
         </div>
     </div>
 
@@ -54,6 +65,58 @@
         </div>
         {% else %}
         {{ empty_state("No GEM Mappings", "Run Import OLT State from a running configuration that includes lineprofile or service-port GEM rows.", icon="settings") }}
+        {% endif %}
+    </div>
+
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Imported Service Ports</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Provisioning and cleanup read these rows instead of guessing from live CLI output.</p>
+            </div>
+            {% if service_port_summary.by_source %}
+            <div class="flex flex-wrap gap-2">
+                {% for item in service_port_summary.by_source %}
+                <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{{ item.source }}: {{ item.count }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% if service_ports %}
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <caption class="sr-only">Imported OLT service ports</caption>
+                <thead class="bg-slate-50 dark:bg-slate-800">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Index</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">F/S/P</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONT</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">VLAN</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">GEM</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Source</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Imported</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                    {% for port in service_ports %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ port.port_index }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-slate-700 dark:text-slate-300">{{ port.fsp }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ port.ont_id_on_olt }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ port.vlan_id }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ port.gem_index }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.source }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.last_imported_at.strftime("%Y-%m-%d %H:%M") if port.last_imported_at else "-" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if service_port_summary.count | default(0) > service_ports | length %}
+        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Showing first {{ service_ports | length }} of {{ service_port_summary.count }} imported service-port rows.</p>
+        {% endif %}
+        {% else %}
+        {{ empty_state("No Service Ports", "Run Import OLT State from a running configuration before provisioning against this OLT.", icon="settings") }}
         {% endif %}
     </div>
 

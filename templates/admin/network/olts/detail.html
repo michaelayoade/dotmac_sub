@@ -94,8 +94,17 @@
             <div class="flex flex-wrap items-center gap-2">
                 <form method="POST" action="/admin/network/olts/{{ olt.id }}/import-state" class="inline">
                     {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="import_source" value="live">
                     <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
-                        Import OLT State
+                        Import Live State
+                    </button>
+                </form>
+                <form method="POST" action="/admin/network/olts/{{ olt.id }}/import-state" class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="import_source" value="dump">
+                    <input type="hidden" name="dump_root" value="/root/olt_audit_20260506">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                        Import Dump
                     </button>
                 </form>
                 <form method="POST" action="/admin/network/olts/{{ olt.id }}/refresh-telemetry" class="inline">

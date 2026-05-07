@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote_plus
 
@@ -18,7 +19,10 @@ from app.web.request_parsing import parse_form_data_sync
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network.olt_inventory import get_olt_or_none
-from app.services.network.olt_state_import import import_olt_state
+from app.services.network.olt_state_import import (
+    import_olt_state,
+    import_olt_state_from_dump,
+)
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.services.network.result_adapter import OperationResult
 
@@ -34,6 +38,33 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
         "current_user": web_admin_service.get_current_user(request),
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
     }
+
+
+def _slug(value: str | None) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _dump_dir_for_olt(olt, dump_root: str | None) -> Path | None:
+    if not dump_root:
+        return None
+    root = Path(dump_root)
+    if not root.exists():
+        return None
+    tokens = {
+        _slug(getattr(olt, "name", None)),
+        _slug(getattr(olt, "hostname", None)),
+        _slug(str(getattr(olt, "name", "")).replace("-olt", "")),
+        _slug(str(getattr(olt, "hostname", "")).replace("-olt", "")),
+    }
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        child_slug = _slug(child.name)
+        if child_slug in tokens or any(
+            token and (token in child_slug or child_slug in token) for token in tokens
+        ):
+            return child
+    return None
 
 
 @router.api_route(
@@ -231,10 +262,33 @@ def olt_backfill_pon_ports(
 def olt_import_state(
     request: Request,
     olt_id: str,
+    import_source: str = Form("live"),
+    dump_root: str = Form("/root/olt_audit_20260506"),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Import OLT profiles and registrations into DB source-of-truth tables."""
-    result = import_olt_state(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
+    if olt is None:
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status=error"
+            f"&sync_message={quote_plus('OLT not found')}",
+            status_code=303,
+        )
+    if import_source == "dump":
+        dump_dir = _dump_dir_for_olt(olt, dump_root.strip())
+        if dump_dir is None:
+            result = None
+            db.rollback()
+            status = "error"
+            message = f"No matching audit dump found under {dump_root}"
+            return RedirectResponse(
+                f"/admin/network/olts/{olt_id}?tab=provisioning&sync_status={status}"
+                f"&sync_message={quote_plus(message)}",
+                status_code=303,
+            )
+        result = import_olt_state_from_dump(db, olt_id, dump_dir)
+    else:
+        result = import_olt_state(db, olt_id)
     if result.success:
         db.commit()
     else:
@@ -244,7 +298,8 @@ def olt_import_state(
     message = (
         f"{result.message} "
         f"line={result.line_profiles}, service={result.service_profiles}, "
-        f"onts={result.ont_registrations}, mappings={result.profile_mappings}"
+        f"onts={result.ont_registrations}, mappings={result.profile_mappings}, "
+        f"service_ports={result.service_ports}"
     )
     if result.warnings:
         message = f"{message}; warnings={len(result.warnings)}"

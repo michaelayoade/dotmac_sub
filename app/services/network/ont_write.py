@@ -517,15 +517,21 @@ class OntWriteService:
 
         # Capture imported service ports for replay.
         from app.services.network.imported_service_ports import (
+            ImportedServicePortStateMissing,
             list_imported_service_ports,
+            require_imported_service_port_state,
         )
 
-        current_ports: list[ServicePortEntry] = list_imported_service_ports(
-            db,
-            olt_id=ctx.olt.id,
-            fsp=ctx.fsp,
-            ont_id_on_olt=ctx.ont_id_on_olt,
-        )
+        try:
+            require_imported_service_port_state(db, olt_id=ctx.olt.id)
+            current_ports: list[ServicePortEntry] = list_imported_service_ports(
+                db,
+                olt_id=ctx.olt.id,
+                fsp=ctx.fsp,
+                ont_id_on_olt=ctx.ont_id_on_olt,
+            )
+        except ImportedServicePortStateMissing as exc:
+            return ActionResult(success=False, message=str(exc))
 
         # Resolve authorization profiles from current assignment
         line_profile_id = getattr(ctx, "line_profile_id", None)

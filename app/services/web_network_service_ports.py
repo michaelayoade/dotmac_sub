@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.imported_service_ports import (
+    ImportedServicePortStateMissing,
     delete_imported_service_port,
     list_imported_service_ports,
+    require_imported_service_port_state,
     upsert_imported_service_port_from_readback,
 )
 from app.services.network.olt_protocol_adapters import (
@@ -173,12 +175,18 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
         context["error"] = "ONT external ID not set — cannot query service-ports"
         return context
 
-    ports = list_imported_service_ports(
-        db,
-        olt_id=str(olt.id),
-        fsp=fsp,
-        ont_id_on_olt=olt_ont_id,
-    )
+    try:
+        require_imported_service_port_state(db, olt_id=olt.id)
+        ports = list_imported_service_ports(
+            db,
+            olt_id=str(olt.id),
+            fsp=fsp,
+            ont_id_on_olt=olt_ont_id,
+        )
+    except ImportedServicePortStateMissing as exc:
+        context["error"] = str(exc)
+        context["service_ports_source"] = "imported"
+        return context
     context["service_ports"] = ports
     context["service_ports_source"] = "imported"
     context["service_port_intent"] = (
@@ -559,12 +567,16 @@ def handle_clone(
     if str(olt.id) != str(ref_olt.id):
         return False, "Target and reference ONTs must be on the same OLT"
 
-    ref_ports = list_imported_service_ports(
-        db,
-        olt_id=str(ref_olt.id),
-        fsp=ref_fsp,
-        ont_id_on_olt=ref_olt_ont_id,
-    )
+    try:
+        require_imported_service_port_state(db, olt_id=ref_olt.id)
+        ref_ports = list_imported_service_ports(
+            db,
+            olt_id=str(ref_olt.id),
+            fsp=ref_fsp,
+            ont_id_on_olt=ref_olt_ont_id,
+        )
+    except ImportedServicePortStateMissing as exc:
+        return False, str(exc)
     if not ref_ports:
         return False, "No imported service-ports found for reference ONT"
 

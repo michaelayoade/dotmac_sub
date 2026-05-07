@@ -5,11 +5,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OltServicePort, OntUnit
 from app.services.network.olt_ssh import ServicePortEntry
+
+
+class ImportedServicePortStateMissing(RuntimeError):
+    """Raised when an OLT has no imported service-port source-of-truth rows."""
 
 
 def service_port_entry_from_import(port: OltServicePort) -> ServicePortEntry:
@@ -43,6 +47,77 @@ def list_imported_service_ports(
         stmt = stmt.where(OltServicePort.ont_id_on_olt == ont_id_on_olt)
     stmt = stmt.order_by(OltServicePort.port_index)
     return [service_port_entry_from_import(port) for port in db.scalars(stmt).all()]
+
+
+def has_imported_service_port_state(
+    db: Session,
+    *,
+    olt_id: UUID | str,
+) -> bool:
+    """Return True when any service-port state has been imported for this OLT."""
+    olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
+    stmt = (
+        select(OltServicePort.id)
+        .where(OltServicePort.olt_device_id == olt_uuid)
+        .limit(1)
+    )
+    return db.scalars(stmt).first() is not None
+
+
+def require_imported_service_port_state(
+    db: Session,
+    *,
+    olt_id: UUID | str,
+) -> None:
+    """Fail unless imported service-port rows exist for this OLT."""
+    if not has_imported_service_port_state(db, olt_id=olt_id):
+        raise ImportedServicePortStateMissing(
+            "No imported service-port state exists for this OLT. "
+            "Run Import OLT State from a running configuration before provisioning."
+        )
+
+
+def imported_service_port_summary(
+    db: Session,
+    *,
+    olt_id: UUID | str,
+) -> dict[str, object]:
+    """Return aggregate visibility for imported service-port state."""
+    olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
+    total = db.scalar(
+        select(func.count()).select_from(OltServicePort).where(
+            OltServicePort.olt_device_id == olt_uuid
+        )
+    )
+    latest = db.scalar(
+        select(func.max(OltServicePort.last_imported_at)).where(
+            OltServicePort.olt_device_id == olt_uuid
+        )
+    )
+    by_source_rows = db.execute(
+        select(OltServicePort.source, func.count())
+        .where(OltServicePort.olt_device_id == olt_uuid)
+        .group_by(OltServicePort.source)
+        .order_by(OltServicePort.source)
+    ).all()
+    by_fsp_rows = db.execute(
+        select(OltServicePort.fsp, func.count())
+        .where(OltServicePort.olt_device_id == olt_uuid)
+        .group_by(OltServicePort.fsp)
+        .order_by(OltServicePort.fsp)
+    ).all()
+    return {
+        "count": int(total or 0),
+        "last_imported_at": latest,
+        "by_source": [
+            {"source": str(source or "unknown"), "count": int(count or 0)}
+            for source, count in by_source_rows
+        ],
+        "by_fsp": [
+            {"fsp": str(fsp or ""), "count": int(count or 0)}
+            for fsp, count in by_fsp_rows
+        ],
+    }
 
 
 def upsert_imported_service_port_from_readback(

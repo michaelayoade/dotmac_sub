@@ -275,6 +275,24 @@ def test_list_context_reads_imported_service_ports_without_live_olt(
     assert ports[0].gem_index == 2
 
 
+def test_list_context_fails_when_service_port_state_was_never_imported(
+    db_session, monkeypatch
+) -> None:
+    olt, ont = _create_olt_ont(db_session)
+    from app.services import web_network_service_ports as service
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_ont_olt_context",
+        lambda db, ont_id: (ont, olt, "0/2/1", 5),
+    )
+
+    context = service.list_context(db_session, str(ont.id))
+
+    assert "No imported service-port state" in context["error"]
+    assert context["service_ports"] == []
+
+
 def test_handle_clone_uses_allocator_indices(db_session, monkeypatch) -> None:
     olt, ont = _create_olt_ont(db_session)
     ref_ont = OntUnit(

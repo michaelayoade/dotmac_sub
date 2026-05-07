@@ -43,6 +43,19 @@ def test_imported_profile_state_context_returns_db_profiles(db_session):
     )
     db_session.flush()
     db_session.add(
+        OltServicePort(
+            olt_device_id=olt.id,
+            port_index=42,
+            fsp="0/1/7",
+            ont_id_on_olt=5,
+            vlan_id=203,
+            gem_index=1,
+            source="running_config",
+            last_imported_at=datetime.now(UTC),
+        )
+    )
+    db_session.flush()
+    db_session.add(
         OltOnuTypeProfileMapping(
             olt_id=olt.id,
             equipment_id="EG8145V5",
@@ -64,6 +77,8 @@ def test_imported_profile_state_context_returns_db_profiles(db_session):
         "EG8145V5"
     ]
     assert [mapping.gem_index for mapping in context["gem_mappings"]] == [1]
+    assert context["service_port_summary"]["count"] == 1
+    assert context["service_ports"][0].port_index == 42
 
 
 def test_save_imported_profile_mapping_requires_imported_profiles(db_session):

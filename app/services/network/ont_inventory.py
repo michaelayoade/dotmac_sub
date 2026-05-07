@@ -81,8 +81,10 @@ def cleanup_olt_state_for_return(
 ) -> tuple[bool, list[str], list[str]]:
     """Remove OLT-side service ports and deauthorize an ONT before inventory return."""
     from app.services.network.imported_service_ports import (
+        ImportedServicePortStateMissing,
         delete_imported_service_port,
         list_imported_service_ports,
+        require_imported_service_port_state,
     )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.service_port_allocator import release_all_for_ont
@@ -97,12 +99,17 @@ def cleanup_olt_state_for_return(
         return True, completed, errors
 
     adapter = get_protocol_adapter(olt)
-    service_ports = list_imported_service_ports(
-        db,
-        olt_id=olt.id,
-        fsp=fsp,
-        ont_id_on_olt=olt_ont_id,
-    )
+    try:
+        require_imported_service_port_state(db, olt_id=olt.id)
+        service_ports = list_imported_service_ports(
+            db,
+            olt_id=olt.id,
+            fsp=fsp,
+            ont_id_on_olt=olt_ont_id,
+        )
+    except ImportedServicePortStateMissing as exc:
+        errors.append(str(exc))
+        return False, completed, errors
     for service_port in service_ports:
         delete_result = adapter.delete_service_port(service_port.index)
         if not delete_result.success:
