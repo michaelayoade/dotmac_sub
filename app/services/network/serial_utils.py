@@ -26,6 +26,32 @@ def normalize(value: str | None) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
 
 
+def canonical(value: str | None) -> str:
+    """Return canonical serial form with hex vendor prefix decoded to ASCII.
+
+    Always returns the ASCII vendor prefix form (e.g., HWTCABEF7A70) regardless
+    of whether the input is hex-encoded (48575443ABEF7A70) or already ASCII.
+    Use for matching serials that may be in either format.
+
+    Examples:
+        "48575443ABEF7A70" → "HWTCABEF7A70"  (hex decoded)
+        "HWTCABEF7A70" → "HWTCABEF7A70"      (unchanged)
+        "HWTC-ABEF-7A70" → "HWTCABEF7A70"    (normalized)
+    """
+    normalized = normalize(value)
+    if not normalized:
+        return ""
+    # If 16-char hex, try to decode vendor prefix to ASCII
+    if len(normalized) == 16 and re.fullmatch(r"[0-9A-F]{16}", normalized):
+        try:
+            vendor_ascii = bytes.fromhex(normalized[:8]).decode("ascii")
+            if vendor_ascii.isalpha():
+                return vendor_ascii + normalized[8:]
+        except (ValueError, UnicodeDecodeError):
+            pass
+    return normalized
+
+
 def search_candidates(serial_number: str | None) -> list[str]:
     """Build likely serial variants for cross-system lookup.
 
