@@ -88,7 +88,10 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
         VlanPurpose,
     )
     from app.models.tr069 import Tr069AcsServer
-    from app.services.network.effective_ont_config import resolve_effective_ont_config
+    from app.services.network.effective_ont_config import (
+        internet_wcd_index_from_effective_values,
+        resolve_effective_ont_config,
+    )
 
     region = RegionZone(name="Test Region", code="desired-config")
     acs = Tr069AcsServer(
@@ -188,6 +191,12 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
                 equipment_id="EG8145V5",
                 line_profile_id=10,
                 service_profile_id=20,
+                wan_provisioning_mode="omci_wan_config",
+                internet_config_ip_index=1,
+                wan_config_profile_id=0,
+                pppoe_wcd_index=2,
+                mgmt_wcd_index=1,
+                primary_wan_service="INTERNET",
             ),
         ]
     )
@@ -215,8 +224,12 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     assert values["tr069_olt_profile_id"] == 30
     assert values["cr_username"] == "pack-cr-user"
     assert values["cr_password"] == "pack-cr-pass"
-    assert values["internet_config_ip_index"] == 0
-    assert values["wan_config_profile_id"] == 5
+    assert values["internet_config_ip_index"] == 1
+    assert values["wan_config_profile_id"] == 0
+    assert values["pppoe_wcd_index"] == 2
+    assert values["mgmt_wcd_index"] == 1
+    assert internet_wcd_index_from_effective_values(values) == 2
+    assert values["primary_wan_service"] == "INTERNET"
     assert values["pppoe_omci_vlan"] is None
     assert values["pppoe_username"] == "subscriber@example"
     assert values["wifi_ssid"] == "Subscriber-WiFi"
@@ -1074,6 +1087,7 @@ def test_web_wan_config_routes_pppoe_to_omci_when_enabled(db_session, monkeypatc
     assert result.success is True
     assert result.waiting is True
     assert result.data["delivery_transport"] == "olt_omci"
+    assert result.data["ip_index"] == 1
     assert calls == [
         ("internet", {"fsp": "0/2/11", "ont_id": 13, "ip_index": 1}),
         (
@@ -1103,6 +1117,8 @@ def test_ont_config_form_has_single_operator_path():
     assert "push-pppoe-omci" not in source
     assert "wan/pppoe-credentials" not in source
     assert "vlans or []" not in source
+    assert 'hx-indicator="find .config-spinner"' not in source
+    assert 'hx-indicator="#config-spinner-wan"' in source
     assert 'name="push_to_device" value="true"' in source
     assert "Save and apply device changes" in source
     assert "/wan/probe" not in panel

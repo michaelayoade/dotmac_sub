@@ -262,6 +262,141 @@ def test_config_pack_comprehensive_does_not_require_legacy_profile_defaults(db_s
     assert "service_profile_id" not in resolved.to_dict()
 
 
+def test_split_omci_wan_derives_ip_index_from_pppoe_wcd(db_session):
+    olt, acs, management_vlan, pool = _acs_ready_olt(db_session)
+    internet_vlan = Vlan(
+        region_id=management_vlan.region_id,
+        olt_device_id=olt.id,
+        tag=203,
+        name="Internet",
+        purpose=VlanPurpose.internet,
+        is_active=True,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "internet_vlan_id": str(internet_vlan.id),
+        "management_vlan_id": str(management_vlan.id),
+        "tr069_olt_profile_id": 5,
+        "internet_config_ip_index": 0,
+        "wan_config_profile_id": 0,
+        "mgmt_wcd_index": 1,
+        "pppoe_wcd_index": 2,
+    }
+    olt.tr069_acs_server_id = acs.id
+    olt.mgmt_ip_pool_id = pool.id
+    olt.supports_ont_internet_config = True
+    olt.supports_ont_wan_config = True
+    olt.wan_provisioning_mode = "omci_wan_config"
+    db_session.commit()
+
+    resolved = resolve_olt_config_pack(db_session, olt.id)
+
+    assert resolved is not None
+    assert resolved.internet_config_ip_index == 1
+    assert resolved.wan_config_profile_id == 0
+
+
+def test_config_pack_keeps_internet_config_when_wan_config_unsupported(db_session):
+    olt, acs, management_vlan, pool = _acs_ready_olt(db_session)
+    internet_vlan = Vlan(
+        region_id=management_vlan.region_id,
+        olt_device_id=olt.id,
+        tag=203,
+        name="Internet",
+        purpose=VlanPurpose.internet,
+        is_active=True,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "internet_vlan_id": str(internet_vlan.id),
+        "management_vlan_id": str(management_vlan.id),
+        "tr069_olt_profile_id": "5",
+        "internet_config_ip_index": "1",
+        "wan_config_profile_id": "0",
+        "mgmt_wcd_index": "1",
+        "pppoe_wcd_index": "2",
+    }
+    olt.tr069_acs_server_id = acs.id
+    olt.mgmt_ip_pool_id = pool.id
+    olt.supports_ont_internet_config = True
+    olt.supports_ont_wan_config = False
+    olt.wan_provisioning_mode = "omci_wan_config"
+    db_session.commit()
+
+    resolved = resolve_olt_config_pack(db_session, olt.id)
+
+    assert resolved is not None
+    assert resolved.tr069_olt_profile_id == 5
+    assert resolved.internet_config_ip_index == 1
+    assert resolved.wan_config_profile_id is None
+    assert resolved.pppoe_wcd_index == 2
+    assert resolved.mgmt_wcd_index == 1
+
+
+def test_runtime_refresh_uses_effective_pppoe_wcd_index():
+    from app.services.network.ont_action_device import _runtime_refresh_params
+
+    params = _runtime_refresh_params("InternetGatewayDevice", internet_wcd_index=2)
+
+    assert (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+        "WANPPPConnection.1.ConnectionStatus"
+    ) in params
+    assert (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+        "WANPPPConnection.1.Username"
+    ) in params
+    assert not any(
+        "WANConnectionDevice.1.WANPPPConnection.1" in path for path in params
+    )
+    assert (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+        "WANIPConnection.1.ConnectionStatus"
+    ) in params
+
+
+def test_config_pack_normalizes_blank_numeric_json_values(db_session):
+    olt, acs, management_vlan, pool = _acs_ready_olt(db_session)
+    internet_vlan = Vlan(
+        region_id=management_vlan.region_id,
+        olt_device_id=olt.id,
+        tag=203,
+        name="Internet",
+        purpose=VlanPurpose.internet,
+        is_active=True,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {
+        "internet_vlan_id": str(internet_vlan.id),
+        "management_vlan_id": str(management_vlan.id),
+        "tr069_olt_profile_id": "",
+        "internet_config_ip_index": "",
+        "wan_config_profile_id": "",
+        "internet_gem_index": "",
+        "mgmt_traffic_table_inbound": "",
+        "pppoe_wcd_index": "",
+    }
+    olt.tr069_acs_server_id = acs.id
+    olt.mgmt_ip_pool_id = pool.id
+    olt.supports_ont_internet_config = True
+    olt.supports_ont_wan_config = True
+    olt.wan_provisioning_mode = "omci_wan_config"
+    db_session.commit()
+
+    resolved = resolve_olt_config_pack(db_session, olt.id)
+
+    assert resolved is not None
+    assert resolved.tr069_olt_profile_id is None
+    assert resolved.internet_config_ip_index is None
+    assert resolved.wan_config_profile_id is None
+    assert resolved.internet_gem_index is None
+    assert resolved.mgmt_traffic_table_inbound is None
+    assert resolved.pppoe_wcd_index is None
+
+
 def test_config_pack_comprehensive_ignores_legacy_gem_index(db_session):
     olt, acs, management_vlan, pool = _acs_ready_olt(db_session)
     internet_vlan = Vlan(

@@ -64,6 +64,37 @@ def _is_ont_already_absent(message: str | None) -> bool:
     )
 
 
+def _is_service_port_already_absent(message: str | None) -> bool:
+    normalized = (message or "").casefold()
+    return (
+        "service virtual port does not exist" in normalized
+        or "service-port does not exist" in normalized
+        or "service port does not exist" in normalized
+        or "service-port not found" in normalized
+        or "service port not found" in normalized
+    )
+
+
+def _verify_service_port_absent_on_olt(
+    olt: OLTDevice, service_port_index: int
+) -> tuple[bool, str]:
+    from app.services.network.olt_ssh_service_ports import get_service_port_by_index
+
+    ok, message, entry = get_service_port_by_index(olt, service_port_index)
+    if ok and entry is None:
+        return True, message
+    if not ok and _is_service_port_already_absent(message):
+        return True, message
+    if ok and entry is not None:
+        return False, f"Service-port {service_port_index} still exists on the OLT"
+    return False, message
+
+
+def _should_reconcile_service_port_delete_failure(message: str | None) -> bool:
+    normalized = (message or "").casefold()
+    return _is_service_port_already_absent(message) or "olt rejected" in normalized
+
+
 def _resolve_return_olt_context(
     db: Session, ont_id: str
 ) -> tuple[object | None, OLTDevice | None, str | None, int | None]:
@@ -113,8 +144,44 @@ def cleanup_olt_state_for_return(
     for service_port in service_ports:
         delete_result = adapter.delete_service_port(service_port.index)
         if not delete_result.success:
+            verify_message = "not checked"
+            if _should_reconcile_service_port_delete_failure(delete_result.message):
+                absent, verify_message = _verify_service_port_absent_on_olt(
+                    olt, service_port.index
+                )
+                if absent:
+                    delete_imported_service_port(
+                        db,
+                        olt_id=olt.id,
+                        port_index=service_port.index,
+                    )
+                    db.flush()
+                    completed.append(
+                        f"Service-port {service_port.index} already absent from OLT; "
+                        "removed stale imported row"
+                    )
+                    try:
+                        emit_event(
+                            db,
+                            EventType.ont_service_port_deleted,
+                            {
+                                "ont_id": ont_id,
+                                "ont_serial": getattr(ont, "serial_number", None),
+                                "olt_id": str(olt.id),
+                                "olt_name": olt.name,
+                                "service_port_index": service_port.index,
+                                "already_absent": True,
+                            },
+                            actor="system",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to emit ont_service_port_deleted event: %s", exc
+                        )
+                    continue
             errors.append(
-                f"Failed to remove service-port {service_port.index}: {delete_result.message}"
+                f"Failed to remove service-port {service_port.index}: "
+                f"{delete_result.message}; live check: {verify_message}"
             )
             return False, completed, errors
         delete_imported_service_port(
@@ -122,6 +189,7 @@ def cleanup_olt_state_for_return(
             olt_id=olt.id,
             port_index=service_port.index,
         )
+        db.flush()
         completed.append(f"Removed service-port {service_port.index}")
         try:
             emit_event(
@@ -412,6 +480,15 @@ def _release_management_ip_for_inventory_return(
         seen_record_ids.add(record.id)
         if getattr(record, "assignment", None):
             continue
+        record_owner = getattr(record, "ont_unit_id", None)
+        if record_owner is not None and str(record_owner) != ont_id:
+            continue
+        record_notes = str(getattr(record, "notes", "") or "").strip()
+        if record_notes and record_notes not in reservation_notes:
+            continue
+        allocation_type = str(getattr(record, "allocation_type", "") or "").strip()
+        if allocation_type and allocation_type != "management":
+            continue
         released.append(record.address)
         record.is_reserved = False
         record.notes = None
@@ -423,6 +500,84 @@ def _release_management_ip_for_inventory_return(
         assignment.mgmt_ip_mode = MgmtIpMode.inactive
         assignment.mgmt_subnet = None
         assignment.mgmt_gateway = None
+
+    return released
+
+
+def _configured_wan_static_ips_for_inventory_return(
+    *, ont, assignments: list[OntAssignment]
+) -> set[str]:
+    """Collect WAN static IPs tied to the returned ONT's saved service config."""
+    static_ips = {
+        str(assignment.static_ip).strip()
+        for assignment in assignments
+        if getattr(assignment, "static_ip", None)
+    }
+    desired_config = getattr(ont, "desired_config", None)
+    if isinstance(desired_config, dict):
+        wan_config = desired_config.get("wan")
+        if isinstance(wan_config, dict) and wan_config.get("static_ip"):
+            static_ips.add(str(wan_config["static_ip"]).strip())
+        if desired_config.get("static_ip"):
+            static_ips.add(str(desired_config["static_ip"]).strip())
+    return {ip for ip in static_ips if ip}
+
+
+def _release_wan_static_ip_for_inventory_return(
+    db: Session,
+    *,
+    ont,
+    assignments: list[OntAssignment],
+) -> list[str]:
+    """Deactivate subscriber WAN IPAM assignments owned by the returned ONT."""
+    all_assignments = list(
+        db.scalars(
+            select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
+        ).all()
+    )
+    by_id = {assignment.id: assignment for assignment in [*assignments, *all_assignments]}
+    assignments_to_release = list(by_id.values())
+    subscriber_ids = {
+        str(assignment.subscriber_id)
+        for assignment in assignments_to_release
+        if getattr(assignment, "subscriber_id", None)
+    }
+    service_address_ids = {
+        str(assignment.service_address_id)
+        for assignment in assignments_to_release
+        if getattr(assignment, "service_address_id", None)
+    }
+    candidate_ips = _configured_wan_static_ips_for_inventory_return(
+        ont=ont,
+        assignments=assignments_to_release,
+    )
+    if not candidate_ips or (not subscriber_ids and not service_address_ids):
+        return []
+
+    records = db.scalars(
+        select(IPv4Address).where(IPv4Address.address.in_(candidate_ips))
+    ).all()
+    released: list[str] = []
+    for record in records:
+        assignment = getattr(record, "assignment", None)
+        if assignment is None or not getattr(assignment, "is_active", False):
+            continue
+        assignment_subscriber_id = str(assignment.subscriber_id)
+        assignment_service_address_id = (
+            str(assignment.service_address_id)
+            if getattr(assignment, "service_address_id", None)
+            else None
+        )
+        if service_address_ids:
+            if assignment_service_address_id not in service_address_ids:
+                continue
+        elif assignment_subscriber_id not in subscriber_ids:
+            continue
+        if str(getattr(record, "allocation_type", "") or "").strip() != "wan":
+            continue
+        assignment.is_active = False
+        record.allocation_type = None
+        released.append(record.address)
 
     return released
 
@@ -540,8 +695,8 @@ def reset_ont_service_state(db: Session, ont, *, reason: str = "service_reset") 
 def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     """Return an ONT to reusable inventory, closing assignments and service state."""
     from app.services.web_network_ont_autofind import (
-        ensure_returned_inventory_candidate,
         build_unconfigured_onts_redirect_url,
+        ensure_returned_inventory_candidate,
     )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -594,6 +749,11 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                 assignment.release_reason = "returned_to_inventory"
 
             released_management_ips = _release_management_ip_for_inventory_return(
+                db,
+                ont=ont,
+                assignments=list(active_assignments),
+            )
+            released_wan_static_ips = _release_wan_static_ip_for_inventory_return(
                 db,
                 ont=ont,
                 assignments=list(active_assignments),
@@ -703,6 +863,13 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             "management IP released"
             if count == 1
             else f"{count} management IPs released"
+        )
+    if "released_wan_static_ips" in locals() and released_wan_static_ips:
+        count = len(released_wan_static_ips)
+        parts.append(
+            "static WAN IP released"
+            if count == 1
+            else f"{count} static WAN IPs released"
         )
     if "acs_completed" in locals() and acs_completed:
         parts.append("ACS device state removed")

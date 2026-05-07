@@ -40,6 +40,7 @@ from app.services.credential_crypto import (
     encrypt_credential,
     encrypt_nas_credentials,
     generate_encryption_key,
+    get_encryption_key,
     is_encrypted,
 )
 from app.services.payment_arrangements import (
@@ -68,6 +69,16 @@ class TestCredentialCrypto:
         key1 = generate_encryption_key()
         key2 = generate_encryption_key()
         assert key1 != key2
+
+    def test_get_encryption_key_prefers_env_without_openbao_probe(self, monkeypatch):
+        key = Fernet.generate_key().decode("ascii")
+        monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key)
+        monkeypatch.setattr(
+            "app.services.secrets.get_secret",
+            lambda *_args, **_kwargs: pytest.fail("OpenBao fallback should not be probed"),
+        )
+
+        assert get_encryption_key() == key.encode("ascii")
 
     def test_encrypt_decrypt_round_trip(self):
         key = Fernet.generate_key().decode("ascii")

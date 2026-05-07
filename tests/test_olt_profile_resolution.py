@@ -18,8 +18,10 @@ from app.services.network.olt_profile_resolution import (
     choose_service_profile,
     resolve_authorization_profiles_from_import,
 )
-from app.services.network.olt_state_import import _import_profile_mappings
-from app.services.network.olt_state_import import import_olt_state_from_dump
+from app.services.network.olt_state_import import (
+    _import_profile_mappings,
+    import_olt_state_from_dump,
+)
 
 
 def test_choose_service_profile_prefers_model_name_over_generic_count_match():
@@ -272,6 +274,106 @@ quit
     assert mapping.equipment_id == "EG8145V5"
     assert mapping.line_profile_id == 40
     assert mapping.service_profile_id == 41
+
+
+def test_import_olt_state_from_dump_preserves_ascii_registration_serial(
+    db_session,
+    tmp_path,
+):
+    olt = OLTDevice(name="Dump ASCII Serial OLT", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    (tmp_path / "10_ont_lineprofile_all.txt").write_text(
+        """
+$ display ont-lineprofile gpon all
+  -----------------------------------------------------------------------------
+  Profile-ID  Profile-name                                Binding times
+  -----------------------------------------------------------------------------
+  40          SMARTOLT_FLEXIBLE_GPON                      1
+  -----------------------------------------------------------------------------
+  Total: 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "11_ont_srvprofile_all.txt").write_text(
+        """
+$ display ont-srvprofile gpon all
+  -----------------------------------------------------------------------------
+  Profile-ID  Profile-name                                Binding times
+  -----------------------------------------------------------------------------
+  41          EG8145V5                                    1
+  -----------------------------------------------------------------------------
+  Total: 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "99_running_config.txt").write_text(
+        """
+interface gpon 0/2
+ ont add 9 12 sn-auth "HWTC600AC29C" omci ont-lineprofile-id 40
+ont-srvprofile-id 41 desc "ASCII serial"
+quit
+""",
+        encoding="utf-8",
+    )
+
+    result = import_olt_state_from_dump(db_session, str(olt.id), tmp_path)
+
+    assert result.success is True
+    registration = db_session.scalars(
+        select(OltOntRegistration).where(OltOntRegistration.olt_id == olt.id)
+    ).one()
+    assert registration.serial_number == "HWTC600AC29C"
+
+
+def test_import_olt_state_from_dump_canonicalizes_hex_registration_serial(
+    db_session,
+    tmp_path,
+):
+    olt = OLTDevice(name="Dump Hex Serial OLT", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    (tmp_path / "10_ont_lineprofile_all.txt").write_text(
+        """
+$ display ont-lineprofile gpon all
+  -----------------------------------------------------------------------------
+  Profile-ID  Profile-name                                Binding times
+  -----------------------------------------------------------------------------
+  40          SMARTOLT_FLEXIBLE_GPON                      1
+  -----------------------------------------------------------------------------
+  Total: 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "11_ont_srvprofile_all.txt").write_text(
+        """
+$ display ont-srvprofile gpon all
+  -----------------------------------------------------------------------------
+  Profile-ID  Profile-name                                Binding times
+  -----------------------------------------------------------------------------
+  41          EG8145V5                                    1
+  -----------------------------------------------------------------------------
+  Total: 1
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "99_running_config.txt").write_text(
+        """
+interface gpon 0/2
+ ont add 9 12 sn-auth "48575443600AC29C" omci ont-lineprofile-id 40
+ont-srvprofile-id 41 desc "HEX serial"
+quit
+""",
+        encoding="utf-8",
+    )
+
+    result = import_olt_state_from_dump(db_session, str(olt.id), tmp_path)
+
+    assert result.success is True
+    registration = db_session.scalars(
+        select(OltOntRegistration).where(OltOntRegistration.olt_id == olt.id)
+    ).one()
+    assert registration.serial_number == "HWTC600AC29C"
 
 
 def test_import_olt_state_from_dump_maps_inventory_model_to_imported_registration(

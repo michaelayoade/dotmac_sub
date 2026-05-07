@@ -465,6 +465,26 @@ class TestSyncScheduledTask:
         assert task.updated_at == original_updated_at
 
 
+class TestRetireScheduledTask:
+    """Tests for _retire_scheduled_task helper."""
+
+    def test_disables_enabled_matching_tasks(self, db_session):
+        task = ScheduledTask(
+            name="retired_task",
+            task_name="app.tasks.removed.run",
+            schedule_type=ScheduleType.interval,
+            interval_seconds=3600,
+            enabled=True,
+        )
+        db_session.add(task)
+        db_session.commit()
+
+        scheduler_config._retire_scheduled_task(db_session, "app.tasks.removed.run")
+
+        db_session.refresh(task)
+        assert task.enabled is False
+
+
 # =============================================================================
 # Get Celery Config Tests
 # =============================================================================

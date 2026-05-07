@@ -112,6 +112,22 @@ _RUNTIME_REFRESH_PARAMS = {
     ],
 }
 
+
+def _runtime_refresh_params(root: str, *, internet_wcd_index: int = 1) -> list[str]:
+    params = list(_RUNTIME_REFRESH_PARAMS.get(root, _RUNTIME_REFRESH_PARAMS["Device"]))
+    if root != "InternetGatewayDevice" or internet_wcd_index == 1:
+        return params
+    return [
+        path.replace(
+            "WANDevice.1.WANConnectionDevice.1.",
+            f"WANDevice.1.WANConnectionDevice.{internet_wcd_index}.",
+        )
+        if "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1" in path
+        else path
+        for path in params
+    ]
+
+
 _PING_PATHS = {
     "Device": {
         "host": "IP.Diagnostics.IPPing.Host",
@@ -219,12 +235,20 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
     try:
         root = detect_data_model_root(db, ont, client, device_id)
         persist_data_model_root(ont, root)
+        internet_wcd_index = 1
+        if root == "InternetGatewayDevice":
+            from app.services.network.effective_ont_config import (
+                resolve_internet_wcd_index,
+            )
+
+            internet_wcd_index = resolve_internet_wcd_index(db, ont)
         result = client.create_task_and_wait(
             device_id,
             {
                 "name": "getParameterValues",
-                "parameterNames": _RUNTIME_REFRESH_PARAMS.get(
-                    root, _RUNTIME_REFRESH_PARAMS["Device"]
+                "parameterNames": _runtime_refresh_params(
+                    root,
+                    internet_wcd_index=internet_wcd_index,
                 ),
             },
         )

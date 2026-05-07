@@ -49,30 +49,98 @@ def _get_active_assignment(ont: OntUnit) -> OntAssignment | None:
     return None
 
 
-def _resolve_imported_line_profile_id(
+def _resolve_imported_profile_mapping(
     db: Session,
     ont: OntUnit | None,
     olt_id: object | None,
-) -> tuple[int | None, int | None]:
+) -> OltOnuTypeProfileMapping | None:
     if ont is None or olt_id is None:
-        return None, None
+        return None
 
     equipment_id = normalize_ont_equipment_id(getattr(ont, "model", None))
     if not equipment_id:
         onu_type = getattr(ont, "onu_type", None)
         equipment_id = normalize_ont_equipment_id(getattr(onu_type, "name", None))
     if not equipment_id:
-        return None, None
+        return None
 
-    mapping = db.scalars(
+    return db.scalars(
         select(OltOnuTypeProfileMapping)
         .where(OltOnuTypeProfileMapping.olt_id == olt_id)
         .where(OltOnuTypeProfileMapping.equipment_id == equipment_id)
         .limit(1)
     ).first()
+
+
+def _resolve_imported_line_profile_id(
+    db: Session,
+    ont: OntUnit | None,
+    olt_id: object | None,
+) -> tuple[int | None, int | None]:
+    mapping = _resolve_imported_profile_mapping(db, ont, olt_id)
     if mapping is None:
         return None, None
     return int(mapping.line_profile_id), int(mapping.service_profile_id)
+
+
+def _mapping_value(mapping: OltOnuTypeProfileMapping | None, field: str) -> Any:
+    if mapping is None:
+        return None
+    return getattr(mapping, field, None)
+
+
+def _coalesce_mapping_config(
+    mapping: OltOnuTypeProfileMapping | None,
+    config_pack: OltConfigPack | None,
+    field: str,
+    default: Any = None,
+) -> Any:
+    mapping_override = _mapping_value(mapping, field)
+    if mapping_override is not None:
+        return mapping_override
+    if config_pack is None:
+        return default
+    return getattr(config_pack, field, default)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def internet_wcd_index_from_effective_values(
+    values: dict[str, Any],
+    *,
+    default: int = 1,
+) -> int:
+    """Return the TR-098 WANConnectionDevice index for subscriber internet."""
+    pppoe_wcd_index = _int_or_none(values.get("pppoe_wcd_index"))
+    if pppoe_wcd_index is not None and pppoe_wcd_index > 0:
+        return pppoe_wcd_index
+
+    wan_instance_index = _int_or_none(values.get("wan_instance_index"))
+    if wan_instance_index is not None and wan_instance_index > 0:
+        return wan_instance_index
+
+    return default
+
+
+def resolve_internet_wcd_index(
+    db: Session,
+    ont: OntUnit,
+    *,
+    default: int = 1,
+) -> int:
+    """Resolve the ONT's effective TR-098 internet WANConnectionDevice index."""
+    effective = resolve_effective_ont_config(db, ont)
+    values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    if not isinstance(values, dict):
+        return default
+    return internet_wcd_index_from_effective_values(values, default=default)
 
 
 def _resolve_imported_vlan_gem_index(
@@ -180,8 +248,12 @@ def _values_from_assignment(
     wan_vlan = config_pack.internet_vlan if config_pack else None
     mgmt_vlan = config_pack.management_vlan if config_pack else None
     olt_id = config_pack.olt_id if config_pack else getattr(ont, "olt_device_id", None)
-    imported_line_profile_id, imported_service_profile_id = (
-        _resolve_imported_line_profile_id(db, ont, olt_id)
+    profile_mapping = _resolve_imported_profile_mapping(db, ont, olt_id)
+    imported_line_profile_id = (
+        int(profile_mapping.line_profile_id) if profile_mapping else None
+    )
+    imported_service_profile_id = (
+        int(profile_mapping.service_profile_id) if profile_mapping else None
     )
     imported_wan_gem_index = _resolve_imported_vlan_gem_index(
         db,
@@ -243,20 +315,33 @@ def _values_from_assignment(
         "tr069_olt_profile_id": config_pack.tr069_olt_profile_id if config_pack else None,
         "cr_username": config_pack.cr_username if config_pack else None,
         "cr_password": config_pack.cr_password if config_pack else None,
-        "internet_config_ip_index": config_pack.internet_config_ip_index if config_pack else None,
-        "wan_config_profile_id": config_pack.wan_config_profile_id if config_pack else None,
-        "wan_provisioning_mode": config_pack.wan_provisioning_mode if config_pack else "omci_wan_config",
+        "internet_config_ip_index": _coalesce_mapping_config(
+            profile_mapping, config_pack, "internet_config_ip_index"
+        ),
+        "wan_config_profile_id": _coalesce_mapping_config(
+            profile_mapping, config_pack, "wan_config_profile_id"
+        ),
+        "wan_provisioning_mode": _coalesce_mapping_config(
+            profile_mapping, config_pack, "wan_provisioning_mode", "omci_wan_config"
+        ),
         "supports_ont_home_gateway_config": (
             config_pack.supports_ont_home_gateway_config if config_pack else False
         ),
         "pppoe_omci_vlan": None,
         # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i})
-        "pppoe_wcd_index": config_pack.pppoe_wcd_index if config_pack else None,
-        "mgmt_wcd_index": config_pack.mgmt_wcd_index if config_pack else None,
-        "voip_wcd_index": config_pack.voip_wcd_index if config_pack else None,
+        "pppoe_wcd_index": _coalesce_mapping_config(
+            profile_mapping, config_pack, "pppoe_wcd_index"
+        ),
+        "mgmt_wcd_index": _coalesce_mapping_config(
+            profile_mapping, config_pack, "mgmt_wcd_index"
+        ),
+        "voip_wcd_index": _coalesce_mapping_config(
+            profile_mapping, config_pack, "voip_wcd_index"
+        ),
         "authorization_line_profile_id": imported_line_profile_id,
         "authorization_service_profile_id": imported_service_profile_id,
-        "primary_wan_service": cfg("wan", "primary_service"),
+        "primary_wan_service": _mapping_value(profile_mapping, "primary_wan_service")
+        or cfg("wan", "primary_service"),
     }
 
 

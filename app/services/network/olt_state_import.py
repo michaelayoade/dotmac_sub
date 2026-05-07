@@ -20,14 +20,14 @@ from sqlalchemy.orm import Session
 
 from app.models.network import (
     OLTDevice,
-    OltLineProfileGemMapping,
     OltLineProfile,
+    OltLineProfileGemMapping,
     OltOntRegistration,
     OltOnuTypeProfileMapping,
-    OltServiceProfile,
     OltServicePort,
-    OnuType,
+    OltServiceProfile,
     OntUnit,
+    OnuType,
     PonPort,
 )
 from app.services.network.equipment_identity import normalize_ont_equipment_id
@@ -39,8 +39,15 @@ from app.services.network.olt_profile_resolution import (
 from app.services.network.olt_ssh_profiles import _parse_profile_table
 from app.services.network.parsers import parse_ont_info, parse_ont_info_detail
 from app.services.network.serial_utils import (
+    canonical as canonical_serial,
+)
+from app.services.network.serial_utils import (
     normalize as normalize_serial,
+)
+from app.services.network.serial_utils import (
     parse_ont_id_on_olt,
+)
+from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
 )
 
@@ -147,8 +154,8 @@ def _looks_like_equipment_profile(name: str | None) -> bool:
 
 
 def _plain_serial_or_none(value: str | None) -> str | None:
-    clean = str(value or "").strip().upper()
-    if re.fullmatch(r"[0-9A-F]{12,32}", clean):
+    clean = canonical_serial(value)
+    if re.fullmatch(r"[A-Z0-9]{8,32}", clean):
         return clean
     return None
 

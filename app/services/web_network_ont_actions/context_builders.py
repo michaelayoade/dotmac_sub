@@ -13,7 +13,10 @@ from app.models.network import OntAssignment
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.network._util import first_present as _first_present
-from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.effective_ont_config import (
+    internet_wcd_index_from_effective_values,
+    resolve_effective_ont_config,
+)
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.services.web_network_ont_actions._common import (
     _display_olt_value,
@@ -55,6 +58,7 @@ def _desired_config_context(
     wan_vlan = _first_present(
         values.get("wan_vlan"),
     )
+    internet_wcd_index = internet_wcd_index_from_effective_values(values)
 
     mgmt_mode = _first_present(
         values.get("mgmt_ip_mode"),
@@ -84,7 +88,7 @@ def _desired_config_context(
             "subnet_mask": str(values.get("wan_static_subnet") or ""),
             "gateway": str(values.get("wan_static_gateway") or ""),
             "dns_servers": str(values.get("wan_static_dns") or ""),
-            "instance_index": 1,
+            "instance_index": internet_wcd_index,
             "pppoe_username": str(values.get("pppoe_username") or ""),
         },
         "desired_lan_config": {

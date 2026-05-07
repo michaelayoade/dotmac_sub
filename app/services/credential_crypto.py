@@ -52,8 +52,9 @@ def get_encryption_key() -> bytes | None:
     """Get the Fernet encryption key from settings or environment.
 
     Checks in order:
-    1. Database settings (credential_encryption_key in security domain)
-    2. Environment variable CREDENTIAL_ENCRYPTION_KEY
+    1. Environment variable CREDENTIAL_ENCRYPTION_KEY
+    2. Database settings (credential_encryption_key in security domain)
+    3. Legacy OpenBao auth/credential_encryption_key fallback
 
     Returns:
         Fernet key bytes if set, None otherwise
@@ -62,15 +63,8 @@ def get_encryption_key() -> bytes | None:
 
     key_str: str | bytes | None = None
 
-    # Try OpenBao first, then settings DB, then env var
-    try:
-        from app.services.secrets import get_secret
-
-        bao_val = get_secret("auth", "credential_encryption_key")
-        if bao_val:
-            key_str = bao_val
-    except Exception:
-        _logger.debug("OpenBao credential encryption key lookup failed", exc_info=True)
+    # Explicit runtime config should not trigger OpenBao lookups during startup.
+    key_str = os.environ.get(_ENCRYPTION_KEY_ENV)
 
     if not key_str:
         try:
@@ -97,9 +91,17 @@ def get_encryption_key() -> bytes | None:
                 exc_info=True,
             )
 
-    # Fall back to environment variable
     if not key_str:
-        key_str = os.environ.get(_ENCRYPTION_KEY_ENV)
+        try:
+            from app.services.secrets import get_secret
+
+            bao_val = get_secret("auth", "credential_encryption_key")
+            if bao_val:
+                key_str = bao_val
+        except Exception:
+            _logger.debug(
+                "OpenBao credential encryption key lookup failed", exc_info=True
+            )
 
     if not key_str:
         if not _encryption_warning_logged:

@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.models.compensation_failure import CompensationFailure
 from app.models.network import (
+    IPAssignment,
     IpBlock,
     IpPool,
     IPv4Address,
@@ -313,6 +315,63 @@ def test_return_to_inventory_clears_historical_assignment_management_ips(
     assert sample_assignment.mgmt_ip_mode == MgmtIpMode.inactive
 
 
+def test_return_to_inventory_does_not_release_management_ip_owned_by_other_ont(
+    db_session, sample_ont, sample_olt, sample_assignment
+):
+    """Historical management IP cleanup must not clear another ONT's reservation."""
+    other_ont = OntUnit(
+        serial_number="HWTC87654321",
+        is_active=True,
+    )
+    db_session.add(other_ont)
+    db_session.flush()
+    sample_assignment.active = False
+    sample_assignment.released_at = datetime.now(UTC)
+    sample_assignment.release_reason = "previous_return"
+    sample_assignment.mgmt_ip_mode = MgmtIpMode.static_ip
+    sample_assignment.mgmt_ip_address = "172.16.201.9"
+    sample_assignment.mgmt_subnet = "255.255.255.0"
+    sample_assignment.mgmt_gateway = "172.16.201.1"
+    other_record = IPv4Address(
+        address="172.16.201.9",
+        is_reserved=True,
+        notes=f"ont:{other_ont.id}",
+        ont_unit_id=other_ont.id,
+        allocation_type="management",
+    )
+    db_session.add(other_record)
+    db_session.commit()
+
+    mock_adapter = MagicMock()
+    mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+        success=True,
+        message="OK",
+        data={"service_ports": []},
+    )
+    mock_adapter.deauthorize_ont.return_value = ActionResult(
+        success=True,
+        message="ONT deauthorized",
+    )
+
+    with (
+        patch(
+            "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+            return_value=mock_adapter,
+        ),
+    ):
+        result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+    assert result.success is True
+    db_session.refresh(sample_assignment)
+    db_session.refresh(other_record)
+    assert sample_assignment.mgmt_ip_address is None
+    assert sample_assignment.mgmt_ip_mode == MgmtIpMode.inactive
+    assert other_record.is_reserved is True
+    assert other_record.notes == f"ont:{other_ont.id}"
+    assert other_record.ont_unit_id == other_ont.id
+    assert other_record.allocation_type == "management"
+
+
 class TestReturnOntToInventory:
     """Tests for return_ont_to_inventory function."""
 
@@ -414,6 +473,67 @@ class TestReturnOntToInventory:
         assert sample_assignment.pppoe_password is None
         assert sample_assignment.wifi_ssid is None
         assert sample_assignment.static_ip is None
+
+    def test_success_releases_subscriber_wan_static_ipam_assignment(
+        self, db_session, sample_ont, sample_olt, sample_assignment, subscriber
+    ):
+        """Returned inventory ONTs release their subscriber WAN static IPAM claim."""
+        pool = IpPool(
+            name="Return WAN Pool",
+            ip_version=IPVersion.ipv4,
+            cidr="100.64.30.0/24",
+            gateway="100.64.30.1",
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.flush()
+        db_session.add(
+            IpBlock(pool_id=pool.id, cidr="100.64.30.0/30", is_active=True)
+        )
+        address = IPv4Address(
+            address="100.64.30.2",
+            pool_id=pool.id,
+            allocation_type="wan",
+        )
+        db_session.add(address)
+        db_session.flush()
+        ip_assignment = IPAssignment(
+            subscriber_id=subscriber.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=address.id,
+            is_active=True,
+        )
+        sample_assignment.subscriber_id = subscriber.id
+        sample_assignment.static_ip = "100.64.30.2"
+        sample_ont.desired_config = {"wan": {"static_ip": "100.64.30.2"}}
+        db_session.add(ip_assignment)
+        db_session.commit()
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="ONT deauthorized",
+        )
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+        ):
+            result = return_ont_to_inventory(db_session, str(sample_ont.id))
+
+        assert result.success is True
+        assert "static WAN IP released" in result.message
+        db_session.refresh(ip_assignment)
+        db_session.refresh(address)
+        assert ip_assignment.is_active is False
+        assert address.allocation_type is None
 
     def test_success_keeps_ont_active(self, db_session, sample_ont, sample_olt, sample_assignment):
         """Test that ONT remains active for reuse (not decommissioned)."""
@@ -1199,6 +1319,46 @@ class TestReturnToInventoryForWeb:
         assert call_kwargs["ont_id"] == sample_ont.id
 
 
+def test_admin_return_to_inventory_runs_synchronously(monkeypatch):
+    from app.web.admin import network_onts_actions
+
+    calls = {}
+
+    class Request:
+        headers = {"hx-request": "true"}
+
+    def fail_enqueue(*args, **kwargs):
+        raise AssertionError("return-to-inventory must not enqueue Celery")
+
+    def fake_return_to_inventory_for_web(db, ont_id, *, request=None):
+        calls["db"] = db
+        calls["ont_id"] = ont_id
+        calls["request"] = request
+        return SimpleNamespace(success=True, message="ONT returned to inventory")
+
+    monkeypatch.setattr(
+        network_onts_actions,
+        "_ensure_ont_write_scope",
+        lambda request, db, ont_id: None,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "return_to_inventory_for_web",
+        fake_return_to_inventory_for_web,
+    )
+    monkeypatch.setattr(network_onts_actions, "enqueue_task", fail_enqueue, raising=False)
+
+    response = network_onts_actions.ont_return_to_inventory(
+        Request(),
+        "ont-1",
+        object(),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["HX-Redirect"] == "/admin/network/onts?view=unconfigured"
+    assert calls["ont_id"] == "ont-1"
+
+
 class TestCleanupOltStateForReturn:
     """Tests for the OLT cleanup helper."""
 
@@ -1250,6 +1410,63 @@ class TestCleanupOltStateForReturn:
         assert success is False
         assert any("service-port" in e.lower() for e in errors)
         mock_adapter.get_service_ports_for_ont.assert_not_called()
+
+    def test_reconciles_stale_imported_service_port_when_absent_on_olt(
+        self, db_session, sample_ont, sample_olt
+    ):
+        """Delete stale imported service-port rows when live OLT state is already clean."""
+        from app.services.web_network_ont_actions.inventory import (
+            _cleanup_olt_state_for_return,
+        )
+
+        _add_imported_service_port(
+            db_session,
+            sample_olt,
+            sample_ont,
+            port_index=42,
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.delete_service_port.return_value = ActionResult(
+            success=False,
+            message="OLT rejected: Failure: Service virtual port does not exist",
+        )
+        mock_adapter.deauthorize_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+        )
+
+        with (
+            patch(
+                "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+                return_value=mock_adapter,
+            ),
+            patch(
+                "app.services.network.olt_ssh_service_ports.get_service_port_by_index",
+                return_value=(
+                    False,
+                    "OLT rejected: Failure: Service virtual port does not exist",
+                    None,
+                ),
+            ),
+            patch(
+                "app.services.network.service_port_allocator.release_all_for_ont",
+                return_value=0,
+            ),
+        ):
+            success, completed, errors = _cleanup_olt_state_for_return(
+                db_session, str(sample_ont.id)
+            )
+
+        assert success is True
+        assert errors == []
+        assert any("already absent" in c.lower() for c in completed)
+        assert (
+            db_session.query(OltServicePort)
+            .filter(OltServicePort.port_index == 42)
+            .first()
+            is None
+        )
+        mock_adapter.deauthorize_ont.assert_called_once_with("0/1/2", 5)
 
     def test_failure_when_deauthorization_fails(
         self, db_session, sample_ont, sample_olt

@@ -118,6 +118,13 @@ def save_imported_profile_mapping(
     equipment_id: str,
     line_profile_id: int,
     service_profile_id: int,
+    wan_provisioning_mode: str | None = None,
+    internet_config_ip_index: int | None = None,
+    wan_config_profile_id: int | None = None,
+    pppoe_wcd_index: int | None = None,
+    mgmt_wcd_index: int | None = None,
+    voip_wcd_index: int | None = None,
+    primary_wan_service: str | None = None,
 ) -> tuple[bool, str]:
     """Create or update an OLT equipment mapping using imported profiles only."""
     olt = db.get(OLTDevice, olt_id)
@@ -162,12 +169,26 @@ def save_imported_profile_mapping(
             equipment_id=clean_equipment_id,
             line_profile_id=line_profile_id,
             service_profile_id=service_profile_id,
+            wan_provisioning_mode=wan_provisioning_mode,
+            internet_config_ip_index=internet_config_ip_index,
+            wan_config_profile_id=wan_config_profile_id,
+            pppoe_wcd_index=pppoe_wcd_index,
+            mgmt_wcd_index=mgmt_wcd_index,
+            voip_wcd_index=voip_wcd_index,
+            primary_wan_service=primary_wan_service,
             source_registration_count=0,
         )
         db.add(mapping)
     else:
         mapping.line_profile_id = line_profile_id
         mapping.service_profile_id = service_profile_id
+        mapping.wan_provisioning_mode = wan_provisioning_mode
+        mapping.internet_config_ip_index = internet_config_ip_index
+        mapping.wan_config_profile_id = wan_config_profile_id
+        mapping.pppoe_wcd_index = pppoe_wcd_index
+        mapping.mgmt_wcd_index = mgmt_wcd_index
+        mapping.voip_wcd_index = voip_wcd_index
+        mapping.primary_wan_service = primary_wan_service
 
     db.flush()
     action = "Created" if created else "Updated"

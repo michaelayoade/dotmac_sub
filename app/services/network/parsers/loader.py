@@ -431,12 +431,25 @@ def parse_ont_info_detail(output: str) -> OntInfoEntry | None:
                 return int(match.group(0))
         return None
 
-    fsp = kv.get("fsp", "") or kv.get("f/s/p", "")
+    def get_first(*keys: str) -> str:
+        for key in keys:
+            value = kv.get(key)
+            if value:
+                return value
+        return ""
+
+    fsp = get_first("fsp", "f/s/p")
     ont_id = get_int("ont id", "ont-id") or 0
     return OntInfoEntry(
         fsp=fsp,
         ont_id=ont_id,
-        serial_number=kv.get("sn", "") or kv.get("serial number", ""),
+        serial_number=get_first(
+            "sn",
+            "serial number",
+            "ont sn",
+            "ont serial number",
+            "ont equipment sn",
+        ),
         control_flag=kv.get("control flag", ""),
         run_state=kv.get("run state", ""),
         config_state=kv.get("config state", ""),

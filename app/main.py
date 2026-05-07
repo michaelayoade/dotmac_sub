@@ -402,7 +402,7 @@ def _log_zabbix_startup_health() -> None:
     try:
         from app.services.zabbix import check_zabbix_availability
 
-        health = check_zabbix_availability(timeout=3.0)
+        health = check_zabbix_availability(timeout=5.0)
     except Exception:
         logger.warning(
             "zabbix_startup_health_failed",

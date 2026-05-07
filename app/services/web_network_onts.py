@@ -26,7 +26,6 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.onu_types import onu_types
 from app.services.network.speed_profiles import speed_profiles
 from app.services.network.zones import network_zones
-from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
 
 logger = logging.getLogger(__name__)
 
@@ -947,8 +946,6 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
                 else None
             )
 
-    zabbix_signal = get_ont_signal_from_zabbix(ont)
-
     context: dict[str, Any] = {
         "request": request,
         "active_page": "onts",
@@ -977,8 +974,12 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "speed_profiles_download": get_speed_profiles(db, "download"),
         "speed_profiles_upload": get_speed_profiles(db, "upload"),
         "signal_info": {
-            "olt_status": zabbix_signal.status,
-            "olt_rx_dbm": zabbix_signal.olt_rx_dbm,
+            "olt_status": (
+                ont.olt_status.value
+                if getattr(getattr(ont, "olt_status", None), "value", None)
+                else str(getattr(ont, "olt_status", "") or "")
+            ),
+            "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
         },
         "pon_label": (
             f"{ont.board}/{ont.port}"

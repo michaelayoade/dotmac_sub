@@ -18,9 +18,8 @@ from app.services import web_network_ont_charts as web_network_ont_charts_servic
 from app.services import web_network_ont_topology as web_network_ont_topology_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
-from app.services.network.action_logging import actor_label, log_network_action_result
+from app.services.network.action_logging import log_network_action_result
 from app.services.network.ont_scope import can_manage_ont_from_request
-from app.services.queue_adapter import enqueue_task
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 from app.web.request_parsing import parse_form_data_sync
 from app.web.templates import templates
@@ -465,17 +464,13 @@ def ont_return_to_inventory(
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    dispatch = enqueue_task(
-        "app.tasks.ont_provisioning.return_ont_to_inventory",
-        kwargs={
-            "ont_id": ont_id,
-            "initiated_by": actor_label(request),
-        },
-        correlation_id=f"return_to_inventory:{ont_id}",
-        source="admin_ont_return_to_inventory",
+    result = web_network_ont_actions_service.return_to_inventory_for_web(
+        db,
+        ont_id,
+        request=request,
     )
-    if dispatch.queued:
-        message = "Return-to-inventory started. Refresh the ONT list shortly to confirm completion."
+    if result.success:
+        message = result.message or "ONT returned to inventory"
         target = "/admin/network/onts?view=unconfigured"
         if request.headers.get("hx-request") == "true":
             return Response(
@@ -493,7 +488,7 @@ def ont_return_to_inventory(
     return Response(
         status_code=400,
         headers=_toast_headers(
-            f"Failed to queue return-to-inventory: {dispatch.error or 'unknown error'}",
+            result.message or "Failed to return ONT to inventory",
             "error",
         ),
     )

@@ -16,14 +16,15 @@
             </div>
         </div>
 
-        {# Chart container - lazy loaded #}
-        <div id="charts-content" hx-get="/admin/network/onts/{{ ont.id }}/charts" hx-trigger="revealed" hx-swap="innerHTML" class="min-h-[300px]">
-            <div class="flex items-center justify-center py-12 text-sm text-slate-400">
-                <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                </svg>
-                Loading signal history...
+        <div id="charts-content" class="min-h-[300px]">
+            <div class="flex items-center justify-center py-12">
+                <button type="button"
+                        hx-get="/admin/network/onts/{{ ont.id }}/charts"
+                        hx-target="#charts-content"
+                        hx-swap="innerHTML"
+                        class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-700">
+                    Load signal history
+                </button>
             </div>
         </div>
     </div>
@@ -45,17 +46,15 @@
             </button>
         </div>
 
-        <div id="lan-ports-content" hx-get="/admin/network/onts/{{ ont.id }}/lan-ports-status" hx-trigger="revealed" hx-swap="innerHTML">
-            <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {% for i in range(1, 5) %}
-                <div class="flex flex-col items-center rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-200 dark:bg-slate-700">
-                        <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
-                    </div>
-                    <div class="mt-2 text-sm font-semibold text-slate-900 dark:text-white">ETH{{ i }}</div>
-                    <div class="mt-1 text-xs text-slate-400">Loading...</div>
-                </div>
-                {% endfor %}
+        <div id="lan-ports-content">
+            <div class="flex items-center justify-center py-8">
+                <button type="button"
+                        hx-get="/admin/network/onts/{{ ont.id }}/lan-ports-status"
+                        hx-target="#lan-ports-content"
+                        hx-swap="innerHTML"
+                        class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-700">
+                    Load port status
+                </button>
             </div>
         </div>
     </div>

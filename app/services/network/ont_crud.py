@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, joinedload
 
-from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+from app.models.network import OLTDevice, OntAssignment, OntUnit, OnuOnlineStatus, PonPort
 from app.schemas.network import OntUnitUpdate
 from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
@@ -244,70 +244,32 @@ class OntUnits(CRUDManager[OntUnit]):
                 )
             )
 
-        needs_zabbix_filter = (
-            olt_status in {"online", "offline"}
-            or signal_quality in {"good", "warning", "critical"}
-            or order_by == "signal"
-        )
+        if olt_status in {"online", "offline"}:
+            stmt = stmt.where(OntUnit.olt_status == OnuOnlineStatus(olt_status))
 
-        if needs_zabbix_filter:
-            from app.services.network.signal_thresholds import classify_signal
-            from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
-
-            candidates = list(
-                db.scalars(stmt.order_by(OntUnit.serial_number.asc())).unique().all()
-            )
+        if signal_quality in {"good", "warning", "critical"}:
             warn, crit = get_signal_thresholds(db)
-            snapshots = get_ont_snapshots_from_zabbix(db, candidates)
-            filtered: list[OntUnit] = []
-            for ont in candidates:
-                snapshot = snapshots.get(str(ont.id))
-                status_value = snapshot.status if snapshot else "offline"
-                if olt_status in {"online", "offline"} and status_value != olt_status:
-                    continue
-                quality = classify_signal(
-                    snapshot.olt_rx_dbm if snapshot else None,
-                    warn_threshold=warn,
-                    crit_threshold=crit,
-                )
-                if (
-                    signal_quality in {"good", "warning", "critical"}
-                    and quality != signal_quality
-                ):
-                    continue
-                filtered.append(ont)
-
-            if order_by == "signal":
-                reverse = order_dir == "desc"
-
-                def _signal_key(ont: OntUnit) -> tuple[bool, float]:
-                    value = snapshots.get(str(ont.id))
-                    signal = value.olt_rx_dbm if value else None
-                    return (signal is None, float(signal or 0.0))
-
-                filtered.sort(key=_signal_key)
-                if reverse:
-                    with_signal = [
-                        ont
-                        for ont in filtered
-                        if snapshots.get(str(ont.id))
-                        and snapshots[str(ont.id)].olt_rx_dbm is not None
-                    ]
-                    without_signal = [
-                        ont
-                        for ont in filtered
-                        if not snapshots.get(str(ont.id))
-                        or snapshots[str(ont.id)].olt_rx_dbm is None
-                    ]
-                    filtered = list(reversed(with_signal)) + without_signal
-            total = len(filtered)
-            return filtered[offset : offset + limit], total
+            signal_col = OntUnit.olt_rx_signal_dbm
+            stmt = stmt.where(signal_col.isnot(None)).where(signal_col >= -50.0).where(
+                signal_col <= 10.0
+            )
+            if signal_quality == "critical":
+                stmt = stmt.where(signal_col < crit)
+            elif signal_quality == "warning":
+                stmt = stmt.where(signal_col >= crit).where(signal_col < warn)
+            else:
+                stmt = stmt.where(signal_col >= warn)
 
         count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = db.scalar(count_stmt) or 0
 
         if order_by == "signal":
-            stmt = stmt.order_by(OntUnit.serial_number.asc())
+            signal_order = (
+                OntUnit.olt_rx_signal_dbm.desc()
+                if order_dir == "desc"
+                else OntUnit.olt_rx_signal_dbm.asc()
+            )
+            stmt = stmt.order_by(signal_order.nulls_last(), OntUnit.serial_number.asc())
         else:
             allowed = {
                 "serial_number": OntUnit.serial_number,

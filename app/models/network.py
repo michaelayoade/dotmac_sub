@@ -1039,7 +1039,7 @@ class OltOntRegistration(Base):
 
 
 class OltOnuTypeProfileMapping(Base):
-    """Imported per-OLT mapping from equipment ID to authorization profiles."""
+    """Imported per-OLT mapping from equipment ID to provisioning behavior."""
 
     __tablename__ = "olt_onu_type_profile_mappings"
     __table_args__ = (
@@ -1074,6 +1074,13 @@ class OltOnuTypeProfileMapping(Base):
     )
     line_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
     service_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    wan_provisioning_mode: Mapped[str | None] = mapped_column(String(40))
+    internet_config_ip_index: Mapped[int | None] = mapped_column(Integer)
+    wan_config_profile_id: Mapped[int | None] = mapped_column(Integer)
+    pppoe_wcd_index: Mapped[int | None] = mapped_column(Integer)
+    mgmt_wcd_index: Mapped[int | None] = mapped_column(Integer)
+    voip_wcd_index: Mapped[int | None] = mapped_column(Integer)
+    primary_wan_service: Mapped[str | None] = mapped_column(String(40))
     source_registration_count: Mapped[int] = mapped_column(Integer, default=0)
     last_imported_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

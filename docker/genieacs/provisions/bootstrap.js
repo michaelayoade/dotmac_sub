@@ -73,6 +73,169 @@ function setParam(path, value) {
   }
 }
 
+function collectParamValues(path, attrName, candidates) {
+  try {
+    const result = declare(path, { path: now, value: now });
+    for (let item of result) {
+      if (!item.path || item.value === undefined || item.value === null) {
+        continue;
+      }
+      const base = item.path.replace(/\.[^.]+$/, "");
+      if (!candidates[base]) {
+        candidates[base] = { base: base };
+      }
+      candidates[base][attrName] = item.value[0];
+    }
+  } catch (e) {
+    log("  Warning: Failed to inspect " + path + ": " + e.message);
+  }
+}
+
+function collectObjectPaths(path, candidates) {
+  try {
+    const result = declare(path, { path: now });
+    for (let item of result) {
+      if (!item.path) {
+        continue;
+      }
+      if (!candidates[item.path]) {
+        candidates[item.path] = { base: item.path };
+      }
+    }
+  } catch (e) {
+    log("  Warning: Failed to inspect " + path + ": " + e.message);
+  }
+}
+
+function inferIgdPppBase(path) {
+  if (!path) {
+    return null;
+  }
+  const match = path.match(/^(InternetGatewayDevice\.WANDevice\.\d+\.WANConnectionDevice\.\d+\.WANPPPConnection\.\d+)\.[^.]+$/);
+  return match ? match[1] : null;
+}
+
+function inferIgdPppCreatePath(paths, wanConfig) {
+  const usernameBase = inferIgdPppBase(paths.wan_pppoe_username);
+  if (usernameBase) {
+    return usernameBase.replace(/\.WANPPPConnection\.\d+$/, ".WANPPPConnection.*");
+  }
+
+  const wcdIndex = wanConfig && wanConfig.wcd_index ? wanConfig.wcd_index : 1;
+  return "InternetGatewayDevice.WANDevice.1.WANConnectionDevice." + wcdIndex + ".WANPPPConnection.*";
+}
+
+function scoreIgdPppCandidate(candidate, desiredUsername, desiredVlan, preferredBase) {
+  let score = 0;
+  const username = candidate.username === undefined || candidate.username === null ? "" : String(candidate.username);
+  const serviceList = candidate.service_list === undefined || candidate.service_list === null ? "" : String(candidate.service_list).toUpperCase();
+  const name = candidate.name === undefined || candidate.name === null ? "" : String(candidate.name).toUpperCase();
+  const vlan = candidate.vlan === undefined || candidate.vlan === null ? "" : String(candidate.vlan);
+
+  if (desiredUsername && username === String(desiredUsername)) {
+    score += 100;
+  }
+  if (serviceList.indexOf("INTERNET") !== -1) {
+    score += 50;
+  }
+  if (desiredVlan !== undefined && desiredVlan !== null && vlan === String(desiredVlan)) {
+    score += 40;
+  }
+  if (name.indexOf("INTERNET") !== -1) {
+    score += 20;
+  }
+  if (!username) {
+    score += 10;
+  }
+  if (preferredBase && candidate.base === preferredBase) {
+    score += 5;
+  }
+
+  return score;
+}
+
+function collectIgdPppCandidates() {
+  const candidates = {};
+
+  try {
+    declare("InternetGatewayDevice.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.*", { path: now });
+  } catch (e) {
+    log("  Warning: Failed to refresh WANPPPConnection tree: " + e.message);
+  }
+
+  collectObjectPaths("InternetGatewayDevice.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*", candidates);
+  collectParamValues("InternetGatewayDevice.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Username", "username", candidates);
+  collectParamValues("InternetGatewayDevice.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.X_HW_SERVICELIST", "service_list", candidates);
+  collectParamValues("InternetGatewayDevice.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.X_HW_VLAN", "vlan", candidates);
+  collectParamValues("InternetGatewayDevice.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Name", "name", candidates);
+
+  const result = [];
+  for (let base in candidates) {
+    result.push(candidates[base]);
+  }
+  return result;
+}
+
+function resolveIgdPppBase(paths, wanConfig) {
+  const preferredBase = inferIgdPppBase(paths.wan_pppoe_username);
+  const desiredUsername = wanConfig ? wanConfig.pppoe_username : null;
+  const desiredVlan = wanConfig ? wanConfig.vlan : null;
+  let candidates = collectIgdPppCandidates();
+
+  if (!candidates.length) {
+    const createPath = inferIgdPppCreatePath(paths, wanConfig);
+    try {
+      log("  WAN: creating PPP object at " + createPath);
+      declare(createPath, null, { path: 1 });
+      commit();
+    } catch (e) {
+      log("  Warning: Failed to create PPP object at " + createPath + ": " + e.message);
+    }
+    candidates = collectIgdPppCandidates();
+  }
+
+  if (!candidates.length) {
+    log("  Warning: No WANPPPConnection instance discovered after create");
+    return null;
+  }
+
+  candidates.sort(function(a, b) {
+    return scoreIgdPppCandidate(b, desiredUsername, desiredVlan, preferredBase) -
+      scoreIgdPppCandidate(a, desiredUsername, desiredVlan, preferredBase);
+  });
+
+  return candidates[0].base;
+}
+
+function setPppoeCredentials(paths, wanConfig) {
+  if (!wanConfig || !wanConfig.pppoe_username || !paths.wan_pppoe_username) {
+    return false;
+  }
+
+  log("  WAN: PPPoE user=" + wanConfig.pppoe_username);
+
+  if (root === "InternetGatewayDevice" && paths.wan_pppoe_username.indexOf("WANPPPConnection.") !== -1) {
+    const base = resolveIgdPppBase(paths, wanConfig);
+    if (!base) {
+      log("  Warning: Unable to resolve WANPPPConnection instance for PPPoE credentials");
+      return false;
+    }
+
+    log("  WAN: PPP instance=" + base);
+    setParam(base + ".Username", wanConfig.pppoe_username);
+    if (wanConfig.pppoe_password) {
+      setParam(base + ".Password", wanConfig.pppoe_password);
+    }
+    return true;
+  }
+
+  setParam(paths.wan_pppoe_username, wanConfig.pppoe_username);
+  if (wanConfig.pppoe_password) {
+    setParam(paths.wan_pppoe_password, wanConfig.pppoe_password);
+  }
+  return true;
+}
+
 if (serial) {
   // Fetch full service config from DotMac API (includes paths from ONT type adapter)
   const config = ext("dotmac-webhook", "getServiceConfig", serial);
@@ -123,14 +286,7 @@ if (serial) {
     // WAN Configuration (PPPoE credentials)
     // Note: WAN connection type is set via OMCI, we only set credentials here
     // -------------------------------------------------------------------------
-    if (config.wan && config.wan.pppoe_username && paths.wan_pppoe_username) {
-      log("  WAN: PPPoE user=" + config.wan.pppoe_username);
-
-      setParam(paths.wan_pppoe_username, config.wan.pppoe_username);
-      if (config.wan.pppoe_password) {
-        setParam(paths.wan_pppoe_password, config.wan.pppoe_password);
-      }
-    }
+    setPppoeCredentials(paths, config.wan);
 
     // -------------------------------------------------------------------------
     // LAN Configuration (IP, DHCP server)

@@ -356,15 +356,34 @@ def olt_imported_profile_mapping_save(
     equipment_id: str = Form(""),
     line_profile_id: int = Form(...),
     service_profile_id: int = Form(...),
+    wan_provisioning_mode: str = Form(""),
+    internet_config_ip_index: str = Form(""),
+    wan_config_profile_id: str = Form(""),
+    pppoe_wcd_index: str = Form(""),
+    mgmt_wcd_index: str = Form(""),
+    voip_wcd_index: str = Form(""),
+    primary_wan_service: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Create or update an explicit equipment-to-profile mapping."""
+
+    def int_or_none(value: str) -> int | None:
+        value = value.strip()
+        return int(value) if value else None
+
     ok, message = web_network_olt_profiles_service.save_imported_profile_mapping(
         db,
         olt_id,
         equipment_id=equipment_id,
         line_profile_id=line_profile_id,
         service_profile_id=service_profile_id,
+        wan_provisioning_mode=wan_provisioning_mode.strip() or None,
+        internet_config_ip_index=int_or_none(internet_config_ip_index),
+        wan_config_profile_id=int_or_none(wan_config_profile_id),
+        pppoe_wcd_index=int_or_none(pppoe_wcd_index),
+        mgmt_wcd_index=int_or_none(mgmt_wcd_index),
+        voip_wcd_index=int_or_none(voip_wcd_index),
+        primary_wan_service=primary_wan_service.strip() or None,
     )
     if ok:
         db.commit()

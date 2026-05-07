@@ -180,10 +180,68 @@ def _resolve_vlan(db: Session, vlan_id: str | None) -> VlanConfig:
     return VlanConfig.from_vlan(vlan)
 
 
+def _int_or_none(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_internet_config_ip_index(
+    *,
+    pack: dict,
+    internet_vlan: VlanConfig,
+    management_vlan: VlanConfig,
+    supports_omci_wan: bool,
+) -> int | None:
+    """Resolve the OLT IPHOST index used for internet-config/wan-config.
+
+    Huawei TR-098 WCDs are 1-based while OLT IPHOST indices are 0-based. In
+    split management/internet mode, WCD2 therefore maps to IPHOST index 1.
+    Prefer that explicit WCD mapping over a stale generic index so we do not
+    bind route/NAT to the management IPHOST.
+    """
+    if not supports_omci_wan:
+        return None
+
+    raw_index = _int_or_none(pack.get("internet_config_ip_index"))
+    pppoe_wcd_index = _int_or_none(pack.get("pppoe_wcd_index"))
+    mgmt_wcd_index = _int_or_none(pack.get("mgmt_wcd_index"))
+    derived_index = (
+        pppoe_wcd_index - 1
+        if pppoe_wcd_index is not None and pppoe_wcd_index > 0
+        else None
+    )
+    split_vlans = (
+        internet_vlan.tag is not None
+        and management_vlan.tag is not None
+        and internet_vlan.tag != management_vlan.tag
+    )
+    split_wcds = (
+        pppoe_wcd_index is not None
+        and mgmt_wcd_index is not None
+        and pppoe_wcd_index != mgmt_wcd_index
+    )
+
+    if (split_vlans or split_wcds) and derived_index is not None:
+        if raw_index is not None and raw_index != derived_index:
+            logger.warning(
+                "Overriding stale internet_config_ip_index=%s with PPPoE WCD-derived "
+                "ip-index=%s for split OLT config",
+                raw_index,
+                derived_index,
+            )
+        return derived_index
+
+    return raw_index
+
+
 def _resolve_tr069_olt_profile_id(db: Session, olt: object, pack: dict) -> int | None:
     raw_profile_id = pack.get("tr069_olt_profile_id")
     if raw_profile_id is not None:
-        return raw_profile_id
+        return _int_or_none(raw_profile_id)
 
     acs_server_id = getattr(olt, "tr069_acs_server_id", None)
     snapshot = getattr(olt, "tr069_profiles_snapshot", None) or {}
@@ -248,25 +306,34 @@ def resolve_olt_config_pack(
 
     pack = olt.config_pack or {}
     tr069_olt_profile_id = _resolve_tr069_olt_profile_id(db, olt, pack)
+    internet_vlan = _resolve_vlan(db, pack.get("internet_vlan_id"))
+    management_vlan = _resolve_vlan(db, pack.get("management_vlan_id"))
+    tr069_vlan = _resolve_vlan(db, pack.get("tr069_vlan_id"))
+    voip_vlan = _resolve_vlan(db, pack.get("voip_vlan_id"))
+    iptv_vlan = _resolve_vlan(db, pack.get("iptv_vlan_id"))
 
     wan_provisioning_mode = str(
         getattr(olt, "wan_provisioning_mode", None) or "omci_wan_config"
     )
-    supports_omci_wan = (
+    supports_internet_config = (
         wan_provisioning_mode == "omci_wan_config"
         and bool(getattr(olt, "supports_ont_internet_config", False))
+    )
+    supports_wan_config = (
+        wan_provisioning_mode == "omci_wan_config"
         and bool(getattr(olt, "supports_ont_wan_config", False))
     )
 
-    # Resolve internet_config_ip_index based on the OLT WAN provisioning strategy.
-    # If the OLT doesn't support ont internet-config, force None regardless of pack value.
-    internet_config_ip_index = (
-        pack.get("internet_config_ip_index") if supports_omci_wan else None
+    internet_config_ip_index = _resolve_internet_config_ip_index(
+        pack=pack,
+        internet_vlan=internet_vlan,
+        management_vlan=management_vlan,
+        supports_omci_wan=supports_internet_config,
     )
 
     # Resolve wan_config_profile_id based on OLT capability
-    if supports_omci_wan:
-        wan_config_profile_id = pack.get("wan_config_profile_id")
+    if supports_wan_config:
+        wan_config_profile_id = _int_or_none(pack.get("wan_config_profile_id"))
     else:
         # OLT doesn't support ont wan-config - force skip
         wan_config_profile_id = None
@@ -280,11 +347,11 @@ def resolve_olt_config_pack(
         ),
         tr069_olt_profile_id=tr069_olt_profile_id,
         # VLANs (resolve UUID strings to VlanConfig)
-        internet_vlan=_resolve_vlan(db, pack.get("internet_vlan_id")),
-        management_vlan=_resolve_vlan(db, pack.get("management_vlan_id")),
-        tr069_vlan=_resolve_vlan(db, pack.get("tr069_vlan_id")),
-        voip_vlan=_resolve_vlan(db, pack.get("voip_vlan_id")),
-        iptv_vlan=_resolve_vlan(db, pack.get("iptv_vlan_id")),
+        internet_vlan=internet_vlan,
+        management_vlan=management_vlan,
+        tr069_vlan=tr069_vlan,
+        voip_vlan=voip_vlan,
+        iptv_vlan=iptv_vlan,
         # Provisioning knobs (capability-gated above)
         internet_config_ip_index=internet_config_ip_index,
         wan_config_profile_id=wan_config_profile_id,
@@ -293,22 +360,30 @@ def resolve_olt_config_pack(
             getattr(olt, "supports_ont_home_gateway_config", False)
         ),
         # GEM indices
-        internet_gem_index=pack.get("internet_gem_index"),
-        mgmt_gem_index=pack.get("mgmt_gem_index"),
-        voip_gem_index=pack.get("voip_gem_index"),
-        iptv_gem_index=pack.get("iptv_gem_index"),
+        internet_gem_index=_int_or_none(pack.get("internet_gem_index")),
+        mgmt_gem_index=_int_or_none(pack.get("mgmt_gem_index")),
+        voip_gem_index=_int_or_none(pack.get("voip_gem_index")),
+        iptv_gem_index=_int_or_none(pack.get("iptv_gem_index")),
         # Connection request credentials
         cr_username=pack.get("cr_username"),
         cr_password=pack.get("cr_password"),
         # Traffic table indices
-        mgmt_traffic_table_inbound=pack.get("mgmt_traffic_table_inbound"),
-        mgmt_traffic_table_outbound=pack.get("mgmt_traffic_table_outbound"),
-        internet_traffic_table_inbound=pack.get("internet_traffic_table_inbound"),
-        internet_traffic_table_outbound=pack.get("internet_traffic_table_outbound"),
+        mgmt_traffic_table_inbound=_int_or_none(
+            pack.get("mgmt_traffic_table_inbound")
+        ),
+        mgmt_traffic_table_outbound=_int_or_none(
+            pack.get("mgmt_traffic_table_outbound")
+        ),
+        internet_traffic_table_inbound=_int_or_none(
+            pack.get("internet_traffic_table_inbound")
+        ),
+        internet_traffic_table_outbound=_int_or_none(
+            pack.get("internet_traffic_table_outbound")
+        ),
         # TR-069 WCD indices
-        pppoe_wcd_index=pack.get("pppoe_wcd_index"),
-        mgmt_wcd_index=pack.get("mgmt_wcd_index"),
-        voip_wcd_index=pack.get("voip_wcd_index"),
+        pppoe_wcd_index=_int_or_none(pack.get("pppoe_wcd_index")),
+        mgmt_wcd_index=_int_or_none(pack.get("mgmt_wcd_index")),
+        voip_wcd_index=_int_or_none(pack.get("voip_wcd_index")),
     )
 
 

@@ -104,6 +104,43 @@
     <div x-show="activeTab === 'files'" x-cloak>
         {% include "admin/network/onts/_tab_files.html" %}
     </div>
-    <div id="modal-container"></div>
+    <div id="modal-container" data-ont-modal-container></div>
 </div>
+
+<script>
+    (function () {
+        if (window.__ontDetailModalGuardBound) {
+            return;
+        }
+        window.__ontDetailModalGuardBound = true;
+
+        function modalContainer() {
+            return document.querySelector('[data-ont-modal-container]');
+        }
+
+        function clearOntModalContainer() {
+            var container = modalContainer();
+            if (container) {
+                container.replaceChildren();
+            }
+        }
+
+        document.addEventListener('click', function (event) {
+            var container = modalContainer();
+            if (!container || !container.contains(event.target)) {
+                return;
+            }
+            var isBackdrop = event.target.matches('[role="dialog"].fixed.inset-0');
+            if (isBackdrop) {
+                clearOntModalContainer();
+            }
+        });
+
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                clearOntModalContainer();
+            }
+        });
+    })();
+</script>
 {% endblock %}

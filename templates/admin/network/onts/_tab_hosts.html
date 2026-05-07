@@ -28,14 +28,15 @@
             </button>
         </div>
 
-        <div id="hosts-table-content" class="p-5" hx-get="/admin/network/onts/{{ ont.id }}/hosts" hx-trigger="revealed" hx-swap="innerHTML">
-            {# Initial loading state - will be replaced by HTMX #}
-            <div class="flex items-center justify-center py-8 text-sm text-slate-400">
-                <svg class="mr-2 h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                </svg>
-                Loading connected devices...
+        <div id="hosts-table-content" class="p-5">
+            <div class="flex items-center justify-center py-8">
+                <button type="button"
+                        hx-get="/admin/network/onts/{{ ont.id }}/hosts"
+                        hx-target="#hosts-table-content"
+                        hx-swap="innerHTML"
+                        class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-700">
+                    Load connected devices
+                </button>
             </div>
         </div>
     </div>

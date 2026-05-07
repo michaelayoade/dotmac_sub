@@ -185,12 +185,8 @@ def get_zabbix_api_url() -> str:
 
 
 def get_zabbix_api_token() -> str:
-    """Resolve the Zabbix API token from OpenBao, secret file, or environment."""
+    """Resolve the Zabbix API token from explicit config or OpenBao fallback."""
     from app.services.secrets import get_secret, resolve_secret
-
-    bao_value = get_secret("zabbix", "api_token", default="")
-    if bao_value:
-        return bao_value
 
     file_value = _read_secret_file(os.getenv("ZABBIX_API_TOKEN_FILE"))
     if file_value:
@@ -199,6 +195,10 @@ def get_zabbix_api_token() -> str:
     env_value = os.getenv("ZABBIX_API_TOKEN")
     if env_value:
         return str(resolve_secret(env_value) or "")
+
+    bao_value = get_secret("zabbix", "api_token", default="")
+    if bao_value:
+        return bao_value
 
     return ""
 

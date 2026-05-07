@@ -28,3 +28,19 @@ def test_parse_ont_info_detail_extracts_profile_and_equipment_fields():
     assert entry.match_state == "mismatch"
     assert entry.last_down_cause == "dying-gasp"
     assert entry.tr069_profile_id == 2
+
+
+def test_parse_ont_info_detail_accepts_ont_sn_alias():
+    entry = parse_ont_info_detail(
+        """
+        F/S/P               : 0/2/9
+        ONT ID              : 12
+        Ont SN              : HWTC600AC29C
+        Run state           : online
+        """
+    )
+
+    assert entry is not None
+    assert entry.fsp == "0/2/9"
+    assert entry.ont_id == 12
+    assert entry.serial_number == "HWTC600AC29C"

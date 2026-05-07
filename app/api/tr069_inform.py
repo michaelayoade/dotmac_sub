@@ -193,6 +193,9 @@ def get_device_config(
     if wan_mode or pppoe_username:
         wan_config = {
             "mode": wan_mode,
+            "vlan": values.get("wan_vlan"),
+            "wcd_index": values.get("pppoe_wcd_index")
+            or values.get("wan_instance_index"),
             "pppoe_username": pppoe_username,
             "pppoe_password": decrypt_if_needed(pppoe_password),
             "static_ip": values.get("wan_static_ip"),

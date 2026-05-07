@@ -1053,6 +1053,10 @@ def build_beat_schedule() -> dict:
         # a manual/operator recovery task only; do not run it as a periodic
         # provisioning loop.
         _retire_scheduled_task(session, "app.tasks.tr069.heal_online_silent_onts")
+        _retire_scheduled_task(
+            session,
+            "app.tasks.ont_verification.verify_ont_provisioning_state",
+        )
 
         # Event retry - retries failed event handlers
         event_retry_enabled = _effective_bool(

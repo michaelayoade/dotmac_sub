@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -286,9 +287,14 @@ def ont_detail(
     tab: str = Query(default="overview"),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    logger.warning("ont_detail_start", extra={"ont_id": ont_id})
+    started_at = monotonic()
+    logger.debug("ont_detail_start", extra={"ont_id": ont_id})
     page_data = web_network_core_devices_service.ont_detail_page_data(db, ont_id)
-    logger.warning("ont_detail_page_data_loaded", extra={"ont_id": ont_id})
+    page_data_duration_ms = round((monotonic() - started_at) * 1000.0, 2)
+    logger.debug(
+        "ont_detail_page_data_loaded",
+        extra={"ont_id": ont_id, "duration_ms": page_data_duration_ms},
+    )
     if not page_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -353,7 +359,25 @@ def ont_detail(
             "ont_feedback": _ont_feedback_from_request(request),
         }
     )
-    logger.warning("ont_detail_context_ready", extra={"ont_id": ont_id})
+    total_duration_ms = round((monotonic() - started_at) * 1000.0, 2)
+    if total_duration_ms >= 2000:
+        logger.info(
+            "ont_detail_context_ready",
+            extra={
+                "ont_id": ont_id,
+                "duration_ms": total_duration_ms,
+                "page_data_duration_ms": page_data_duration_ms,
+            },
+        )
+    else:
+        logger.debug(
+            "ont_detail_context_ready",
+            extra={
+                "ont_id": ont_id,
+                "duration_ms": total_duration_ms,
+                "page_data_duration_ms": page_data_duration_ms,
+            },
+        )
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
 
 

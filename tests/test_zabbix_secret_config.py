@@ -4,12 +4,16 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import httpx
+
 from app.services import zabbix
 
 
 def test_zabbix_token_resolves_secret_reference(monkeypatch):
     monkeypatch.setenv("ZABBIX_API_TOKEN", "bao://secret/zabbix#api_token")
-    monkeypatch.setattr("app.services.secrets.get_secret", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(
+        "app.services.secrets.get_secret",
+        Mock(side_effect=AssertionError("OpenBao fallback should not be probed")),
+    )
     monkeypatch.setattr(
         "app.services.secrets.resolve_secret",
         lambda value: "resolved-token" if value == "bao://secret/zabbix#api_token" else value,
@@ -18,8 +22,32 @@ def test_zabbix_token_resolves_secret_reference(monkeypatch):
     assert zabbix.get_zabbix_api_token() == "resolved-token"
 
 
-def test_zabbix_token_prefers_openbao_over_env(monkeypatch):
+def test_zabbix_token_prefers_env_over_openbao_fallback(monkeypatch):
     monkeypatch.setenv("ZABBIX_API_TOKEN", "env-token")
+    monkeypatch.setattr(
+        "app.services.secrets.get_secret",
+        Mock(side_effect=AssertionError("OpenBao fallback should not be probed")),
+    )
+
+    assert zabbix.get_zabbix_api_token() == "env-token"
+
+
+def test_zabbix_token_file_takes_precedence(monkeypatch, tmp_path):
+    token_file = tmp_path / "zabbix-token"
+    token_file.write_text("file-token\n", encoding="utf-8")
+    monkeypatch.setenv("ZABBIX_API_TOKEN", "env-token")
+    monkeypatch.setattr(
+        "app.services.secrets.get_secret",
+        Mock(side_effect=AssertionError("OpenBao fallback should not be probed")),
+    )
+    monkeypatch.setenv("ZABBIX_API_TOKEN_FILE", str(token_file))
+
+    assert zabbix.get_zabbix_api_token() == "file-token"
+
+
+def test_zabbix_token_uses_openbao_fallback(monkeypatch):
+    monkeypatch.delenv("ZABBIX_API_TOKEN", raising=False)
+    monkeypatch.delenv("ZABBIX_API_TOKEN_FILE", raising=False)
     monkeypatch.setattr(
         "app.services.secrets.get_secret",
         lambda path, field, default="": "bao-token"
@@ -28,16 +56,6 @@ def test_zabbix_token_prefers_openbao_over_env(monkeypatch):
     )
 
     assert zabbix.get_zabbix_api_token() == "bao-token"
-
-
-def test_zabbix_token_file_fallback(monkeypatch, tmp_path):
-    token_file = tmp_path / "zabbix-token"
-    token_file.write_text("file-token\n", encoding="utf-8")
-    monkeypatch.delenv("ZABBIX_API_TOKEN", raising=False)
-    monkeypatch.setattr("app.services.secrets.get_secret", lambda *_args, **_kwargs: "")
-    monkeypatch.setenv("ZABBIX_API_TOKEN_FILE", str(token_file))
-
-    assert zabbix.get_zabbix_api_token() == "file-token"
 
 
 def test_zabbix_configured_uses_resolved_token(monkeypatch):
@@ -141,8 +159,8 @@ def test_zabbix_metrics_adapter_uses_shared_secret_resolvers(monkeypatch):
 
 
 def test_zabbix_device_sync_rolls_back_when_api_unavailable(monkeypatch):
-    from app.tasks import zabbix_ingestion
     from app.services import zabbix_host_sync
+    from app.tasks import zabbix_ingestion
 
     calls: list[str] = []
     db = SimpleNamespace(

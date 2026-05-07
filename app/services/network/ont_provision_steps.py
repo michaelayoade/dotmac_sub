@@ -1246,6 +1246,9 @@ def provision_with_reconciliation(
             allocated_ip=values.get("mgmt_ip_address"),
             subnet_mask=values.get("mgmt_subnet"),
             gateway=values.get("mgmt_gateway"),
+            internet_config_ip_index=values.get("internet_config_ip_index"),
+            wan_config_profile_id=values.get("wan_config_profile_id"),
+            tr069_profile_id=values.get("tr069_olt_profile_id"),
         )
         result = adapter.configure_management_batch(mgmt_spec)
         if not result.success:

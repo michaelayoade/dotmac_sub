@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 
 def test_genieacs_service_receives_inform(monkeypatch) -> None:
     from app.services import tr069 as tr069_service
@@ -63,6 +66,66 @@ def test_tr069_inform_route_uses_genieacs_service(monkeypatch) -> None:
     assert calls["kwargs"]["serial_number"] == "ABC123"
     assert calls["kwargs"]["device_id_raw"] == "OUI-Model-ABC123"
     assert calls["kwargs"]["request_id"] == "req-route"
+
+
+def test_device_config_includes_wan_resolution_hints(monkeypatch) -> None:
+    from app.api import tr069_inform
+
+    onu_type = SimpleNamespace(
+        id="onu-type-1",
+        name="Huawei HG8546M",
+        adapter_name=None,
+        tr069_data_model="tr098",
+        wan_pppoe_username_path=(
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+            "WANPPPConnection.1.Username"
+        ),
+        wan_pppoe_password_path=(
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+            "WANPPPConnection.1.Password"
+        ),
+    )
+    ont = SimpleNamespace(id="ont-1", onu_type=onu_type)
+
+    monkeypatch.setattr(
+        tr069_inform,
+        "find_unique_active_ont_by_serial",
+        lambda db, serial_number: ont,
+    )
+    monkeypatch.setattr(
+        tr069_inform,
+        "resolve_effective_ont_config",
+        lambda db, ont: {
+            "values": {
+                "wan_mode": "pppoe",
+                "wan_vlan": 203,
+                "pppoe_wcd_index": 2,
+                "pppoe_username": "100025868",
+                "pppoe_password": "plain-secret",
+            }
+        },
+    )
+
+    result = tr069_inform.get_device_config("HWTC600AC29C", object())
+
+    assert result["wan"]["vlan"] == 203
+    assert result["wan"]["wcd_index"] == 2
+    assert result["wan"]["pppoe_username"] == "100025868"
+    assert result["paths"]["wan_pppoe_username"].endswith(
+        "WANConnectionDevice.2.WANPPPConnection.1.Username"
+    )
+
+
+def test_bootstrap_resolves_dynamic_igd_ppp_instance() -> None:
+    bootstrap = Path("docker/genieacs/provisions/bootstrap.js").read_text()
+
+    assert "function resolveIgdPppBase" in bootstrap
+    assert "function collectObjectPaths" in bootstrap
+    assert "WANPPPConnection.*.Username" in bootstrap
+    assert "declare(createPath, null, { path: 1 })" in bootstrap
+    assert "return preferredBase;" not in bootstrap
+    assert 'root === "InternetGatewayDevice"' in bootstrap
+    assert 'setParam(base + ".Username", wanConfig.pppoe_username)' in bootstrap
 
 
 def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:

@@ -64,6 +64,18 @@ CONFIG_ENTRIES = {
     "cwmp.connectionRequestAuth": 'EXT("auth", "connectionRequest", DeviceID.ID, DeviceID.SerialNumber)',
 }
 
+# Legacy ad-hoc provisions that are too heavy for GenieACS's 50ms provision VM
+# budget, or have been replaced by the managed bootstrap/periodic provisions.
+LEGACY_PRESET_IDS = {
+    "dotmac-runtime-collect",
+    "dotmac-inform-webhook",
+}
+LEGACY_PROVISION_IDS = {
+    "dotmac-runtime-collect",
+    "dotmac-inform-webhook",
+    "full-refresh",
+}
+
 
 class GenieACSSetup:
     """Handles deployment of GenieACS configuration."""
@@ -204,6 +216,37 @@ class GenieACSSetup:
 
         return results
 
+    def prune_legacy_objects(self) -> dict[str, str]:
+        """Remove known stale GenieACS objects from older deployments."""
+        logger.info("Pruning legacy GenieACS objects")
+        results = {}
+
+        for preset_id in sorted(LEGACY_PRESET_IDS):
+            key = f"preset:{preset_id}"
+            try:
+                self._request("DELETE", f"/presets/{preset_id}")
+                results[key] = "deleted"
+                logger.info("  ✓ Deleted legacy preset %s", preset_id)
+            except Exception as e:
+                results[key] = f"error: {e}"
+                logger.error("  ✗ Failed to delete legacy preset %s: %s", preset_id, e)
+
+        for provision_id in sorted(LEGACY_PROVISION_IDS):
+            key = f"provision:{provision_id}"
+            try:
+                self._request("DELETE", f"/provisions/{provision_id}")
+                results[key] = "deleted"
+                logger.info("  ✓ Deleted legacy provision %s", provision_id)
+            except Exception as e:
+                results[key] = f"error: {e}"
+                logger.error(
+                    "  ✗ Failed to delete legacy provision %s: %s",
+                    provision_id,
+                    e,
+                )
+
+        return results
+
     def verify_connection(self) -> bool:
         """Verify connection to GenieACS NBI."""
         logger.info("Verifying connection to GenieACS at %s", self.base_url)
@@ -257,6 +300,7 @@ class GenieACSSetup:
     def run_full_setup(self) -> dict[str, dict[str, str]]:
         """Run full GenieACS setup."""
         results = {
+            "legacyPrune": self.prune_legacy_objects(),
             "provisions": self.deploy_provisions(),
             "virtualParameters": self.deploy_virtual_parameters(),
             "presets": self.deploy_presets(),
@@ -300,6 +344,11 @@ def main():
         help="Deploy only config entries",
     )
     parser.add_argument(
+        "--prune-legacy",
+        action="store_true",
+        help="Remove known legacy GenieACS presets/provisions",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         help="List current GenieACS state",
@@ -324,9 +373,17 @@ def main():
             return
 
         # If specific flags are set, only run those
-        specific_run = args.provisions or args.virtual_params or args.presets or args.config
+        specific_run = (
+            args.provisions
+            or args.virtual_params
+            or args.presets
+            or args.config
+            or args.prune_legacy
+        )
 
         results = {}
+        if args.prune_legacy or not specific_run:
+            results["legacyPrune"] = setup.prune_legacy_objects()
         if args.provisions or not specific_run:
             results["provisions"] = setup.deploy_provisions()
         if args.virtual_params or not specific_run:
@@ -345,13 +402,13 @@ def main():
         total_errors = 0
 
         for category, items in results.items():
-            deployed = sum(1 for v in items.values() if v == "deployed")
+            deployed = sum(1 for v in items.values() if v in {"deployed", "deleted"})
             errors = sum(1 for v in items.values() if v.startswith("error"))
             total_deployed += deployed
             total_errors += errors
             print(f"\n{category}:")
             for name, status in items.items():
-                symbol = "✓" if status == "deployed" else "✗"
+                symbol = "✓" if status in {"deployed", "deleted"} else "✗"
                 print(f"  {symbol} {name}: {status}")
 
         print("\n" + "-" * 60)

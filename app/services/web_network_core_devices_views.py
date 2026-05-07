@@ -1245,7 +1245,7 @@ def onts_list_page_data(
     per_page: int = 50,
 ) -> dict[str, object]:
     """Return ONT/CPE list payload with advanced filtering and signal classification."""
-    from app.models.network import OLTDevice, OntUnit
+    from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
     from app.services.network.signal_thresholds import (
         classify_signal,
         get_signal_thresholds,
@@ -1319,34 +1319,44 @@ def onts_list_page_data(
 
     # Signal threshold classification for displayed ONTs
     warn, crit = get_signal_thresholds(db)
-    signal_data: dict[str, dict[str, str]] = {}
+    signal_data: dict[str, dict[str, object]] = {}
     displayed_onts = list(onts) + [
         item for item in diagnostics_onts if item not in onts
     ]
-    from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
-
-    zabbix_snapshot = get_ont_snapshots_from_zabbix(db, displayed_onts)
     connection_request_by_ont_id = _connection_request_state_by_ont_id(
         db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
     )
     for ont in displayed_onts:
-        zbx = zabbix_snapshot.get(str(ont.id))
+        olt_rx_dbm = getattr(ont, "olt_rx_signal_dbm", None)
+        onu_rx_dbm = getattr(ont, "onu_rx_signal_dbm", None)
         quality = classify_signal(
-            zbx.olt_rx_dbm if zbx else None,
+            olt_rx_dbm,
             warn_threshold=warn,
             crit_threshold=crit,
         )
         connection_request_info = connection_request_by_ont_id.get(str(ont.id), {})
-        status_val = zbx.status if zbx else "offline"
+        raw_status = getattr(ont, "olt_status", None)
+        if isinstance(raw_status, OnuOnlineStatus):
+            status_val = raw_status.value
+        elif raw_status:
+            status_val = str(raw_status)
+        else:
+            status_val = "offline"
+        if status_val not in ONLINE_STATUS_CLASSES:
+            status_val = "unknown"
         status_display_val = status_val
-        status_source = "zabbix"
-        effective_last_seen_at = zbx.updated_at if zbx else None
+        status_source = "inventory"
+        effective_last_seen_at = (
+            getattr(ont, "last_seen_at", None)
+            or getattr(ont, "olt_status_seen_at", None)
+            or getattr(ont, "signal_updated_at", None)
+        )
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
         signal_data[str(ont.id)] = {
-            "olt_rx_dbm": zbx.olt_rx_dbm if zbx else None,
-            "onu_rx_dbm": zbx.onu_rx_dbm if zbx else None,
-            "signal_updated_at": zbx.updated_at if zbx else None,
+            "olt_rx_dbm": olt_rx_dbm,
+            "onu_rx_dbm": onu_rx_dbm,
+            "signal_updated_at": getattr(ont, "signal_updated_at", None),
             "quality": quality,
             "quality_class": SIGNAL_QUALITY_CLASSES.get(
                 quality, SIGNAL_QUALITY_CLASSES["unknown"]
@@ -1369,7 +1379,7 @@ def onts_list_page_data(
                 status_val,
                 ONLINE_STATUS_CLASSES["offline"],
             ),
-            "status_source_display": "Zabbix",
+            "status_source_display": "Cached",
             "status_source_class": ACS_STATUS_CLASSES.get(
                 status_source, ACS_STATUS_CLASSES["unknown"]
             ),
@@ -1390,51 +1400,36 @@ def onts_list_page_data(
             else "",
         }
 
-    # Summary counts aligned to current non-status filters.
-    from app.services.zabbix_ont_status import get_olt_ont_summary_from_zabbix
-
+    # Summary counts use cached inventory state; live Zabbix polling runs out of band.
     total_cpes_count = db.scalar(select(func.count()).select_from(CPEDevice)) or 0
-
+    stats_filters = [OntUnit.is_active.is_(True)]
     if olt_id:
-        olt_for_stats = db.get(OLTDevice, olt_id)
-        if olt_for_stats and olt_for_stats.zabbix_host_id:
-            stat_onts = list(
-                db.scalars(
-                    select(OntUnit)
-                    .where(OntUnit.olt_device_id == olt_for_stats.id)
-                    .where(OntUnit.is_active.is_(True))
-                ).all()
-            )
-            zabbix_stats = get_olt_ont_summary_from_zabbix(olt_for_stats, stat_onts)
-            online_count = zabbix_stats.get("online_count", 0)
-            offline_count = zabbix_stats.get("offline_count", 0)
-            all_onts_count = zabbix_stats.get("total_count", 0) or (online_count + offline_count)
-            low_signal_count = zabbix_stats.get("low_signal_count", 0)
-        else:
-            online_count = offline_count = all_onts_count = low_signal_count = 0
-    else:
-        online_count = 0
-        offline_count = 0
-        all_onts_count = 0
-        low_signal_count = 0
-        olts_with_zabbix = db.scalars(
-            select(OLTDevice)
-            .where(OLTDevice.is_active.is_(True))
-            .where(OLTDevice.zabbix_host_id.isnot(None))
-        ).all()
-        for olt_item in olts_with_zabbix:
-            stat_onts = list(
-                db.scalars(
-                    select(OntUnit)
-                    .where(OntUnit.olt_device_id == olt_item.id)
-                    .where(OntUnit.is_active.is_(True))
-                ).all()
-            )
-            zabbix_stats = get_olt_ont_summary_from_zabbix(olt_item, stat_onts)
-            online_count += zabbix_stats.get("online_count", 0)
-            offline_count += zabbix_stats.get("offline_count", 0)
-            low_signal_count += zabbix_stats.get("low_signal_count", 0)
-        all_onts_count = online_count + offline_count
+        stats_filters.append(OntUnit.olt_device_id == olt_id)
+
+    all_onts_count = (
+        db.scalar(select(func.count()).select_from(OntUnit).where(*stats_filters))
+        or 0
+    )
+    online_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(*stats_filters)
+            .where(OntUnit.olt_status == OnuOnlineStatus.online)
+        )
+        or 0
+    )
+    offline_count = max(all_onts_count - online_count, 0)
+    low_signal_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(*stats_filters)
+            .where(OntUnit.olt_rx_signal_dbm.isnot(None))
+            .where(OntUnit.olt_rx_signal_dbm < warn)
+        )
+        or 0
+    )
 
     stats = {
         "total_onts": all_onts_count,
@@ -1443,7 +1438,7 @@ def onts_list_page_data(
         "online_count": online_count,
         "offline_count": offline_count,
         "low_signal_count": low_signal_count,
-        "source": "zabbix",
+        "source": "inventory",
     }
 
     # OLT list for filter dropdown
@@ -1687,19 +1682,17 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     assignment = next((a for a in assignments if a.active), None)
     past_assignments = [a for a in assignments if not a.active]
 
-    # Signal classification - fetch from Zabbix directly for real-time data
+    # Signal classification uses the last persisted monitoring snapshot. Explicit
+    # refresh actions are responsible for live polling.
     from app.services.network.signal_thresholds import (
         classify_signal,
         get_signal_thresholds,
         normalize_optical_signal_dbm,
     )
-    from app.services.zabbix_ont_status import get_ont_signal_from_zabbix
 
-    # Zabbix is the monitoring source; API/mapping misses are offline.
-    zabbix_signal = get_ont_signal_from_zabbix(ont)
-    olt_rx = normalize_optical_signal_dbm(zabbix_signal.olt_rx_dbm)
-    onu_rx = normalize_optical_signal_dbm(zabbix_signal.onu_rx_dbm)
-    signal_updated_at = zabbix_signal.updated_at
+    olt_rx = normalize_optical_signal_dbm(getattr(ont, "olt_rx_signal_dbm", None))
+    onu_rx = normalize_optical_signal_dbm(getattr(ont, "onu_rx_signal_dbm", None))
+    signal_updated_at = getattr(ont, "signal_updated_at", None)
 
     warn, crit = get_signal_thresholds(db)
     olt_quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
@@ -1714,9 +1707,12 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         .order_by(Tr069CpeDevice.last_inform_at.desc().nullslast())
         .first()
     )
-    status_val = zabbix_signal.status
+    raw_status = getattr(ont, "olt_status", None)
+    status_val = raw_status.value if hasattr(raw_status, "value") else str(raw_status or "offline")
+    if status_val not in ONLINE_STATUS_CLASSES:
+        status_val = "unknown"
     status_display_val = status_val
-    status_source = "zabbix"
+    status_source = "inventory"
     normalized_acs_last_inform_at = getattr(ont, "acs_last_inform_at", None) or (
         getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
     )
@@ -1730,7 +1726,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         acs_status_class = ACS_STATUS_CLASSES["unmanaged"]
     reason = getattr(ont, "offline_reason", None)
     reason_val = reason.value if reason else None
-    effective_last_seen_at = zabbix_signal.updated_at
+    effective_last_seen_at = (
+        getattr(ont, "last_seen_at", None)
+        or getattr(ont, "olt_status_seen_at", None)
+        or signal_updated_at
+    )
 
     signal_info = {
         "olt_rx_dbm": olt_rx,
@@ -1745,7 +1745,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         ),
         "distance_meters": getattr(ont, "distance_meters", None),
         "signal_updated_at": signal_updated_at,
-        "signal_source": "zabbix",
+        "signal_source": "cached",
         "olt_status": status_val,
         "olt_status_display": (
             status_val.replace("_", " ").title() if status_val else ""
@@ -1784,8 +1784,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         else "",
         "warn_threshold": warn,
         "crit_threshold": crit,
-        # Add online_status from Zabbix when available
-        "online_status": zabbix_signal.status,
+        "online_status": status_val,
     }
 
     display_serial_number = _ont_display_serial(ont)

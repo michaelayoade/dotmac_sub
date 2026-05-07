@@ -343,6 +343,9 @@ def create_batched_mgmt_spec_from_config_pack(
     allocated_ip: str | None = None,
     subnet_mask: str | None = None,
     gateway: str | None = None,
+    internet_config_ip_index: int | None = None,
+    wan_config_profile_id: int | None = None,
+    tr069_profile_id: int | None = None,
 ) -> BatchedMgmtSpec:
     """Create BatchedMgmtSpec from OLT Config Pack.
 
@@ -376,7 +379,19 @@ def create_batched_mgmt_spec_from_config_pack(
         subnet_mask=subnet_mask,
         gateway=gateway,
         ip_index=0,
-        internet_config_ip_index=config_pack.internet_config_ip_index,
-        wan_config_profile_id=config_pack.wan_config_profile_id,
-        tr069_profile_id=config_pack.tr069_olt_profile_id,
+        internet_config_ip_index=(
+            internet_config_ip_index
+            if internet_config_ip_index is not None
+            else config_pack.internet_config_ip_index
+        ),
+        wan_config_profile_id=(
+            wan_config_profile_id
+            if wan_config_profile_id is not None
+            else config_pack.wan_config_profile_id
+        ),
+        tr069_profile_id=(
+            tr069_profile_id
+            if tr069_profile_id is not None
+            else config_pack.tr069_olt_profile_id
+        ),
     )

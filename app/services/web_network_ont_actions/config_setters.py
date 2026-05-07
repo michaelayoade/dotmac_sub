@@ -514,6 +514,16 @@ def set_pppoe_credentials(
         set_pppoe_credentials as _set_pppoe_credentials,
     )
 
+    ont = db.get(OntUnit, ont_id)
+    if ont is not None:
+        from app.services.network.effective_ont_config import (
+            resolve_internet_wcd_index,
+        )
+
+        effective_instance_index = resolve_internet_wcd_index(db, ont)
+        if instance_index == 1 and effective_instance_index != 1:
+            instance_index = effective_instance_index
+
     result = _set_pppoe_credentials(
         db,
         ont_id,
@@ -525,7 +535,6 @@ def set_pppoe_credentials(
     )
 
     if result.success:
-        ont = db.get(OntUnit, ont_id)
         _persist_ont_plan_step(
             db,
             ont_id,
@@ -690,10 +699,18 @@ def set_wan_config(
 
     ont = db.get(OntUnit, ont_id)
     config_pack_wan_vlan: int | None = None
+    effective_instance_index: int | None = None
     if ont and ont.olt_device_id:
         config_pack = resolve_olt_config_pack(db, ont.olt_device_id)
         if config_pack and config_pack.internet_vlan:
             config_pack_wan_vlan = config_pack.internet_vlan.tag
+        from app.services.network.effective_ont_config import (
+            resolve_internet_wcd_index,
+        )
+
+        effective_instance_index = resolve_internet_wcd_index(db, ont)
+        if instance_index == 1 and effective_instance_index != 1:
+            instance_index = effective_instance_index
 
     wan_mode_normalized = wan_mode.strip().lower()
     resolved_wan_vlan = (
@@ -772,6 +789,7 @@ def set_wan_config(
                 "password_set": bool(pppoe_password),
                 "ip_address": ip_address,
                 "instance_index": instance_index,
+                "effective_instance_index": effective_instance_index,
                 "wan_vlan": resolved_wan_vlan,
                 "delivery_transport": (
                     result.data.get("delivery_transport")
@@ -791,6 +809,7 @@ def set_wan_config(
             "waiting": result.waiting,
             "wan_mode": wan_mode,
             "instance_index": instance_index,
+            "effective_instance_index": effective_instance_index,
             "wan_vlan": resolved_wan_vlan,
         },
     )

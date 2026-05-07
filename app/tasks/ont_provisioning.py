@@ -119,38 +119,6 @@ def authorize_ont(
             }
 
 
-@celery_app.task(name="app.tasks.ont_provisioning.return_ont_to_inventory")
-def return_ont_to_inventory(
-    ont_id: str,
-    *,
-    initiated_by: str | None = None,
-) -> dict[str, Any]:
-    """Return an ONT to inventory outside the web request timeout path."""
-    del initiated_by  # Reserved for richer audit propagation.
-    with db_session_adapter.session() as db:
-        try:
-            from app.services.web_network_ont_actions.inventory import (
-                return_to_inventory_for_web,
-            )
-
-            result = return_to_inventory_for_web(db, ont_id, request=None)
-            db.commit()
-            return {
-                "success": result.success,
-                "message": result.message,
-                "data": result.data or {},
-                "ont_id": ont_id,
-            }
-        except Exception as exc:
-            logger.exception("Background return-to-inventory failed for ONT %s", ont_id)
-            db.rollback()
-            return {
-                "success": False,
-                "message": f"Return-to-inventory task error: {exc}",
-                "ont_id": ont_id,
-            }
-
-
 @celery_app.task(name="app.tasks.ont_provisioning.provision_ont")
 def provision_ont(
     ont_id: str,
