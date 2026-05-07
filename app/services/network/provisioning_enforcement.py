@@ -33,6 +33,11 @@ from app.models.tr069 import Tr069CpeDevice
 from app.services.genieacs_service import genieacs_service
 from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.imported_service_ports import (
+    ImportedServicePortStateMissing,
+    list_imported_service_ports,
+    require_imported_service_port_state,
+)
 from app.services.network.provisioning_settings import get_stale_runtime_hours
 from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
@@ -525,12 +530,12 @@ class ProvisioningEnforcement:
     ) -> list[VlanDriftEntry]:
         """Detect service-port VLAN mismatches for ONTs on a specific OLT.
 
-        This method queries the OLT via SSH to read actual service-ports and
-        compares them against expected VLANs from the database.
+        This method reads imported OLT service-port state from the database and
+        compares it against expected VLANs from the database.
 
         Note:
-            This is an expensive operation (requires OLT SSH connection).
-            Should be run on-demand or in background tasks, not in fast queries.
+            This should be run after OLT state import has populated
+            ``olt_service_ports`` for the target OLT.
 
         Drift types detected:
         - ``missing``: ONT has expected VLAN in DB but no service-port on OLT
@@ -545,7 +550,6 @@ class ProvisioningEnforcement:
             List of VlanDriftEntry describing each detected mismatch.
         """
         from app.services.network.olt_inventory import get_olt_or_none
-        from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.network.serial_utils import parse_ont_id_on_olt
 
         olt = get_olt_or_none(db, olt_id)
@@ -586,24 +590,22 @@ class ProvisioningEnforcement:
 
         drift_entries: list[VlanDriftEntry] = []
 
-        adapter = get_protocol_adapter(olt)
-
         for fsp, fsp_onts in onts_by_fsp.items():
-            # Query service-ports for this FSP from OLT
-            result = adapter.get_service_ports(fsp)
-            if not result.success:
+            try:
+                require_imported_service_port_state(db, olt_id=olt.id)
+                service_ports = list_imported_service_ports(
+                    db,
+                    olt_id=olt.id,
+                    fsp=fsp,
+                )
+            except ImportedServicePortStateMissing as exc:
                 logger.warning(
-                    "Cannot read service-ports for OLT %s FSP %s: %s",
+                    "Cannot inspect imported service-ports for OLT %s FSP %s: %s",
                     olt.name,
                     fsp,
-                    result.message,
+                    exc,
                 )
                 continue
-
-            sp_data = result.data.get("service_ports", [])
-            service_ports: list[ServicePortEntry] = (
-                sp_data if isinstance(sp_data, list) else []
-            )
 
             # Build lookup: olt_ont_id -> list of observed VLANs
             observed_vlans_by_ont: dict[int, list[int]] = {}
