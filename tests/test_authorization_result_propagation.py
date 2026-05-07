@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from app.services.network import olt_api_operations
 
 
-def test_api_authorize_ont_returns_synchronous_acs_failure_result(monkeypatch):
+def test_api_authorize_ont_returns_workflow_result(monkeypatch):
     """API authorization returns the completed workflow result directly."""
     failed_result = SimpleNamespace(
         success=False,
         status="error",
-        message="ONT authorized, but ACS foundation setup failed.",
+        message="ONT authorization failed.",
         ont_unit_id="ont-1",
         ont_id_on_olt=7,
         completed_authorization=True,
@@ -40,7 +40,7 @@ def test_api_authorize_ont_returns_synchronous_acs_failure_result(monkeypatch):
     )
 
     assert response.success is False
-    assert response.message == "ONT authorized, but ACS foundation setup failed."
+    assert response.message == "ONT authorization failed."
     assert response.data == {
         "status": "error",
         "ont_unit_id": "ont-1",

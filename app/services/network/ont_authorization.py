@@ -1,15 +1,14 @@
 """ONT authorization service - OLT serial registration with DB state tracking.
 
 Authorization runs synchronously because the OLT work is OMCI/CLI-driven. The
-workflow registers the autofind serial, persists local inventory state, links the
-PON assignment, allocates management IP, and applies the OLT-side ACS foundation
-before returning.
+workflow registers the autofind serial and persists local inventory state before
+returning. Follow-up service configuration is applied explicitly after
+authorization.
 """
 
 from __future__ import annotations
 
 import logging
-import ipaddress
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -21,21 +20,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.network import (
-    MgmtIpMode,
-    OLTDevice,
     OntAssignment,
     OntAuthorizationStatus,
     OntProvisioningStatus,
     OntUnit,
     OnuOnlineStatus,
 )
-from app.services.network.olt_inventory import get_olt_or_none
-from app.services.network.ont_desired_config import (
-    desired_config_column,
-    get_desired_config_value,
-    set_desired_config_values,
-)
 from app.services.network.equipment_identity import normalize_ont_equipment_id
+from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
     normalize as normalize_serial,
@@ -51,24 +43,6 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
-
-
-def _subnet_mask_from_cidr(cidr: str | None) -> str | None:
-    if not cidr:
-        return None
-    try:
-        return str(ipaddress.ip_network(str(cidr), strict=False).netmask)
-    except ValueError:
-        return None
-
-
-def _management_pool_subnet(pool: object) -> str | None:
-    return _subnet_mask_from_cidr(getattr(pool, "cidr", None))
-
-
-def _management_pool_gateway(pool: object) -> str | None:
-    gateway = str(getattr(pool, "gateway", "") or "").strip()
-    return gateway or None
 
 
 @dataclass
@@ -138,407 +112,6 @@ def _serial_predicates(serial_number: str) -> list[str]:
         )
         if candidate
     ]
-
-
-# ---------------------------------------------------------------------------
-# Management IP allocation
-# ---------------------------------------------------------------------------
-
-
-def _pool_contains_ipv4_address(
-    db: Session,
-    *,
-    pool_id: str | uuid.UUID,
-    address: str,
-) -> bool:
-    """Return whether address belongs to an active IPv4 block in the pool."""
-    import ipaddress
-
-    from app.models.network import IpBlock
-
-    try:
-        ip_address = ipaddress.ip_address(str(address))
-    except ValueError:
-        return False
-    if ip_address.version != 4:
-        return False
-
-    blocks = db.scalars(
-        select(IpBlock)
-        .where(IpBlock.pool_id == pool_id)
-        .where(IpBlock.is_active.is_(True))
-    ).all()
-    for block in blocks:
-        try:
-            network = ipaddress.ip_network(str(block.cidr), strict=False)
-        except ValueError:
-            continue
-        if network.version == 4 and ip_address in network:
-            return True
-    return False
-
-
-def _management_ip_is_available(
-    db: Session,
-    *,
-    pool_id: str | uuid.UUID,
-    address: str | None,
-) -> bool:
-    """Return whether an IPv4 address is currently free for management allocation."""
-    from app.models.network import IPv4Address, OntAssignment
-
-    candidate = str(address or "").strip()
-    if not candidate:
-        return False
-    if not _pool_contains_ipv4_address(db, pool_id=pool_id, address=candidate):
-        return False
-
-    record = db.scalars(
-        select(IPv4Address).where(IPv4Address.address == candidate)
-    ).first()
-    if (
-        record is not None
-        and record.pool_id is not None
-        and str(record.pool_id) != str(pool_id)
-    ):
-        return False
-    if record is not None and (
-        record.is_reserved
-        or record.ont_unit_id is not None
-        or getattr(record, "assignment", None) is not None
-    ):
-        return False
-
-    assigned = db.scalar(
-        select(OntAssignment.id)
-        .where(OntAssignment.mgmt_ip_address == candidate)
-        .where(OntAssignment.active.is_(True))
-        .limit(1)
-    )
-    if assigned is not None:
-        return False
-    return candidate not in _desired_management_ips(db)
-
-
-def _desired_management_ips(db: Session) -> set[str]:
-    """Return management IPs stored in ONT desired_config."""
-    rows = db.scalars(select(desired_config_column(OntUnit))).all()
-    ips: set[str] = set()
-    for config in rows:
-        if not isinstance(config, dict):
-            continue
-        value = get_desired_config_value(config, "management", "ip_address")
-        if value:
-            ips.add(str(value))
-    return ips
-
-
-def refresh_pool_availability(
-    db: Session,
-    pool_id: str | uuid.UUID,
-) -> tuple[str | None, int]:
-    """Recompute next available IPv4 address and available count for a pool."""
-    import ipaddress
-
-    from app.models.network import IpBlock, IpPool, IPv4Address, OntAssignment
-
-    pool = db.get(IpPool, pool_id)
-    if pool is None:
-        return None, 0
-
-    blocks = list(
-        db.scalars(
-            select(IpBlock)
-            .where(IpBlock.pool_id == pool.id)
-            .where(IpBlock.is_active.is_(True))
-        ).all()
-    )
-
-    address_rows = db.scalars(
-        select(IPv4Address).where(IPv4Address.pool_id == pool.id)
-    ).all()
-    used = {
-        str(address.address)
-        for address in address_rows
-        if address.is_reserved
-        or address.ont_unit_id is not None
-        or getattr(address, "assignment", None) is not None
-    }
-
-    assigned_ips = db.scalars(
-        select(OntAssignment.mgmt_ip_address).where(
-            OntAssignment.mgmt_ip_address.isnot(None),
-            OntAssignment.active.is_(True),
-        )
-    ).all()
-    for ip in assigned_ips:
-        if ip:
-            used.add(str(ip))
-    used.update(_desired_management_ips(db))
-
-    gateway = getattr(pool, "gateway", None)
-    if gateway:
-        used.add(str(gateway))
-
-    next_available: str | None = None
-    available_count = 0
-    for block in blocks:
-        try:
-            network = ipaddress.ip_network(str(block.cidr), strict=False)
-        except ValueError:
-            continue
-        if network.version != 4:
-            continue
-        for ip_address in network.hosts():
-            candidate = str(ip_address)
-            if candidate in used:
-                continue
-            available_count += 1
-            if next_available is None:
-                next_available = candidate
-
-    pool.next_available_ip = next_available
-    pool.available_count = available_count
-    db.flush()
-    return next_available, available_count
-
-
-def _advance_pool_cache_after_allocation(
-    db: Session,
-    *,
-    pool,
-    allocated_ip: str,
-) -> None:
-    """Advance cached next IP without recomputing full pool availability."""
-    import ipaddress
-
-    from app.models.network import IpBlock
-
-    try:
-        allocated = ipaddress.ip_address(str(allocated_ip))
-    except ValueError:
-        pool.next_available_ip = None
-        pool.available_count = None
-        return
-    if not isinstance(allocated, ipaddress.IPv4Address):
-        pool.next_available_ip = None
-        pool.available_count = None
-        return
-
-    next_available: str | None = None
-    blocks = db.scalars(
-        select(IpBlock)
-        .where(IpBlock.pool_id == pool.id)
-        .where(IpBlock.is_active.is_(True))
-        .order_by(IpBlock.cidr.asc())
-    ).all()
-    for block in blocks:
-        try:
-            network = ipaddress.ip_network(str(block.cidr), strict=False)
-        except ValueError:
-            continue
-        if not isinstance(network, ipaddress.IPv4Network) or allocated not in network:
-            continue
-        for ip_address in network.hosts():
-            if ip_address <= allocated:
-                continue
-            candidate = str(ip_address)
-            if _management_ip_is_available(db, pool_id=pool.id, address=candidate):
-                next_available = candidate
-                break
-        if next_available is not None:
-            break
-
-    pool.next_available_ip = next_available
-    if pool.available_count is not None and pool.available_count > 0:
-        pool.available_count -= 1
-
-
-def allocate_management_ip_for_ont(
-    db: Session,
-    *,
-    ont_unit_id: str,
-    olt_id: str,
-) -> tuple[bool, str, str | None]:
-    """Allocate a management IP from the OLT's management IP pool for the ONT.
-
-    The IP is stored on OntUnit.desired_config. Legacy assignment columns are
-    updated during the transition for compatibility with old pool scans.
-
-    Returns:
-        Tuple of (success, message, allocated_ip).
-        If no pool is configured, returns a failure because ACS reachability cannot
-        be established without a management address.
-    """
-    from app.models.network import IpPool, IPv4Address
-    from app.services.network.ont_management_ipam import allocate_ont_management_ip
-
-    ont = db.get(OntUnit, ont_unit_id)
-    if ont is None:
-        return False, "ONT not found.", None
-
-    olt = db.get(OLTDevice, olt_id)
-    if olt is None:
-        return False, "OLT not found.", None
-
-    try:
-        allocation = allocate_ont_management_ip(db, ont=ont, olt=olt)
-    except ValueError as exc:
-        return False, str(exc), None
-    return (
-        True,
-        (
-            f"ONT already has management IP {allocation.address}."
-            if allocation.reused
-            else f"Allocated management IP {allocation.address}."
-        ),
-        allocation.address,
-    )
-
-    assignment = _get_or_create_active_assignment(db, ont)
-
-    pool_id = olt.mgmt_ip_pool_id
-    if not pool_id:
-        return False, "No management IP pool configured on OLT.", None
-
-    # Serialize allocation for this pool
-    locked_pool = db.scalars(
-        select(IpPool).where(IpPool.id == pool_id).with_for_update()
-    ).first()
-    if locked_pool is None:
-        return False, "Management IP pool not found.", None
-
-    # Reuse existing management IP if valid for this pool
-    if assignment.mgmt_ip_address:
-        existing_ip = str(assignment.mgmt_ip_address).strip()
-        record = db.scalars(
-            select(IPv4Address).where(IPv4Address.address == existing_ip)
-        ).first()
-        record_ont_id = getattr(record, "ont_unit_id", None)
-        owned_by_other_ont = record_ont_id is not None and str(record_ont_id) != str(
-            ont.id
-        )
-        in_current_pool = _pool_contains_ipv4_address(
-            db, pool_id=pool_id, address=existing_ip
-        )
-
-        if in_current_pool and not owned_by_other_ont:
-            mgmt_subnet = _management_pool_subnet(locked_pool)
-            mgmt_gateway = _management_pool_gateway(locked_pool)
-            if not mgmt_subnet:
-                return False, "Management IP pool CIDR is invalid or missing.", None
-            if record is None:
-                record = IPv4Address(
-                    address=existing_ip,
-                    pool_id=pool_id,
-                    is_reserved=True,
-                    notes=f"ont:{ont_unit_id}",
-                )
-                db.add(record)
-            else:
-                record.pool_id = pool_id
-                record.is_reserved = True
-                record.notes = f"ont:{ont_unit_id}"
-            record.ont_unit_id = ont.id
-            record.allocation_type = "management"
-            assignment.mgmt_ip_mode = MgmtIpMode.static_ip
-            assignment.mgmt_subnet = mgmt_subnet
-            assignment.mgmt_gateway = mgmt_gateway
-            set_desired_config_values(
-                ont,
-                {
-                    "management.ip_address": existing_ip,
-                    "management.ip_mode": "static_ip",
-                    "management.subnet": mgmt_subnet,
-                    "management.gateway": mgmt_gateway,
-                },
-            )
-            db.flush()
-            return True, f"ONT already has management IP {existing_ip}.", existing_ip
-
-        # Clear stale IP
-        if record is not None and str(getattr(record, "ont_unit_id", "")) == str(
-            ont.id
-        ):
-            record.is_reserved = False
-            record.notes = None
-            record.ont_unit_id = None
-            record.allocation_type = None
-        assignment.mgmt_ip_address = None
-        assignment.mgmt_subnet = None
-        assignment.mgmt_gateway = None
-        assignment.mgmt_ip_mode = MgmtIpMode.inactive
-        set_desired_config_values(
-            ont,
-            {
-                "management.ip_address": None,
-                "management.ip_mode": "inactive",
-                "management.subnet": None,
-                "management.gateway": None,
-            },
-        )
-        db.flush()
-
-    # Find next available IP
-    next_ip = str(getattr(locked_pool, "next_available_ip", "") or "").strip() or None
-    if next_ip and not _management_ip_is_available(
-        db, pool_id=pool_id, address=next_ip
-    ):
-        next_ip = None
-
-    if next_ip is None:
-        next_ip, _ = refresh_pool_availability(db, pool_id)
-    if not next_ip:
-        return False, "Management IP pool exhausted.", None
-
-    # Reserve the IP
-    record = db.scalars(
-        select(IPv4Address).where(IPv4Address.address == next_ip)
-    ).first()
-    if record is None:
-        record = IPv4Address(
-            address=next_ip,
-            pool_id=pool_id,
-            is_reserved=True,
-            notes=f"ont:{ont_unit_id}",
-        )
-        db.add(record)
-    else:
-        if record.pool_id and str(record.pool_id) != str(pool_id):
-            return False, f"Management IP {next_ip} belongs to a different pool.", None
-        record.pool_id = pool_id
-        record.is_reserved = True
-        record.notes = f"ont:{ont_unit_id}"
-    record.ont_unit_id = ont.id
-    record.allocation_type = "management"
-
-    mgmt_subnet = _management_pool_subnet(locked_pool)
-    mgmt_gateway = _management_pool_gateway(locked_pool)
-    if not mgmt_subnet:
-        return False, "Management IP pool CIDR is invalid or missing.", None
-    assignment.mgmt_ip_address = next_ip
-    assignment.mgmt_ip_mode = MgmtIpMode.static_ip
-    assignment.mgmt_subnet = mgmt_subnet
-    assignment.mgmt_gateway = mgmt_gateway
-    set_desired_config_values(
-        ont,
-        {
-            "management.ip_address": next_ip,
-            "management.ip_mode": "static_ip",
-            "management.subnet": mgmt_subnet,
-            "management.gateway": mgmt_gateway,
-        },
-    )
-    _advance_pool_cache_after_allocation(db, pool=locked_pool, allocated_ip=next_ip)
-
-    db.flush()
-    logger.info(
-        "Allocated management IP %s from pool %s to ONT %s",
-        next_ip,
-        pool_id,
-        ont.serial_number,
-    )
-    return True, f"Allocated management IP {next_ip}.", next_ip
 
 
 def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
@@ -826,163 +399,6 @@ def ensure_assignment_and_pon_port_for_authorized_ont(
         return False, "Failed to link ONT to PON port. Check server logs."
 
 
-def apply_authorization_foundation(
-    db: Session,
-    *,
-    ont_unit_id: str,
-    olt_id: str,
-    fsp: str,
-    serial_number: str,
-    ont_id_on_olt: int,
-) -> tuple[bool, str, list[dict[str, object]]]:
-    """Run post-authorization setup: link PON port, allocate IP, apply ACS foundation.
-
-    Returns:
-        Tuple of (success, message, steps).
-    """
-    from app.services.network.acs_foundation import apply_acs_foundation
-
-    steps: list[dict[str, object]] = []
-
-    # Link PON port
-    port_ok, port_msg = ensure_assignment_and_pon_port_for_authorized_ont(
-        db,
-        ont_unit_id=ont_unit_id,
-        olt_id=olt_id,
-        fsp=fsp,
-    )
-    steps.append(
-        {"name": "Link ONT to PON port", "success": port_ok, "message": port_msg}
-    )
-    if not port_ok:
-        return False, port_msg, steps
-
-    # Allocate management IP
-    ip_ok, ip_msg, allocated_ip = allocate_management_ip_for_ont(
-        db,
-        ont_unit_id=ont_unit_id,
-        olt_id=olt_id,
-    )
-    steps.append(
-        {
-            "name": "Allocate management IP",
-            "success": ip_ok,
-            "message": ip_msg,
-            "allocated_ip": allocated_ip,
-        }
-    )
-    if not ip_ok:
-        return False, ip_msg, steps
-
-    ont = db.get(OntUnit, ont_unit_id)
-    olt = db.get(OLTDevice, olt_id)
-    acs_prereq_step: dict[str, object] = {
-        "name": "Verify ACS prerequisites",
-        "success": True,
-        "message": "ACS prerequisites resolved.",
-    }
-    if not ont:
-        acs_prereq_step.update({"success": False, "message": "ONT not found."})
-        steps.append(acs_prereq_step)
-        return False, "ONT not found.", steps
-    if not olt:
-        acs_prereq_step.update({"success": False, "message": "OLT not found."})
-        steps.append(acs_prereq_step)
-        return False, "OLT not found.", steps
-    if not allocated_ip:
-        message = (
-            "A static management IP is required before ACS authorization can be "
-            "guaranteed."
-        )
-        acs_prereq_step.update({"success": False, "message": message})
-        steps.append(acs_prereq_step)
-        return False, message, steps
-
-    from app.services.network.effective_ont_config import resolve_effective_ont_config
-
-    effective_values = resolve_effective_ont_config(db, ont, olt=olt).get("values", {})
-    missing_acs_prereqs: list[str] = []
-    if not effective_values.get("tr069_acs_server_id"):
-        missing_acs_prereqs.append("ACS server")
-    if effective_values.get("tr069_olt_profile_id") in (None, ""):
-        missing_acs_prereqs.append("OLT TR-069 profile")
-    if effective_values.get("mgmt_vlan") in (None, ""):
-        missing_acs_prereqs.append("management VLAN")
-    effective_mgmt_ip = effective_values.get("mgmt_ip_address")
-    if not effective_mgmt_ip:
-        missing_acs_prereqs.append("static management IP")
-    elif str(effective_mgmt_ip) != str(allocated_ip):
-        missing_acs_prereqs.append("matching static management IP")
-
-    if missing_acs_prereqs:
-        message = (
-            "ACS authorization cannot be guaranteed; missing "
-            f"{', '.join(missing_acs_prereqs)}."
-        )
-        acs_prereq_step.update(
-            {
-                "success": False,
-                "message": message,
-                "missing": missing_acs_prereqs,
-            }
-        )
-        steps.append(acs_prereq_step)
-        return False, message, steps
-
-    steps.append(acs_prereq_step)
-
-    try:
-        db.commit()
-    except SQLAlchemyError as exc:
-        db.rollback()
-        logger.warning(
-            "Failed to commit before ACS foundation for ONT %s",
-            serial_number,
-            exc_info=True,
-        )
-        return False, f"Database commit failed: {exc}", steps
-
-    try:
-        acs_result = apply_acs_foundation(
-            db,
-            ont_unit_id=ont_unit_id,
-            olt_id=olt_id,
-            fsp=fsp,
-            ont_id_on_olt=ont_id_on_olt,
-            wait_for_acs_bootstrap=True,
-        )
-        acs_ok = bool(acs_result.get("success"))
-        acs_msg = str(acs_result.get("message") or "")
-        steps.append(
-            {
-                "name": "Apply ACS foundation",
-                "success": acs_ok,
-                "message": acs_msg,
-                "data": acs_result,
-            }
-        )
-        if not acs_ok:
-            return (
-                False,
-                "Authorization foundation failed: ACS foundation was not applied.",
-                steps,
-            )
-    except Exception as exc:
-        steps.append(
-            {
-                "name": "Apply ACS foundation",
-                "success": False,
-                "message": str(exc),
-            }
-        )
-        logger.warning(
-            "Error applying ACS foundation for ONT %s: %s", serial_number, exc
-        )
-        return False, f"ACS foundation failed: {exc}", steps
-
-    return True, "Authorization foundation completed with ACS connected.", steps
-
-
 # ---------------------------------------------------------------------------
 # Core authorization
 # ---------------------------------------------------------------------------
@@ -1226,15 +642,15 @@ def authorize_ont(
     preset_id: str | None = None,
     request: Request | None = None,
 ) -> AuthorizationWorkflowResult:
-    """Authorize ONT, allocate management IP, apply ACS foundation, and audit log.
+    """Authorize ONT on the OLT, persist inventory state, and audit log.
 
     This is the main entry point for ONT authorization. It:
     1. Registers the ONT serial on the OLT
     2. Creates/updates the OntUnit record
-    3. Links to PON port
-    4. Allocates management IP (if pool configured)
-    5. Applies ACS foundation (if mgmt IP allocated)
-    6. Logs the action for audit
+    3. Logs the action for audit
+
+    Connectivity setup is intentionally not run inline here. After authorization,
+    callers should apply the OMCI configuration through explicit ONT config actions.
     """
     started_at = monotonic()
 
@@ -1253,69 +669,6 @@ def authorize_ont(
             db, request, olt_id, fsp, serial_number, force_reauthorize, result
         )
         return result
-
-    # Commit OLT authorization before slower follow-up work
-    db.commit()
-
-    # Step 2-4: Link PON port, allocate IP, apply ACS foundation
-    if result.ont_unit_id and result.ont_id_on_olt is not None:
-        foundation_ok, foundation_msg, foundation_steps = (
-            apply_authorization_foundation(
-                db,
-                ont_unit_id=result.ont_unit_id,
-                olt_id=olt_id,
-                fsp=fsp,
-                serial_number=serial_number,
-                ont_id_on_olt=result.ont_id_on_olt,
-            )
-        )
-
-        failed_foundation_message = next(
-            (
-                str(step.get("message") or "")
-                for step in foundation_steps
-                if not bool(step.get("success")) and step.get("message")
-            ),
-            foundation_msg,
-        )
-        foundation_step_message = (
-            failed_foundation_message if not foundation_ok else foundation_msg
-        )
-
-        # Add a summary step for the foundation work
-        result.steps.append(
-            AuthorizationStepResult(
-                step=len(result.steps) + 1,
-                name="Bring ONT onto ACS",
-                success=foundation_ok,
-                message=foundation_step_message,
-            )
-        )
-
-        if not foundation_ok:
-            result.success = False
-            result.status = "error"
-            result.partial_success = True
-            result.message = (
-                f"ONT authorized, but ACS foundation setup failed: {foundation_msg}"
-            )
-        else:
-            # Check if we got a management IP
-            ip_step = next(
-                (
-                    s
-                    for s in foundation_steps
-                    if s.get("name") == "Allocate management IP"
-                ),
-                None,
-            )
-            allocated_ip = ip_step.get("allocated_ip") if ip_step else None
-            if allocated_ip:
-                result.message = (
-                    f"ONT authorized with management IP {allocated_ip} and ACS connected."
-                )
-            else:
-                result.message = "ONT authorized and ACS connected."
 
     db.commit()
     _audit_authorization(

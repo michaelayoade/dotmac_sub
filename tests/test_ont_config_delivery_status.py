@@ -1,6 +1,20 @@
 from __future__ import annotations
 
 
+def _make_subscriber(db_session, email: str):
+    from app.models.subscriber import Subscriber, SubscriberStatus
+
+    subscriber = Subscriber(
+        first_name="Static",
+        last_name="WAN",
+        email=email,
+        status=SubscriberStatus.active,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    return subscriber
+
+
 def test_configure_push_scope_sections_are_individual() -> None:
     from app.web.admin.network_onts import _configure_push_scope_sections
 
@@ -209,6 +223,122 @@ def test_update_ont_config_pushes_static_wan_fields(db_session, monkeypatch) -> 
     assert calls[0]["subnet_mask"] == "255.255.255.252"
     assert calls[0]["gateway"] == "100.64.1.1"
     assert calls[0]["dns_servers"] == "1.1.1.1"
+
+
+def test_update_ont_config_claims_static_wan_ipam_address(db_session) -> None:
+    from app.models.network import (
+        IPAssignment,
+        IpBlock,
+        IpPool,
+        IPVersion,
+        OntAssignment,
+        OntUnit,
+    )
+    from app.services.network.ont_desired_config import desired_config
+    from app.services.web_network_ont_actions.db_config import update_ont_config
+
+    subscriber = _make_subscriber(db_session, "static-wan-owner@example.com")
+    ont = OntUnit(serial_number="STATIC-WAN-IPAM-CLAIM", is_active=True)
+    pool = IpPool(
+        name="Subscriber WAN Static Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="100.64.10.0/29",
+        is_active=True,
+    )
+    db_session.add_all([ont, pool])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OntAssignment(
+                ont_unit_id=ont.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            ),
+            IpBlock(pool_id=pool.id, cidr="100.64.10.0/29", is_active=True),
+        ]
+    )
+    db_session.commit()
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        wan_mode="static_ip",
+        wan_static_ip="100.64.10.2",
+        push_to_device=False,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert desired_config(ont)["wan"]["static_ip"] == "100.64.10.2"
+    assignment = (
+        db_session.query(IPAssignment)
+        .join(IPAssignment.ipv4_address)
+        .filter(IPAssignment.subscriber_id == subscriber.id)
+        .filter(IPAssignment.is_active.is_(True))
+        .one()
+    )
+    assert assignment.ipv4_address.address == "100.64.10.2"
+
+
+def test_update_ont_config_rejects_static_wan_ip_assigned_elsewhere(
+    db_session,
+) -> None:
+    from app.models.network import (
+        IPAssignment,
+        IpPool,
+        IPv4Address,
+        IPVersion,
+        OntAssignment,
+        OntUnit,
+    )
+    from app.services.web_network_ont_actions.db_config import update_ont_config
+
+    owner = _make_subscriber(db_session, "static-wan-existing@example.com")
+    requester = _make_subscriber(db_session, "static-wan-requester@example.com")
+    ont = OntUnit(serial_number="STATIC-WAN-IPAM-CONFLICT", is_active=True)
+    pool = IpPool(
+        name="Subscriber WAN Conflict Pool",
+        ip_version=IPVersion.ipv4,
+        cidr="100.64.20.0/29",
+        is_active=True,
+    )
+    db_session.add_all([ont, pool])
+    db_session.flush()
+    address = IPv4Address(
+        address="100.64.20.2",
+        pool_id=pool.id,
+        is_reserved=False,
+        allocation_type="wan",
+    )
+    db_session.add(address)
+    db_session.flush()
+    db_session.add_all(
+        [
+            OntAssignment(
+                ont_unit_id=ont.id,
+                subscriber_id=requester.id,
+                active=True,
+            ),
+            IPAssignment(
+                subscriber_id=owner.id,
+                ip_version=IPVersion.ipv4,
+                ipv4_address_id=address.id,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = update_ont_config(
+        db_session,
+        str(ont.id),
+        wan_mode="static_ip",
+        wan_static_ip="100.64.20.2",
+        push_to_device=False,
+    )
+
+    assert result.success is False
+    assert "already assigned to another subscriber" in result.message
 
 
 def test_update_ont_config_does_not_convert_omci_failure_to_pending(

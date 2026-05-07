@@ -159,7 +159,7 @@ def validate_olt_acs_management_reachability(
             f"Pool: {pool_cidrs}; allowed: {allowed}."
         )
 
-    from app.services.network.ont_authorization import refresh_pool_availability
+    from app.services.network.ont_management_ipam import refresh_pool_availability
 
     next_ip, available_count = refresh_pool_availability(db, pool.id)
     if not next_ip or available_count < 1:

@@ -1049,9 +1049,9 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_runtime_interval,
         )
 
-        # ACS foundation is applied during authorization. Online-silent repair
-        # remains a manual/operator recovery task only; do not run it as a
-        # periodic provisioning loop.
+        # Authorization only registers the ONT. Online-silent ACS repair remains
+        # a manual/operator recovery task only; do not run it as a periodic
+        # provisioning loop.
         _retire_scheduled_task(session, "app.tasks.tr069.heal_online_silent_onts")
 
         # Event retry - retries failed event handlers

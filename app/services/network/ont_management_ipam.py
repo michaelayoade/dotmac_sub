@@ -10,10 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
-    IPVersion,
-    IPv4Address,
     IpBlock,
     IpPool,
+    IPv4Address,
+    IPVersion,
     MgmtIpMode,
     OLTDevice,
     OntAssignment,
@@ -276,6 +276,19 @@ def _advance_pool_cache(db: Session, pool: IpPool) -> None:
                 next_available = candidate
     pool.next_available_ip = next_available
     pool.available_count = available_count
+
+
+def refresh_pool_availability(
+    db: Session,
+    pool_id: object,
+) -> tuple[str | None, int]:
+    """Recompute the next available management IPv4 address for a pool."""
+    pool = db.get(IpPool, pool_id)
+    if pool is None:
+        return None, 0
+    _advance_pool_cache(db, pool)
+    db.flush()
+    return pool.next_available_ip, int(pool.available_count or 0)
 
 
 def release_ont_management_ip(

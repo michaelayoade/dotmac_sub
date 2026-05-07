@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -205,7 +204,7 @@ def test_return_to_inventory_releases_management_ip_for_reauthorization(
     db_session, sample_ont, sample_olt, sample_assignment
 ):
     """Returned ONTs release management IP reservations before reuse."""
-    from app.services.network.ont_authorization import allocate_management_ip_for_ont
+    from app.services.network.ont_management_ipam import allocate_ont_management_ip
 
     pool = IpPool(
         name="Return Mgmt Pool",
@@ -267,15 +266,13 @@ def test_return_to_inventory_releases_management_ip_for_reauthorization(
     sample_ont.olt_device_id = sample_olt.id
     sample_assignment.active = True
     db_session.commit()
-    ok, message, allocated_ip = allocate_management_ip_for_ont(
+    allocation = allocate_ont_management_ip(
         db_session,
-        ont_unit_id=str(sample_ont.id),
-        olt_id=str(sample_olt.id),
+        ont=sample_ont,
+        olt=sample_olt,
     )
 
-    assert ok is True
-    assert allocated_ip == "172.16.201.2"
-    assert "Allocated management IP" in message
+    assert allocation.address == "172.16.201.2"
 
 
 def test_return_to_inventory_clears_historical_assignment_management_ips(

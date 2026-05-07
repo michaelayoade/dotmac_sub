@@ -13,6 +13,7 @@ from app.services.network.ont_management_ipam import (
     allocate_ont_management_ip,
     release_ont_management_ip,
 )
+from app.services.network.subscriber_wan_ipam import ensure_wan_static_ip_available
 from app.services.web_network_ont_actions._common import (
     _is_input_error,
     _log_action_audit,
@@ -109,7 +110,11 @@ def update_ont_config(
         if ip_protocol is not None:
             desired_updates["wan.ip_protocol"] = ip_protocol.strip() or None
         if wan_static_ip is not None:
-            desired_updates["wan.static_ip"] = wan_static_ip.strip() or None
+            desired_updates["wan.static_ip"] = ensure_wan_static_ip_available(
+                db,
+                ont=ont,
+                requested_ip=wan_static_ip,
+            )
         if wan_static_subnet is not None:
             desired_updates["wan.static_subnet"] = wan_static_subnet.strip() or None
         if wan_static_gateway is not None:
