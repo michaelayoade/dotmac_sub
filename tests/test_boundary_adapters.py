@@ -103,6 +103,17 @@ def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
     assert "OLT SSH timed out" in result.message
 
 
+def test_olt_protocol_adapter_satisfies_contract() -> None:
+    from app.services.network.olt_protocol_adapters import (
+        OltProtocolAdapter,
+        OltProtocolAdapterContract,
+    )
+
+    adapter = OltProtocolAdapter(SimpleNamespace(name="OLT 1"))
+
+    assert isinstance(adapter, OltProtocolAdapterContract)
+
+
 def test_adapter_registry_tracks_named_adapters() -> None:
     from app.services.adapters import AdapterRegistry
 

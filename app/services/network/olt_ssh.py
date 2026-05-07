@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 
 from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
@@ -37,28 +37,23 @@ from app.services.network.olt_command_gen import build_service_port_command
 from app.services.network.olt_ssh_ont._common import _safe_profile_name
 from app.services.network.olt_ssh_ont.tr069 import bind_tr069_server_profile
 from app.services.network.olt_ssh_profiles import (
-    Tr069ServerProfile,
     create_tr069_server_profile,
     get_tr069_server_profiles,
 )
-from app.services.network.tr069_profile_matching import match_tr069_profile
 
 # Import SSH policy from adapter (re-export for backward compatibility)
 from app.services.network.olt_vendor_adapters import (
     OltSshPolicy,
     get_olt_adapter,
 )
-
-# TextFSM-based parsers (preferred)
-try:
-    from app.services.network.parsers import (
-        parse_service_port_table as _textfsm_parse_service_port_table,
-    )
-
-    _TEXTFSM_AVAILABLE = True
-except ImportError:
-    _TEXTFSM_AVAILABLE = False
-    logger.warning("TextFSM parsers not available, using legacy regex parsing")
+from app.services.network.parsers import (
+    FirmwareInfo,
+    ServicePortEntry,
+    parse_firmware_info,
+    parse_service_port_table,
+    parse_service_port_table_legacy,
+)
+from app.services.network.tr069_profile_matching import match_tr069_profile
 
 
 def _normalized(value: str | None) -> str:
@@ -392,84 +387,9 @@ def _invalidate_olt_read_cache(
         olt_cache.invalidate(str(olt.id), operation)
 
 
-@dataclass
-class ServicePortEntry:
-    """A single L2 service-port binding on a Huawei OLT."""
-
-    index: int
-    vlan_id: int
-    ont_id: int  # VPI column = ONT-ID for GPON
-    gem_index: int  # VCI column = GEM index for GPON
-    flow_type: str  # e.g. "vlan"
-    flow_para: str  # e.g. "203"
-    state: str  # "up" or "down"
-    fsp: str = ""
-    tag_transform: str = ""
-
-
 def _parse_service_port_table_legacy(output: str) -> list[ServicePortEntry]:
-    """Legacy regex parser for ``display service-port`` output.
-
-    Used as fallback when TextFSM parsing fails.
-    """
-    entries: list[ServicePortEntry] = []
-    for line in output.splitlines():
-        line = line.strip()
-        # Match lines like: "27  201 common   gpon 0/2 /1  0    2     vlan  201  86   86   up"
-        # Fields: INDEX VLAN_ID VLAN_ATTR PORT_TYPE F/S/P VPI(ONT) VCI(GEM) FLOW_TYPE FLOW_PARA RX TX STATE
-        parts = line.split()
-        if len(parts) < 10:
-            continue
-        try:
-            index = int(parts[0])
-            vlan_id = int(parts[1])
-        except (ValueError, IndexError):
-            continue
-        # Find ont_id and gem_index — they follow the "gpon F/S /P" pattern
-        # The port reference may be split (e.g. "0/2 /1") so find numerics after "gpon"
-        try:
-            gpon_idx = parts.index("gpon")
-        except ValueError:
-            continue
-        # After "gpon" and the F/S/P tokens, next two ints are ONT-ID and GEM index
-        fsp_tokens: list[str] = []
-        nums_after_gpon: list[int] = []
-        for token in parts[gpon_idx + 1 :]:
-            # Skip F/S/P fragments like "0/2" or "/1"
-            cleaned = token.strip("/").replace("/", "")
-            if "/" in token:
-                fsp_tokens.append(token)
-                continue
-            if cleaned.isdigit():
-                nums_after_gpon.append(int(cleaned))
-            if len(nums_after_gpon) == 2:
-                break
-        if len(nums_after_gpon) < 2:
-            continue
-        ont_id, gem_index = nums_after_gpon[0], nums_after_gpon[1]
-        # Flow type and state are near the end
-        state = parts[-1].lower() if parts[-1].lower() in ("up", "down") else "unknown"
-        flow_type = ""
-        flow_para = ""
-        for i, p in enumerate(parts):
-            if p in ("vlan", "ppp", "ip", "ip4", "ip6"):
-                flow_type = p
-                if i + 1 < len(parts):
-                    flow_para = parts[i + 1]
-                break
-        entries.append(
-            ServicePortEntry(
-                index=index,
-                vlan_id=vlan_id,
-                ont_id=ont_id,
-                gem_index=gem_index,
-                flow_type=flow_type,
-                flow_para=flow_para,
-                state=state,
-                fsp="".join(fsp_tokens).replace(" ", ""),
-            )
-        )
-    return entries
+    """Backward-compatible wrapper for the parser package implementation."""
+    return parse_service_port_table_legacy(output)
 
 
 def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
@@ -477,34 +397,7 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
 
     Uses TextFSM template for robust parsing with fallback to legacy regex.
     """
-    if "gpon" not in output.lower():
-        return []
-    if _TEXTFSM_AVAILABLE:
-        try:
-            result = _textfsm_parse_service_port_table(output)
-            if result.success and result.data:
-                # Convert from parser dataclass to local dataclass
-                return [
-                    ServicePortEntry(
-                        index=e.index,
-                        vlan_id=e.vlan_id,
-                        ont_id=e.ont_id,
-                        gem_index=e.gem_index,
-                        flow_type=e.flow_type,
-                        flow_para=e.flow_para,
-                        state=e.state,
-                        fsp=e.fsp.replace(" ", ""),
-                        tag_transform=e.tag_transform,
-                    )
-                    for e in result.data
-                ]
-            if result.warnings:
-                logger.debug("TextFSM service-port warnings: %s", result.warnings)
-        except (ValueError, KeyError, IndexError, AttributeError) as e:
-            logger.debug("TextFSM service-port parse failed, using legacy: %s", e)
-
-    # Fallback to legacy regex parsing
-    return _parse_service_port_table_legacy(output)
+    return parse_service_port_table(output).data
 
 
 _HUAWEI_ERROR_PATTERNS = (
@@ -783,54 +676,9 @@ def upgrade_firmware(
         transport.close()
 
 
-@dataclass
-class FirmwareInfo:
-    """Firmware version information from OLT."""
-
-    current_version: str | None = None
-    standby_version: str | None = None
-    running_board: str | None = None
-    standby_board: str | None = None
-    uptime: str | None = None
-    has_dual_image: bool = False
-
-
 def _parse_firmware_info(output: str) -> FirmwareInfo:
-    """Parse firmware version information from 'display version' output."""
-    info = FirmwareInfo()
-    lines = output.splitlines()
-
-    for line in lines:
-        line_lower = line.lower()
-
-        # Look for version patterns
-        if "version" in line_lower and "software" in line_lower:
-            # Huawei: VRP (R) software, Version X.XXX
-            match = re.search(r"Version\s+(\S+)", line, re.IGNORECASE)
-            if match:
-                info.current_version = match.group(1)
-
-        # Look for uptime
-        if "uptime" in line_lower:
-            match = re.search(r"uptime[:\s]+(.+)$", line, re.IGNORECASE)
-            if match:
-                info.uptime = match.group(1).strip()
-
-        # Look for board information
-        if "board" in line_lower and ("main" in line_lower or "master" in line_lower):
-            info.running_board = line.strip()
-        if "board" in line_lower and ("standby" in line_lower or "slave" in line_lower):
-            info.standby_board = line.strip()
-            info.has_dual_image = True
-
-        # Look for standby version
-        if "standby" in line_lower and "version" in line_lower:
-            match = re.search(r"Version[:\s]+(\S+)", line, re.IGNORECASE)
-            if match:
-                info.standby_version = match.group(1)
-                info.has_dual_image = True
-
-    return info
+    """Backward-compatible wrapper for the parser package implementation."""
+    return parse_firmware_info(output)
 
 
 def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
@@ -1017,7 +865,11 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         if is_error_output(config_text):
             return False, "OLT rejected running-config command", config_text
         if "return" not in config_text.lower():
-            return False, "Config output incomplete — missing return marker", config_text
+            return (
+                False,
+                "Config output incomplete — missing return marker",
+                config_text,
+            )
         olt_cache.set(str(olt.id), "running_config", config_text)
         return True, "Configuration retrieved", config_text
     except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
@@ -1143,9 +995,7 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
         if lines and re.search(policy.prompt_regex, lines[-1]):
             lines = lines[:-1]
         clean_output = "\n".join(lines).strip()
-        olt_cache.set(
-            str(olt.id), "running_config", clean_output, cache_params, ttl=60
-        )
+        olt_cache.set(str(olt.id), "running_config", clean_output, cache_params, ttl=60)
         return True, "Command executed", clean_output
     except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
         logger.error(
@@ -1386,7 +1236,11 @@ def create_single_service_port(
             olt.name,
             fsp,
         )
-        return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})", port_index
+        return (
+            True,
+            f"Service-port created (VLAN {vlan_id}, GEM {gem_index})",
+            port_index,
+        )
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
             "Error creating service-port on OLT %s: %s", olt.name, exc, exc_info=True

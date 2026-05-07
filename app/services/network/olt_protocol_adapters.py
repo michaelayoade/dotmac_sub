@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.services.adapters.base import AdapterResult
 
@@ -43,6 +43,176 @@ class OltOperationResult(AdapterResult):
 
     # For create_service_port: the assigned service-port index
     service_port_index: int | None = None
+
+
+@runtime_checkable
+class OltProtocolAdapterContract(Protocol):
+    """Contract consumed by ONT authorization/provisioning workflows.
+
+    Implementations may use SSH, NETCONF, or another transport, but callers
+    should depend on this operation surface rather than transport details.
+    """
+
+    @property
+    def olt(self) -> OLTDevice: ...
+
+    def authorize_ont(
+        self,
+        fsp: str,
+        serial_number: str,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+        description: str = "",
+    ) -> OltOperationResult: ...
+
+    def deauthorize_ont(self, fsp: str, ont_id: int) -> OltOperationResult: ...
+
+    def find_ont_by_serial(self, serial_number: str) -> OltOperationResult: ...
+
+    def update_ont_profiles(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        line_profile_id: int | None = None,
+        service_profile_id: int | None = None,
+    ) -> OltOperationResult: ...
+
+    def configure_iphost(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        mode: str = "dhcp",
+        vlan: int,
+        priority: int | None = None,
+        ip_address: str | None = None,
+        subnet_mask: str | None = None,
+        gateway: str | None = None,
+    ) -> OltOperationResult: ...
+
+    def bind_tr069_profile(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        profile_id: int,
+    ) -> OltOperationResult: ...
+
+    def create_service_port(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        gem_index: int,
+        vlan_id: int,
+        user_vlan: int | str | None = None,
+        tag_transform: str = "translate",
+        port_index: int | None = None,
+    ) -> OltOperationResult: ...
+
+    def delete_service_port(self, port_index: int) -> OltOperationResult: ...
+
+    def configure_management_batch(
+        self,
+        spec: BatchedMgmtSpec,
+    ) -> OltOperationResult: ...
+
+    def reboot_ont(self, fsp: str, ont_id: int) -> OltOperationResult: ...
+
+    def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult: ...
+
+    def configure_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult: ...
+
+    def configure_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        profile_id: int = 0,
+    ) -> OltOperationResult: ...
+
+    def configure_pppoe(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int,
+        vlan_id: int,
+        username: str,
+        password: str,
+    ) -> OltOperationResult: ...
+
+    def configure_port_native_vlan(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        eth_port: int,
+        vlan_id: int,
+        priority: int = 0,
+    ) -> OltOperationResult: ...
+
+    def clear_iphost_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult: ...
+
+    def clear_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult: ...
+
+    def clear_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult: ...
+
+    def unbind_tr069_profile(self, fsp: str, ont_id: int) -> OltOperationResult: ...
+
+    def get_service_ports(self, fsp: str) -> OltOperationResult: ...
+
+    def get_service_ports_for_ont(
+        self, fsp: str, ont_id: int
+    ) -> OltOperationResult: ...
+
+    def get_line_profiles(self) -> OltOperationResult: ...
+
+    def get_service_profiles(self) -> OltOperationResult: ...
+
+    def get_tr069_profiles(self) -> OltOperationResult: ...
+
+    def create_tr069_profile(
+        self,
+        *,
+        profile_name: str,
+        acs_url: str,
+        username: str,
+        password: str,
+        inform_interval: int,
+    ) -> OltOperationResult: ...
+
+    def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult: ...
+
+    def fetch_running_config(self) -> OltOperationResult: ...
 
 
 # ============================================================================
@@ -729,7 +899,7 @@ class OltProtocolAdapter:
 # ============================================================================
 
 
-def get_protocol_adapter(olt: OLTDevice) -> OltProtocolAdapter:
+def get_protocol_adapter(olt: OLTDevice) -> OltProtocolAdapterContract:
     """Get the protocol adapter for an OLT.
 
     Args:
