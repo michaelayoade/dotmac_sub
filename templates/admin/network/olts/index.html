@@ -125,7 +125,7 @@
                     </div>
                     <div>
                         <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">PON Ports</dt>
-                        <dd class="mt-1 text-slate-800 dark:text-slate-200">{{ olt.pon_ports }}</dd>
+                        <dd class="mt-1 text-slate-800 dark:text-slate-200">{{ olt.pon_ports }} PON / {{ olt.imported_service_ports | default(0) }} SP</dd>
                     </div>
                     <div>
                         <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Checks</dt>
@@ -178,7 +178,10 @@
                 <td class="px-6 py-3 whitespace-nowrap font-mono tabular-nums text-slate-700 dark:text-slate-300">{{ olt.mgmt_ip or '—' }}</td>
                 <td class="px-6 py-3">
                     <span class="text-slate-900 dark:text-white">{{ olt.vendor or 'Unknown' }}{% if olt.model %} {{ olt.model }}{% endif %}</span>
-                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ olt.pon_ports }} PON ports</p>
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ olt.pon_ports }} PON ports / {{ olt.imported_service_ports | default(0) }} imported service-ports</p>
+                    {% if not olt.imported_service_ports %}
+                    <p class="mt-0.5 text-xs font-medium text-amber-600 dark:text-amber-300">Import OLT state before provisioning</p>
+                    {% endif %}
                 </td>
                 <td class="px-6 py-3 whitespace-nowrap">
                     <div class="flex items-center gap-2">

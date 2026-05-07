@@ -32,9 +32,9 @@ Provisioning is intentionally staged. Do not authorize ONTs on a new OLT until t
 | Phase | Purpose | Operator Entry Points | Main Code Modules |
 |-------|---------|-----------------------|-------------------|
 | 1. Foundation setup | Create shared network primitives before touching live OLTs. | VLANs, speed profiles, ONU types, zones, IP pools, TR-069 ACS servers, optional WireGuard. | `app/web/admin/network_tr069.py`, `app/web/admin/wireguard.py`, `app/services/web_network_tr069.py`, `app/services/web_network_vlans.py`, `app/services/network/speed_profiles.py`, `app/services/network/onu_types.py`, `app/services/network/zones.py`, `app/services/wireguard.py` |
-| 2. OLT onboarding | Create the OLT record and attach the defaults it will use for ONT work. | OLT create/edit form, ACS assignment, VLAN/IP-pool scoping, config-pack defaults, backup settings. | `app/web/admin/network_olts_inventory.py`, `app/services/web_network_olts.py`, `app/services/network/olt.py`, `app/services/network/olt_web_forms.py`, `app/services/network/olt_config_pack.py` |
+| 2. OLT onboarding | Create the OLT record and attach OLT-local resources. | OLT create/edit form, ACS assignment, VLAN/IP-pool scoping, imported profile/service-port state, backup settings. | `app/web/admin/network_olts_inventory.py`, `app/web/admin/network_olts_profiles.py`, `app/services/web_network_olts.py`, `app/services/network/olt_state_import.py`, `app/services/network/olt_profile_resolution.py` |
 | 3. Connectivity validation | Prove the app can reach the OLT before any write operation. | Test SSH, NETCONF, running-config reads, and Zabbix host linkage for SNMP collection; REST only where the adapter supports it. | `app/services/network/olt_protocol_adapters.py`, `app/services/network/olt_ssh.py`, `app/services/network/olt_ssh_session.py`, `app/services/network/olt_ssh_pool.py`, `app/services/network/olt_netconf.py`, `app/services/network/olt_rest_client.py`, `app/services/network/olt_vendor_adapters.py` |
-| 4. Config-pack readiness | Verify authorization and ACS prerequisites are complete. | Config-pack validation badge/details on the OLT page. | `app/services/network/olt_config_pack.py`, `app/services/network/olt_readiness_validator.py`, `app/services/network/acs_reachability.py`, `app/services/network/olt_profile_resolution.py` |
+| 4. Imported state readiness | Verify OLT-local profiles, GEM mappings, ONT registrations, and service-port rows are imported. | Import Live State, Import Dump, Imported Profiles tab, mapping coverage report. | `app/services/network/olt_state_import.py`, `app/services/network/imported_service_ports.py`, `app/services/network/effective_ont_config.py`, `scripts/report_missing_olt_mappings.py` |
 | 5. Inventory and topology sync | Populate operational state from the OLT. | ONT sync, autofind scan, PON repair, Zabbix-backed hardware discovery, monitoring links. | `app/services/network/olt_inventory.py`, `app/services/network/olt_hardware_discovery.py`, `app/services/network/olt_web_topology.py`, `app/web/admin/network_pon_interfaces.py`, `app/web/admin/network_olts_profiles.py`, `app/tasks/olt_hardware_discovery.py` |
 | 6. ONT authorization/provisioning | Register ONTs and apply service configuration only after readiness passes. | Autofind authorization, ONT provisioning tab, subscriber assignment. | `app/services/network/ont_authorization.py`, `app/services/network/acs_foundation.py`, `app/services/network/ont_provision_steps.py`, `app/services/network/ont_provisioning/orchestrator.py` |
 | 7. Backup, config audit, and drift checks | Keep read-only evidence that live OLT state matches intended state. | Scheduled SSH running-config backups, backup audits, live config-pack audits, compensation retry watchdog. | `app/tasks/olt_config_backup.py`, `app/services/network/olt_config_audit.py`, `app/services/network/olt_config_pack_live_audit.py`, `app/tasks/provisioning.py` |
@@ -117,28 +117,28 @@ On the OLT detail page:
 3. Select your GenieACS server from the dropdown
 4. Save
 
-### Step 5: Set Config Pack Defaults
+### Step 5: Import OLT State
 
-On the OLT edit form, complete the config pack defaults:
+On the OLT detail page, import the actual OLT state before authorizing or provisioning ONTs:
 
-- **Line Profile ID** and **Service Profile ID** — required for ONT authorization
-- **Internet VLAN** — required for service ports
-- **Management VLAN** — required for ACS connectivity
-- **Management IP Pool** — required for managed ONT ACS addresses
-- **TR-069 ACS Server** — required for remote management
-- **TR-069 OLT Profile ID** — required for binding ONTs to ACS
-- **GEM/WCD/IP indexes** — confirm values match the OLT design
+1. Click **"Import Live State"** to read profiles, ONT registrations, GEM mappings, and service-ports over SSH.
+2. If a recent audit dump is available on the app server, click **"Import Dump"** to import from `/root/olt_audit_20260506`.
+3. Open the **Imported Profiles** tab and confirm:
+   - Line profiles and service profiles are present.
+   - Equipment profile mappings exist for the ONT models on that OLT.
+   - GEM mappings exist for the internet and management VLANs.
+   - Service-port count is non-zero and `last_imported_at` is current.
 
-The config-pack validation badge on the OLT page must show no blocking errors before authorizing ONTs.
+Provisioning treats imported DB rows as source of truth. If imported service-port state is missing, provisioning, cleanup, clone, and VLAN enforcement paths fail fast instead of falling back to guessed GEM/VLAN defaults.
 
-### Step 6: Discover OLT Profiles
+### Step 6: Verify Profile and ACS Readiness
 
 On the OLT detail page:
 
-1. Open the **Profiles** / **TR-069 Profiles** tabs
-2. Fetch line/service profiles and TR-069 profiles from the OLT over SSH
-3. Create the TR-069 profile on the OLT if it does not exist
-4. Copy the correct OLT-local profile IDs back into the config pack
+1. Open the **TR-069 Profiles** tab.
+2. Create or confirm the DotMac ACS TR-069 profile on the OLT.
+3. Confirm the imported equipment mappings point to imported line/service profile IDs.
+4. Run `python scripts/report_missing_olt_mappings.py --all --fail-on-missing` after fleet imports; it must report `0 missing mapping(s)`.
 
 ### Step 7: Sync Inventory and Topology
 
@@ -146,6 +146,7 @@ On the OLT detail page:
 2. Click **"Discover Hardware"** — reads shelves/cards/ports/SFPs from Zabbix-collected SNMP Entity MIB data
 3. Run **"Repair PON Ports"** if ONTs exist but canonical PON ports are missing
 4. Confirm the topology and PON interface views show the expected OLT structure
+5. Re-run **Import Live State** after large manual OLT changes so imported service-port and GEM rows stay current.
 
 ### Step 8: Run Autofind
 

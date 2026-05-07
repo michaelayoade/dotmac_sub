@@ -13,6 +13,7 @@ from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceInterface, NetworkDevice
 from app.services import network as network_service
 from app.services.network import cpe as cpe_service
+from app.services.network.imported_service_ports import imported_service_port_summary
 
 if TYPE_CHECKING:
     from app.models.network import Port
@@ -413,6 +414,7 @@ def olts_list_page_data(
 
     olts = []
     for olt in all_olts:
+        service_port_summary = imported_service_port_summary(db, olt_id=olt.id)
         linked = linked_monitoring_by_olt_id.get(str(olt.id))
         status_label, status_variant = _find_linked_monitoring_status(
             olt=olt,
@@ -444,6 +446,10 @@ def olts_list_page_data(
                 "runtime_snmp_label": snmp_label,
                 "runtime_snmp_state": snmp_state,
                 "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
+                "imported_service_ports": service_port_summary["count"],
+                "imported_service_ports_at": service_port_summary[
+                    "last_imported_at"
+                ],
                 "detail_url": f"/admin/network/olts/{olt.id}",
                 "edit_url": f"/admin/network/olts/{olt.id}/edit",
             }
