@@ -10,6 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+from app.services.network.imported_service_ports import (
+    delete_imported_service_port,
+    list_imported_service_ports,
+    upsert_imported_service_port_from_readback,
+)
 from app.services.network.olt_protocol_adapters import (
     OltOperationResult,
     get_protocol_adapter,
@@ -168,16 +173,14 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
         context["error"] = "ONT external ID not set — cannot query service-ports"
         return context
 
-    # Query OLT for service-ports on this ONT
-    adapter = get_protocol_adapter(olt)
-    result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
-    if not result.success:
-        context["error"] = result.message
-        return context
-
-    ports_data = result.data.get("service_ports", [])
-    ports: list[ServicePortEntry] = ports_data if isinstance(ports_data, list) else []
+    ports = list_imported_service_ports(
+        db,
+        olt_id=str(olt.id),
+        fsp=fsp,
+        ont_id_on_olt=olt_ont_id,
+    )
     context["service_ports"] = ports
+    context["service_ports_source"] = "imported"
     context["service_port_intent"] = (
         service_intent_ui_adapter.profile_service_port_defaults(
             ont,
@@ -259,6 +262,7 @@ def _create_allocated_service_port(
     db: Session,
     *,
     olt: OLTDevice,
+    ont: OntUnit,
     ont_id: str,
     fsp: str,
     olt_ont_id: int,
@@ -326,6 +330,13 @@ def _create_allocated_service_port(
                 "for this ONT.",
                 True,
             )
+        upsert_imported_service_port_from_readback(
+            db,
+            olt=olt,
+            ont=ont,
+            port=matching_port,
+            source="provisioning_readback",
+        )
         return (
             True,
             f"Service-port {port_index} created (VLAN {vlan_id}, GEM {gem_index})",
@@ -392,7 +403,7 @@ def handle_create(
     )
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
-    if not olt or not fsp or olt_ont_id is None:
+    if not ont or not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
 
     # Validate configuration before proceeding
@@ -425,6 +436,7 @@ def handle_create(
         return _create_allocated_service_port(
             db,
             olt=olt,
+            ont=ont,
             ont_id=ont_id,
             fsp=fsp,
             olt_ont_id=olt_ont_id,
@@ -493,6 +505,9 @@ def handle_delete(
             )
 
         allocation = find_allocation_by_index(db, str(olt.id), index)
+        db_changed = False
+        if delete_imported_service_port(db, olt_id=olt.id, port_index=index):
+            db_changed = True
         if allocation:
             if str(allocation.ont_unit_id) != str(ont.id):
                 logger.warning(
@@ -503,12 +518,14 @@ def handle_delete(
                 )
             else:
                 release_service_port(db, str(allocation.id))
-                db.commit()
+                db_changed = True
                 logger.info(
                     "Released service-port allocation %d for ONT %s",
                     index,
                     ont_id,
                 )
+        if db_changed:
+            db.commit()
 
     return ok, msg
 
@@ -530,7 +547,7 @@ def handle_clone(
     """
     # Resolve target ONT
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
-    if not olt or not fsp or olt_ont_id is None:
+    if not ont or not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for target ONT"
 
     # Resolve reference ONT
@@ -542,18 +559,14 @@ def handle_clone(
     if str(olt.id) != str(ref_olt.id):
         return False, "Target and reference ONTs must be on the same OLT"
 
-    # Get reference service-ports
-    adapter = get_protocol_adapter(ref_olt)
-    result = adapter.get_service_ports_for_ont(ref_fsp, ref_olt_ont_id)
-    if not result.success:
-        return False, f"Could not get reference ports: {result.message}"
-
-    ref_ports_data = result.data.get("service_ports", [])
-    ref_ports: list[ServicePortEntry] = (
-        ref_ports_data if isinstance(ref_ports_data, list) else []
+    ref_ports = list_imported_service_ports(
+        db,
+        olt_id=str(ref_olt.id),
+        fsp=ref_fsp,
+        ont_id_on_olt=ref_olt_ont_id,
     )
     if not ref_ports:
-        return False, f"Could not get reference ports: {result.message}"
+        return False, "No imported service-ports found for reference ONT"
 
     created = 0
     for ref_port in ref_ports:
@@ -568,6 +581,7 @@ def handle_clone(
         ok, message = _create_allocated_service_port(
             db,
             olt=olt,
+            ont=ont,
             ont_id=ont_id,
             fsp=fsp,
             olt_ont_id=olt_ont_id,

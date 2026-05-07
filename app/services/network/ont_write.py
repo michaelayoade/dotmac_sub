@@ -515,11 +515,16 @@ class OntWriteService:
         # Get adapter once outside closures
         adapter = get_protocol_adapter(ctx.olt)
 
-        # Capture current service ports for replay
-        sp_result = adapter.get_service_ports_for_ont(ctx.fsp, ctx.ont_id_on_olt)
-        sp_data = sp_result.data.get("service_ports", []) if sp_result.success else []
-        current_ports: list[ServicePortEntry] = (
-            sp_data if isinstance(sp_data, list) else []
+        # Capture imported service ports for replay.
+        from app.services.network.imported_service_ports import (
+            list_imported_service_ports,
+        )
+
+        current_ports: list[ServicePortEntry] = list_imported_service_ports(
+            db,
+            olt_id=ctx.olt.id,
+            fsp=ctx.fsp,
+            ont_id_on_olt=ctx.ont_id_on_olt,
         )
 
         # Resolve authorization profiles from current assignment

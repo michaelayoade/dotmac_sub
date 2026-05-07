@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.models.network import OLTDevice, OntUnit, ServicePortAllocation
+from app.models.network import OLTDevice, OltServicePort, OntUnit, ServicePortAllocation
 from app.services.network.olt_protocol_adapters import OltOperationResult
 from app.services.network.olt_ssh import ServicePortEntry
 
@@ -231,6 +231,50 @@ def test_handle_create_keeps_allocation_reserved_when_readback_misses(
     assert allocation.provisioned_at is not None
 
 
+def test_list_context_reads_imported_service_ports_without_live_olt(
+    db_session, monkeypatch
+) -> None:
+    olt, ont = _create_olt_ont(db_session)
+    imported = OltServicePort(
+        olt_device_id=olt.id,
+        ont_unit_id=ont.id,
+        port_index=401,
+        fsp="0/2/1",
+        ont_id_on_olt=5,
+        vlan_id=203,
+        gem_index=2,
+        flow_type="vlan",
+        flow_para="203",
+        state="up",
+        source="running_config",
+    )
+    db_session.add(imported)
+    db_session.commit()
+
+    from app.services import web_network_service_ports as service
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_ont_olt_context",
+        lambda db, ont_id: (ont, olt, "0/2/1", 5),
+    )
+
+    def _fail_live_adapter(_olt):
+        raise AssertionError("list_context should use imported DB state")
+
+    monkeypatch.setattr(service, "get_protocol_adapter", _fail_live_adapter)
+
+    context = service.list_context(db_session, str(ont.id))
+
+    assert context["error"] is None
+    assert context["service_ports_source"] == "imported"
+    ports = context["service_ports"]
+    assert len(ports) == 1
+    assert ports[0].index == 401
+    assert ports[0].vlan_id == 203
+    assert ports[0].gem_index == 2
+
+
 def test_handle_clone_uses_allocator_indices(db_session, monkeypatch) -> None:
     olt, ont = _create_olt_ont(db_session)
     ref_ont = OntUnit(
@@ -241,6 +285,23 @@ def test_handle_clone_uses_allocator_indices(db_session, monkeypatch) -> None:
         external_id="7",
     )
     db_session.add(ref_ont)
+    db_session.flush()
+    db_session.add(
+        OltServicePort(
+            olt_device_id=olt.id,
+            ont_unit_id=ref_ont.id,
+            port_index=900,
+            fsp="0/2/1",
+            ont_id_on_olt=7,
+            vlan_id=203,
+            gem_index=1,
+            flow_type="vlan",
+            flow_para="203",
+            state="up",
+            tag_transform="translate",
+            source="running_config",
+        )
+    )
     db_session.commit()
     db_session.refresh(ref_ont)
 

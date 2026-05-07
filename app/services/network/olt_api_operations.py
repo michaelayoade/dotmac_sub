@@ -106,13 +106,16 @@ def _serialize_tr069_profile(entry: object) -> dict[str, object]:
 
 
 def list_service_ports(db: Session, olt_id: str, *, fsp: str) -> OltApiWriteResult:
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.imported_service_ports import list_imported_service_ports
 
     olt = load_olt(db, olt_id)
-    result = get_protocol_adapter(olt).get_service_ports(fsp)
-    entries = result.data.get("service_ports", [])
+    entries = list_imported_service_ports(db, olt_id=olt.id, fsp=fsp)
     data = [_serialize_service_port(entry) for entry in entries]
-    return OltApiWriteResult(result.success, result.message, {"entries": data})
+    return OltApiWriteResult(
+        True,
+        "Imported service-port state loaded",
+        {"entries": data, "source": "imported"},
+    )
 
 
 def list_service_ports_for_ont(
@@ -122,13 +125,21 @@ def list_service_ports_for_ont(
     fsp: str,
     ont_id: int,
 ) -> OltApiWriteResult:
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.imported_service_ports import list_imported_service_ports
 
     olt = load_olt(db, olt_id)
-    result = get_protocol_adapter(olt).get_service_ports_for_ont(fsp, ont_id)
-    entries = result.data.get("service_ports", [])
+    entries = list_imported_service_ports(
+        db,
+        olt_id=olt.id,
+        fsp=fsp,
+        ont_id_on_olt=ont_id,
+    )
     data = [_serialize_service_port(entry) for entry in entries]
-    return OltApiWriteResult(result.success, result.message, {"entries": data})
+    return OltApiWriteResult(
+        True,
+        "Imported service-port state loaded",
+        {"entries": data, "source": "imported"},
+    )
 
 
 def get_line_profiles(db: Session, olt_id: str) -> OltApiWriteResult:

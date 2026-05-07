@@ -24,6 +24,7 @@ from app.models.network import (
     IPVersion,
     MgmtIpMode,
     OLTDevice,
+    OltServicePort,
     OntAssignment,
     OntProvisioningStatus,
     OntUnit,
@@ -36,6 +37,33 @@ from app.services.network.ont_inventory import (
     reset_ont_service_state,
     return_ont_to_inventory,
 )
+
+
+def _add_imported_service_port(
+    db_session,
+    sample_olt,
+    sample_ont,
+    *,
+    port_index: int = 100,
+    fsp: str = "0/1/2",
+    ont_id_on_olt: int = 5,
+) -> OltServicePort:
+    service_port = OltServicePort(
+        olt_device_id=sample_olt.id,
+        ont_unit_id=sample_ont.id,
+        port_index=port_index,
+        fsp=fsp,
+        ont_id_on_olt=ont_id_on_olt,
+        vlan_id=203,
+        gem_index=1,
+        flow_type="vlan",
+        flow_para="203",
+        state="up",
+        source="test",
+    )
+    db_session.add(service_port)
+    db_session.commit()
+    return service_port
 
 
 @pytest.fixture
@@ -535,10 +563,11 @@ class TestReturnOntToInventory:
         self, db_session, sample_ont, sample_olt, sample_assignment
     ):
         """Test that failure during OLT cleanup stops the return process."""
+        _add_imported_service_port(db_session, sample_olt, sample_ont)
         mock_adapter = MagicMock()
-        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+        mock_adapter.delete_service_port.return_value = ActionResult(
             success=False,
-            message="SSH connection failed",
+            message="SSH delete failed",
         )
 
         with patch(
@@ -560,13 +589,8 @@ class TestReturnOntToInventory:
         self, db_session, sample_ont, sample_olt, sample_assignment
     ):
         """Test that service ports are deleted from OLT."""
-        mock_service_port = SimpleNamespace(index=100)
+        _add_imported_service_port(db_session, sample_olt, sample_ont)
         mock_adapter = MagicMock()
-        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
-            success=True,
-            message="OK",
-            data={"service_ports": [mock_service_port]},
-        )
         mock_adapter.delete_service_port.return_value = ActionResult(
             success=True,
             message="Deleted",
@@ -587,6 +611,7 @@ class TestReturnOntToInventory:
         assert result.success is True
         mock_adapter.delete_service_port.assert_called_once_with(100)
         mock_adapter.deauthorize_ont.assert_called_once()
+        assert db_session.query(OltServicePort).count() == 0
 
     @pytest.mark.skipif(
         not bool(__import__("os").getenv("TEST_DATABASE_URL")),
@@ -645,13 +670,8 @@ class TestReturnToInventoryWebAction:
         """Test that success emits deauthorization and service port events."""
         from app.services.network.ont_inventory import return_ont_to_inventory
 
-        mock_service_port = SimpleNamespace(index=100)
+        _add_imported_service_port(db_session, sample_olt, sample_ont)
         mock_adapter = MagicMock()
-        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
-            success=True,
-            message="OK",
-            data={"service_ports": [mock_service_port]},
-        )
         mock_adapter.delete_service_port.return_value = ActionResult(
             success=True,
             message="Deleted",
@@ -836,7 +856,7 @@ class TestReturnToInventoryWebAction:
 
         assert result.success is False
         assert "acs device" in result.message.lower()
-        mock_adapter.get_service_ports_for_ont.assert_called_once()
+        mock_adapter.get_service_ports_for_ont.assert_not_called()
         mock_adapter.deauthorize_ont.assert_called_once()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
@@ -967,11 +987,12 @@ class TestReturnToInventoryWebAction:
         )
         db_session.add(tr069_device)
         db_session.commit()
+        _add_imported_service_port(db_session, sample_olt, sample_ont)
 
         mock_adapter = MagicMock()
-        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+        mock_adapter.delete_service_port.return_value = ActionResult(
             success=False,
-            message="SSH connection failed",
+            message="SSH delete failed",
         )
         mock_client = MagicMock()
         mock_client.list_devices.return_value = []
@@ -992,6 +1013,7 @@ class TestReturnToInventoryWebAction:
         assert result.success is False
         assert "local cleanup" in result.message.lower()
         mock_client.delete_device.assert_not_called()
+        mock_adapter.get_service_ports_for_ont.assert_not_called()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         db_session.refresh(tr069_device)
@@ -1188,13 +1210,14 @@ class TestCleanupOltStateForReturn:
     def test_failure_when_service_port_read_fails(
         self, db_session, sample_ont, sample_olt
     ):
-        """Test that failure to read service ports stops cleanup."""
+        """Test that failure to delete imported service ports stops cleanup."""
         from app.services.web_network_ont_actions.inventory import (
             _cleanup_olt_state_for_return,
         )
 
+        _add_imported_service_port(db_session, sample_olt, sample_ont)
         mock_adapter = MagicMock()
-        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+        mock_adapter.delete_service_port.return_value = ActionResult(
             success=False,
             message="Connection timeout",
         )
@@ -1208,7 +1231,8 @@ class TestCleanupOltStateForReturn:
             )
 
         assert success is False
-        assert any("service-ports" in e.lower() for e in errors)
+        assert any("service-port" in e.lower() for e in errors)
+        mock_adapter.get_service_ports_for_ont.assert_not_called()
 
     def test_failure_when_deauthorization_fails(
         self, db_session, sample_ont, sample_olt
@@ -1291,13 +1315,13 @@ class TestCleanupOltStateForReturn:
             _cleanup_olt_state_for_return,
         )
 
-        mock_service_port = SimpleNamespace(index=42)
-        mock_adapter = MagicMock()
-        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
-            success=True,
-            message="OK",
-            data={"service_ports": [mock_service_port]},
+        _add_imported_service_port(
+            db_session,
+            sample_olt,
+            sample_ont,
+            port_index=42,
         )
+        mock_adapter = MagicMock()
         mock_adapter.delete_service_port.return_value = ActionResult(
             success=True,
             message="Deleted",
@@ -1325,6 +1349,7 @@ class TestCleanupOltStateForReturn:
         assert any("service-port 42" in c.lower() for c in completed)
         assert any("deauthorized" in c.lower() for c in completed)
         assert any("allocation" in c.lower() for c in completed)
+        mock_adapter.get_service_ports_for_ont.assert_not_called()
 
 
 class TestOntWithoutOltBinding:

@@ -946,6 +946,10 @@ def rollback_service_ports(
         ont_id: OntUnit primary key.
     """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.imported_service_ports import (
+        delete_imported_service_port,
+        list_imported_service_ports,
+    )
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
@@ -953,10 +957,13 @@ def rollback_service_ports(
         return StepResult("rollback_service_ports", False, err)
 
     adapter = get_protocol_adapter(ctx.olt)
-    ports_result = adapter.get_service_ports_for_ont(ctx.fsp, ctx.olt_ont_id)
-    ports_data = ports_result.data.get("service_ports", []) if ports_result.success else []
-    ports = ports_data if isinstance(ports_data, list) else []
-    if not ports_result.success or not ports:
+    ports = list_imported_service_ports(
+        db,
+        olt_id=ctx.olt.id,
+        fsp=ctx.fsp,
+        ont_id_on_olt=ctx.olt_ont_id,
+    )
+    if not ports:
         ms = int((time.monotonic() - t0) * 1000)
         return StepResult(
             "rollback_service_ports", True, "No service ports to remove", ms
@@ -967,6 +974,11 @@ def rollback_service_ports(
     for port in ports:
         delete_result = adapter.delete_service_port(port.index)
         if delete_result.success:
+            delete_imported_service_port(
+                db,
+                olt_id=ctx.olt.id,
+                port_index=port.index,
+            )
             deleted += 1
         else:
             errors += 1

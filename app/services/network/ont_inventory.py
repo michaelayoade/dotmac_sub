@@ -80,6 +80,10 @@ def cleanup_olt_state_for_return(
     db: Session, ont_id: str
 ) -> tuple[bool, list[str], list[str]]:
     """Remove OLT-side service ports and deauthorize an ONT before inventory return."""
+    from app.services.network.imported_service_ports import (
+        delete_imported_service_port,
+        list_imported_service_ports,
+    )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.service_port_allocator import release_all_for_ont
 
@@ -93,13 +97,12 @@ def cleanup_olt_state_for_return(
         return True, completed, errors
 
     adapter = get_protocol_adapter(olt)
-    ports_result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
-    if not ports_result.success:
-        errors.append(f"Cannot read OLT service-ports: {ports_result.message}")
-        return False, completed, errors
-
-    service_ports_data = ports_result.data.get("service_ports", [])
-    service_ports = service_ports_data if isinstance(service_ports_data, list) else []
+    service_ports = list_imported_service_ports(
+        db,
+        olt_id=olt.id,
+        fsp=fsp,
+        ont_id_on_olt=olt_ont_id,
+    )
     for service_port in service_ports:
         delete_result = adapter.delete_service_port(service_port.index)
         if not delete_result.success:
@@ -107,6 +110,11 @@ def cleanup_olt_state_for_return(
                 f"Failed to remove service-port {service_port.index}: {delete_result.message}"
             )
             return False, completed, errors
+        delete_imported_service_port(
+            db,
+            olt_id=olt.id,
+            port_index=service_port.index,
+        )
         completed.append(f"Removed service-port {service_port.index}")
         try:
             emit_event(
