@@ -227,6 +227,7 @@ from app.models.network import (  # noqa: F401
     OltPortType,
     OltPowerUnit,
     OltServiceProfile,
+    OltServicePort,
     OltSfpModule,
     OltShelf,
     OntAssignment,

@@ -25,6 +25,7 @@ from app.models.network import (
     OltOntRegistration,
     OltOnuTypeProfileMapping,
     OltServiceProfile,
+    OltServicePort,
     OnuType,
     OntUnit,
     PonPort,
@@ -74,8 +75,10 @@ _GEM_MAPPING_RE = re.compile(
     re.IGNORECASE,
 )
 _SERVICE_PORT_RE = re.compile(
-    r"\bservice-port\s+\d+\s+vlan\s+(?P<vlan>\d+)\s+gpon\s+"
-    r"(?P<fsp>\d+/\d+/\d+)\s+ont\s+(?P<ont_id>\d+)\s+gemport\s+(?P<gem>\d+)",
+    r"\bservice-port\s+(?P<index>\d+)\s+vlan\s+(?P<vlan>\d+)\s+gpon\s+"
+    r"(?P<fsp>\d+/\d+/\d+)\s+ont\s+(?P<ont_id>\d+)\s+gemport\s+(?P<gem>\d+)"
+    r"(?:.*?\buser-vlan\s+(?P<user_vlan>\S+))?"
+    r"(?:.*?\btag-transform\s+(?P<tag_transform>\S+))?",
     re.IGNORECASE,
 )
 
@@ -89,6 +92,7 @@ class OltStateImportResult:
     service_profiles: int = 0
     ont_registrations: int = 0
     profile_mappings: int = 0
+    service_ports: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +104,7 @@ class OltStateImportResult:
             "service_profiles": self.service_profiles,
             "ont_registrations": self.ont_registrations,
             "profile_mappings": self.profile_mappings,
+            "service_ports": self.service_ports,
             "warnings": list(self.warnings),
         }
 
@@ -266,6 +271,55 @@ def _import_service_port_gem_mappings_from_config(
                 "eth_port": None,
                 "usage_count": int(usage_count),
                 "raw_config": None,
+                "last_imported_at": imported_at,
+            },
+        )
+        imported += 1
+    return imported
+
+
+def _import_observed_service_ports_from_config(
+    db: Session,
+    olt: OLTDevice,
+    config_text: str,
+    imported_at: datetime,
+) -> int:
+    """Import observed service-port rows from running configuration."""
+    registration_by_location = {
+        (registration.fsp, registration.ont_id_on_olt): registration
+        for registration in db.scalars(
+            select(OltOntRegistration)
+            .where(OltOntRegistration.olt_id == olt.id)
+            .where(OltOntRegistration.is_active.is_(True))
+        ).all()
+    }
+    imported = 0
+    for match in _SERVICE_PORT_RE.finditer(config_text):
+        fsp = match.group("fsp")
+        ont_id = int(match.group("ont_id"))
+        port_index = int(match.group("index"))
+        registration = registration_by_location.get((fsp, ont_id))
+        raw_config = match.group(0).strip()
+        _upsert_by_keys(
+            db,
+            OltServicePort,
+            {"olt_device_id": olt.id, "port_index": port_index},
+            {
+                "ont_unit_id": None,
+                "fsp": fsp,
+                "ont_id_on_olt": ont_id,
+                "vlan_id": int(match.group("vlan")),
+                "gem_index": int(match.group("gem")),
+                "user_vlan": match.group("user_vlan"),
+                "tag_transform": match.group("tag_transform"),
+                "flow_type": "vlan",
+                "flow_para": match.group("vlan"),
+                "state": None,
+                "source": "running_config",
+                "raw_entry": {
+                    "raw_config": raw_config,
+                    "serial_number": getattr(registration, "serial_number", None),
+                },
                 "last_imported_at": imported_at,
             },
         )
@@ -695,6 +749,12 @@ def import_olt_state_from_dump(
                 },
             )
             mapping_count += 1
+        service_port_count = _import_observed_service_ports_from_config(
+            db,
+            olt,
+            running_config,
+            imported_at,
+        )
         gem_mapping_count += _import_service_port_gem_mappings_from_config(
             db,
             olt,
@@ -720,6 +780,7 @@ def import_olt_state_from_dump(
             service_profiles=len(service_profiles),
             ont_registrations=registration_count,
             profile_mappings=mapping_count,
+            service_ports=service_port_count,
             warnings=warnings,
         )
     except Exception as exc:

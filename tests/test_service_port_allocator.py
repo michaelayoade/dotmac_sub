@@ -48,6 +48,41 @@ def test_allocate_service_port_rejects_exhausted_reserved_pool(db_session) -> No
         raise AssertionError("Expected AllocationError for exhausted pool")
 
 
+def test_allocate_service_port_skips_imported_observed_port(db_session) -> None:
+    from app.models.network import OltServicePort, OltServicePortPool
+    from app.services.network.service_port_allocator import allocate_service_port
+
+    olt, ont = _create_olt_and_ont(db_session)
+    pool = OltServicePortPool(
+        olt_device_id=olt.id,
+        min_index=100,
+        max_index=101,
+        next_available_index=100,
+        is_active=True,
+    )
+    observed = OltServicePort(
+        olt_device_id=olt.id,
+        port_index=100,
+        fsp="0/1/0",
+        ont_id_on_olt=1,
+        vlan_id=203,
+        gem_index=1,
+        source="test",
+    )
+    db_session.add_all([pool, observed])
+    db_session.commit()
+
+    allocation = allocate_service_port(
+        db_session,
+        olt.id,
+        ont.id,
+        vlan_id=203,
+        gem_index=1,
+    )
+
+    assert allocation.port_index == 101
+
+
 def test_with_allocated_service_port_releases_failed_write(db_session) -> None:
     from app.models.network import ServicePortAllocation
     from app.services.network.service_port_allocator import with_allocated_service_port

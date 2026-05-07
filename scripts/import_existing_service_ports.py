@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Import existing service-ports from OLTs into DB allocator.
+"""Import existing service-ports from OLTs into observed OLT state.
 
 This script reads all service-ports from each OLT via SSH and creates
-corresponding ServicePortAllocation records in the database.
+corresponding OltServicePort records in the database.
 
-Run after migration 035_add_provisioning_architecture.py to backfill
-existing data.
+Run after migration 096_add_imported_olt_service_ports.py to backfill observed
+state.
 
 Usage:
     poetry run python scripts/import_existing_service_ports.py
@@ -30,11 +30,10 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.network import (
     OLTDevice,
-    OltServicePortPool,
     OntAssignment,
     OntUnit,
     PonPort,
-    ServicePortAllocation,
+    OltServicePort,
 )
 from app.services.network.olt_ssh_ont._common import normalize_fsp
 
@@ -52,27 +51,6 @@ def get_all_active_olts(db) -> list[OLTDevice]:
         OLTDevice.mgmt_ip.isnot(None),
     )
     return list(db.scalars(stmt).all())
-
-
-def get_or_create_pool(db, olt: OLTDevice) -> OltServicePortPool:
-    """Get or create service-port pool for OLT."""
-    stmt = select(OltServicePortPool).where(
-        OltServicePortPool.olt_device_id == olt.id,
-        OltServicePortPool.is_active.is_(True),
-    )
-    pool = db.scalars(stmt).first()
-
-    if not pool:
-        pool = OltServicePortPool(
-            olt_device_id=olt.id,
-            min_index=0,
-            max_index=65535,
-        )
-        db.add(pool)
-        db.flush()
-        logger.info("Created pool for OLT %s", olt.name)
-
-    return pool
 
 
 def get_ont_by_external_id(db, olt_id: UUID, external_id: str) -> OntUnit | None:
@@ -124,23 +102,20 @@ def import_service_ports_for_olt(
     from app.services.network.olt_ssh import get_service_ports
 
     results = {
-        "created": 0,
-        "skipped_existing": 0,
-        "skipped_no_ont": 0,
+        "imported": 0,
+        "updated": 0,
+        "unmatched_ont": 0,
         "failed": 0,
     }
 
     logger.info("Importing service-ports from OLT %s (%s)", olt.name, olt.mgmt_ip)
 
-    # Get or create pool
-    pool = get_or_create_pool(db, olt)
-
-    # Get existing allocations for this pool
-    allocation_stmt = select(ServicePortAllocation.port_index).where(
-        ServicePortAllocation.pool_id == pool.id,
-        ServicePortAllocation.is_active.is_(True),
-    )
-    existing_indices: set[int] = set(db.scalars(allocation_stmt).all())
+    existing_ports = {
+        port.port_index: port
+        for port in db.scalars(
+            select(OltServicePort).where(OltServicePort.olt_device_id == olt.id)
+        ).all()
+    }
 
     # Get all PON ports for this OLT
     pon_port_stmt = select(PonPort).where(PonPort.olt_id == olt.id)
@@ -161,11 +136,6 @@ def import_service_ports_for_olt(
             logger.info("    Found %d service-ports", len(ports))
 
             for port in ports:
-                # Skip if already exists
-                if port.index in existing_indices:
-                    results["skipped_existing"] += 1
-                    continue
-
                 # Try to find the ONT
                 ont = get_ont_by_pon_port_and_id(db, olt.id, fsp, port.ont_id)
                 if not ont:
@@ -177,29 +147,54 @@ def import_service_ports_for_olt(
                         port.index,
                         port.ont_id,
                     )
-                    results["skipped_no_ont"] += 1
-                    continue
+                    results["unmatched_ont"] += 1
 
-                # Create allocation
                 if not dry_run:
-                    allocation = ServicePortAllocation(
-                        pool_id=pool.id,
-                        ont_unit_id=ont.id,
-                        port_index=port.index,
-                        vlan_id=port.vlan_id,
-                        gem_index=port.gem_index,
-                        service_type=port.flow_type or "internet",
-                        is_active=True,
-                        provisioned_at=datetime.now(UTC),
-                    )
-                    db.add(allocation)
-                    existing_indices.add(port.index)
+                    existing = existing_ports.get(port.index)
+                    values = {
+                        "ont_unit_id": ont.id if ont else None,
+                        "fsp": fsp,
+                        "ont_id_on_olt": port.ont_id,
+                        "vlan_id": port.vlan_id,
+                        "gem_index": port.gem_index,
+                        "user_vlan": getattr(port, "user_vlan", None),
+                        "tag_transform": getattr(port, "tag_transform", None),
+                        "flow_type": port.flow_type,
+                        "flow_para": port.flow_para,
+                        "state": port.state,
+                        "source": "ssh",
+                        "raw_entry": {
+                            "service_port": port.index,
+                            "vlan": port.vlan_id,
+                            "fsp": fsp,
+                            "ont_id": port.ont_id,
+                            "gemport": port.gem_index,
+                            "flow_type": port.flow_type,
+                            "flow_para": port.flow_para,
+                            "state": port.state,
+                        },
+                        "last_imported_at": datetime.now(UTC),
+                    }
+                    if existing is None:
+                        existing = OltServicePort(
+                            olt_device_id=olt.id,
+                            port_index=port.index,
+                            **values,
+                        )
+                        db.add(existing)
+                        existing_ports[port.index] = existing
+                        results["imported"] += 1
+                    else:
+                        for key, value in values.items():
+                            setattr(existing, key, value)
+                        results["updated"] += 1
+                else:
+                    results["imported"] += 1
 
-                results["created"] += 1
                 logger.debug(
-                    "    Created allocation for port %d (ONT %s, VLAN %d)",
+                    "    Imported service-port %d (ONT %s, VLAN %d)",
                     port.index,
-                    ont.serial_number,
+                    getattr(ont, "serial_number", None) or "unmatched",
                     port.vlan_id,
                 )
 
@@ -207,16 +202,7 @@ def import_service_ports_for_olt(
             logger.error("    Error reading service-ports: %s", e)
             results["failed"] += 1
 
-    # Update pool cache
-    if not dry_run and results["created"] > 0:
-        total_range = pool.max_index - pool.min_index + 1
-        pool.available_count = total_range - len(existing_indices)
-        # Find next available
-        for idx in range(pool.min_index, pool.max_index + 1):
-            if idx not in existing_indices:
-                pool.next_available_index = idx
-                break
-
+    if not dry_run and (results["imported"] > 0 or results["updated"] > 0):
         db.flush()
 
     return results
@@ -224,7 +210,7 @@ def import_service_ports_for_olt(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Import existing service-ports from OLTs into DB allocator"
+        description="Import existing service-ports from OLTs into observed OLT state"
     )
     parser.add_argument(
         "--dry-run",
@@ -255,9 +241,9 @@ def main():
             logger.info("DRY RUN - no changes will be made")
 
         total_results = {
-            "created": 0,
-            "skipped_existing": 0,
-            "skipped_no_ont": 0,
+            "imported": 0,
+            "updated": 0,
+            "unmatched_ont": 0,
             "failed": 0,
         }
 
@@ -268,11 +254,11 @@ def main():
                     total_results[key] += value
 
                 logger.info(
-                    "OLT %s: created=%d, skipped_existing=%d, skipped_no_ont=%d, failed=%d",
+                    "OLT %s: imported=%d, updated=%d, unmatched_ont=%d, failed=%d",
                     olt.name,
-                    results["created"],
-                    results["skipped_existing"],
-                    results["skipped_no_ont"],
+                    results["imported"],
+                    results["updated"],
+                    results["unmatched_ont"],
                     results["failed"],
                 )
 
@@ -286,9 +272,9 @@ def main():
 
         logger.info("=" * 60)
         logger.info("TOTAL RESULTS:")
-        logger.info("  Created: %d", total_results["created"])
-        logger.info("  Skipped (existing): %d", total_results["skipped_existing"])
-        logger.info("  Skipped (no ONT): %d", total_results["skipped_no_ont"])
+        logger.info("  Imported: %d", total_results["imported"])
+        logger.info("  Updated: %d", total_results["updated"])
+        logger.info("  Unmatched ONT: %d", total_results["unmatched_ont"])
         logger.info("  Failed: %d", total_results["failed"])
 
         return 0

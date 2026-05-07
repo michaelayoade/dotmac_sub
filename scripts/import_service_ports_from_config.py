@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""Import service-ports from OLT config files into DB allocator.
+"""Import service-ports from OLT config files into observed OLT state.
 
-Parses Huawei OLT configuration files and creates ServicePortAllocation
-records in the database.
+Parses Huawei OLT configuration files and upserts OltServicePort records in the
+database. These observed rows reserve live OLT indices without pretending the
+app allocated them.
 
 Usage:
     poetry run python scripts/import_service_ports_from_config.py /path/to/configs/
@@ -27,10 +28,9 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.network import (
     OLTDevice,
-    OltServicePortPool,
     OntAssignment,
     OntUnit,
-    ServicePortAllocation,
+    OltServicePort,
 )
 
 logging.basicConfig(
@@ -244,9 +244,9 @@ def import_from_config(
 ) -> dict[str, int]:
     """Import service-ports from config files."""
     results = {
-        "created": 0,
-        "skipped_existing": 0,
-        "skipped_no_ont": 0,
+        "imported": 0,
+        "updated": 0,
+        "unmatched_ont": 0,
         "skipped_no_olt": 0,
         "failed": 0,
     }
@@ -285,39 +285,20 @@ def import_from_config(
             ont_registrations = parse_ont_registrations(config_file)
             logger.info("  Found %d ONT registrations", len(ont_registrations))
 
-            # Get or create pool for this OLT
-            pool_stmt = select(OltServicePortPool).where(
-                OltServicePortPool.olt_device_id == olt.id
-            )
-            pool = db.scalars(pool_stmt).first()
-            if not pool:
-                pool = OltServicePortPool(
-                    olt_device_id=olt.id,
-                    min_index=0,
-                    max_index=8191,
-                )
-                db.add(pool)
-                db.flush()
-                logger.info("  Created pool for OLT %s", olt.name)
-
-            # Get existing allocations
-            allocation_stmt = select(ServicePortAllocation.port_index).where(
-                ServicePortAllocation.pool_id == pool.id
-            )
-            existing_indices: set[int] = set(db.scalars(allocation_stmt).all())
+            existing_ports = {
+                port.port_index: port
+                for port in db.scalars(
+                    select(OltServicePort).where(OltServicePort.olt_device_id == olt.id)
+                ).all()
+            }
 
             file_results = {
-                "created": 0,
-                "skipped_existing": 0,
-                "skipped_no_ont": 0,
+                "imported": 0,
+                "updated": 0,
+                "unmatched_ont": 0,
             }
 
             for sp in service_ports:
-                # Skip if already exists
-                if sp.index in existing_indices:
-                    file_results["skipped_existing"] += 1
-                    continue
-
                 # Extract port number from FSP (e.g., "0/2/3" -> 3)
                 fsp_parts = sp.fsp.split("/")
                 port_num = int(fsp_parts[-1]) if len(fsp_parts) == 3 else None
@@ -331,53 +312,69 @@ def import_from_config(
                 ont, assignment = get_ont_by_fsp_and_id(
                     db, olt.id, sp.fsp, sp.ont_id, serial_number
                 )
-
                 if not ont:
                     logger.debug(
-                        "    Skipping port %d: ONT %s/%d (sn=%s) not found",
+                        "    Importing port %d without local ONT match: %s/%d (sn=%s)",
                         sp.index,
                         sp.fsp,
                         sp.ont_id,
                         serial_number,
                     )
-                    file_results["skipped_no_ont"] += 1
-                    continue
+                    file_results["unmatched_ont"] += 1
 
-                # Create allocation
                 if not dry_run:
-                    allocation = ServicePortAllocation(
-                        pool_id=pool.id,
-                        port_index=sp.index,
-                        ont_unit_id=ont.id,
-                        vlan_id=sp.vlan_id,
-                        gem_index=sp.gemport,
-                        is_active=True,
-                        provisioned_at=datetime.now(UTC),
-                    )
-                    db.add(allocation)
-                    existing_indices.add(sp.index)
+                    existing = existing_ports.get(sp.index)
+                    values = {
+                        "ont_unit_id": ont.id if ont else None,
+                        "fsp": sp.fsp,
+                        "ont_id_on_olt": sp.ont_id,
+                        "vlan_id": sp.vlan_id,
+                        "gem_index": sp.gemport,
+                        "source": "running_config",
+                        "raw_entry": {
+                            "service_port": sp.index,
+                            "vlan": sp.vlan_id,
+                            "fsp": sp.fsp,
+                            "ont_id": sp.ont_id,
+                            "gemport": sp.gemport,
+                            "serial_number": serial_number,
+                        },
+                        "last_imported_at": datetime.now(UTC),
+                    }
+                    if existing is None:
+                        existing = OltServicePort(
+                            olt_device_id=olt.id,
+                            port_index=sp.index,
+                            **values,
+                        )
+                        db.add(existing)
+                        existing_ports[sp.index] = existing
+                        file_results["imported"] += 1
+                    else:
+                        for key, value in values.items():
+                            setattr(existing, key, value)
+                        file_results["updated"] += 1
+                else:
+                    file_results["imported"] += 1
 
-                file_results["created"] += 1
                 logger.debug(
-                    "    Created allocation: index=%d, ONT=%s, VLAN=%d",
+                    "    Imported service-port: index=%d, ONT=%s, VLAN=%d",
                     sp.index,
-                    ont.serial_number,
+                    getattr(ont, "serial_number", None) or "unmatched",
                     sp.vlan_id,
                 )
 
-            # No next_index tracking needed - allocations are tracked in table
-
             logger.info(
-                "  %s: created=%d, skipped_existing=%d, skipped_no_ont=%d",
+                "  %s: imported=%d, updated=%d, unmatched_ont=%d",
                 config_file.name,
-                file_results["created"],
-                file_results["skipped_existing"],
-                file_results["skipped_no_ont"],
+                file_results["imported"],
+                file_results["updated"],
+                file_results["unmatched_ont"],
             )
 
-            results["created"] += file_results["created"]
-            results["skipped_existing"] += file_results["skipped_existing"]
-            results["skipped_no_ont"] += file_results["skipped_no_ont"]
+            results["imported"] += file_results["imported"]
+            results["updated"] += file_results["updated"]
+            results["unmatched_ont"] += file_results["unmatched_ont"]
 
         if not dry_run:
             db.commit()
@@ -422,9 +419,9 @@ def main():
 
     logger.info("=" * 60)
     logger.info("TOTAL RESULTS:")
-    logger.info("  Created: %d", results["created"])
-    logger.info("  Skipped (existing): %d", results["skipped_existing"])
-    logger.info("  Skipped (no ONT): %d", results["skipped_no_ont"])
+    logger.info("  Imported: %d", results["imported"])
+    logger.info("  Updated: %d", results["updated"])
+    logger.info("  Unmatched ONT: %d", results["unmatched_ont"])
     logger.info("  Skipped (no OLT): %d", results["skipped_no_olt"])
 
 

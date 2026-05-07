@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import (
     OLTDevice,
+    OltServicePort,
     OltServicePortPool,
     OntUnit,
     ServicePortAllocation,
@@ -132,6 +133,22 @@ def _get_allocated_indices(db: Session, pool_id: UUID) -> set[int]:
     return set(db.scalars(stmt).all())
 
 
+def _get_imported_service_port_indices(db: Session, olt_id: UUID) -> set[int]:
+    """Get service-port indices already observed on the OLT."""
+    stmt = select(OltServicePort.port_index).where(
+        OltServicePort.olt_device_id == olt_id,
+    )
+    return set(db.scalars(stmt).all())
+
+
+def _get_unavailable_indices(db: Session, pool: OltServicePortPool) -> set[int]:
+    """Get all indices that cannot be allocated for this OLT."""
+    return _get_allocated_indices(db, pool.id) | _get_imported_service_port_indices(
+        db,
+        pool.olt_device_id,
+    )
+
+
 def _reserved_indices(pool: OltServicePortPool) -> set[int]:
     reserved: set[int] = set()
     for raw_index in pool.reserved_indices or []:
@@ -167,7 +184,7 @@ def _find_next_available(
 
 def _refresh_pool_cache(db: Session, pool: OltServicePortPool) -> None:
     """Update the pool's cached next_available_index and available_count."""
-    allocated = _get_allocated_indices(db, pool.id)
+    allocated = _get_unavailable_indices(db, pool)
     reserved = _reserved_indices(pool)
 
     total_range = pool.max_index - pool.min_index + 1
@@ -256,8 +273,8 @@ def allocate_service_port(
     if not ont:
         raise AllocationError(f"ONT {ont_id} not found")
 
-    # Get current allocations
-    allocated = _get_allocated_indices(db, pool.id)
+    # Get current allocated/imported indices.
+    allocated = _get_unavailable_indices(db, pool)
 
     # Try cached index first
     port_index = pool.next_available_index

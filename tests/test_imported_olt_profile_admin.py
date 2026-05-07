@@ -9,10 +9,12 @@ from app.models.network import (
     OltOntRegistration,
     OltOnuTypeProfileMapping,
     OltServiceProfile,
+    OltServicePort,
 )
 from app.services import web_network_olt_profiles
 from app.services.network.olt_state_import import (
     _import_line_profile_gem_mappings_from_config,
+    _import_observed_service_ports_from_config,
     _import_service_port_gem_mappings_from_config,
 )
 
@@ -213,6 +215,12 @@ service-port 11 vlan 201 gpon 0/1/7 ont 5 gemport 2 multi-service user-vlan 201 
         config,
         imported_at,
     )
+    observed_count = _import_observed_service_ports_from_config(
+        db_session,
+        olt,
+        config,
+        imported_at,
+    )
     db_session.flush()
 
     context = web_network_olt_profiles.imported_profile_state_context(
@@ -225,6 +233,13 @@ service-port 11 vlan 201 gpon 0/1/7 ont 5 gemport 2 multi-service user-vlan 201 
     }
     assert line_count == 2
     assert service_count == 2
+    assert observed_count == 2
+    observed_ports = {
+        (row.port_index, row.vlan_id, row.gem_index)
+        for row in db_session.query(OltServicePort).all()
+    }
+    assert (10, 203, 1) in observed_ports
+    assert (11, 201, 2) in observed_ports
     assert ("line_profile", None, 0, 1) in rows
     assert ("line_profile", 201, None, 2) in rows
     assert ("service_port", 203, None, 1) in rows

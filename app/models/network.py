@@ -3301,6 +3301,62 @@ class ServicePortAllocation(Base):
     ont_unit = relationship("OntUnit")
 
 
+class OltServicePort(Base):
+    """Imported service-port state observed on an OLT."""
+
+    __tablename__ = "olt_service_ports"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_device_id",
+            "port_index",
+            name="uq_olt_service_ports_olt_port_index",
+        ),
+        Index("ix_olt_service_ports_olt_fsp", "olt_device_id", "fsp"),
+        Index("ix_olt_service_ports_ont", "ont_unit_id"),
+        Index("ix_olt_service_ports_vlan_gem", "vlan_id", "gem_index"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    port_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    fsp: Mapped[str] = mapped_column(String(32), nullable=False)
+    ont_id_on_olt: Mapped[int] = mapped_column(Integer, nullable=False)
+    vlan_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    gem_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_vlan: Mapped[str | None] = mapped_column(String(32))
+    tag_transform: Mapped[str | None] = mapped_column(String(40))
+    flow_type: Mapped[str | None] = mapped_column(String(40))
+    flow_para: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str | None] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    raw_entry: Mapped[dict | None] = mapped_column(JSON)
+    last_imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt_device = relationship("OLTDevice")
+    ont_unit = relationship("OntUnit")
+
+
 # =============================================================================
 # Phase 2: Verification Status for Async Drift Detection
 # =============================================================================
