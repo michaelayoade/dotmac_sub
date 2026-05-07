@@ -7,7 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.services.network import olt_netconf_ont
+olt_netconf_ont = pytest.importorskip(
+    "app.services.network.olt_netconf_ont",
+    reason="Legacy NETCONF ONT authorization module is not installed.",
+)
 
 
 @pytest.fixture

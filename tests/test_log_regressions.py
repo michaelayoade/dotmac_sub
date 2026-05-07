@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from starlette.requests import Request
 
-from app.services.network import ont_metrics
+from app.services.network.metrics_adapters import VictoriaMetricsAdapter
 from app.services.network.olt_ssh import _run_huawei_cmd
 from app.web.admin.network_olts_inventory import olt_authorize_ont
 
@@ -19,7 +19,7 @@ class _DummyChannel:
 
 
 def test_promql_label_selector_does_not_overescape_hyphen() -> None:
-    selector = ont_metrics._build_label_selector(
+    selector = VictoriaMetricsAdapter()._build_label_selector(
         ont_serial="485754437D4510C3",  # noqa: SLF001
         ont_id="d3158608-b57d-405b-8ace-e71ba195ed33",
     )
@@ -93,32 +93,20 @@ def test_force_authorize_route_runs_synchronously(
 
     captured: dict[str, object] = {}
 
-    def _fake_authorize(
-        _db,
-        *,
-        olt_id: str,
-        fsp: str,
-        serial_number: str,
-        force_reauthorize: bool = False,
-        preset_id: str | None = None,
-        request=None,
-    ):
-        captured.update(
-            {
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force_reauthorize,
-                "preset_id": preset_id,
-                "request": request,
-            }
-        )
-        return True, "ONT authorized and provisioned.", "ont-123"
+    def _fake_enqueue(_task_name, *, kwargs, **_dispatch_kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(queued=True)
 
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
     monkeypatch.setattr(
-        network_olts_inventory.olt_operations_service,
-        "authorize_ont",
-        _fake_authorize,
+        network_olts_inventory,
+        "_authorization_detail_redirect_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "can_authorize_ont_from_request",
+        lambda *_args, **_kwargs: True,
     )
     monkeypatch.setattr(
         network_olts_inventory.web_admin_service,
@@ -154,11 +142,11 @@ def test_force_authorize_route_runs_synchronously(
     )
 
     assert response.status_code == 303
-    assert "ONT+authorized" in response.headers["location"]
+    assert "Authorization+started" in response.headers["location"]
     assert captured["force_reauthorize"] is True
     assert captured["fsp"] == "0/1/6"
     assert captured["serial_number"] == "4857544328201B9A"
-    assert captured["request"] is request
+    assert captured["initiated_by"] == "Alice Admin"
 
 
 def test_normal_authorize_route_runs_synchronously(
@@ -168,32 +156,20 @@ def test_normal_authorize_route_runs_synchronously(
 
     captured: dict[str, object] = {}
 
-    def _fake_authorize(
-        _db,
-        *,
-        olt_id: str,
-        fsp: str,
-        serial_number: str,
-        force_reauthorize: bool = False,
-        preset_id: str | None = None,
-        request=None,
-    ):
-        captured.update(
-            {
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force_reauthorize,
-                "preset_id": preset_id,
-                "request": request,
-            }
-        )
-        return True, "ONT authorized.", "ont-456"
+    def _fake_enqueue(_task_name, *, kwargs, **_dispatch_kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(queued=True)
 
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
     monkeypatch.setattr(
-        network_olts_inventory.olt_operations_service,
-        "authorize_ont",
-        _fake_authorize,
+        network_olts_inventory,
+        "_authorization_detail_redirect_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "can_authorize_ont_from_request",
+        lambda *_args, **_kwargs: True,
     )
     monkeypatch.setattr(
         network_olts_inventory.web_admin_service,
@@ -229,54 +205,28 @@ def test_normal_authorize_route_runs_synchronously(
     )
 
     assert response.status_code == 303
-    assert "ONT+authorized" in response.headers["location"]
+    assert "Authorization+started" in response.headers["location"]
     assert captured["force_reauthorize"] is False
     assert captured["fsp"] == "0/1/6"
     assert captured["serial_number"] == "4857544328201B9A"
-    assert captured["request"] is request
+    assert captured["initiated_by"] == "Alice Admin"
 
 
-def test_olt_detail_template_defaults_missing_acs_prefill() -> None:
+def test_olt_detail_template_exposes_import_state_actions() -> None:
     template = Path("templates/admin/network/olts/detail.html").read_text()
 
-    assert "acs_prefill|default({})" in template
-    assert "acs_prefill.cwmp_url" not in template
+    assert 'name="import_source" value="live"' in template
+    assert 'name="import_source" value="dump"' in template
+    assert "/root/olt_audit_20260506" in template
+    assert "Import Live State" in template
+    assert "Import Dump" in template
 
 
-def test_olt_detail_template_uses_operator_focused_tabs() -> None:
+def test_olt_detail_template_uses_imported_state_sections() -> None:
     template = Path("templates/admin/network/olts/detail.html").read_text()
 
-    for tab in (
-        "overview",
-        "network-resources",
-        "inventory",
-        "provisioning",
-        "operations",
-    ):
-        assert f"activeTab === '{tab}'" in template
-        assert template.count(f"x-show=\"activeTab === '{tab}'\"") == 1
-
-    for legacy_tab in (
-        "ports",
-        "onts",
-        "autofind",
-        "tr069",
-        "config",
-        "settings",
-        "subscribers",
-        "terminal",
-        "activity",
-        "events",
-        "profiles",
-    ):
-        assert f"activeTab === '{legacy_tab}'" not in template
-
-    assert "normalizeTab(tab)" in template
+    assert "Imported OLT Profiles" in template
+    assert 'hx-get="/admin/network/olts/{{ olt.id }}/profiles/imported"' in template
+    assert "x-show=\"activeTab" not in template
     assert "Subscriber Impact" not in template
     assert "Runtime and hardware state" not in template
-    nav_section = template[
-        template.index("{# Tab Navigation #}") : template.index(
-            "{# ===================== OVERVIEW TAB"
-        )
-    ]
-    assert "Profiles" not in nav_section
