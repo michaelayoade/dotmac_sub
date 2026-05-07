@@ -9,8 +9,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.domain_settings import SettingDomain
-from app.models.network import OLTDevice, OntUnit
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
 from app.models.network_monitoring import (
     DeviceInterface,
     InterfaceStatus,
@@ -18,9 +18,6 @@ from app.models.network_monitoring import (
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber
-from app.services import (
-    settings_spec,
-)
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -55,6 +52,17 @@ def _float_setting(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _setting_raw_value(setting: DomainSetting) -> object | None:
+    return setting.value_json if setting.value_json is not None else setting.value_text
+
+
+def _rollback_after_failed_query(db: Session) -> None:
+    try:
+        db.rollback()
+    except Exception:
+        logger.debug("Failed to roll back dashboard session", exc_info=True)
 
 
 def _is_user_actor(actor_type) -> bool:
@@ -153,50 +161,109 @@ def _build_pon_outages(db: Session, limit: int = 10) -> list[dict]:
     return outages
 
 
+def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
+    """Return ONT status from locally persisted monitoring fields.
+
+    The dashboard must not synchronously poll Zabbix per OLT during initial
+    render. Background ingestion keeps these columns fresh enough for overview
+    counts, while live diagnostics pages can still query Zabbix directly.
+    """
+    counts = (
+        db.query(
+            func.count(OntUnit.id).label("total"),
+            func.count(OntUnit.id)
+            .filter(OntUnit.olt_status == OnuOnlineStatus.online)
+            .label("online"),
+            func.count(OntUnit.id)
+            .filter(OntUnit.olt_rx_signal_dbm.is_not(None))
+            .filter(OntUnit.olt_rx_signal_dbm < -25)
+            .label("low_signal"),
+        )
+        .filter(OntUnit.is_active.is_(True))
+        .one()
+    )
+    total = counts.total or 0
+    online = counts.online or 0
+    low_signal = counts.low_signal or 0
+    return {
+        "total": total,
+        "online": online,
+        "offline": max(total - online, 0),
+        "low_signal": low_signal,
+    }
+
+
 def _build_health_thresholds(db: Session) -> dict:
     """Resolve network/server health thresholds from settings."""
-    return {
-        "disk_warn_pct": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "server_health_disk_warn_pct"
-            )
-        ),
-        "disk_crit_pct": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "server_health_disk_crit_pct"
-            )
-        ),
-        "mem_warn_pct": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "server_health_mem_warn_pct"
-            )
-        ),
-        "mem_crit_pct": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "server_health_mem_crit_pct"
-            )
-        ),
-        "load_warn": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "server_health_load_warn"
-            )
-        ),
-        "load_crit": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "server_health_load_crit"
-            )
-        ),
-        "network_warn_pct": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "network_health_warn_pct"
-            )
-        ),
-        "network_crit_pct": _float_setting(
-            settings_spec.resolve_value(
-                db, SettingDomain.network_monitoring, "network_health_crit_pct"
-            )
-        ),
+    keys = {
+        "server_health_disk_warn_pct": "disk_warn_pct",
+        "server_health_disk_crit_pct": "disk_crit_pct",
+        "server_health_mem_warn_pct": "mem_warn_pct",
+        "server_health_mem_crit_pct": "mem_crit_pct",
+        "server_health_load_warn": "load_warn",
+        "server_health_load_crit": "load_crit",
+        "network_health_warn_pct": "network_warn_pct",
+        "network_health_crit_pct": "network_crit_pct",
     }
+    rows = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network_monitoring)
+        .filter(DomainSetting.key.in_(keys.keys()))
+        .filter(DomainSetting.is_active.is_(True))
+        .all()
+    )
+    values = {keys[row.key]: _float_setting(_setting_raw_value(row)) for row in rows}
+    return {field: values.get(field) for field in keys.values()}
+
+
+def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
+    """Return the small billing aggregate needed by the admin overview."""
+    from sqlalchemy import text as sa_text
+
+    try:
+        row = db.execute(
+            sa_text(
+                """
+                SELECT
+                    COALESCE((
+                        SELECT SUM(amount)
+                        FROM payments
+                        WHERE is_active = true
+                          AND status = 'completed'
+                          AND paid_at >= date_trunc('month', NOW())
+                          AND paid_at < date_trunc('month', NOW()) + INTERVAL '1 month'
+                    ), 0) AS payments_this_month,
+                    COALESCE((
+                        SELECT SUM(balance_due)
+                        FROM invoices
+                        WHERE is_active = true
+                          AND status != 'void'
+                          AND balance_due > 0
+                    ), 0) AS pending_amount,
+                    COALESCE((
+                        SELECT SUM(balance_due)
+                        FROM invoices
+                        WHERE is_active = true
+                          AND status != 'void'
+                          AND balance_due > 0
+                          AND due_at < NOW()
+                    ), 0) AS overdue_amount
+                """
+            )
+        ).one()
+        return {
+            "payments_this_month": float(row.payments_this_month or 0),
+            "pending_amount": float(row.pending_amount or 0),
+            "overdue_amount": float(row.overdue_amount or 0),
+        }
+    except Exception:
+        logger.debug("Failed to load dashboard billing summary", exc_info=True)
+        _rollback_after_failed_query(db)
+        return {
+            "payments_this_month": 0.0,
+            "pending_amount": 0.0,
+            "overdue_amount": 0.0,
+        }
 
 
 def _build_recent_activities(
@@ -251,7 +318,6 @@ def _build_recent_activities(
 def dashboard(request: Request, db: Session):
     """Build the main admin dashboard context and return TemplateResponse."""
     from app.services import network_monitoring as network_monitoring_service
-    from app.services.billing.reporting import billing_reporting
 
     # --- Server health ---
     server_health = system_health_service.get_system_health()
@@ -263,7 +329,7 @@ def dashboard(request: Request, db: Session):
     # --- Centralized stats ---
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
     net_stats = network_monitoring_service.network_devices.get_dashboard_stats(db)
-    billing_stats = billing_reporting.get_dashboard_stats(db)
+    billing_summary = _build_dashboard_billing_summary(db)
 
     # --- OLT/ONT inventory counts (kept for network health ring) ---
     olt_total = db.query(func.count(OLTDevice.id)).scalar() or 0
@@ -302,10 +368,9 @@ def dashboard(request: Request, db: Session):
         health_status = "critical"
 
     # --- Billing summary ---
-    b_stats = billing_stats.get("stats", {})
-    payments_this_month = b_stats.get("payments_amount", 0)
-    pending_amount = b_stats.get("pending_amount", 0)
-    overdue_amount = b_stats.get("overdue_amount", 0)
+    payments_this_month = billing_summary["payments_this_month"]
+    pending_amount = billing_summary["pending_amount"]
+    overdue_amount = billing_summary["overdue_amount"]
     active_subscribers = sub_stats["active_count"]
     arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
@@ -330,6 +395,7 @@ def dashboard(request: Request, db: Session):
         ar_60 = float(ar_row.ar_60)
     except Exception:
         logger.debug("Failed to compute AR aging", exc_info=True)
+        _rollback_after_failed_query(db)
 
     # --- Bandwidth from device metrics ---
     bw_current = "0"
@@ -354,6 +420,7 @@ def dashboard(request: Request, db: Session):
             bw_current = f"{total_bps / 1e3:.0f} Kbps"
     except Exception:
         logger.debug("Failed to compute bandwidth stats", exc_info=True)
+        _rollback_after_failed_query(db)
 
     stats = {
         "total_subscribers": sub_stats["total_count"],
@@ -516,6 +583,7 @@ def dashboard(request: Request, db: Session):
         }
     except Exception:
         logger.debug("Failed to load sync status for dashboard", exc_info=True)
+        _rollback_after_failed_query(db)
         sync_status = {"last_sync": None, "total_mappings": 0, "is_healthy": False}
 
     # --- Monitoring device summary (for operations dashboard) ---
@@ -528,10 +596,11 @@ def dashboard(request: Request, db: Session):
 
     # --- ONT status summary ---
     try:
-        ont_service_summary = network_monitoring_service.get_onu_status_summary(db)
-        ont_olt_link_summary = network_monitoring_service.get_onu_olt_status_summary(db)
+        ont_service_summary = _build_cached_ont_status_summary(db)
+        ont_olt_link_summary = dict(ont_service_summary)
     except Exception:
         logger.debug("Failed to load ONT summary for dashboard", exc_info=True)
+        _rollback_after_failed_query(db)
         ont_service_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
         ont_olt_link_summary = {"online": 0, "offline": 0, "total": 0}
 
@@ -546,6 +615,7 @@ def dashboard(request: Request, db: Session):
         )
     except Exception:
         logger.debug("Failed to load unconfigured ONT count for dashboard", exc_info=True)
+        _rollback_after_failed_query(db)
 
     # --- PON interface status summary ---
     try:
@@ -554,6 +624,7 @@ def dashboard(request: Request, db: Session):
         logger.debug(
             "Failed to load PON interface summary for dashboard", exc_info=True
         )
+        _rollback_after_failed_query(db)
         pon_interface_summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
 
     # --- PON outages (interfaces currently down) ---
@@ -562,32 +633,40 @@ def dashboard(request: Request, db: Session):
         pon_outages = _build_pon_outages(db, limit=10)
     except Exception:
         logger.debug("Failed to load PON outages for dashboard", exc_info=True)
-
-    # --- VPN tunnel status ---
-    vpn_tunnels = []
-    try:
-        from app.services.web_network_monitoring import get_vpn_tunnel_status
-
-        vpn_tunnels = get_vpn_tunnel_status()
-    except Exception:
-        logger.debug("Failed to load VPN tunnel status for dashboard", exc_info=True)
+        _rollback_after_failed_query(db)
 
     # --- Pending service orders ---
     pending_orders = 0
     try:
-        from app.services.provisioning_managers import service_orders
+        from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 
-        so_stats = service_orders.get_dashboard_stats(db)
-        pending_orders = so_stats.get("pending", 0) + so_stats.get("in_progress", 0)
-        stats["orders_new"] = so_stats.get("pending", 0)
-        stats["orders_in_progress"] = so_stats.get("in_progress", 0)
-        stats["orders_completed_today"] = so_stats.get("completed", 0)
-    except ImportError:
-        logger.debug(
-            "provisioning_managers not available, skipping service order stats"
+        order_counts = (
+            db.query(
+                func.count(ServiceOrder.id)
+                .filter(
+                    ServiceOrder.status.in_(
+                        (ServiceOrderStatus.submitted, ServiceOrderStatus.scheduled)
+                    )
+                )
+                .label("pending"),
+                func.count(ServiceOrder.id)
+                .filter(ServiceOrder.status == ServiceOrderStatus.provisioning)
+                .label("in_progress"),
+                func.count(ServiceOrder.id)
+                .filter(ServiceOrder.status == ServiceOrderStatus.active)
+                .label("completed"),
+            )
+            .one()
         )
+        pending = order_counts.pending or 0
+        in_progress = order_counts.in_progress or 0
+        pending_orders = pending + in_progress
+        stats["orders_new"] = pending
+        stats["orders_in_progress"] = in_progress
+        stats["orders_completed_today"] = order_counts.completed or 0
     except Exception:
         logger.error("Failed to load service order stats for dashboard", exc_info=True)
+        _rollback_after_failed_query(db)
 
     # --- Attention items (things needing action) ---
     attention_items: list[dict] = []
@@ -682,7 +761,7 @@ def dashboard(request: Request, db: Session):
             "stats": stats,
             "subscriber_stats": sub_stats,
             "network_stats": net_stats,
-            "billing_stats": billing_stats,
+            "billing_stats": {"stats": billing_summary},
             "network_health": {
                 "percent": health_pct,
                 "status": health_status,
@@ -712,7 +791,7 @@ def dashboard(request: Request, db: Session):
             "ont_olt_link_summary": ont_olt_link_summary,
             "pon_interface_summary": pon_interface_summary,
             "pon_outages": pon_outages,
-            "vpn_tunnels": vpn_tunnels,
+            "vpn_tunnels": [],
         },
     )
 
