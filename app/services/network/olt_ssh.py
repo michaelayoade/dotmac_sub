@@ -47,11 +47,18 @@ from app.services.network.olt_vendor_adapters import (
     get_olt_adapter,
 )
 from app.services.network.parsers import (
+    HUAWEI_OPTIONAL_ARG_PROMPT,
     FirmwareInfo,
     ServicePortEntry,
+    is_error_output,
+    needs_huawei_command_confirm,
+    normalize_fsp,
     parse_firmware_info,
     parse_service_port_table,
     parse_service_port_table_legacy,
+    validate_fsp,
+    validate_readonly_command,
+    validate_serial,
 )
 from app.services.network.tr069_profile_matching import match_tr069_profile
 
@@ -286,31 +293,19 @@ def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
         transport.close()
 
 
-_FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
-_SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
-_FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNORECASE)
-
-
 def _normalize_fsp(fsp: str) -> str:
     """Normalize FSP by stripping common port name prefixes like 'pon-'."""
-    if not fsp:
-        return fsp
-    return _FSP_PREFIX_RE.sub("", fsp.strip())
+    return normalize_fsp(fsp)
 
 
 def _validate_fsp(fsp: str) -> tuple[bool, str]:
     """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1')."""
-    check_fsp = _normalize_fsp(fsp)
-    if not _FSP_RE.match(check_fsp):
-        return False, f"Invalid F/S/P format: {fsp!r} (expected digits/digits/digits)"
-    return True, ""
+    return validate_fsp(fsp)
 
 
 def _validate_serial(serial_number: str) -> tuple[bool, str]:
     """Validate ONT serial number contains only alphanumeric chars and dashes."""
-    if not serial_number or not _SERIAL_RE.match(serial_number):
-        return False, f"Invalid serial number format: {serial_number!r}"
-    return True, ""
+    return validate_serial(serial_number)
 
 
 def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
@@ -400,38 +395,9 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
     return parse_service_port_table(output).data
 
 
-_HUAWEI_ERROR_PATTERNS = (
-    "failure",
-    "error",
-    "% parameter error",
-    "% unknown command",
-    "command not found",
-    "invalid",
-    "unrecognized",
-    "incomplete command",
-    "\u5931\u8d25",  # Chinese: "失败" (failure)
-    "\u9519\u8bef",  # Chinese: "错误" (error)
-)
-
-
-def is_error_output(output: str) -> bool:
-    """Check if Huawei CLI output indicates an error.
-
-    Detects common error patterns across English and Chinese locales.
-    """
-    lower = output.lower()
-    return any(pattern in lower for pattern in _HUAWEI_ERROR_PATTERNS)
-
-
-_HUAWEI_OPTIONAL_ARG_PROMPT = r"\{[^\r\n{}]*\}\s*:?\s*$"
-
-
 def _needs_huawei_command_confirm(output: str) -> bool:
     """Return true when Huawei CLI is waiting for Enter to accept defaults."""
-    return (
-        "<cr>" in output.lower()
-        or re.search(_HUAWEI_OPTIONAL_ARG_PROMPT, output) is not None
-    )
+    return needs_huawei_command_confirm(output)
 
 
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
@@ -439,7 +405,7 @@ def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> s
     logger.debug("OLT command: %r", command)
     channel.send(f"{command}\n")
     out = _read_until_prompt(
-        channel, rf"{prompt}|<cr>|{_HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
+        channel, rf"{prompt}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
     )
     if _needs_huawei_command_confirm(out):
         channel.send("\n")
@@ -879,67 +845,13 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         return False, f"Error: {exc}", ""
 
 
-# Read-only command prefixes allowed for run_cli_command()
-_READONLY_COMMAND_PREFIXES = (
-    "display",
-    "show",
-    "dir",
-    "pwd",
-    "more",
-    "ping",
-    "tracert",
-)
-
-# Dangerous command prefixes that should never be allowed
-_DANGEROUS_COMMAND_PREFIXES = (
-    "config",
-    "undo",
-    "delete",
-    "reset",
-    "reboot",
-    "shutdown",
-    "format",
-    "copy",
-    "startup",
-    "save",
-    "commit",
-    "rollback",
-    "system",
-    "patch",
-    "upgrade",
-    "restore",
-    "ont add",
-    "ont delete",
-    "service-port",
-    "interface",
-)
-
-
 def _validate_readonly_command(command: str) -> tuple[bool, str]:
     """Validate that a CLI command is read-only (display/show only).
 
     Returns:
         Tuple of (is_valid, error_message).
     """
-    normalized = command.strip().lower()
-
-    # Check for dangerous commands first
-    for prefix in _DANGEROUS_COMMAND_PREFIXES:
-        if normalized.startswith(prefix):
-            return (
-                False,
-                f"Command '{prefix}' is not allowed — only read-only commands permitted",
-            )
-
-    # Check for allowed read-only prefixes
-    for prefix in _READONLY_COMMAND_PREFIXES:
-        if normalized.startswith(prefix):
-            return True, ""
-
-    return (
-        False,
-        f"Command not recognized as read-only — must start with: {', '.join(_READONLY_COMMAND_PREFIXES)}",
-    )
+    return validate_readonly_command(command)
 
 
 def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
