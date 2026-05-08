@@ -611,6 +611,27 @@ def authorize_autofind_ont(
             partial_success=True,
         )
 
+    assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
+        db,
+        ont_unit_id=ont_unit_id,
+        olt_id=olt_id,
+        fsp=fsp,
+    )
+    if not assignment_ok:
+        add_step("Link ONT Assignment", False, assignment_msg, activation_started)
+        return finish(
+            success=False,
+            message=(
+                "ONT authorized on OLT, but local PON assignment setup failed: "
+                f"{assignment_msg}"
+            ),
+            status="error",
+            ont_unit_id=ont_unit_id,
+            ont_id_on_olt=ont_id,
+            completed_authorization=True,
+            partial_success=True,
+        )
+
     # Resolve autofind candidate
     _resolve_authorized_autofind_candidate(
         db, olt_id=olt_id, fsp=fsp, serial_number=normalized_serial
@@ -618,7 +639,7 @@ def authorize_autofind_ont(
 
     activation_message = (
         f"{getattr(authorization_profiles, 'message', '')} "
-        f"{auth_result.message} {create_msg}".strip()
+        f"{auth_result.message} {create_msg} {assignment_msg}".strip()
     )
     add_step("Activate ONT", True, activation_message, activation_started)
 

@@ -49,6 +49,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
+INTERNET_PPP_CONNECTION_NAME = "DOTMAC_INTERNET_PPP"
+
 # Time to wait before verifying addObject result
 _WAN_ADD_OBJECT_VERIFY_DELAY_SECONDS = 60
 # How long to consider a pending addObject operation valid
@@ -365,6 +367,7 @@ def set_pppoe_credentials(
     password: str,
     instance_index: int = 1,
     wan_vlan: int | None = None,
+    connection_name: str = INTERNET_PPP_CONNECTION_NAME,
 ) -> ActionResult:
     """Set PPPoE credentials on an ONT via TR-069.
 
@@ -420,6 +423,10 @@ def set_pppoe_credentials(
             service_path = _resolve_wan_path(root, "ppp.service_list", instance_index)
             params[service_path] = "INTERNET"
 
+        if connection_name:
+            name_path = _resolve_wan_path(root, "ppp.name", instance_index)
+            params[name_path] = connection_name
+
     # Expected values for verification (exclude password - it's write-only)
     expected = {
         path: value
@@ -443,6 +450,9 @@ def set_pppoe_credentials(
                 "device_id": device_id,
                 "username": username,
                 "instance_index": instance_index,
+                "connection_name": (
+                    connection_name if root == "InternetGatewayDevice" else None
+                ),
                 "root": root,
                 "task": result,
             },

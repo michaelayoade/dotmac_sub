@@ -128,6 +128,49 @@ def test_bootstrap_resolves_dynamic_igd_ppp_instance() -> None:
     assert 'setParam(base + ".Username", wanConfig.pppoe_username)' in bootstrap
 
 
+def test_set_pppoe_credentials_names_internet_ppp_slot(monkeypatch) -> None:
+    from app.services.network import ont_action_wan
+
+    calls = {}
+    ont = SimpleNamespace(serial_number="4857544306351E9C")
+
+    monkeypatch.setattr(
+        ont_action_wan,
+        "get_ont_client_or_error",
+        lambda db, ont_id: ((ont, object(), "device-1"), None),
+    )
+    monkeypatch.setattr(
+        ont_action_wan,
+        "detect_data_model_root",
+        lambda db, ont, client, device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_wan, "persist_data_model_root", lambda *a: None)
+
+    def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
+        calls["params"] = params
+        calls["expected"] = expected
+        return {"_id": "task-1"}
+
+    monkeypatch.setattr(ont_action_wan, "set_and_verify", fake_set_and_verify)
+
+    result = ont_action_wan.set_pppoe_credentials(
+        object(),
+        "ont-1",
+        username="100025868",
+        password="secret",
+        instance_index=1,
+        wan_vlan=203,
+    )
+
+    name_path = (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+        "WANPPPConnection.1.Name"
+    )
+    assert result.success is True
+    assert calls["params"][name_path] == ont_action_wan.INTERNET_PPP_CONNECTION_NAME
+    assert calls["expected"][name_path] == ont_action_wan.INTERNET_PPP_CONNECTION_NAME
+
+
 def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:
     from app.services.genieacs_service import genieacs_service
     from app.services.network import ont_action_wifi

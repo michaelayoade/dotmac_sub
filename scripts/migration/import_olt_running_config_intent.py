@@ -59,7 +59,55 @@ class ParsedOnt:
     mgmt_primary_dns: str | None = None
     mgmt_secondary_dns: str | None = None
     tr069_olt_profile_id: int | None = None
+    pppoe_ip_index: int | None = None
+    internet_config_ip_index: int | None = None
+    wan_config_ip_index: int | None = None
+    wan_config_profile_id: int | None = None
     service_ports: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def internet_ip_index(self) -> int | None:
+        indices = [
+            value
+            for value in (
+                self.pppoe_ip_index,
+                self.internet_config_ip_index,
+                self.wan_config_ip_index,
+            )
+            if value is not None
+        ]
+        if not indices or len(set(indices)) > 1:
+            return None
+        return indices[0]
+
+    @property
+    def internet_stack_validation_errors(self) -> list[str]:
+        indices = [
+            value
+            for value in (
+                self.pppoe_ip_index,
+                self.internet_config_ip_index,
+                self.wan_config_ip_index,
+            )
+            if value is not None
+        ]
+        errors: list[str] = []
+        if len(set(indices)) > 1:
+            errors.append(
+                "Misaligned internet ip-index values: "
+                f"pppoe={self.pppoe_ip_index}, "
+                f"internet-config={self.internet_config_ip_index}, "
+                f"wan-config={self.wan_config_ip_index}"
+            )
+        if self.pppoe_ip_index is not None and self.internet_config_ip_index is None:
+            errors.append("PPPoE ipconfig exists without ont internet-config")
+        if self.pppoe_ip_index is not None and self.wan_config_ip_index is None:
+            errors.append("PPPoE ipconfig exists without ont wan-config")
+        return errors
+
+    @property
+    def internet_stack_validation_status(self) -> str:
+        return "invalid" if self.internet_stack_validation_errors else "valid"
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -86,6 +134,15 @@ class ParsedOnt:
                 "secondary_dns": self.mgmt_secondary_dns,
             },
             "tr069_olt_profile_id": self.tr069_olt_profile_id,
+            "internet_stack": {
+                "internet_ip_index": self.internet_ip_index,
+                "pppoe_ip_index": self.pppoe_ip_index,
+                "internet_config_ip_index": self.internet_config_ip_index,
+                "wan_config_ip_index": self.wan_config_ip_index,
+                "wan_config_profile_id": self.wan_config_profile_id,
+                "validation_status": self.internet_stack_validation_status,
+                "validation_errors": self.internet_stack_validation_errors,
+            },
             "service_ports": self.service_ports,
         }
 
@@ -102,6 +159,8 @@ def _commands_from_config(text: str) -> list[str]:
     starts = (
         "ont add ",
         "ont ipconfig ",
+        "ont internet-config ",
+        "ont wan-config ",
         "ont tr069-server-config ",
         "service-port ",
         "interface gpon ",
@@ -211,6 +270,42 @@ def parse_config(path: Path) -> list[ParsedOnt]:
                 parsed.mgmt_secondary_dns = ip_match.group("slave")
             continue
 
+        pppoe_match = re.match(
+            r"ont ipconfig (?P<port>\d+) (?P<ont>\d+) ip-index "
+            r"(?P<idx>\d+) pppoe\b",
+            command,
+        )
+        if pppoe_match:
+            parsed = onts.get((pppoe_match.group("port"), pppoe_match.group("ont")))
+            if parsed:
+                parsed.pppoe_ip_index = int(pppoe_match.group("idx"))
+            continue
+
+        internet_config_match = re.match(
+            r"ont internet-config (?P<port>\d+) (?P<ont>\d+) ip-index "
+            r"(?P<idx>\d+)",
+            command,
+        )
+        if internet_config_match:
+            parsed = onts.get(
+                (internet_config_match.group("port"), internet_config_match.group("ont"))
+            )
+            if parsed:
+                parsed.internet_config_ip_index = int(internet_config_match.group("idx"))
+            continue
+
+        wan_config_match = re.match(
+            r"ont wan-config (?P<port>\d+) (?P<ont>\d+) ip-index "
+            r"(?P<idx>\d+) profile-id (?P<profile>\d+)",
+            command,
+        )
+        if wan_config_match:
+            parsed = onts.get((wan_config_match.group("port"), wan_config_match.group("ont")))
+            if parsed:
+                parsed.wan_config_ip_index = int(wan_config_match.group("idx"))
+                parsed.wan_config_profile_id = int(wan_config_match.group("profile"))
+            continue
+
         tr069_match = re.match(
             r"ont tr069-server-config (?P<port>\d+) (?P<ont>\d+) profile-id "
             r"(?P<profile>\d+)",
@@ -295,6 +390,7 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
             "unmatched_onts": 0,
             "updated_onts": 0,
             "vlan_links": 0,
+            "invalid_internet_stacks": 0,
         }
 
         for parsed in parsed_onts:
@@ -305,6 +401,8 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
                 stats["unmatched_onts"] += 1
                 continue
             stats["matched_onts"] += 1
+            if parsed.internet_stack_validation_errors:
+                stats["invalid_internet_stacks"] += 1
             olt = olt_by_key.get(parsed.olt_key)
             vlan = (
                 vlan_by_olt_tag.get((str(olt.id), parsed.mgmt_vlan_tag))

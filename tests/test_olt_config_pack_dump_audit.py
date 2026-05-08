@@ -39,6 +39,27 @@ def test_parse_olt_dump_profiles_reads_line_profiles_and_usage():
     assert parsed.ont_line_profile_counts == Counter({40: 2, 1: 1})
 
 
+def test_parse_olt_dump_profiles_flags_misaligned_internet_stack():
+    parsed = parse_olt_dump_profiles(
+        """
+interface gpon 0/2
+ ont add 11 13 sn-auth "4857544306351E9C" omci ont-lineprofile-id 40 ont-srvprofile-id 13 desc "Dr Ezike"
+ ont ipconfig 11 13 ip-index 1 pppoe vlan 203 priority 5 user-account username "100025868" password "redacted"
+ ont internet-config 11 13 ip-index 1
+ ont wan-config 11 13 ip-index 0 profile-id 0
+"""
+    )
+
+    stack = parsed.ont_internet_stacks["0/2/11.13"]
+
+    assert stack.pppoe_ip_index == 1
+    assert stack.internet_config_ip_index == 1
+    assert stack.wan_config_ip_index == 0
+    assert stack.internet_ip_index is None
+    assert stack.validation_status == "invalid"
+    assert "Misaligned internet ip-index values" in stack.validation_errors[0]
+
+
 def test_dump_audit_does_not_require_legacy_line_profile_defaults(
     db_session,
     tmp_path,
@@ -74,4 +95,5 @@ def test_dump_audit_does_not_require_legacy_line_profile_defaults(
     assert report.is_valid is True
     assert report.suggested_updates == {}
     assert "line_profile_id" not in report.observed
+    assert report.observed["invalid_ont_internet_stacks"] == []
     assert apply_dump_audit_suggestions(db_session, [report]) == 0

@@ -58,6 +58,11 @@ class BatchedMgmtSpec:
     tr069_profile_id: int | None = None
 
     @property
+    def internet_ip_index(self) -> int | None:
+        """Single OLT ip-index for routed internet stack commands."""
+        return self.internet_config_ip_index
+
+    @property
     def has_service_port(self) -> bool:
         """True if service-port configuration is specified."""
         return self.mgmt_vlan_tag is not None

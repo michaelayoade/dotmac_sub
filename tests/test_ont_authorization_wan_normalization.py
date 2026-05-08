@@ -484,6 +484,139 @@ def test_authorization_reports_partial_failure_when_local_record_setup_fails(
     assert "local inventory record setup failed" in result.message
 
 
+def test_authorization_links_assignment_before_reporting_success(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="OLT-Link-Assignment", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+    calls = {}
+
+    class FakeAdapter:
+        def authorize_ont(
+            self,
+            fsp,
+            serial_number,
+            *,
+            line_profile_id=None,
+            service_profile_id=None,
+        ):
+            return SimpleNamespace(
+                success=True,
+                message="Authorized.",
+                ont_id=7,
+            )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        lambda _olt: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_import",
+        lambda db, olt, *, equipment_id=None: (
+            True,
+            "Using OLT authorization profiles.",
+            SimpleNamespace(
+                line_profile_id=10,
+                service_profile_id=20,
+                message="Using OLT authorization profiles.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "create_or_find_ont_for_authorized_serial",
+        lambda *args, **kwargs: ("ont-1", "Using existing ONT record."),
+    )
+
+    def fake_ensure(db, *, ont_unit_id, olt_id, fsp):
+        calls["ensure"] = (ont_unit_id, olt_id, fsp)
+        return True, "Linked ONT to PON port 0/1/6."
+
+    monkeypatch.setattr(
+        ont_authorization,
+        "ensure_assignment_and_pon_port_for_authorized_ont",
+        fake_ensure,
+    )
+
+    result = ont_authorization.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/6",
+        "HWTCLINKOK1",
+    )
+
+    assert result.success is True
+    assert result.partial_success is False
+    assert calls["ensure"] == ("ont-1", str(olt.id), "0/1/6")
+    assert "Linked ONT to PON port 0/1/6." in result.steps[-1].message
+
+
+def test_authorization_reports_partial_failure_when_assignment_link_fails(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="OLT-Link-Fails", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    class FakeAdapter:
+        def authorize_ont(
+            self,
+            fsp,
+            serial_number,
+            *,
+            line_profile_id=None,
+            service_profile_id=None,
+        ):
+            return SimpleNamespace(
+                success=True,
+                message="Authorized.",
+                ont_id=7,
+            )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        lambda _olt: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles_from_import",
+        lambda db, olt, *, equipment_id=None: (
+            True,
+            "Using OLT authorization profiles.",
+            SimpleNamespace(
+                line_profile_id=10,
+                service_profile_id=20,
+                message="Using OLT authorization profiles.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "create_or_find_ont_for_authorized_serial",
+        lambda *args, **kwargs: ("ont-1", "Using existing ONT record."),
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "ensure_assignment_and_pon_port_for_authorized_ont",
+        lambda *args, **kwargs: (False, "Invalid OLT F/S/P for assignment."),
+    )
+
+    result = ont_authorization.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/6",
+        "HWTCLINKFAIL1",
+    )
+
+    assert result.success is False
+    assert result.completed_authorization is True
+    assert result.partial_success is True
+    assert result.status == "error"
+    assert "local PON assignment setup failed" in result.message
+
+
 def test_authorization_ignores_explicit_foundation_failures(
     db_session, monkeypatch
 ):

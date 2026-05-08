@@ -100,6 +100,11 @@ class ProvisioningSpec:
     pppoe_omci_vlan: int | None = None
     ipv6_enabled: bool = False
 
+    @property
+    def internet_ip_index(self) -> int | None:
+        """Single OLT ip-index for PPPoE, internet-config, and wan-config."""
+        return self.internet_config_ip_index
+
 
 def _render_template(template: str, context: OntProvisioningContext) -> str:
     """Render a simple template string with subscriber context.
@@ -325,10 +330,17 @@ class HuaweiCommandGenerator:
         ]
         if not pppoe_services:
             return []
+        if spec.internet_ip_index is None:
+            raise ValueError("PPPoE OMCI config requires explicit internet_ip_index")
+        if len(pppoe_services) > 1:
+            raise ValueError(
+                "PPPoE OMCI config supports one routed internet stack per ip-index; "
+                "configure additional services via TR-069 or separate ip-indices"
+            )
 
         enter_cmd = f"interface gpon {context.frame_slot}"
         commands = [enter_cmd]
-        for i, ws in enumerate(pppoe_services, start=1):
+        for ws in pppoe_services:
             username_template = ws.pppoe_username_template or ""
             username = (
                 _render_template(username_template, context)
@@ -340,7 +352,7 @@ class HuaweiCommandGenerator:
                 continue
             cmd = (
                 f"ont ipconfig {context.port} {context.ont_id} "
-                f"ip-index {i} pppoe vlan {spec.pppoe_omci_vlan} "
+                f"ip-index {spec.internet_ip_index} pppoe vlan {spec.pppoe_omci_vlan} "
                 f"priority {ws.cos_priority or 0} "
                 f"user {username} password {password}"
             )

@@ -697,6 +697,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     from app.services.web_network_ont_autofind import (
         build_unconfigured_onts_redirect_url,
         ensure_returned_inventory_candidate,
+        restore_candidate_by_serial,
     )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -895,6 +896,21 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             candidate_message = str(exc)
             logger.warning(
                 "Failed to restore returned ONT inventory candidate: %s", exc
+            )
+    else:
+        # OLT binding was already cleared; try to restore candidate by serial lookup
+        try:
+            candidate_ready, candidate_message = restore_candidate_by_serial(
+                db,
+                serial_number=getattr(ont, "serial_number", None),
+                ont_unit_id=getattr(ont, "id", None),
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            candidate_message = str(exc)
+            logger.warning(
+                "Failed to restore returned ONT inventory candidate by serial: %s", exc
             )
 
     if candidate_ready:

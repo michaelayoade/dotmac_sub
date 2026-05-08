@@ -34,6 +34,22 @@ _ONT_ADD_LINE_PROFILE_RE = re.compile(
     r"\bont\s+add\b.*?\bont-lineprofile-id\s+(\d+)\b",
     re.IGNORECASE,
 )
+_INTERFACE_GPON_RE = re.compile(r"^\s*interface\s+gpon\s+(\d+/\d+)\b", re.IGNORECASE)
+_ONT_PPPOE_IPCONFIG_RE = re.compile(
+    r"\bont\s+ipconfig\s+(?P<port>\d+)\s+(?P<ont>\d+)\s+"
+    r"ip-index\s+(?P<idx>\d+)\s+pppoe\b",
+    re.IGNORECASE,
+)
+_ONT_INTERNET_CONFIG_RE = re.compile(
+    r"\bont\s+internet-config\s+(?P<port>\d+)\s+(?P<ont>\d+)\s+"
+    r"ip-index\s+(?P<idx>\d+)\b",
+    re.IGNORECASE,
+)
+_ONT_WAN_CONFIG_RE = re.compile(
+    r"\bont\s+wan-config\s+(?P<port>\d+)\s+(?P<ont>\d+)\s+"
+    r"ip-index\s+(?P<idx>\d+)\s+profile-id\s+(?P<profile>\d+)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -52,11 +68,77 @@ class DumpTr069Profile:
     acs_url: str
 
 
+@dataclass
+class DumpOntInternetStack:
+    external_id: str
+    pppoe_ip_index: int | None = None
+    internet_config_ip_index: int | None = None
+    wan_config_ip_index: int | None = None
+    wan_config_profile_id: int | None = None
+
+    @property
+    def internet_ip_index(self) -> int | None:
+        indices = [
+            value
+            for value in (
+                self.pppoe_ip_index,
+                self.internet_config_ip_index,
+                self.wan_config_ip_index,
+            )
+            if value is not None
+        ]
+        if not indices or len(set(indices)) > 1:
+            return None
+        return indices[0]
+
+    @property
+    def validation_errors(self) -> list[str]:
+        indices = [
+            value
+            for value in (
+                self.pppoe_ip_index,
+                self.internet_config_ip_index,
+                self.wan_config_ip_index,
+            )
+            if value is not None
+        ]
+        errors: list[str] = []
+        if len(set(indices)) > 1:
+            errors.append(
+                "Misaligned internet ip-index values: "
+                f"pppoe={self.pppoe_ip_index}, "
+                f"internet-config={self.internet_config_ip_index}, "
+                f"wan-config={self.wan_config_ip_index}"
+            )
+        if self.pppoe_ip_index is not None and self.internet_config_ip_index is None:
+            errors.append("PPPoE ipconfig exists without ont internet-config")
+        if self.pppoe_ip_index is not None and self.wan_config_ip_index is None:
+            errors.append("PPPoE ipconfig exists without ont wan-config")
+        return errors
+
+    @property
+    def validation_status(self) -> str:
+        return "invalid" if self.validation_errors else "valid"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "external_id": self.external_id,
+            "internet_ip_index": self.internet_ip_index,
+            "pppoe_ip_index": self.pppoe_ip_index,
+            "internet_config_ip_index": self.internet_config_ip_index,
+            "wan_config_ip_index": self.wan_config_ip_index,
+            "wan_config_profile_id": self.wan_config_profile_id,
+            "validation_status": self.validation_status,
+            "validation_errors": self.validation_errors,
+        }
+
+
 @dataclass(frozen=True)
 class ParsedOltDumpProfiles:
     line_profiles: dict[int, DumpLineProfile]
     tr069_profiles: dict[int, DumpTr069Profile]
     ont_line_profile_counts: Counter[int]
+    ont_internet_stacks: dict[str, DumpOntInternetStack]
 
 
 @dataclass
@@ -132,8 +214,10 @@ def parse_olt_dump_profiles(config_text: str) -> ParsedOltDumpProfiles:
     line_profiles: dict[int, DumpLineProfile] = {}
     tr069_profiles: dict[int, DumpTr069Profile] = {}
     ont_line_profile_counts: Counter[int] = Counter()
+    ont_internet_stacks: dict[str, DumpOntInternetStack] = {}
 
     current_id: int | None = None
+    current_board: str | None = None
     current_name = ""
     current_gems: set[int] = set()
     current_tr069 = False
@@ -161,6 +245,12 @@ def parse_olt_dump_profiles(config_text: str) -> ParsedOltDumpProfiles:
         if not line:
             continue
 
+        interface_match = _INTERFACE_GPON_RE.match(line)
+        if interface_match:
+            flush_current()
+            current_board = interface_match.group(1)
+            continue
+
         tr069_match = _TR069_PROFILE_RE.search(line)
         if tr069_match:
             profile_id = int(tr069_match.group(1))
@@ -173,6 +263,27 @@ def parse_olt_dump_profiles(config_text: str) -> ParsedOltDumpProfiles:
         usage_match = _ONT_ADD_LINE_PROFILE_RE.search(line)
         if usage_match:
             ont_line_profile_counts[int(usage_match.group(1))] += 1
+
+        if current_board:
+            for regex, field_name in (
+                (_ONT_PPPOE_IPCONFIG_RE, "pppoe_ip_index"),
+                (_ONT_INTERNET_CONFIG_RE, "internet_config_ip_index"),
+                (_ONT_WAN_CONFIG_RE, "wan_config_ip_index"),
+            ):
+                match = regex.search(line)
+                if not match:
+                    continue
+                external_id = (
+                    f"{current_board}/{match.group('port')}.{match.group('ont')}"
+                )
+                stack = ont_internet_stacks.setdefault(
+                    external_id,
+                    DumpOntInternetStack(external_id=external_id),
+                )
+                setattr(stack, field_name, int(match.group("idx")))
+                if field_name == "wan_config_ip_index":
+                    stack.wan_config_profile_id = int(match.group("profile"))
+                break
 
         start_match = _LINE_PROFILE_START_RE.search(line)
         if start_match:
@@ -203,6 +314,7 @@ def parse_olt_dump_profiles(config_text: str) -> ParsedOltDumpProfiles:
         line_profiles=line_profiles,
         tr069_profiles=tr069_profiles,
         ont_line_profile_counts=ont_line_profile_counts,
+        ont_internet_stacks=ont_internet_stacks,
     )
 
 
@@ -255,11 +367,27 @@ def audit_olt_config_pack_dump(
         "tr069_profile_exists": tr069_profile_id in parsed.tr069_profiles,
         "imported_line_profiles": sorted(parsed.line_profiles),
         "ont_line_profile_counts": dict(parsed.ont_line_profile_counts.most_common()),
+        "ont_internet_stack_count": len(parsed.ont_internet_stacks),
+        "invalid_ont_internet_stacks": [
+            stack.to_dict()
+            for stack in sorted(
+                parsed.ont_internet_stacks.values(),
+                key=lambda item: item.external_id,
+            )
+            if stack.validation_errors
+        ],
     }
 
     if tr069_profile_id not in parsed.tr069_profiles:
         audit.errors.append(
             f"Config pack tr069_olt_profile_id={tr069_profile_id} was not found in dump"
+        )
+
+    invalid_count = len(audit.observed["invalid_ont_internet_stacks"])
+    if invalid_count:
+        audit.warnings.append(
+            f"{invalid_count} ONT internet stack(s) have misaligned or incomplete "
+            "PPPoE/internet-config/wan-config ip-index state."
         )
 
     audit.warnings.append(

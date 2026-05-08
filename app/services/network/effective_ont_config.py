@@ -22,9 +22,12 @@ from app.models.network import (
     OntUnit,
 )
 from app.services.network.equipment_identity import normalize_ont_equipment_id
-from app.services.network.ont_management_ipam import get_ont_management_ip_record
 from app.services.network.olt_config_pack import OltConfigPack, resolve_olt_config_pack
-from app.services.network.ont_desired_config import desired_config, get_desired_config_value
+from app.services.network.ont_desired_config import (
+    desired_config,
+    get_desired_config_value,
+)
+from app.services.network.ont_management_ipam import get_ont_management_ip_record
 
 
 def _resolve_config_pack(
@@ -268,7 +271,7 @@ def _values_from_assignment(
         vlan_tag=mgmt_vlan.tag if mgmt_vlan else None,
     )
 
-    return {
+    values = {
         "config_method": None,
         "onu_mode": asn_wan_mode,
         "ip_protocol": None,
@@ -343,6 +346,8 @@ def _values_from_assignment(
         "primary_wan_service": _mapping_value(profile_mapping, "primary_wan_service")
         or cfg("wan", "primary_service"),
     }
+    values["internet_ip_index"] = values["internet_config_ip_index"]
+    return values
 
 
 def _resolve_management_pool_network(

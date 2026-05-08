@@ -108,6 +108,16 @@ class OltConfigPack:
     voip_wcd_index: int | None = None  # VoIP WCD if provisioned
 
     @property
+    def internet_ip_index(self) -> int | None:
+        """Single OLT ip-index for routed internet PPPoE/IPHOST commands.
+
+        Stored config still uses the historical internet_config_ip_index key.
+        New code should treat this as the one index shared by ont ipconfig
+        PPPoE, ont internet-config, and ont wan-config.
+        """
+        return self.internet_config_ip_index
+
+    @property
     def has_tr069_config(self) -> bool:
         """True if TR-069 ACS and OLT profile are configured."""
         return (
@@ -150,6 +160,7 @@ class OltConfigPack:
                 "tag": self.tr069_vlan.tag,
                 "name": self.tr069_vlan.name,
             },
+            "internet_ip_index": self.internet_ip_index,
             "internet_config_ip_index": self.internet_config_ip_index,
             "wan_config_profile_id": self.wan_config_profile_id,
             "wan_provisioning_mode": self.wan_provisioning_mode,

@@ -157,6 +157,69 @@ def ensure_returned_inventory_candidate(
     return True, f"Returned inventory candidate {action}"
 
 
+def restore_candidate_by_serial(
+    db: Session,
+    *,
+    serial_number: str | None,
+    ont_unit_id: object | None = None,
+) -> tuple[bool, str]:
+    """Restore an autofind candidate by serial number when OLT/FSP is unknown.
+
+    Used by return-to-inventory when the ONT's OLT binding was already cleared
+    before the return. Finds the most recent candidate matching the serial and
+    restores it to active state for reauthorization.
+    """
+    clean_serial = str(serial_number or "").strip()
+    serial_variants = [
+        candidate
+        for candidate in dict.fromkeys(serial_search_candidates(clean_serial))
+        if candidate
+    ]
+    normalized_serials = {
+        normalize_serial(candidate) for candidate in serial_variants if candidate
+    }
+    if not normalized_serials:
+        return False, "No serial number provided"
+
+    # Find candidates matching any serial variant
+    all_candidates = list(
+        db.scalars(
+            select(OltAutofindCandidate).order_by(
+                OltAutofindCandidate.last_seen_at.desc().nulls_last(),
+                OltAutofindCandidate.created_at.desc(),
+            )
+        ).all()
+    )
+
+    candidate = next(
+        (
+            item
+            for item in all_candidates
+            if normalized_serials.intersection(_candidate_serial_values(item))
+        ),
+        None,
+    )
+
+    if candidate is None:
+        return False, "No autofind candidate found for serial"
+
+    if candidate.is_active:
+        return True, "Candidate already active"
+
+    now = datetime.now(UTC)
+    candidate.ont_unit_id = ont_unit_id or candidate.ont_unit_id
+    candidate.is_active = True
+    candidate.resolution_reason = None
+    candidate.resolved_at = None
+    candidate.last_seen_at = now
+    candidate.notes = (
+        "Restored from return-to-inventory by serial lookup."
+    )
+
+    db.flush()
+    return True, "Restored candidate by serial lookup"
+
+
 def resolve_candidate_authorized(
     db: Session,
     *,
