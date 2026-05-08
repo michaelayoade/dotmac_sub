@@ -7,6 +7,26 @@
 </div>
 {% else %}
 <div class="space-y-6">
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Provisioning Dependency Audit</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Checks imported mappings against live TR-069, DBA, traffic-table, and WAN profile inventories.</p>
+            </div>
+            <form hx-post="/admin/network/olts/{{ olt.id }}/profiles/imported/audit"
+                  hx-target="#profile-dependency-audit"
+                  hx-swap="innerHTML"
+                  hx-indicator="#profile-dependency-audit-spinner">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                    Run Audit
+                </button>
+                <span id="profile-dependency-audit-spinner" class="htmx-indicator ml-2 text-xs text-slate-500 dark:text-slate-400">Running...</span>
+            </form>
+        </div>
+        <div id="profile-dependency-audit" class="mt-4"></div>
+    </div>
+
     <div class="grid gap-4 md:grid-cols-4">
         <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Line profiles</p>

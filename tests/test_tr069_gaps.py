@@ -368,6 +368,111 @@ class TestInformWebhook:
         assert ont.tr069_last_snapshot == {}
         assert ont.tr069_last_snapshot_at is None
 
+    def test_tr069_rebind_fails_before_adapter_when_dependencies_invalid(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network.olt_dependency_preflight import (
+            OltDependencyPreflightResult,
+        )
+        from app.services.network.olt_tr069_admin import handle_rebind_tr069_profiles
+
+        olt = SimpleNamespace(id=uuid4(), name="Garki")
+        monkeypatch.setattr(
+            "app.services.network.olt_tr069_admin.get_olt_or_none",
+            lambda *args, **kwargs: olt,
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies",
+            lambda *args, **kwargs: OltDependencyPreflightResult(
+                success=False,
+                message="OLT TR-069 profile rebind dependency audit failed: missing TR-069 profile(s): 1",
+                audit={"is_valid": False},
+                errors=["missing TR-069 profile(s): 1"],
+            ),
+        )
+        get_adapter = MagicMock()
+        monkeypatch.setattr(
+            "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+            get_adapter,
+        )
+
+        result = handle_rebind_tr069_profiles(
+            MagicMock(),
+            str(olt.id),
+            ["ont-1", "ont-2"],
+            target_profile_id=1,
+        )
+
+        assert result == {
+            "rebound": 0,
+            "failed": 2,
+            "errors": [
+                "OLT TR-069 profile rebind dependency audit failed: missing TR-069 profile(s): 1"
+            ],
+        }
+        get_adapter.assert_not_called()
+
+    def test_management_enforcement_fails_batch_before_adapter_when_dependencies_invalid(
+        self, monkeypatch
+    ) -> None:
+        from app.models.network import OLTDevice, OntUnit
+        from app.services.network.olt_dependency_preflight import (
+            OltDependencyPreflightResult,
+        )
+        from app.services.network.provisioning_enforcement import (
+            ProvisioningEnforcement,
+        )
+
+        olt_id = uuid4()
+        ont = SimpleNamespace(
+            id="ont-1",
+            board="0/2",
+            port="11",
+            external_id="13",
+            olt_device_id=olt_id,
+            serial_number="HWTCDEPENDENCY",
+        )
+        olt = SimpleNamespace(id=olt_id, name="Garki")
+
+        db = MagicMock()
+
+        def _get(model, entity_id):
+            if model is OntUnit and entity_id == "ont-1":
+                return ont
+            if model is OLTDevice and str(entity_id) == str(olt_id):
+                return olt
+            return None
+
+        db.get.side_effect = _get
+        monkeypatch.setattr(
+            "app.services.network.provisioning_enforcement._effective_field",
+            lambda _db, _ont, key: {
+                "mgmt_ip_address": "172.16.201.10",
+                "mgmt_vlan": 201,
+                "mgmt_subnet": "255.255.255.0",
+                "mgmt_gateway": "172.16.201.1",
+            }.get(key),
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies",
+            lambda *args, **kwargs: OltDependencyPreflightResult(
+                success=False,
+                message="OLT management IPHOST enforcement dependency audit failed: missing WAN config profile(s): 0",
+                audit={"is_valid": False},
+                errors=["missing WAN config profile(s): 0"],
+            ),
+        )
+        get_adapter = MagicMock()
+        monkeypatch.setattr(
+            "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+            get_adapter,
+        )
+
+        result = ProvisioningEnforcement.enforce_management_config(db, ["ont-1"])
+
+        assert result == {"pushed": 0, "failed": 1, "skipped": 0}
+        get_adapter.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 4. Auto-link ONTs during sync

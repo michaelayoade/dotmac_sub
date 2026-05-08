@@ -69,6 +69,36 @@ def _pppoe_omci_ip_index(
     return 1
 
 
+def _validate_olt_write_dependencies(db: Session, olt: object) -> ActionResult | None:
+    """Return a failed action result when live OLT dependencies are invalid."""
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    olt_id = getattr(olt, "id", None)
+    if olt_id is None:
+        return ActionResult(
+            success=False,
+            message="OLT ID not available for dependency audit.",
+            data={"delivery_pending": False},
+        )
+    result = validate_olt_profile_dependencies(
+        db,
+        olt_id=str(olt_id),
+        operation="manual OLT write",
+    )
+    if result.success:
+        return None
+    return ActionResult(
+        success=False,
+        message=result.message,
+        data={
+            "delivery_pending": False,
+            "dependency_audit": result.audit,
+        },
+    )
+
+
 def _set_pppoe_config_omci(
     db: Session,
     ont_id: str,
@@ -104,6 +134,14 @@ def _set_pppoe_config_omci(
             message=f"WAN PPPoE OMCI apply failed: {err}",
             data={"delivery_transport": "olt_omci", "delivery_pending": False},
         )
+
+    dependency_failure = _validate_olt_write_dependencies(db, ctx.olt)
+    if dependency_failure is not None:
+        dependency_failure.data = {
+            **(dependency_failure.data or {}),
+            "delivery_transport": "olt_omci",
+        }
+        return dependency_failure
 
     adapter = get_protocol_adapter(ctx.olt)
     ip_index = _pppoe_omci_ip_index(
@@ -430,6 +468,9 @@ def configure_management_ip(
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
+    dependency_failure = _validate_olt_write_dependencies(db, olt)
+    if dependency_failure is not None:
+        return False, dependency_failure.message
     config_pack = resolve_olt_config_pack(db, olt.id)
     vlan_id = (
         config_pack.management_vlan.tag
@@ -462,6 +503,9 @@ def bind_tr069_profile(db: Session, ont_id: str) -> tuple[bool, str]:
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
+    dependency_failure = _validate_olt_write_dependencies(db, olt)
+    if dependency_failure is not None:
+        return False, dependency_failure.message
     config_pack = resolve_olt_config_pack(db, olt.id)
     profile_id = config_pack.tr069_olt_profile_id if config_pack else None
     if profile_id is None:
@@ -505,7 +549,6 @@ def set_pppoe_credentials(
     username: str,
     password: str,
     instance_index: int = 1,
-    ensure_instance: bool = True,
     wan_vlan: int | None = None,
     request: Request | None = None,
 ) -> ActionResult:
@@ -530,7 +573,6 @@ def set_pppoe_credentials(
         username=username,
         password=password,
         instance_index=instance_index,
-        ensure_instance=ensure_instance,
         wan_vlan=wan_vlan,
     )
 
@@ -584,7 +626,6 @@ def set_wan_dhcp(
     ont_id: str,
     *,
     instance_index: int = 1,
-    ensure_instance: bool = True,
     wan_vlan: int | None = None,
     request: Request | None = None,
 ) -> ActionResult:
@@ -595,7 +636,6 @@ def set_wan_dhcp(
         db,
         ont_id,
         instance_index=instance_index,
-        ensure_instance=ensure_instance,
         wan_vlan=wan_vlan,
     )
 
@@ -690,7 +730,6 @@ def set_wan_config(
     gateway: str | None = None,
     dns_servers: list[str] | None = None,
     instance_index: int = 1,
-    ensure_instance: bool = True,
     wan_vlan: int | None = None,
     request: Request | None = None,
 ) -> ActionResult:
@@ -770,7 +809,6 @@ def set_wan_config(
             gateway=gateway,
             dns_servers=dns_servers,
             instance_index=instance_index,
-            ensure_instance=ensure_instance,
             wan_vlan=resolved_wan_vlan,
         )
 

@@ -117,6 +117,14 @@ def _patch_context_and_adapter(monkeypatch, olt, ont, adapter):
         lambda db, ont_id: (ont, olt, "0/2/1", 5),
     )
     monkeypatch.setattr(service, "get_protocol_adapter", lambda resolved_olt: adapter)
+    monkeypatch.setattr(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies",
+        lambda *args, **kwargs: SimpleNamespace(
+            success=True,
+            message="OLT profile dependencies are valid.",
+            audit={"is_valid": True},
+        ),
+    )
     return service
 
 
@@ -231,6 +239,38 @@ def test_handle_create_keeps_allocation_reserved_when_readback_misses(
     assert allocation.provisioned_at is not None
 
 
+def test_handle_create_fails_before_adapter_when_dependency_audit_fails(
+    db_session,
+    monkeypatch,
+) -> None:
+    olt, ont = _create_olt_ont(db_session)
+    adapter = _FakeAdapter([])
+    service = _patch_context_and_adapter(monkeypatch, olt, ont, adapter)
+    monkeypatch.setattr(
+        "app.services.network.config_validator_adapter.validate_service_port_config",
+        lambda *args, **kwargs: SimpleNamespace(
+            is_valid=True,
+            errors=[],
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies",
+        lambda *args, **kwargs: SimpleNamespace(
+            success=False,
+            message="OLT service-port create dependency audit failed: missing WAN config profile(s): 0",
+            audit={"is_valid": False},
+        ),
+    )
+
+    ok, message = service.handle_create(db_session, str(ont.id), 203, 1)
+
+    assert ok is False
+    assert "dependency audit failed" in message
+    assert adapter.created == []
+    assert db_session.query(ServicePortAllocation).count() == 0
+
+
 def test_list_context_reads_imported_service_ports_without_live_olt(
     db_session, monkeypatch
 ) -> None:
@@ -333,6 +373,14 @@ def test_handle_clone_uses_allocator_indices(db_session, monkeypatch) -> None:
 
     monkeypatch.setattr(service, "_resolve_ont_olt_context", _context)
     monkeypatch.setattr(service, "get_protocol_adapter", lambda resolved_olt: adapter)
+    monkeypatch.setattr(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies",
+        lambda *args, **kwargs: SimpleNamespace(
+            success=True,
+            message="OLT profile dependencies are valid.",
+            audit={"is_valid": True},
+        ),
+    )
 
     ok, message = service.handle_clone(db_session, str(ont.id), str(ref_ont.id))
 

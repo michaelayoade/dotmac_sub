@@ -488,7 +488,6 @@ def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
         "username": "subscriber@example",
         "password": "secret",
         "instance_index": 1,
-        "ensure_instance": True,
         "wan_vlan": 100,
     }
 
@@ -1056,6 +1055,10 @@ def test_web_wan_config_routes_pppoe_to_omci_when_enabled(db_session, monkeypatc
         lambda db: "auto",
     )
     monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._validate_olt_write_dependencies",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
         "app.services.network.ont_provisioning.context.resolve_olt_context",
         lambda db, ont_id: (
             SimpleNamespace(olt=olt, fsp="0/2/11", olt_ont_id=13),
@@ -1102,6 +1105,81 @@ def test_web_wan_config_routes_pppoe_to_omci_when_enabled(db_session, monkeypatc
             },
         ),
     ]
+
+
+def test_set_wan_config_omci_fails_before_adapter_when_dependencies_invalid(
+    db_session,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.ont_action_common import ActionResult
+    from app.services.web_network_ont_actions.config_setters import set_wan_config
+
+    olt = OLTDevice(
+        name="OMCI OLT Dependency Fail",
+        supports_ont_internet_config=True,
+        supports_ont_wan_config=True,
+        wan_provisioning_mode="omci_wan_config",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(serial_number="OMCI-WAN-FAIL", olt_device_id=olt.id)
+    db_session.add(ont)
+    db_session.flush()
+
+    adapter_factory = MagicMock()
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters.get_olt_write_mode_enabled",
+        lambda db: True,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters.get_pppoe_provisioning_method",
+        lambda db: "auto",
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters.resolve_olt_config_pack",
+        lambda *args, **kwargs: SimpleNamespace(internet_vlan=SimpleNamespace(tag=203)),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provisioning.context.resolve_olt_context",
+        lambda db, ont_id: (
+            SimpleNamespace(olt=olt, fsp="0/2/11", olt_ont_id=13),
+            "",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        adapter_factory,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._validate_olt_write_dependencies",
+        lambda *args, **kwargs: ActionResult(
+            success=False,
+            message="OLT manual OLT write dependency audit failed: missing WAN config profile(s): 0",
+            data={"dependency_audit": {"is_valid": False}},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions.config_setters._log_action_audit",
+        lambda *args, **kwargs: None,
+    )
+
+    result = set_wan_config(
+        db_session,
+        str(ont.id),
+        wan_mode="pppoe",
+        pppoe_username="100025868",
+        pppoe_password="secret",
+        instance_index=1,
+    )
+
+    assert result.success is False
+    assert "dependency audit failed" in result.message
+    assert result.data["delivery_transport"] == "olt_omci"
+    adapter_factory.assert_not_called()
 
 
 def test_ont_config_form_has_single_operator_path():

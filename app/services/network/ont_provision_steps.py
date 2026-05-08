@@ -74,6 +74,35 @@ _TR069_TASK_READY_POLL_INTERVAL_SEC = (
 )
 
 
+def _validate_olt_profile_dependencies(
+    db: Session,
+    *,
+    olt_id: str,
+    duration_start: float,
+) -> StepResult | None:
+    """Return a failed StepResult when live OLT profile dependencies are invalid."""
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    result = validate_olt_profile_dependencies(
+        db,
+        olt_id=olt_id,
+        operation="provisioning",
+    )
+    if result.success:
+        return None
+
+    ms = int((time.monotonic() - duration_start) * 1000)
+    return StepResult(
+        "provision",
+        False,
+        result.message,
+        ms,
+        data={"dependency_audit": result.audit},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step completion tracking
 # ---------------------------------------------------------------------------
@@ -583,7 +612,6 @@ def _provision_wan_service_instances(
             username=str(pppoe_username),
             password=str(pppoe_password),
             instance_index=detected_index,
-            ensure_instance=True,
             wan_vlan=wan_vlan_int,
         )
     elif wan_mode == "dhcp":
@@ -591,7 +619,6 @@ def _provision_wan_service_instances(
             db,
             ont_id,
             instance_index=detected_index,
-            ensure_instance=True,
             wan_vlan=wan_vlan_int,
         )
     elif wan_mode in {"static", "static_ip"}:
@@ -945,13 +972,13 @@ def rollback_service_ports(
         db: Database session.
         ont_id: OntUnit primary key.
     """
-    from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.imported_service_ports import (
         ImportedServicePortStateMissing,
         delete_imported_service_port,
         list_imported_service_ports,
         require_imported_service_port_state,
     )
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
     ctx, err = resolve_olt_context(db, ont_id)
@@ -1176,6 +1203,8 @@ def provision_with_reconciliation(
     # Build preview data
     wan_vlan = values.get("wan_vlan")
     raw_wan_gem = values.get("wan_gem_index")
+    raw_wan_mode = str(values.get("wan_mode") or "").strip().lower()
+    wan_mode = "bridge" if raw_wan_mode in {"bridge", "bridged", "setup_via_onu"} else raw_wan_mode
     mgmt_vlan = values.get("mgmt_vlan")
     tr069_profile = values.get("tr069_olt_profile_id")
 
@@ -1200,11 +1229,27 @@ def provision_with_reconciliation(
                 "dry_run": True,
                 "wan_vlan": wan_vlan,
                 "wan_gem_index": wan_gem,
+                "wan_mode": wan_mode,
+                "bridge_native_vlan": int(wan_vlan) if wan_vlan and wan_mode == "bridge" else None,
                 "mgmt_vlan": mgmt_vlan,
                 "tr069_profile_id": tr069_profile,
                 "mgmt_ip_mode": values.get("mgmt_ip_mode"),
             },
         )
+
+    olt_id = getattr(ctx.olt, "id", None)
+    if olt_id is None:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult("provision", False, "OLT ID not available for dependency audit", ms)
+    dependency_failure = _validate_olt_profile_dependencies(
+        db,
+        olt_id=str(olt_id),
+        duration_start=t0,
+    )
+    if dependency_failure is not None:
+        _record_step(db, ctx.ont, "provision", dependency_failure)
+        _send_failure_notification(ctx, ont_id, dependency_failure)
+        return dependency_failure
 
     adapter = get_protocol_adapter(ctx.olt)
     steps_completed: list[str] = []
@@ -1232,6 +1277,32 @@ def provision_with_reconciliation(
         steps_completed.append(f"service_port_vlan_{wan_vlan}")
         if result.data and result.data.get("service_port_index"):
             created_port_indices.append(result.data["service_port_index"])
+
+        if wan_mode == "bridge":
+            native_result = adapter.configure_port_native_vlan(
+                ctx.fsp,
+                ctx.olt_ont_id,
+                eth_port=1,
+                vlan_id=int(wan_vlan),
+            )
+            if not native_result.success:
+                for port_idx in created_port_indices:
+                    try:
+                        adapter.delete_service_port(port_idx)
+                    except Exception:
+                        pass
+                ms = int((time.monotonic() - t0) * 1000)
+                step_result = StepResult(
+                    "provision",
+                    False,
+                    f"Bridge native VLAN failed: {native_result.message}",
+                    ms,
+                    data={"rollback_performed": len(created_port_indices) > 0},
+                )
+                _record_step(db, ctx.ont, "provision", step_result)
+                _send_failure_notification(ctx, ont_id, step_result)
+                return step_result
+            steps_completed.append(f"native_vlan_{wan_vlan}_eth_1")
 
     # 2. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
     if mgmt_vlan:
@@ -1362,6 +1433,8 @@ def preview_reconciliation(
         return {"error": "OLT config pack not found", "has_changes": False, "is_valid": False}
 
     wan_vlan = values.get("wan_vlan")
+    raw_wan_mode = str(values.get("wan_mode") or "").strip().lower()
+    wan_mode = "bridge" if raw_wan_mode in {"bridge", "bridged", "setup_via_onu"} else raw_wan_mode
     mgmt_vlan = values.get("mgmt_vlan")
 
     # Build service port list
@@ -1398,6 +1471,10 @@ def preview_reconciliation(
         "has_changes": len(service_ports) > 0,
         "is_valid": True,
         "service_ports": service_ports,
+        "bridge_native_vlan": {
+            "eth_port": 1,
+            "vlan_id": int(wan_vlan),
+        } if wan_vlan and wan_mode == "bridge" else None,
         "management": {
             "vlan": mgmt_vlan,
             "ip_mode": values.get("mgmt_ip_mode"),

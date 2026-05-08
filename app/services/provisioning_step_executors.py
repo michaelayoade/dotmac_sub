@@ -94,6 +94,18 @@ def execute_create_olt_service_port(
                 detail="Could not resolve ONT/OLT context for service-port creation.",
             )
 
+        from app.services.network.olt_dependency_preflight import (
+            validate_olt_profile_dependencies,
+        )
+
+        dependency_result = validate_olt_profile_dependencies(
+            db,
+            olt_id=str(getattr(olt, "id", "")),
+            operation="service-port create",
+        )
+        if not dependency_result.success:
+            return ProvisioningResult(status="failed", detail=dependency_result.message)
+
         adapter = get_protocol_adapter(olt)
         result = adapter.create_service_port(
             fsp,

@@ -1484,13 +1484,6 @@ def ont_set_pppoe_credentials(
     password = _form_str(form, "pppoe_password").strip()
     instance_index_raw = _form_str(form, "instance_index").strip()
     wan_vlan_raw = _form_str(form, "wan_vlan").strip()
-    ensure_instance = _form_str(form, "ensure_instance").strip().lower() in {
-        "true",
-        "1",
-        "yes",
-        "on",
-        "",
-    }
 
     if not username or not password:
         return _action_json_response(
@@ -1510,7 +1503,6 @@ def ont_set_pppoe_credentials(
         username=username,
         password=password,
         instance_index=instance_index,
-        ensure_instance=ensure_instance,
         wan_vlan=wan_vlan,
         request=request,
     )
@@ -1538,13 +1530,6 @@ def ont_set_wan_dhcp(
     form = parse_form_data_sync(request)
     instance_index_raw = _form_str(form, "instance_index").strip()
     wan_vlan_raw = _form_str(form, "wan_vlan").strip()
-    ensure_instance = _form_str(form, "ensure_instance").strip().lower() in {
-        "true",
-        "1",
-        "yes",
-        "on",
-        "",
-    }
 
     instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
     wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
@@ -1553,7 +1538,6 @@ def ont_set_wan_dhcp(
         db,
         ont_id,
         instance_index=instance_index,
-        ensure_instance=ensure_instance,
         wan_vlan=wan_vlan,
         request=request,
     )
@@ -1642,13 +1626,6 @@ def ont_set_wan_config(
     dns_servers_raw = _form_str(form, "dns_servers").strip()
     instance_index_raw = _form_str(form, "instance_index").strip()
     wan_vlan_raw = _form_str(form, "wan_vlan").strip()
-    ensure_instance = _form_str(form, "ensure_instance").strip().lower() in {
-        "true",
-        "1",
-        "yes",
-        "on",
-        "",
-    }
 
     if wan_mode not in {"pppoe", "dhcp", "static", "bridge"}:
         return _action_json_response(
@@ -1678,7 +1655,6 @@ def ont_set_wan_config(
         gateway=gateway,
         dns_servers=dns_servers,
         instance_index=instance_index,
-        ensure_instance=ensure_instance,
         wan_vlan=wan_vlan,
         request=request,
     )

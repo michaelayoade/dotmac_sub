@@ -340,6 +340,156 @@ def restore_candidate_audited(
     return ok, message
 
 
+def refresh_autofind_from_olt(
+    db: Session,
+    *,
+    olt_id: str,
+) -> tuple[bool, str, dict[str, int]]:
+    """Refresh persisted autofind candidates from one OLT via explicit SSH query."""
+    from app.services.common import coerce_uuid
+    from app.services.network.olt_ssh_ont.autofind import query_ont_autofind
+
+    uuid_id = coerce_uuid(olt_id)
+    olt = db.get(OLTDevice, uuid_id)
+    if olt is None:
+        return False, "OLT not found", {"created": 0, "updated": 0, "disappeared": 0}
+
+    ok, message, entries = query_ont_autofind(olt)
+    if not ok:
+        return False, message, {"created": 0, "updated": 0, "disappeared": 0}
+
+    now = datetime.now(UTC)
+    created = 0
+    updated = 0
+    seen_ids: set[object] = set()
+
+    for entry in entries:
+        serial_number = str(entry.serial_number or entry.serial_hex or "").strip()
+        normalized_serial = normalize_serial(serial_number)
+        if not normalized_serial or not entry.fsp:
+            continue
+
+        serial_variants = [
+            normalize_serial(candidate)
+            for candidate in serial_search_candidates(serial_number)
+        ]
+        if entry.serial_hex:
+            serial_variants.extend(
+                normalize_serial(candidate)
+                for candidate in serial_search_candidates(entry.serial_hex)
+            )
+        serial_variants = [value for value in dict.fromkeys(serial_variants) if value]
+
+        candidate = db.scalars(
+            select(OltAutofindCandidate)
+            .where(
+                OltAutofindCandidate.olt_id == olt.id,
+                OltAutofindCandidate.fsp == entry.fsp,
+                or_(
+                    _normalized_serial_expr(OltAutofindCandidate.serial_number).in_(
+                        serial_variants
+                    ),
+                    _normalized_serial_expr(OltAutofindCandidate.serial_hex).in_(
+                        serial_variants
+                    ),
+                ),
+            )
+            .with_for_update(skip_locked=True)
+        ).first()
+        matched_ont = _find_ont_by_serial(db, serial_number)
+
+        if candidate is None:
+            candidate = OltAutofindCandidate(
+                olt_id=olt.id,
+                ont_unit_id=matched_ont.id if matched_ont else None,
+                fsp=entry.fsp,
+                serial_number=serial_number,
+                serial_hex=entry.serial_hex or None,
+                vendor_id=entry.vendor_id or None,
+                model=entry.model or None,
+                software_version=entry.software_version or None,
+                mac=entry.mac or None,
+                equipment_sn=entry.equipment_sn or None,
+                autofind_time=entry.autofind_time or None,
+                is_active=True,
+                first_seen_at=now,
+                last_seen_at=now,
+                notes="Discovered via explicit OLT autofind refresh",
+            )
+            db.add(candidate)
+            db.flush()
+            created += 1
+        else:
+            candidate.ont_unit_id = matched_ont.id if matched_ont else candidate.ont_unit_id
+            candidate.serial_hex = entry.serial_hex or candidate.serial_hex
+            candidate.vendor_id = entry.vendor_id or candidate.vendor_id
+            candidate.model = entry.model or candidate.model
+            candidate.software_version = (
+                entry.software_version or candidate.software_version
+            )
+            candidate.mac = entry.mac or candidate.mac
+            candidate.equipment_sn = entry.equipment_sn or candidate.equipment_sn
+            candidate.autofind_time = entry.autofind_time or candidate.autofind_time
+            candidate.is_active = True
+            candidate.resolution_reason = None
+            candidate.resolved_at = None
+            candidate.last_seen_at = now
+            candidate.notes = "Refreshed via explicit OLT autofind query"
+            updated += 1
+
+        seen_ids.add(candidate.id)
+
+    disappeared = 0
+    active_candidates = list(
+        db.scalars(
+            select(OltAutofindCandidate)
+            .where(OltAutofindCandidate.olt_id == olt.id)
+            .where(OltAutofindCandidate.is_active.is_(True))
+            .with_for_update(skip_locked=True)
+        ).all()
+    )
+    for candidate in active_candidates:
+        if candidate.id in seen_ids:
+            continue
+        candidate.is_active = False
+        candidate.resolution_reason = "disappeared"
+        candidate.resolved_at = now
+        candidate.last_seen_at = now
+        candidate.notes = "Marked disappeared by explicit OLT autofind refresh"
+        disappeared += 1
+
+    db.commit()
+    stats = {"created": created, "updated": updated, "disappeared": disappeared}
+    return (
+        True,
+        (
+            f"Autofind refreshed for {olt.name}: "
+            f"{created} created, {updated} updated, {disappeared} disappeared"
+        ),
+        stats,
+    )
+
+
+def refresh_autofind_from_olt_audited(
+    db: Session,
+    *,
+    olt_id: str,
+    request: Request | None = None,
+) -> tuple[bool, str, dict[str, int]]:
+    ok, message, stats = refresh_autofind_from_olt(db, olt_id=olt_id)
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="refresh_autofind_candidates",
+        entity_type="olt",
+        entity_id=olt_id,
+        metadata={"result": "success" if ok else "error", "message": message, **stats},
+        status_code=200 if ok else 400,
+        is_success=ok,
+    )
+    return ok, message, stats
+
+
 def build_unconfigured_onts_page_data(
     db: Session,
     *,

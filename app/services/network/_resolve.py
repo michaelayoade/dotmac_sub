@@ -12,8 +12,12 @@ from app.models.domain_settings import SettingDomain
 from app.models.network import CPEDevice, OLTDevice, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
-from app.services.genieacs_client import GenieACSClient, create_genieacs_client
-from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
+from app.services.genieacs_client import (
+    GenieACSClient,
+    GenieACSError,
+    create_genieacs_client,
+    normalize_tr069_serial,
+)
 from app.services.network.serial_utils import search_candidates
 
 logger = logging.getLogger(__name__)
@@ -113,6 +117,8 @@ def _verified_genieacs_device_id(
     if not clean_id:
         return None
     device = client.get_device(clean_id)
+    if not isinstance(device, dict):
+        return clean_id
     live_id = str(device.get("_id") or "").strip()
     return live_id or clean_id
 

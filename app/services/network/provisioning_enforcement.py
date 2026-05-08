@@ -20,10 +20,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from app.services.network.olt_ssh import ServicePortEntry
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -368,6 +365,9 @@ class ProvisioningEnforcement:
         """
         import time
 
+        from app.services.network.olt_dependency_preflight import (
+            validate_olt_profile_dependencies,
+        )
         from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.network.serial_utils import parse_ont_id_on_olt
 
@@ -410,6 +410,19 @@ class ProvisioningEnforcement:
                 len(onts),
                 olt.name,
             )
+            dependency_result = validate_olt_profile_dependencies(
+                db,
+                olt_id=str(olt.id),
+                operation="management IPHOST enforcement",
+            )
+            if not dependency_result.success:
+                logger.warning(
+                    "Management enforcement skipped OLT %s: %s",
+                    olt.name,
+                    dependency_result.message,
+                )
+                failed += len(onts)
+                continue
 
             for ont in onts:
                 fsp = f"{ont.board}/{ont.port}"

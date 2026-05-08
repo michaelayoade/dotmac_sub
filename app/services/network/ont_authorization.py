@@ -103,6 +103,26 @@ def _is_serial_already_registered_message(message: str | None) -> bool:
     return "sn already exists" in lowered or "serial already exists" in lowered
 
 
+def _validate_authorization_dependencies(
+    db: Session,
+    *,
+    olt_id: str,
+) -> str | None:
+    """Return a blocking message when OLT profile dependencies are invalid."""
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    result = validate_olt_profile_dependencies(
+        db,
+        olt_id=olt_id,
+        operation="authorization",
+    )
+    if result.success:
+        return None
+    return result.message
+
+
 def _serial_predicates(serial_number: str) -> list[str]:
     return [
         candidate
@@ -462,6 +482,12 @@ def authorize_autofind_ont(
         return finish(success=False, message="OLT not found", status="error")
 
     normalized_serial = normalize_serial(serial_number)
+
+    dependency_error = _validate_authorization_dependencies(db, olt_id=str(olt.id))
+    if dependency_error is not None:
+        add_step("Validate OLT Profile Dependencies", False, dependency_error, started_at)
+        return finish(success=False, message=dependency_error, status="error")
+
     adapter = get_protocol_adapter(olt)
 
     # Handle force reauthorize - remove existing registration first

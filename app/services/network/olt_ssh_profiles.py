@@ -50,7 +50,69 @@ class Tr069ServerProfile:
     binding_count: int = 0
 
 
+@dataclass
+class DbaProfileEntry:
+    """A Huawei DBA profile entry."""
+
+    profile_id: int
+    name: str = ""
+    type: str = ""
+    fixed_bandwidth: int | None = None
+    assured_bandwidth: int | None = None
+    max_bandwidth: int | None = None
+    extra: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class TrafficTableEntry:
+    """A Huawei IP traffic table entry."""
+
+    index: int
+    name: str = ""
+    cir: int | None = None
+    pir: int | None = None
+    priority: int | None = None
+    priority_policy: str = ""
+    extra: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class WanProfileEntry:
+    """A Huawei ONT WAN profile used by ``ont wan-config``."""
+
+    profile_id: int
+    name: str = ""
+    connection_type: str = ""
+    nat_enabled: bool | None = None
+    extra: dict[str, str] = field(default_factory=dict)
+
+
 _TR069_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,64}$")
+_DBA_PROFILE_ID_RE = re.compile(
+    r"(?:profile[- ]?id|index)\s*[:=]?\s*(?P<id>\d+)",
+    re.IGNORECASE,
+)
+_DBA_TYPE_RE = re.compile(r"\b(?P<type>type[1-5])\b", re.IGNORECASE)
+_DBA_BW_RE = re.compile(
+    r"\b(?P<label>fix(?:ed)?|assure(?:d)?|max(?:imum)?)\s*[:=]?\s*(?P<value>\d+)",
+    re.IGNORECASE,
+)
+_TRAFFIC_TABLE_INDEX_RE = re.compile(
+    r"(?:traffic\s+table\s+index|table\s+index|index)\s*[:=]?\s*(?P<id>\d+)",
+    re.IGNORECASE,
+)
+_TRAFFIC_TABLE_BW_RE = re.compile(
+    r"\b(?P<label>cir|pir)\s*[:=]?\s*(?P<value>\d+)",
+    re.IGNORECASE,
+)
+_WAN_PROFILE_ID_RE = re.compile(
+    r"(?:profile[- ]?id|profile\s+index|index)\s*[:=]?\s*(?P<id>\d+)",
+    re.IGNORECASE,
+)
+_WAN_CONNECTION_TYPE_RE = re.compile(
+    r"(?:connection[- ]?type|connect\s+type)\s*[:=]?\s*(?P<value>\w+)",
+    re.IGNORECASE,
+)
 
 
 def _parse_profile_table_legacy(
@@ -156,6 +218,287 @@ def _parse_tr069_profile_detail(output: str) -> dict[str, str]:
     return _parse_tr069_profile_detail_legacy(output)
 
 
+def _extract_dba_bandwidths(text: str) -> tuple[int | None, int | None, int | None]:
+    fixed: int | None = None
+    assured: int | None = None
+    max_bw: int | None = None
+    for match in _DBA_BW_RE.finditer(text):
+        label = match.group("label").lower()
+        value = int(match.group("value"))
+        if label.startswith("fix"):
+            fixed = value
+        elif label.startswith("assure"):
+            assured = value
+        elif label.startswith("max"):
+            max_bw = value
+    return fixed, assured, max_bw
+
+
+def parse_dba_profiles(output: str) -> list[DbaProfileEntry]:
+    """Parse ``display dba-profile all`` output into DBA profile entries."""
+    entries: list[DbaProfileEntry] = []
+    block: list[str] = []
+
+    def flush_block() -> None:
+        if not block:
+            return
+        kv: dict[str, str] = {}
+        for line in block:
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            kv[key.strip().lower()] = value.strip()
+        text = " ".join(line.strip() for line in block if line.strip())
+        id_match = _DBA_PROFILE_ID_RE.search(text)
+        if not id_match:
+            return
+        type_match = _DBA_TYPE_RE.search(text)
+        fixed, assured, max_bw = _extract_dba_bandwidths(text)
+        entries.append(
+            DbaProfileEntry(
+                profile_id=int(id_match.group("id")),
+                name=kv.get("profile-name", kv.get("name", "")),
+                type=kv.get(
+                    "type",
+                    type_match.group("type").lower() if type_match else "",
+                ),
+                fixed_bandwidth=fixed,
+                assured_bandwidth=assured,
+                max_bandwidth=max_bw,
+            )
+        )
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("-") or line.startswith("="):
+            continue
+        if _DBA_PROFILE_ID_RE.search(line) and block:
+            flush_block()
+            block = [line]
+            continue
+
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit():
+            flush_block()
+            fixed, assured, max_bw = _extract_dba_bandwidths(line)
+            type_match = _DBA_TYPE_RE.search(line)
+            if type_match and fixed is None and assured is None and max_bw is None:
+                type_idx = parts.index(type_match.group("type"))
+                numbers = [
+                    int(part)
+                    for part in parts[type_idx + 1 :]
+                    if part.isdigit()
+                ]
+                if len(numbers) >= 3:
+                    fixed, assured, max_bw = numbers[:3]
+                elif len(numbers) == 2:
+                    assured, max_bw = numbers
+                elif len(numbers) == 1:
+                    max_bw = numbers[0]
+            entries.append(
+                DbaProfileEntry(
+                    profile_id=int(parts[0]),
+                    name=parts[1],
+                    type=(type_match.group("type").lower() if type_match else ""),
+                    fixed_bandwidth=fixed,
+                    assured_bandwidth=assured,
+                    max_bandwidth=max_bw,
+                )
+            )
+            block = []
+            continue
+
+        if block or _DBA_PROFILE_ID_RE.search(line):
+            block.append(line)
+
+    flush_block()
+    return entries
+
+
+def _extract_traffic_rates(text: str) -> tuple[int | None, int | None]:
+    cir: int | None = None
+    pir: int | None = None
+    for match in _TRAFFIC_TABLE_BW_RE.finditer(text):
+        label = match.group("label").lower()
+        value = int(match.group("value"))
+        if label == "cir":
+            cir = value
+        elif label == "pir":
+            pir = value
+    return cir, pir
+
+
+def parse_traffic_tables(output: str) -> list[TrafficTableEntry]:
+    """Parse ``display traffic table ip all`` output."""
+    entries: list[TrafficTableEntry] = []
+    block: list[str] = []
+
+    def flush_block() -> None:
+        if not block:
+            return
+        kv: dict[str, str] = {}
+        for line in block:
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            kv[key.strip().lower()] = value.strip()
+        text = " ".join(line.strip() for line in block if line.strip())
+        id_match = _TRAFFIC_TABLE_INDEX_RE.search(text)
+        if not id_match:
+            return
+        cir, pir = _extract_traffic_rates(text)
+        priority_raw = kv.get("priority")
+        entries.append(
+            TrafficTableEntry(
+                index=int(id_match.group("id")),
+                name=kv.get("name", kv.get("traffic table name", "")),
+                cir=cir,
+                pir=pir,
+                priority=int(priority_raw) if priority_raw and priority_raw.isdigit() else None,
+                priority_policy=kv.get("priority policy", ""),
+            )
+        )
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("-") or line.startswith("="):
+            continue
+        if _TRAFFIC_TABLE_INDEX_RE.search(line) and block:
+            flush_block()
+            block = [line]
+            continue
+
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            flush_block()
+            cir, pir = _extract_traffic_rates(line)
+            if cir is None and pir is None:
+                numbers = [int(part) for part in parts[2:] if part.isdigit()]
+                if len(numbers) >= 2:
+                    cir, pir = numbers[:2]
+            priority = None
+            if len(parts) >= 5 and parts[4].isdigit():
+                priority = int(parts[4])
+            entries.append(
+                TrafficTableEntry(
+                    index=int(parts[0]),
+                    name=parts[1] if len(parts) > 1 else "",
+                    cir=cir,
+                    pir=pir,
+                    priority=priority,
+                )
+            )
+            block = []
+            continue
+
+        if block or _TRAFFIC_TABLE_INDEX_RE.search(line):
+            block.append(line)
+
+    flush_block()
+    return entries
+
+
+def _parse_wan_nat_enabled(text: str) -> bool | None:
+    nat_match = re.search(r"\bnat\s*(?:enable|status)?\s*[:=]?\s*(\w+)", text, re.I)
+    if not nat_match:
+        return None
+    value = nat_match.group(1).lower()
+    if value in {"enable", "enabled", "yes", "true", "on"}:
+        return True
+    if value in {"disable", "disabled", "no", "false", "off"}:
+        return False
+    return None
+
+
+def parse_wan_profiles(output: str) -> list[WanProfileEntry]:
+    """Parse ``display ont wan-profile all`` output."""
+    entries: list[WanProfileEntry] = []
+    block: list[str] = []
+
+    def flush_block() -> None:
+        if not block:
+            return
+        kv: dict[str, str] = {}
+        for line in block:
+            if ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            kv[key.strip().lower()] = value.strip()
+        text = " ".join(line.strip() for line in block if line.strip())
+        id_match = _WAN_PROFILE_ID_RE.search(text)
+        if not id_match:
+            return
+        connection_match = _WAN_CONNECTION_TYPE_RE.search(text)
+        entries.append(
+            WanProfileEntry(
+                profile_id=int(id_match.group("id")),
+                name=(
+                    kv.get("profile-name")
+                    or kv.get("profile name")
+                    or kv.get("name")
+                    or ""
+                ),
+                connection_type=(
+                    connection_match.group("value").lower()
+                    if connection_match
+                    else ""
+                ),
+                nat_enabled=_parse_wan_nat_enabled(text),
+                extra=kv,
+            )
+        )
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush_block()
+            block = []
+            continue
+        if line.startswith("-") or line.startswith("="):
+            continue
+        if _WAN_PROFILE_ID_RE.search(line) and block:
+            flush_block()
+            block = [line]
+            continue
+
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            flush_block()
+            lowered_parts = [part.lower() for part in parts[2:]]
+            connection_type = next(
+                (
+                    part
+                    for part in lowered_parts
+                    if part in {"route", "bridge", "nat", "pppoe", "ipoe"}
+                ),
+                "",
+            )
+            nat_enabled = None
+            if any(part in {"enable", "enabled", "yes"} for part in lowered_parts):
+                nat_enabled = True
+            elif any(part in {"disable", "disabled", "no"} for part in lowered_parts):
+                nat_enabled = False
+            entries.append(
+                WanProfileEntry(
+                    profile_id=int(parts[0]),
+                    name=parts[1] if len(parts) > 1 else "",
+                    connection_type=connection_type,
+                    nat_enabled=nat_enabled,
+                )
+            )
+            block = []
+            continue
+
+        if block or _WAN_PROFILE_ID_RE.search(line):
+            block.append(line)
+
+    flush_block()
+    deduped: dict[int, WanProfileEntry] = {}
+    for entry in entries:
+        deduped[entry.profile_id] = entry
+    return list(deduped.values())
+
+
 def get_line_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]:
     """Query OLT for GPON line profiles.
 
@@ -220,6 +563,108 @@ def get_service_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntr
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
             "Error reading service profiles from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}", []
+    finally:
+        transport.close()
+
+
+def get_dba_profiles(olt: OLTDevice) -> tuple[bool, str, list[DbaProfileEntry]]:
+    """Query OLT for DBA profiles."""
+    from app.services.network.olt_ssh import (
+        _open_shell,
+        _read_until_prompt,
+        _run_huawei_cmd,
+    )
+
+    try:
+        transport, channel, _policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", []
+
+    try:
+        channel.send("enable\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        output = _run_huawei_cmd(channel, "display dba-profile all")
+        entries = parse_dba_profiles(output)
+        return True, f"Found {len(entries)} DBA profile(s)", entries
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error reading DBA profiles from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}", []
+    finally:
+        transport.close()
+
+
+def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntry]]:
+    """Query OLT for IP traffic tables."""
+    from app.services.network.olt_ssh import (
+        _open_shell,
+        _read_until_prompt,
+        _run_huawei_cmd,
+    )
+
+    try:
+        transport, channel, _policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", []
+
+    try:
+        channel.send("enable\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        output = _run_huawei_cmd(channel, "display traffic table ip from-index 0")
+        entries = parse_traffic_tables(output)
+        return True, f"Found {len(entries)} traffic table(s)", entries
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error reading traffic tables from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}", []
+    finally:
+        transport.close()
+
+
+def get_wan_profiles(olt: OLTDevice) -> tuple[bool, str, list[WanProfileEntry]]:
+    """Query OLT for ONT WAN profiles."""
+    from app.services.network.olt_ssh import (
+        _open_shell,
+        _read_until_prompt,
+        _run_huawei_cmd,
+    )
+
+    try:
+        transport, channel, _policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", []
+
+    try:
+        channel.send("enable\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        output = _run_huawei_cmd(channel, "display ont wan-profile all")
+        entries = parse_wan_profiles(output)
+        return True, f"Found {len(entries)} WAN profile(s)", entries
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error reading WAN profiles from OLT %s: %s",
             olt.name,
             exc,
             exc_info=True,

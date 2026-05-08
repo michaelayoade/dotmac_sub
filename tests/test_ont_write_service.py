@@ -6,6 +6,9 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from app.services.network.olt_dependency_preflight import OltDependencyPreflightResult
 from app.services.network.ont_write import OntWriteService
 from app.services.network.provisioning_events import provisioning_correlation
 
@@ -15,6 +18,18 @@ FAKE_UUID2 = str(uuid.uuid4())
 
 def _config_pack(tag: int = 203) -> SimpleNamespace:
     return SimpleNamespace(management_vlan=SimpleNamespace(tag=tag))
+
+
+@pytest.fixture(autouse=True)
+def _pass_olt_dependency_preflight(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies",
+        lambda *args, **kwargs: OltDependencyPreflightResult(
+            success=True,
+            message="OLT profile dependencies are valid.",
+            audit={"is_valid": True},
+        ),
+    )
 
 
 class TestUpdateSpeedProfile:
@@ -293,6 +308,45 @@ class TestUpdateManagementIp:
         mock_emit.assert_not_called()
 
     @patch("app.services.network.ont_write.resolve_olt_config_pack")
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    @patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    def test_management_ip_fails_before_adapter_when_dependencies_invalid(
+        self,
+        mock_get,
+        mock_resolve_context,
+        mock_preflight,
+        mock_get_adapter,
+        mock_config_pack,
+    ):
+        olt_id = uuid.uuid4()
+        ont = MagicMock(external_id="generic:5")
+        mock_get.return_value = (ont, None)
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=SimpleNamespace(id=olt_id), fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+        mock_preflight.return_value = OltDependencyPreflightResult(
+            success=False,
+            message="OLT management IP config dependency audit failed: missing TR-069 profile(s): 1",
+            audit={"is_valid": False},
+            errors=["missing TR-069 profile(s): 1"],
+        )
+        db = MagicMock()
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+        )
+
+        assert result.success is False
+        assert "dependency audit failed" in result.message
+        mock_get_adapter.assert_not_called()
+        mock_config_pack.assert_not_called()
+
+    @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
     def test_rejects_global_management_vlan_id(
@@ -447,6 +501,43 @@ class TestUpdateServicePort:
         assert "timed out" in result.message
         db.commit.assert_not_called()
         mock_emit.assert_not_called()
+
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    @patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+    @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    def test_service_port_fails_before_adapter_when_dependencies_invalid(
+        self,
+        mock_get,
+        mock_resolve_context,
+        mock_preflight,
+        mock_get_adapter,
+    ):
+        olt_id = uuid.uuid4()
+        ont = MagicMock(external_id="generic:5")
+        mock_get.return_value = (ont, None)
+        mock_resolve_context.return_value = (
+            SimpleNamespace(olt=SimpleNamespace(id=olt_id), fsp="0/1/3", ont_id_on_olt=5),
+            None,
+        )
+        mock_preflight.return_value = OltDependencyPreflightResult(
+            success=False,
+            message="OLT service-port update dependency audit failed: missing WAN config profile(s): 0",
+            audit={"is_valid": False},
+            errors=["missing WAN config profile(s): 0"],
+        )
+        db = MagicMock()
+
+        result = OntWriteService.update_service_port(
+            db,
+            "ont-1",
+            vlan_id=203,
+            gem_index=1,
+        )
+
+        assert result.success is False
+        assert "dependency audit failed" in result.message
+        mock_get_adapter.assert_not_called()
 
     @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
@@ -797,6 +888,58 @@ class TestMoveOnt:
         assert result.success is True
         assert ont.olt_device_id == "new-olt"
         db.commit.assert_called_once()
+
+    @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+    @patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+    @patch("app.services.network.ont_write._strict_olt_write_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    def test_move_fails_before_adapter_when_dependencies_invalid(
+        self,
+        mock_get,
+        mock_context,
+        mock_preflight,
+        mock_get_adapter,
+    ):
+        olt_id = uuid.uuid4()
+        ont = MagicMock()
+        ont.id = "ont-1"
+        mock_get.return_value = (ont, None)
+
+        target_port = MagicMock()
+        target_port.id = "pon-1"
+        target_port.olt_id = olt_id
+        target_port.name = "0/2/13"
+
+        current_assignment = MagicMock()
+        current_assignment.subscriber_id = "sub-1"
+
+        db = MagicMock()
+        db.get.return_value = target_port
+        db.scalars.return_value.first.return_value = current_assignment
+
+        mock_context.return_value = (
+            SimpleNamespace(
+                olt=SimpleNamespace(id=olt_id),
+                fsp="0/2/11",
+                ont_id_on_olt=13,
+                line_profile_id=10,
+                service_profile_id=20,
+            ),
+            None,
+        )
+        mock_preflight.return_value = OltDependencyPreflightResult(
+            success=False,
+            message="OLT ONT move dependency audit failed: missing WAN config profile(s): 0",
+            audit={"is_valid": False},
+            errors=["missing WAN config profile(s): 0"],
+        )
+
+        result = OntWriteService.move_ont(db, "ont-1", target_pon_port_id=FAKE_UUID)
+
+        assert result.success is False
+        assert "dependency audit failed" in result.message
+        assert result.data == {"dependency_audit": {"is_valid": False}}
+        mock_get_adapter.assert_not_called()
 
     def test_resolve_olt_context_prefers_assignment_pon_port_olt(self):
         from app.services.network.ont_write import _resolve_olt_context

@@ -1,7 +1,16 @@
 from __future__ import annotations
 
-from app.models.network import OLTDevice
+from types import SimpleNamespace
+
+from app.models.network import (
+    OLTDevice,
+    OltLineProfile,
+    OltOnuTypeProfileMapping,
+    OltServiceProfile,
+)
 from app.services.network.olt_config_pack_live_audit import (
+    audit_olt_config_pack_live,
+    extract_dba_profile_ids,
     parse_line_profile_detail,
     parse_tr069_profile_detail,
     suggest_compatible_line_profiles,
@@ -69,6 +78,10 @@ def test_parse_tr069_profile_detail_extracts_profile_fields() -> None:
     assert detail.acs_url == "http://acs.example/cwmp"
 
 
+def test_extract_dba_profile_ids_from_imported_line_profile() -> None:
+    assert extract_dba_profile_ids(LINE_PROFILE_DETAIL) == {10, 11, 12}
+
+
 def test_line_profile_suggestions_are_deprecated(db_session) -> None:
     olt = OLTDevice(name="Live Audit OLT", config_pack={"tr069_olt_profile_id": 2})
     db_session.add(olt)
@@ -79,3 +92,99 @@ def test_line_profile_suggestions_are_deprecated(db_session) -> None:
     assert ok is False
     assert suggestions == []
     assert "Import OLT State" in message
+
+
+def test_live_audit_validates_profile_dependencies(monkeypatch, db_session) -> None:
+    olt = OLTDevice(
+        name="Live Audit OLT",
+        config_pack={
+            "tr069_olt_profile_id": 2,
+            "wan_config_profile_id": 0,
+            "internet_traffic_table_inbound": 6,
+        },
+        supports_ont_wan_config=True,
+        wan_provisioning_mode="omci_wan_config",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfile(
+                olt_id=olt.id,
+                profile_id=40,
+                name="HG8546M",
+                raw_config="tcont 1 dba-profile-id 50",
+            ),
+            OltServiceProfile(olt_id=olt.id, profile_id=41, name="HG8546M"),
+        ]
+    )
+    db_session.flush()
+    db_session.add(
+        OltOnuTypeProfileMapping(
+            olt_id=olt.id,
+            equipment_id="HG8546M",
+            line_profile_id=40,
+            service_profile_id=41,
+            wan_config_profile_id=0,
+        )
+    )
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_tr069_server_profiles",
+        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=2, name="ACS", acs_url="")]),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_dba_profiles",
+        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=50)]),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_traffic_tables",
+        lambda _olt: (True, "ok", [SimpleNamespace(index=6)]),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_wan_profiles",
+        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=0)]),
+    )
+
+    audit = audit_olt_config_pack_live(db_session, str(olt.id))
+
+    assert audit.is_valid is True
+    assert audit.observed["required_wan_config_profile_ids"] == [0]
+    assert audit.observed["missing_wan_config_profile_ids"] == []
+    assert audit.observed["required_dba_profile_ids"] == [50]
+
+
+def test_live_audit_detects_missing_wan_profile_zero(monkeypatch, db_session) -> None:
+    olt = OLTDevice(
+        name="Live Audit OLT",
+        config_pack={"tr069_olt_profile_id": 2, "wan_config_profile_id": 0},
+        supports_ont_wan_config=True,
+        wan_provisioning_mode="omci_wan_config",
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_tr069_server_profiles",
+        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=2, name="ACS", acs_url="")]),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_dba_profiles",
+        lambda _olt: (True, "ok", []),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_traffic_tables",
+        lambda _olt: (True, "ok", []),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_config_pack_live_audit.get_wan_profiles",
+        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=5)]),
+    )
+
+    audit = audit_olt_config_pack_live(db_session, str(olt.id))
+
+    assert audit.is_valid is False
+    assert audit.observed["required_wan_config_profile_ids"] == [0]
+    assert audit.observed["missing_wan_config_profile_ids"] == [0]
+    assert "missing WAN config profile(s): 0" in audit.errors[-1]

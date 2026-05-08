@@ -374,6 +374,7 @@ class OltProtocolAdapter:
                 fsp,
                 ont_id,
                 vlan_id=vlan,
+                ip_index=ip_index,
                 ip_mode=mode,
                 priority=priority,
                 ip_address=ip_address,

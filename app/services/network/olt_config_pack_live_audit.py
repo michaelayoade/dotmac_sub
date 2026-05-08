@@ -12,12 +12,24 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice
+from app.models.network import (
+    OLTDevice,
+    OltLineProfile,
+    OltOnuTypeProfileMapping,
+    OltServiceProfile,
+)
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.olt_profile_resolution import parse_line_profile_tr069_enabled
-from app.services.network.olt_ssh_profiles import _parse_tr069_profile_detail
+from app.services.network.olt_ssh_profiles import (
+    _parse_tr069_profile_detail,
+    get_dba_profiles,
+    get_tr069_server_profiles,
+    get_traffic_tables,
+    get_wan_profiles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +93,22 @@ class CompatibleLineProfileSuggestion:
             "tr069_ip_index": self.tr069_ip_index,
             "binding_count": self.binding_count,
         }
+
+
+_DBA_PROFILE_REF_RE = re.compile(
+    r"\bdba\s+profile[- ]?id\s*[:=]?\s*(\d+)|\bdba-profile-id\s*[:=]?\s*(\d+)",
+    re.IGNORECASE,
+)
+
+
+def extract_dba_profile_ids(raw_config: str | None) -> set[int]:
+    """Extract DBA profile references from imported Huawei line-profile config."""
+    if not raw_config:
+        return set()
+    return {
+        int(match.group(1) or match.group(2))
+        for match in _DBA_PROFILE_REF_RE.finditer(raw_config)
+    }
 
 
 def parse_line_profile_detail(output: str, *, profile_id: int) -> LiveLineProfileDetail:
@@ -162,6 +190,86 @@ def _run_live_tr069_profile_command(olt: OLTDevice, *, tr069_profile_id: int):
         transport.close()
 
 
+def _required_traffic_table_ids(pack: Any) -> dict[str, int]:
+    fields = (
+        "mgmt_traffic_table_inbound",
+        "mgmt_traffic_table_outbound",
+        "internet_traffic_table_inbound",
+        "internet_traffic_table_outbound",
+    )
+    return {
+        field: int(value)
+        for field in fields
+        if (value := getattr(pack, field, None)) is not None
+    }
+
+
+def _collect_imported_profile_dependencies(
+    db: Session,
+    *,
+    olt_id: Any,
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    line_profiles = db.scalars(
+        select(OltLineProfile).where(OltLineProfile.olt_id == olt_id)
+    ).all()
+    service_profiles = db.scalars(
+        select(OltServiceProfile).where(OltServiceProfile.olt_id == olt_id)
+    ).all()
+    mappings = db.scalars(
+        select(OltOnuTypeProfileMapping).where(OltOnuTypeProfileMapping.olt_id == olt_id)
+    ).all()
+
+    line_profile_ids = {profile.profile_id for profile in line_profiles}
+    service_profile_ids = {profile.profile_id for profile in service_profiles}
+    mapped_line_ids = {mapping.line_profile_id for mapping in mappings}
+    mapped_service_ids = {mapping.service_profile_id for mapping in mappings}
+    missing_line_ids = sorted(mapped_line_ids - line_profile_ids)
+    missing_service_ids = sorted(mapped_service_ids - service_profile_ids)
+
+    line_profiles_by_id = {profile.profile_id: profile for profile in line_profiles}
+    required_dba_ids: set[int] = set()
+    for profile_id in mapped_line_ids:
+        profile = line_profiles_by_id.get(profile_id)
+        if profile is not None:
+            required_dba_ids.update(extract_dba_profile_ids(profile.raw_config))
+
+    mapping_wan_profile_ids = sorted(
+        {
+            int(mapping.wan_config_profile_id)
+            for mapping in mappings
+            if mapping.wan_config_profile_id is not None
+        }
+    )
+    observed = {
+        "imported_line_profile_ids": sorted(line_profile_ids),
+        "imported_service_profile_ids": sorted(service_profile_ids),
+        "mapping_count": len(mappings),
+        "mapped_line_profile_ids": sorted(mapped_line_ids),
+        "mapped_service_profile_ids": sorted(mapped_service_ids),
+        "required_dba_profile_ids": sorted(required_dba_ids),
+        "mapping_wan_config_profile_ids": mapping_wan_profile_ids,
+    }
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    if mappings and missing_line_ids:
+        errors.append(
+            "Imported ONU type mappings reference missing line profile(s): "
+            + ", ".join(str(profile_id) for profile_id in missing_line_ids)
+        )
+    if mappings and missing_service_ids:
+        errors.append(
+            "Imported ONU type mappings reference missing service profile(s): "
+            + ", ".join(str(profile_id) for profile_id in missing_service_ids)
+        )
+    if not mappings:
+        errors.append(
+            "No imported ONU type profile mappings found; run Import OLT State before provisioning."
+        )
+
+    return observed, errors, warnings
+
+
 def suggest_compatible_line_profiles(
     db: Session,
     olt_id: str,
@@ -212,33 +320,110 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
         )
         return audit
 
-    ok, message, tr069_output = _run_live_tr069_profile_command(
-        olt,
-        tr069_profile_id=int(pack.tr069_olt_profile_id),
+    imported_observed, imported_errors, imported_warnings = (
+        _collect_imported_profile_dependencies(db, olt_id=olt.id)
     )
-    if not ok or tr069_output is None:
-        audit.errors.append(message)
-        return audit
+    audit.observed.update(imported_observed)
+    audit.errors.extend(imported_errors)
+    audit.warnings.extend(imported_warnings)
 
-    tr069_detail = parse_tr069_profile_detail(
-        tr069_output,
-        profile_id=int(pack.tr069_olt_profile_id),
+    ok, message, tr069_profiles = get_tr069_server_profiles(olt)
+    if not ok:
+        audit.errors.append(f"Live TR-069 profile inventory failed: {message}")
+    tr069_profile_ids = {profile.profile_id for profile in tr069_profiles}
+    required_tr069_id = int(pack.tr069_olt_profile_id)
+    tr069_detail = next(
+        (profile for profile in tr069_profiles if profile.profile_id == required_tr069_id),
+        None,
     )
-    audit.success = True
-    audit.observed = {
-        "tr069_profile_id": tr069_detail.profile_id,
-        "tr069_profile_exists": tr069_detail.exists,
-        "tr069_profile_name": tr069_detail.name,
-        "tr069_profile_acs_url": tr069_detail.acs_url,
-    }
-
-    if not tr069_detail.exists:
+    audit.observed.update(
+        {
+            "tr069_profile_id": required_tr069_id,
+            "tr069_profile_exists": required_tr069_id in tr069_profile_ids,
+            "tr069_profile_name": tr069_detail.name if tr069_detail else "",
+            "tr069_profile_acs_url": tr069_detail.acs_url if tr069_detail else "",
+            "live_tr069_profile_ids": sorted(tr069_profile_ids),
+        }
+    )
+    if ok and required_tr069_id not in tr069_profile_ids:
         audit.errors.append(
             f"Live OLT TR-069 server profile {pack.tr069_olt_profile_id} was not found"
         )
-    audit.warnings.append(
-        "Line/service profile and GEM validation is handled by imported OLT state; "
-        "run scripts/import_olt_state.py and scripts/report_missing_olt_mappings.py."
+
+    ok, message, dba_profiles = get_dba_profiles(olt)
+    if not ok:
+        audit.errors.append(f"Live DBA profile inventory failed: {message}")
+    live_dba_ids = {profile.profile_id for profile in dba_profiles}
+    required_dba_ids = set(audit.observed.get("required_dba_profile_ids") or [])
+    missing_dba_ids = sorted(required_dba_ids - live_dba_ids) if ok else []
+    audit.observed.update(
+        {
+            "live_dba_profile_ids": sorted(live_dba_ids),
+            "missing_dba_profile_ids": missing_dba_ids,
+        }
     )
+    if missing_dba_ids:
+        audit.errors.append(
+            "Imported line profiles reference missing DBA profile(s): "
+            + ", ".join(str(profile_id) for profile_id in missing_dba_ids)
+        )
+
+    ok, message, traffic_tables = get_traffic_tables(olt)
+    if not ok:
+        audit.errors.append(f"Live traffic table inventory failed: {message}")
+    live_traffic_ids = {table.index for table in traffic_tables}
+    required_traffic_ids = _required_traffic_table_ids(pack)
+    missing_traffic_fields = {
+        field: table_id
+        for field, table_id in required_traffic_ids.items()
+        if ok and table_id not in live_traffic_ids
+    }
+    audit.observed.update(
+        {
+            "required_traffic_table_ids": required_traffic_ids,
+            "live_traffic_table_ids": sorted(live_traffic_ids),
+            "missing_traffic_table_ids": missing_traffic_fields,
+        }
+    )
+    if missing_traffic_fields:
+        audit.errors.append(
+            "Config pack references missing traffic table(s): "
+            + ", ".join(
+                f"{field}={table_id}"
+                for field, table_id in sorted(missing_traffic_fields.items())
+            )
+        )
+
+    ok, message, wan_profiles = get_wan_profiles(olt)
+    if not ok:
+        audit.errors.append(f"Live WAN profile inventory failed: {message}")
+    live_wan_ids = {profile.profile_id for profile in wan_profiles}
+    required_wan_profile_ids = sorted(
+        {
+            profile_id
+            for profile_id in [
+                pack.wan_config_profile_id,
+                *audit.observed.get("mapping_wan_config_profile_ids", []),
+            ]
+            if profile_id is not None
+        }
+    )
+    missing_wan_profile_ids = (
+        sorted(set(required_wan_profile_ids) - live_wan_ids) if ok else []
+    )
+    audit.observed.update(
+        {
+            "required_wan_config_profile_ids": required_wan_profile_ids,
+            "live_wan_config_profile_ids": sorted(live_wan_ids),
+            "missing_wan_config_profile_ids": missing_wan_profile_ids,
+        }
+    )
+    if missing_wan_profile_ids:
+        audit.errors.append(
+            "Config pack or mappings reference missing WAN config profile(s): "
+            + ", ".join(str(profile_id) for profile_id in missing_wan_profile_ids)
+        )
+
+    audit.success = not any("inventory failed" in error for error in audit.errors)
 
     return audit

@@ -17,11 +17,11 @@ from sqlalchemy.orm import Session
 from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_config_pack import resolve_olt_config_pack
-from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
+from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_olt_context import (
     OntOltWriteContext,
     resolve_ont_olt_write_context,
@@ -31,6 +31,31 @@ from app.services.network.provisioning_events import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_olt_write_dependencies(
+    db: Session,
+    *,
+    olt_id: str,
+    operation: str,
+) -> ActionResult | None:
+    """Return an action error when live OLT profile dependencies are invalid."""
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    dependency_result = validate_olt_profile_dependencies(
+        db,
+        olt_id=olt_id,
+        operation=operation,
+    )
+    if dependency_result.success:
+        return None
+    return ActionResult(
+        success=False,
+        message=dependency_result.message,
+        data={"dependency_audit": dependency_result.audit},
+    )
 
 
 def _resolve_olt_context(
@@ -185,6 +210,14 @@ class OntWriteService:
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
+        dependency_err = _validate_olt_write_dependencies(
+            db,
+            olt_id=str(ctx.olt.id),
+            operation="management IP config",
+        )
+        if dependency_err:
+            return dependency_err
+
         config_pack = resolve_olt_config_pack(db, ctx.olt.id)
         management_vlan = getattr(config_pack, "management_vlan", None)
         vlan_int = getattr(management_vlan, "tag", None)
@@ -283,6 +316,14 @@ class OntWriteService:
             return context_err
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
+
+        dependency_err = _validate_olt_write_dependencies(
+            db,
+            olt_id=str(ctx.olt.id),
+            operation="service-port update",
+        )
+        if dependency_err:
+            return dependency_err
 
         from app.services.network.service_port_allocator import (
             AllocationError,
@@ -511,6 +552,14 @@ class OntWriteService:
 
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
+
+        dependency_err = _validate_olt_write_dependencies(
+            db,
+            olt_id=str(ctx.olt.id),
+            operation="ONT move",
+        )
+        if dependency_err:
+            return dependency_err
 
         # Get adapter once outside closures
         adapter = get_protocol_adapter(ctx.olt)

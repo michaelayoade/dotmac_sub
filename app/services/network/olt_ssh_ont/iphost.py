@@ -98,20 +98,20 @@ def _configure_single_ont_in_session(
     priority_clause = f" priority {cfg.priority}" if cfg.priority is not None else ""
     if cfg.ip_mode == "dhcp":
         cmd = (
-            f"ont ipconfig {port_num} {cfg.ont_id} ip-index 0 "
+            f"ont ipconfig {port_num} {cfg.ont_id} ip-index {cfg.ip_index} "
             f"dhcp vlan {cfg.vlan_id}{priority_clause}"
         )
     else:
         cmd = (
             f"ont ipconfig {port_num} {cfg.ont_id} "
-            f"ip-index 0 static ip-address {cfg.ip_address} "
+            f"ip-index {cfg.ip_index} static ip-address {cfg.ip_address} "
             f"mask {cfg.subnet} gateway {gateway} vlan {cfg.vlan_id}{priority_clause}"
         )
 
     # Clear any existing IPHOST config first to ensure new settings are applied.
     # Without this, if ONT already has IPHOST configured with different IP/VLAN,
     # OLT returns "make configuration repeatedly" and leaves old config in place.
-    undo_cmd = f"undo ont ipconfig {port_num} {cfg.ont_id} ip-index 0"
+    undo_cmd = f"undo ont ipconfig {port_num} {cfg.ont_id} ip-index {cfg.ip_index}"
     channel.send(f"{undo_cmd}\n")
     time.sleep(0.3)
     core._read_until_prompt(channel, config_prompt, timeout_sec=5)
@@ -181,6 +181,7 @@ def configure_ont_iphost(
     ont_id: int,
     *,
     vlan_id: int,
+    ip_index: int = 0,
     ip_mode: str = "dhcp",
     priority: int | None = None,
     ip_address: str | None = None,
@@ -201,6 +202,7 @@ def configure_ont_iphost(
         fsp=fsp,
         ont_id=ont_id,
         vlan_id=vlan_id,
+        ip_index=ip_index,
         ip_address=ip_address or "",
         subnet=subnet or "",
         gateway=gateway,

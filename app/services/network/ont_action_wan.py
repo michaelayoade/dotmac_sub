@@ -20,7 +20,6 @@ Usage::
         username="100014919",
         password="secret123",
         instance_index=1,
-        ensure_instance=True,
         wan_vlan=100,
     )
 """

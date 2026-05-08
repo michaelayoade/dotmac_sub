@@ -130,6 +130,134 @@ class TestProfileParser:
 
         assert result.data[1].binding_count == 0
 
+    def test_parse_dba_profiles_table(self):
+        """Parse DBA profile listing."""
+        from app.services.network.olt_ssh_profiles import parse_dba_profiles
+
+        output = _load_fixture("display_dba_profile.txt")
+        entries = parse_dba_profiles(output)
+
+        assert len(entries) == 3
+        assert entries[0].profile_id == 1
+        assert entries[0].name == "default"
+        assert entries[0].type == "type3"
+        assert entries[0].assured_bandwidth == 1024
+        assert entries[0].max_bandwidth == 102400
+        assert entries[1].profile_id == 50
+        assert entries[1].name == "DOTMAC_100M"
+        assert entries[1].assured_bandwidth == 50000
+
+    def test_parse_dba_profiles_detail_blocks(self):
+        """Parse DBA profile detail-style output."""
+        from app.services.network.olt_ssh_profiles import parse_dba_profiles
+
+        output = """
+        Profile-ID      : 50
+        Profile-name    : DOTMAC_100M
+        Type            : type3
+        Assure          : 50000
+        Max             : 100000
+
+        Profile-ID      : 51
+        Profile-name    : DOTMAC_250M
+        Type            : type4
+        Max             : 250000
+        """
+
+        entries = parse_dba_profiles(output)
+
+        assert [entry.profile_id for entry in entries] == [50, 51]
+        assert entries[0].name == "DOTMAC_100M"
+        assert entries[0].type == "type3"
+        assert entries[0].assured_bandwidth == 50000
+        assert entries[0].max_bandwidth == 100000
+        assert entries[1].max_bandwidth == 250000
+
+    def test_parse_traffic_tables_table(self):
+        """Parse IP traffic table listing."""
+        from app.services.network.olt_ssh_profiles import parse_traffic_tables
+
+        output = _load_fixture("display_traffic_table_ip.txt")
+        entries = parse_traffic_tables(output)
+
+        assert len(entries) == 3
+        assert entries[0].index == 6
+        assert entries[0].name == "DOTMAC_100M_IN"
+        assert entries[0].cir == 50000
+        assert entries[0].pir == 100000
+        assert entries[0].priority == 0
+        assert entries[2].index == 20
+        assert entries[2].priority == 3
+
+    def test_parse_traffic_tables_detail_blocks(self):
+        """Parse detail-style IP traffic table output."""
+        from app.services.network.olt_ssh_profiles import parse_traffic_tables
+
+        output = """
+        Traffic table index : 6
+        Name                : DOTMAC_100M_IN
+        CIR                 : 50000
+        PIR                 : 100000
+        Priority            : 0
+        Priority policy     : local-pri
+
+        Traffic table index : 20
+        Name                : DOTMAC_250M_IN
+        CIR                 : 125000
+        PIR                 : 250000
+        Priority            : 3
+        """
+
+        entries = parse_traffic_tables(output)
+
+        assert [entry.index for entry in entries] == [6, 20]
+        assert entries[0].name == "DOTMAC_100M_IN"
+        assert entries[0].cir == 50000
+        assert entries[0].pir == 100000
+        assert entries[0].priority == 0
+        assert entries[0].priority_policy == "local-pri"
+        assert entries[1].cir == 125000
+
+    def test_parse_wan_profiles_table(self):
+        """Parse ONT WAN profile listing."""
+        from app.services.network.olt_ssh_profiles import parse_wan_profiles
+
+        output = _load_fixture("display_ont_wan_profile.txt")
+        entries = parse_wan_profiles(output)
+
+        assert len(entries) == 2
+        assert entries[0].profile_id == 0
+        assert entries[0].name == "Default_Router"
+        assert entries[0].connection_type == "route"
+        assert entries[0].nat_enabled is True
+        assert entries[1].profile_id == 5
+        assert entries[1].connection_type == "bridge"
+        assert entries[1].nat_enabled is False
+
+    def test_parse_wan_profiles_detail_blocks(self):
+        """Parse detail-style ONT WAN profile output."""
+        from app.services.network.olt_ssh_profiles import parse_wan_profiles
+
+        output = """
+        Profile-ID      : 0
+        Profile-name    : Default_Router
+        Connection-type : route
+        NAT enable      : enable
+
+        Profile-ID      : 5
+        Profile-name    : Bridge_Default
+        Connection-type : bridge
+        NAT enable      : disable
+        """
+
+        entries = parse_wan_profiles(output)
+
+        assert [entry.profile_id for entry in entries] == [0, 5]
+        assert entries[0].connection_type == "route"
+        assert entries[0].nat_enabled is True
+        assert entries[1].connection_type == "bridge"
+        assert entries[1].nat_enabled is False
+
 
 class TestKeyValueParser:
     """Tests for key-value output parser."""

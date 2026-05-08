@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
@@ -15,9 +15,9 @@ from app.db import get_db
 from app.services import web_admin as web_admin_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services.auth_dependencies import require_permission
-from app.web.request_parsing import parse_form_data_sync
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
+from app.services.network.olt_config_pack_live_audit import audit_olt_config_pack_live
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_state_import import (
     import_olt_state,
@@ -25,6 +25,7 @@ from app.services.network.olt_state_import import (
 )
 from app.services.network.ont_scope import filter_manageable_ont_ids_from_request
 from app.services.network.result_adapter import OperationResult
+from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-olt-profiles"])
@@ -344,6 +345,27 @@ def olt_imported_profiles(
     return templates.TemplateResponse(
         "admin/network/olts/_imported_profiles.html",
         context,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/profiles/imported/audit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_imported_profile_dependency_audit(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: live dependency audit for imported profile mappings."""
+    audit = audit_olt_config_pack_live(db, olt_id)
+    return templates.TemplateResponse(
+        "admin/network/olts/_profile_dependency_audit.html",
+        {
+            "request": request,
+            "audit": audit.to_dict(),
+        },
     )
 
 

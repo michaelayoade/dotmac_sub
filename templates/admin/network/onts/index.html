@@ -208,6 +208,19 @@
                 <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</h2>
                 <p class="text-sm text-slate-500 dark:text-slate-400">Cached autofind results across active OLTs.</p>
             </div>
+            {% set can_refresh_autofind = filters.olt_id is defined and filters.olt_id %}
+            <form method="POST" action="/admin/network/unconfigured-onts/refresh" class="flex flex-wrap items-center gap-2" x-data="{ submitting: false, canRefreshAutofind: {{ can_refresh_autofind|tojson }} }" @submit="submitting = true">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="olt_id" value="{{ filters.olt_id or '' }}">
+                <button type="submit" :disabled="submitting || !canRefreshAutofind" class="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition-colors dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300" :class="(submitting || !canRefreshAutofind) ? 'opacity-60 cursor-not-allowed' : 'hover:bg-emerald-100 dark:hover:bg-emerald-900/30'" title="{{ 'Run display ont autofind all on the selected OLT' if filters.olt_id else 'Select one OLT filter before refreshing' }}">
+                    <svg x-show="submitting" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span x-show="!submitting">Refresh OLT</span>
+                    <span x-show="submitting" x-cloak>Refreshing...</span>
+                </button>
+            </form>
         </div>
 
         <div class="grid gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-center lg:gap-x-6 lg:gap-y-2 dark:border-slate-700 dark:bg-slate-800">
@@ -533,7 +546,7 @@
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                                     {# Configure button - for authorized ONTs #}
                                     {% if ont.authorization_status and ont.authorization_status.value == 'authorized' %}
-                                    <a href="/admin/network/onts/{{ ont.id }}/configure"
+                                    <a href="/admin/network/onts/{{ ont.id }}?tab=configuration"
                                        class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/30 dark:hover:text-blue-300"
                                        title="Configure ONT">
                                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -718,7 +731,7 @@
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                                     {# Configure button - for authorized ONTs #}
                                     {% if ont.authorization_status and ont.authorization_status.value == 'authorized' %}
-                                    <a href="/admin/network/onts/{{ ont.id }}/configure"
+                                    <a href="/admin/network/onts/{{ ont.id }}?tab=configuration"
                                        class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-900/30 dark:hover:text-blue-300"
                                        title="Configure ONT">
                                         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>

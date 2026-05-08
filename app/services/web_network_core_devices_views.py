@@ -1326,9 +1326,16 @@ def onts_list_page_data(
     connection_request_by_ont_id = _connection_request_state_by_ont_id(
         db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
     )
+    from app.services import zabbix_ont_status
+
+    zabbix_snapshots = zabbix_ont_status.get_ont_snapshots_from_zabbix(
+        db,
+        displayed_onts,
+    )
     for ont in displayed_onts:
-        olt_rx_dbm = getattr(ont, "olt_rx_signal_dbm", None)
-        onu_rx_dbm = getattr(ont, "onu_rx_signal_dbm", None)
+        zbx = zabbix_snapshots.get(str(ont.id))
+        olt_rx_dbm = zbx.olt_rx_dbm if zbx else getattr(ont, "olt_rx_signal_dbm", None)
+        onu_rx_dbm = zbx.onu_rx_dbm if zbx else getattr(ont, "onu_rx_signal_dbm", None)
         quality = classify_signal(
             olt_rx_dbm,
             warn_threshold=warn,
@@ -1344,10 +1351,11 @@ def onts_list_page_data(
             status_val = "offline"
         if status_val not in ONLINE_STATUS_CLASSES:
             status_val = "unknown"
-        status_display_val = status_val
-        status_source = "inventory"
+        status_display_val = zbx.status if zbx else status_val
+        status_source = "zabbix" if zbx and zbx.error is None else "inventory"
         effective_last_seen_at = (
-            getattr(ont, "last_seen_at", None)
+            (zbx.updated_at if zbx and zbx.updated_at else None)
+            or getattr(ont, "last_seen_at", None)
             or getattr(ont, "olt_status_seen_at", None)
             or getattr(ont, "signal_updated_at", None)
         )

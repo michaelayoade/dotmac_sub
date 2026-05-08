@@ -63,6 +63,7 @@ class OntIphostConfig:
     ip_address: str
     subnet: str
     gateway: str | None = None  # Derived from IP if not provided
+    ip_index: int = 0
     ip_mode: str = "static"
     priority: int | None = None
     serial_number: str | None = None  # For logging/tracking

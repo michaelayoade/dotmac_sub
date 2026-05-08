@@ -43,13 +43,20 @@ def test_create_olt_sp_fails_without_gem_index() -> None:
 
 
 @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+@patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
-def test_create_olt_sp_success(mock_resolve: MagicMock, mock_get_adapter: MagicMock) -> None:
+def test_create_olt_sp_success(
+    mock_resolve: MagicMock,
+    mock_preflight: MagicMock,
+    mock_get_adapter: MagicMock,
+) -> None:
     from app.services.network.olt_protocol_adapters import OltOperationResult
 
     db = MagicMock()
     olt = MagicMock()
+    olt.id = "olt-1"
     mock_resolve.return_value = (MagicMock(), olt, "0/1/3", 5)
+    mock_preflight.return_value = MagicMock(success=True)
 
     mock_adapter = MagicMock()
     mock_adapter.create_service_port.return_value = OltOperationResult(
@@ -69,15 +76,20 @@ def test_create_olt_sp_success(mock_resolve: MagicMock, mock_get_adapter: MagicM
 
 
 @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+@patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
 def test_create_olt_sp_ssh_failure(
-    mock_resolve: MagicMock, mock_get_adapter: MagicMock
+    mock_resolve: MagicMock,
+    mock_preflight: MagicMock,
+    mock_get_adapter: MagicMock,
 ) -> None:
     from app.services.network.olt_protocol_adapters import OltOperationResult
 
     db = MagicMock()
     olt = MagicMock()
+    olt.id = "olt-1"
     mock_resolve.return_value = (MagicMock(), olt, "0/1/3", 5)
+    mock_preflight.return_value = MagicMock(success=True)
 
     mock_adapter = MagicMock()
     mock_adapter.create_service_port.return_value = OltOperationResult(
@@ -93,6 +105,33 @@ def test_create_olt_sp_ssh_failure(
     assert result.status == "failed"
     assert result.detail is not None
     assert "SSH timeout" in result.detail
+
+
+@patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
+@patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+@patch("app.services.web_network_service_ports._resolve_ont_olt_context")
+def test_create_olt_sp_fails_before_adapter_when_dependency_audit_fails(
+    mock_resolve: MagicMock,
+    mock_preflight: MagicMock,
+    mock_get_adapter: MagicMock,
+) -> None:
+    db = MagicMock()
+    olt = MagicMock()
+    olt.id = "olt-1"
+    mock_resolve.return_value = (MagicMock(), olt, "0/1/3", 5)
+    mock_preflight.return_value = MagicMock(
+        success=False,
+        message="OLT service-port create dependency audit failed: missing WAN config profile(s): 0",
+    )
+
+    result = execute_create_olt_service_port(
+        db, {"ont_unit_id": "abc"}, {"vlan_id": 203, "gem_index": 1}
+    )
+
+    assert result.status == "failed"
+    assert result.detail is not None
+    assert "dependency audit failed" in result.detail
+    mock_get_adapter.assert_not_called()
 
 
 # ── execute_ensure_nas_vlan ──

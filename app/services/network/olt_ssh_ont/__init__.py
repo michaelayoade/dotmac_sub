@@ -12,6 +12,12 @@ from app.services.network.olt_ssh_ont._common import (
     ServicePortDiagnostics,
     _safe_profile_name,
 )
+from app.services.network.olt_ssh_ont.autofind import (
+    build_autofind_command,
+    parse_autofind_output,
+    query_ont_autofind,
+    query_ont_autofind_session,
+)
 from app.services.network.olt_ssh_ont.diagnostics import (
     diagnose_service_ports,
     remote_ping_ont,
@@ -56,6 +62,10 @@ __all__ = [
     "RegisteredOntEntry",
     "ServicePortDiagnostics",
     # Status queries
+    "build_autofind_command",
+    "parse_autofind_output",
+    "query_ont_autofind",
+    "query_ont_autofind_session",
     "get_ont_status",
     "get_registered_ont_serials",
     "find_ont_by_serial",

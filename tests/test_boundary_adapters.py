@@ -103,6 +103,33 @@ def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
     assert "OLT SSH timed out" in result.message
 
 
+def test_olt_protocol_adapter_passes_iphost_ip_index(monkeypatch) -> None:
+    from app.services.network.olt_protocol_adapters import OltProtocolAdapter
+
+    calls = []
+
+    def configure(*_args, **kwargs):
+        calls.append(kwargs)
+        return True, "configured"
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.iphost.configure_ont_iphost",
+        configure,
+    )
+
+    adapter = OltProtocolAdapter(SimpleNamespace(name="OLT 1"))
+    result = adapter.configure_iphost(
+        "0/1/3",
+        5,
+        ip_index=1,
+        vlan=203,
+        mode="dhcp",
+    )
+
+    assert result.success is True
+    assert calls[0]["ip_index"] == 1
+
+
 def test_olt_protocol_adapter_satisfies_contract() -> None:
     from app.services.network.olt_protocol_adapters import (
         OltProtocolAdapter,

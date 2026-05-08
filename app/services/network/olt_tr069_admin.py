@@ -512,6 +512,22 @@ def handle_rebind_tr069_profiles(
     if not olt:
         return {"rebound": 0, "failed": 1, "errors": ["OLT not found"]}
 
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    dependency_result = validate_olt_profile_dependencies(
+        db,
+        olt_id=str(olt.id),
+        operation="TR-069 profile rebind",
+    )
+    if not dependency_result.success:
+        return {
+            "rebound": 0,
+            "failed": len(ont_ids),
+            "errors": [dependency_result.message],
+        }
+
     rebound = 0
     failed = 0
     errors_list: list[str] = []

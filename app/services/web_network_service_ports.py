@@ -286,6 +286,17 @@ def _create_allocated_service_port(
     so the pre-allocated index is not reused while the live OLT state is
     uncertain.
     """
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    dependency_result = validate_olt_profile_dependencies(
+        db,
+        olt_id=str(olt.id),
+        operation="service-port create",
+    )
+    if not dependency_result.success:
+        return False, dependency_result.message
 
     def _write_allocated_port(allocation):
         port_index = allocation.port_index

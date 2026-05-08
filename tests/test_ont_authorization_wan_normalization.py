@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from app.models.network import (
     IpBlock,
@@ -371,6 +372,11 @@ def test_authorization_cleans_stale_registration_before_retry(
             )
 
     monkeypatch.setattr(
+        ont_authorization,
+        "_validate_authorization_dependencies",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
         "app.services.network.olt_protocol_adapters.get_protocol_adapter",
         lambda _olt: FakeAdapter(),
     )
@@ -441,6 +447,11 @@ def test_authorization_reports_partial_failure_when_local_record_setup_fails(
             )
 
     monkeypatch.setattr(
+        ont_authorization,
+        "_validate_authorization_dependencies",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
         "app.services.network.olt_protocol_adapters.get_protocol_adapter",
         lambda _olt: FakeAdapter(),
     )
@@ -508,6 +519,11 @@ def test_authorization_links_assignment_before_reporting_success(
                 ont_id=7,
             )
 
+    monkeypatch.setattr(
+        ont_authorization,
+        "_validate_authorization_dependencies",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(
         "app.services.network.olt_protocol_adapters.get_protocol_adapter",
         lambda _olt: FakeAdapter(),
@@ -577,6 +593,11 @@ def test_authorization_reports_partial_failure_when_assignment_link_fails(
             )
 
     monkeypatch.setattr(
+        ont_authorization,
+        "_validate_authorization_dependencies",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
         "app.services.network.olt_protocol_adapters.get_protocol_adapter",
         lambda _olt: FakeAdapter(),
     )
@@ -615,6 +636,42 @@ def test_authorization_reports_partial_failure_when_assignment_link_fails(
     assert result.partial_success is True
     assert result.status == "error"
     assert "local PON assignment setup failed" in result.message
+
+
+def test_authorization_fails_before_adapter_when_dependency_audit_fails(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="OLT-Audit-Fail", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    adapter_factory = MagicMock()
+    monkeypatch.setattr(
+        "app.services.network.olt_protocol_adapters.get_protocol_adapter",
+        adapter_factory,
+    )
+    monkeypatch.setattr(
+        ont_authorization,
+        "_validate_authorization_dependencies",
+        lambda *args, **kwargs: (
+            "OLT authorization dependency audit failed: missing WAN config profile(s): 0"
+        ),
+    )
+
+    result = ont_authorization.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/6",
+        "HWTCAUDITFAIL",
+        force_reauthorize=True,
+    )
+
+    assert result.success is False
+    assert result.completed_authorization is False
+    assert "dependency audit failed" in result.message
+    assert result.steps[0].name == "Validate OLT Profile Dependencies"
+    adapter_factory.assert_not_called()
 
 
 def test_authorization_ignores_explicit_foundation_failures(

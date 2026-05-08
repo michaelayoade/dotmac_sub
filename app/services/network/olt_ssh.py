@@ -37,6 +37,9 @@ from app.services.network.olt_command_gen import build_service_port_command
 from app.services.network.olt_ssh_ont._common import _safe_profile_name
 from app.services.network.olt_ssh_ont.tr069 import bind_tr069_server_profile
 from app.services.network.olt_ssh_profiles import (
+    Tr069ServerProfile as Tr069ServerProfile,
+)
+from app.services.network.olt_ssh_profiles import (
     create_tr069_server_profile,
     get_tr069_server_profiles,
 )

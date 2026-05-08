@@ -34,8 +34,8 @@ from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
-from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.ont_scope import can_authorize_ont_from_request
+from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.olt_detail_adapter import olt_detail_adapter
 from app.services.queue_adapter import enqueue_task
 from app.web.request_parsing import parse_form_data_sync
@@ -1107,6 +1107,42 @@ def restore_autofind_candidate(
         target,
         status_code=303,
     )
+
+
+@router.post(
+    "/unconfigured-onts/refresh",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def refresh_autofind_candidates(
+    request: Request,
+    olt_id: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if not olt_id:
+        ok = False
+        message = "Select one OLT before refreshing autofind candidates"
+    else:
+        ok, message, _stats = (
+            web_network_ont_autofind_service.refresh_autofind_from_olt_audited(
+                db,
+                olt_id=olt_id,
+                request=request,
+            )
+        )
+    log_network_action_result(
+        request=request,
+        resource_type="olt",
+        resource_id=olt_id or "none",
+        action="Refresh Autofind Candidates",
+        success=ok,
+        message=message,
+    )
+    status = "success" if ok else "error"
+    target = web_network_ont_autofind_service.build_unconfigured_onts_feedback_url(
+        status=status,
+        message=message,
+    )
+    return RedirectResponse(target, status_code=303)
 
 
 @router.post(

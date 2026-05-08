@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.services.credential_crypto import decrypt_credential
+from app.services.network.olt_validators import (
+    validate_gem_index,
+    validate_profile_name,
+    validate_vlan_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +86,7 @@ class WanServiceSpec:
     ip_protocol: str = "ipv4"  # ipv4, dual_stack
     traffic_table_inbound: int | None = None  # OLT traffic-table index for QoS
     traffic_table_outbound: int | None = None
+    bridge_eth_ports: list[int] = field(default_factory=lambda: [1])
 
 
 @dataclass
@@ -400,6 +406,47 @@ class HuaweiCommandGenerator:
         ]
 
     @staticmethod
+    def generate_native_vlan_commands(
+        spec: ProvisioningSpec,
+        context: OntProvisioningContext,
+    ) -> list[OltCommandSet]:
+        """Generate native VLAN commands for bridged WAN services."""
+        bridge_services = [
+            ws
+            for ws in spec.wan_services
+            if ws.connection_type in {"bridge", "bridged"}
+        ]
+        if not bridge_services:
+            return []
+
+        commands = [f"interface gpon {context.frame_slot}"]
+        count = 0
+        for ws in bridge_services:
+            vlan_id = validate_vlan_id(int(ws.c_vlan or ws.vlan_id))
+            priority_clause = (
+                f" priority {ws.cos_priority}" if ws.cos_priority is not None else ""
+            )
+            eth_ports = ws.bridge_eth_ports or [1]
+            for eth_port in eth_ports:
+                commands.append(
+                    f"ont port native-vlan {context.port} {context.ont_id} "
+                    f"eth {eth_port} vlan {vlan_id}{priority_clause}"
+                )
+                count += 1
+        commands.append("quit")
+
+        return [
+            OltCommandSet(
+                step="Configure Bridge Native VLAN",
+                commands=commands,
+                description=(
+                    f"Set native VLAN for {count} bridged LAN port(s) "
+                    f"on ONT {context.ont_id}"
+                ),
+            )
+        ]
+
+    @staticmethod
     def generate_full_provisioning(
         spec: ProvisioningSpec,
         context: OntProvisioningContext,
@@ -414,6 +461,7 @@ class HuaweiCommandGenerator:
         result.extend(gen.generate_wan_config_commands(spec, context))
         result.extend(gen.generate_tr069_binding_commands(spec, context))
         result.extend(gen.generate_pppoe_omci_commands(spec, context))
+        result.extend(gen.generate_native_vlan_commands(spec, context))
         return result
 
 
@@ -493,6 +541,9 @@ def build_spec_from_profile(
                 tcont_profile=ws.t_cont_profile or "",
                 traffic_table_inbound=traffic_in,
                 traffic_table_outbound=traffic_out,
+                bridge_eth_ports=_extract_bridge_eth_ports(
+                    getattr(ws, "bind_lan_ports", None)
+                ),
             )
         )
 
@@ -574,6 +625,11 @@ def build_service_port_command(
     Returns:
         Huawei CLI command string for service-port creation
     """
+    validate_vlan_id(int(vlan_id))
+    validate_gem_index(int(gem_index))
+    if isinstance(user_vlan, int):
+        validate_vlan_id(user_vlan)
+
     resolved_user_vlan = user_vlan
     if resolved_user_vlan is None:
         resolved_user_vlan = vlan_id
@@ -602,3 +658,83 @@ def build_service_port_command(
             f"multi-service user-vlan {resolved_user_vlan} "
             f"tag-transform {tag_transform}{traffic_clause}"
         )
+
+
+def _validate_positive_index(value: int, field: str) -> int:
+    if not isinstance(value, int) or value < 1:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _extract_bridge_eth_ports(raw: Any) -> list[int]:
+    if not raw:
+        return [1]
+    if isinstance(raw, dict):
+        ports = raw.get("eth") or raw.get("eth_ports") or raw.get("lan_ports")
+    else:
+        ports = raw
+    if not ports:
+        return [1]
+    if isinstance(ports, str):
+        ports = [part.strip() for part in ports.split(",") if part.strip()]
+    result: list[int] = []
+    for port in ports:
+        idx = int(port)
+        if idx < 1 or idx > 24:
+            raise ValueError(f"Bridge ETH port out of range (1-24): {idx}")
+        result.append(idx)
+    return result or [1]
+
+
+def generate_service_profile_commands(
+    *,
+    profile_id: int,
+    name: str,
+    eth_ports: int = 4,
+    pots_ports: int = 0,
+    vlan: int | None = None,
+) -> list[str]:
+    """Generate Huawei GPON service-profile creation commands."""
+    profile_id = _validate_positive_index(profile_id, "profile_id")
+    name = validate_profile_name(name)
+    if eth_ports < 1 or eth_ports > 24:
+        raise ValueError(f"eth_ports must be 1-24: {eth_ports}")
+    if pots_ports < 0 or pots_ports > 16:
+        raise ValueError(f"pots_ports must be 0-16: {pots_ports}")
+
+    cmds = [
+        f'ont-srvprofile gpon profile-id {profile_id} profile-name "{name}"',
+        f"ont-port eth {eth_ports}" + (f" pots {pots_ports}" if pots_ports else ""),
+    ]
+    if vlan is not None:
+        cmds.append(f"port vlan eth 1 {validate_vlan_id(int(vlan))}")
+    cmds.extend(["commit", "quit"])
+    return cmds
+
+
+def generate_line_profile_commands(
+    *,
+    profile_id: int,
+    name: str,
+    tcont_id: int,
+    dba_profile_id: int,
+    gem_id: int,
+    vlan: int,
+) -> list[str]:
+    """Generate Huawei GPON line-profile creation commands."""
+    profile_id = _validate_positive_index(profile_id, "profile_id")
+    name = validate_profile_name(name)
+    if tcont_id < 0 or tcont_id > 7:
+        raise ValueError(f"tcont_id must be 0-7: {tcont_id}")
+    _validate_positive_index(dba_profile_id, "dba_profile_id")
+    validate_gem_index(int(gem_id))
+    vlan = validate_vlan_id(int(vlan))
+
+    return [
+        f'ont-lineprofile gpon profile-id {profile_id} profile-name "{name}"',
+        f"tcont {tcont_id} dba-profile-id {dba_profile_id}",
+        f"gem add {gem_id} eth tcont {tcont_id}",
+        f"gem mapping {gem_id} 0 vlan {vlan}",
+        "commit",
+        "quit",
+    ]

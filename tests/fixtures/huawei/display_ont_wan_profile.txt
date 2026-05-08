@@ -1,0 +1,4 @@
+Profile-ID  Profile-name       Connection-type  NAT
+0           Default_Router     route            enable
+5           Bridge_Default     bridge           disable
+

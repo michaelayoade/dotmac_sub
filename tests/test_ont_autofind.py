@@ -25,6 +25,91 @@ def test_upsert_autofind_from_syslog_creates_candidate(db_session):
     assert item.notes == "Discovered via syslog"
 
 
+def test_refresh_autofind_from_olt_persists_live_candidates(
+    db_session,
+    monkeypatch,
+):
+    from app.services.network.parsers.loader import AutofindEntry
+
+    olt = OLTDevice(name="OLT-Live-Autofind", mgmt_ip="198.51.100.210", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    def fake_query(query_olt):
+        assert query_olt.id == olt.id
+        return (
+            True,
+            "Found 1 autofind entry",
+            [
+                AutofindEntry(
+                    fsp="0/2/11",
+                    serial_number="HWTC06351E9C",
+                    serial_hex="4857544306351E9C",
+                    vendor_id="HWTC",
+                    model="HG8546M",
+                    software_version="V5R019C10S100",
+                    mac="3C:E8:24:43:F6:6E",
+                    equipment_sn="",
+                    autofind_time="2026-05-08 10:00:00",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.autofind.query_ont_autofind",
+        fake_query,
+    )
+
+    ok, message, stats = autofind_service.refresh_autofind_from_olt(
+        db_session,
+        olt_id=str(olt.id),
+    )
+
+    assert ok is True
+    assert "1 created" in message
+    assert stats == {"created": 1, "updated": 0, "disappeared": 0}
+    candidate = db_session.query(OltAutofindCandidate).one()
+    assert candidate.fsp == "0/2/11"
+    assert candidate.serial_number == "HWTC06351E9C"
+    assert candidate.serial_hex == "4857544306351E9C"
+    assert candidate.model == "HG8546M"
+    assert candidate.is_active is True
+    assert candidate.notes == "Discovered via explicit OLT autofind refresh"
+
+
+def test_refresh_autofind_from_olt_marks_missing_active_candidates_disappeared(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="OLT-Live-Autofind-Empty", mgmt_ip="198.51.100.211", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/11",
+        serial_number="HWTC06351E9C",
+        is_active=True,
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.autofind.query_ont_autofind",
+        lambda _olt: (True, "Found 0 autofind entries", []),
+    )
+
+    ok, _message, stats = autofind_service.refresh_autofind_from_olt(
+        db_session,
+        olt_id=str(olt.id),
+    )
+
+    assert ok is True
+    assert stats == {"created": 0, "updated": 0, "disappeared": 1}
+    db_session.refresh(candidate)
+    assert candidate.is_active is False
+    assert candidate.resolution_reason == "disappeared"
+
+
 def test_upsert_autofind_from_syslog_reactivates_disappeared_entry(db_session):
     olt = OLTDevice(name="OLT-Reappeared", mgmt_ip="198.51.100.203", is_active=True)
     db_session.add(olt)

@@ -28,7 +28,7 @@ def test_api_authorize_ont_returns_workflow_result(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "app.services.network.olt_api_operations.authorize_ont_workflow",
+        "app.services.network.olt_api_operations.ont_authorization.authorize_ont",
         lambda *args, **kwargs: failed_result,
     )
 

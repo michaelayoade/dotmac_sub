@@ -1,0 +1,74 @@
+{% set observed = audit.observed if audit and audit.observed is mapping else {} %}
+{% set errors = audit.errors if audit and audit.errors else [] %}
+{% set warnings = audit.warnings if audit and audit.warnings else [] %}
+
+<div class="rounded-lg border px-4 py-3 text-sm {% if audit.is_valid %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/30 dark:bg-rose-900/10 dark:text-rose-300{% endif %}">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+            <p class="font-semibold">
+                {% if audit.is_valid %}
+                    Dependency audit passed
+                {% else %}
+                    Dependency audit found blockers
+                {% endif %}
+            </p>
+            <p class="mt-1 text-xs opacity-80">{{ audit.olt_name }}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <span class="rounded-md bg-white/70 px-2 py-1 dark:bg-slate-950/30">Mappings {{ observed.get("mapping_count", 0) }}</span>
+            <span class="rounded-md bg-white/70 px-2 py-1 dark:bg-slate-950/30">DBA {{ observed.get("required_dba_profile_ids", []) | length }}</span>
+            <span class="rounded-md bg-white/70 px-2 py-1 dark:bg-slate-950/30">Traffic {{ observed.get("required_traffic_table_ids", {}) | length }}</span>
+            <span class="rounded-md bg-white/70 px-2 py-1 dark:bg-slate-950/30">WAN {{ observed.get("required_wan_config_profile_ids", []) | length }}</span>
+        </div>
+    </div>
+
+    {% if errors %}
+    <div class="mt-3">
+        <p class="text-xs font-semibold uppercase opacity-80">Errors</p>
+        <ul class="mt-1 list-disc space-y-1 pl-5">
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if warnings %}
+    <div class="mt-3">
+        <p class="text-xs font-semibold uppercase opacity-80">Warnings</p>
+        <ul class="mt-1 list-disc space-y-1 pl-5">
+            {% for warning in warnings %}
+            <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="mt-3 grid gap-2 text-xs text-slate-700 dark:text-slate-300 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/30">
+            <p class="font-medium">TR-069</p>
+            <p class="mt-1 font-mono">required={{ observed.get("tr069_profile_id", "-") }} live={{ observed.get("live_tr069_profile_ids", []) | join(", ") or "-" }}</p>
+        </div>
+        <div class="rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/30">
+            <p class="font-medium">DBA</p>
+            <p class="mt-1 font-mono">missing={{ observed.get("missing_dba_profile_ids", []) | join(", ") or "-" }}</p>
+        </div>
+        <div class="rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/30">
+            <p class="font-medium">Traffic tables</p>
+            <p class="mt-1 font-mono">missing={{ observed.get("missing_traffic_table_ids", {}) }}</p>
+        </div>
+        <div class="rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/30">
+            <p class="font-medium">WAN profiles</p>
+            <p class="mt-1 font-mono">required={{ observed.get("required_wan_config_profile_ids", []) | join(", ") or "-" }}</p>
+            <p class="mt-1 font-mono">missing={{ observed.get("missing_wan_config_profile_ids", []) | join(", ") or "-" }}</p>
+        </div>
+        <div class="rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/30">
+            <p class="font-medium">Line profiles</p>
+            <p class="mt-1 font-mono">mapped={{ observed.get("mapped_line_profile_ids", []) | join(", ") or "-" }}</p>
+        </div>
+        <div class="rounded-md bg-white/70 px-3 py-2 dark:bg-slate-950/30">
+            <p class="font-medium">Service profiles</p>
+            <p class="mt-1 font-mono">mapped={{ observed.get("mapped_service_profile_ids", []) | join(", ") or "-" }}</p>
+        </div>
+    </div>
+</div>

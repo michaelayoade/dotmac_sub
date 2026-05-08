@@ -12,12 +12,8 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OLTDevice
-from app.services.network import olt_operations
+from app.services.network import olt_operations, ont_authorization
 from app.services.network.olt import OLTDevices
-from app.services.network.ont_authorization import (
-    AuthorizationWorkflowResult,
-    authorize_ont as authorize_ont_workflow,
-)
 
 
 @dataclass(frozen=True)
@@ -40,7 +36,7 @@ def authorize_ont(
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> OltApiWriteResult:
-    result = authorize_ont_workflow(
+    result = ont_authorization.authorize_ont(
         db,
         olt_id,
         fsp,
@@ -56,7 +52,7 @@ def authorize_ont(
 
 
 def _serialize_authorization_result(
-    result: AuthorizationWorkflowResult,
+    result: ont_authorization.AuthorizationWorkflowResult,
 ) -> dict[str, object]:
     return {
         "status": result.status,
@@ -214,6 +210,18 @@ def create_service_port(
     )
 
     olt = load_olt(db, olt_id)
+    from app.services.network.olt_dependency_preflight import (
+        validate_olt_profile_dependencies,
+    )
+
+    dependency_result = validate_olt_profile_dependencies(
+        db,
+        olt_id=str(olt.id),
+        operation="service-port create",
+    )
+    if not dependency_result.success:
+        return OltApiWriteResult(False, dependency_result.message)
+
     result = get_protocol_adapter(olt).create_service_port(
         fsp,
         ont_id,
