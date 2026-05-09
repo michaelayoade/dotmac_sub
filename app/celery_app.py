@@ -47,6 +47,7 @@ celery_app.conf.task_routes = {
     # OLT queue processing (circuit breaker recovery) - route to tr069 queue
     "app.tasks.olt_queue.process_deferred_olt_operations": {"queue": "tr069"},
     "app.tasks.olt_queue.retry_failed_operations": {"queue": "tr069"},
+    "app.tasks.profile_sync.execute_due_profile_sync_tasks": {"queue": "tr069"},
     # High-volume bandwidth tasks - dedicated queue to prevent starvation
     "app.tasks.bandwidth.process_bandwidth_stream": {"queue": "bandwidth"},
     "app.tasks.bandwidth.aggregate_to_metrics": {"queue": "bandwidth"},

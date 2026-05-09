@@ -773,3 +773,33 @@ class TestBuildBeatSchedule:
             and getattr(call.args[0], "interval_seconds", None) == 120
             for call in scheduled_calls
         )
+
+    def test_builds_olt_profile_sync_due_task_runner(self, monkeypatch):
+        """Test OLT profile sync due-task runner is opt-in and interval clamped."""
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.setenv("OLT_PROFILE_SYNC_WORKER_ENABLED", "true")
+        monkeypatch.setenv("OLT_PROFILE_SYNC_INTERVAL_SECONDS", "45")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        scheduled_calls = mock_session.add.call_args_list
+        assert any(
+            getattr(call.args[0], "name", None) == "olt_profile_sync_due_task_runner"
+            and getattr(call.args[0], "task_name", None)
+            == "app.tasks.profile_sync.execute_due_profile_sync_tasks"
+            and getattr(call.args[0], "interval_seconds", None) == 60
+            for call in scheduled_calls
+        )

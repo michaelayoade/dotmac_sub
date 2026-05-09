@@ -59,6 +59,61 @@ class TestBillingTask:
 
 
 # =============================================================================
+# OLT Profile Sync Task Tests
+# =============================================================================
+
+
+class TestOltProfileSyncTask:
+    """Tests for profile_sync.execute_due_profile_sync_tasks task."""
+
+    def test_execute_due_profile_sync_tasks_success(self):
+        """Test successful due profile sync execution."""
+        mock_session = MagicMock()
+        expected = {"total": 1, "completed": 1, "failed": 0, "results": []}
+
+        with patch(
+            "app.tasks.profile_sync.db_session_adapter.create_session",
+            return_value=mock_session,
+        ):
+            with patch(
+                "app.tasks.profile_sync.profile_sync_service.execute_due_profile_sync_tasks",
+                return_value=expected,
+            ) as mock_execute:
+                from app.tasks.profile_sync import execute_due_profile_sync_tasks
+
+                result = execute_due_profile_sync_tasks(limit=10)
+
+                assert result == expected
+                mock_execute.assert_called_once_with(
+                    mock_session,
+                    executed_by="profile-sync-worker",
+                    actor_is_admin=True,
+                    limit=10,
+                )
+                mock_session.close.assert_called_once()
+
+    def test_execute_due_profile_sync_tasks_exception_rollback(self):
+        """Test exception triggers rollback and closes session."""
+        mock_session = MagicMock()
+
+        with patch(
+            "app.tasks.profile_sync.db_session_adapter.create_session",
+            return_value=mock_session,
+        ):
+            with patch(
+                "app.tasks.profile_sync.profile_sync_service.execute_due_profile_sync_tasks",
+                side_effect=Exception("sync failed"),
+            ):
+                from app.tasks.profile_sync import execute_due_profile_sync_tasks
+
+                with pytest.raises(Exception, match="sync failed"):
+                    execute_due_profile_sync_tasks()
+
+                mock_session.rollback.assert_called_once()
+                mock_session.close.assert_called_once()
+
+
+# =============================================================================
 # Collections Task Tests
 # =============================================================================
 

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.models.audit import AuditEvent
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -218,6 +219,333 @@ def test_approve_profile_sync_task_from_form_can_schedule(db_session):
     assert task.scheduled_for.replace(tzinfo=UTC) == datetime(
         2026, 5, 10, 9, 30, tzinfo=UTC
     )
+    event = db_session.query(AuditEvent).one()
+    assert event.action == "olt_profile_sync_task_scheduled"
+    assert event.entity_type == "olt_profile_sync_task"
+    assert event.entity_id == str(task.id)
+    assert event.actor_id == "admin@example.test"
+    assert event.metadata_["status"] == "scheduled"
+    assert event.metadata_["scheduled_for"].startswith("2026-05-10T09:30")
+
+
+def test_cancel_profile_sync_task_from_form_marks_task_cancelled(db_session):
+    olt = OLTDevice(name="Cancel Queue OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Cancel 120",
+        code="FC120",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=120,
+        speed_upload_mbps=60,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    task = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="approved",
+        trigger="catalog_offer_update",
+        preview_payload={"vlan_id": 203},
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    ok, message = web_network_olt_profiles.cancel_profile_sync_task_from_form(
+        db_session,
+        task_id=str(task.id),
+        cancelled_by="admin@example.test",
+        reason="operator changed plan",
+    )
+
+    assert ok is True
+    assert "Cancelled" in message
+    db_session.refresh(task)
+    assert task.status == "cancelled"
+    assert task.result_payload["cancelled_by"] == "admin@example.test"
+    assert task.result_payload["cancel_reason"] == "operator changed plan"
+    event = db_session.query(AuditEvent).one()
+    assert event.action == "olt_profile_sync_task_cancelled"
+    assert event.entity_type == "olt_profile_sync_task"
+    assert event.entity_id == str(task.id)
+    assert event.actor_id == "admin@example.test"
+    assert event.metadata_["status"] == "cancelled"
+    assert event.metadata_["reason"] == "operator changed plan"
+
+
+def test_execute_profile_sync_task_marks_completed_and_audits(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="Execute Queue OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Execute 120",
+        code="FE120",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=120,
+        speed_upload_mbps=60,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    bundle = OltProfileBundle(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        name=offer.name,
+        checksum="e" * 64,
+        vlan_id=203,
+        download_kbps=120_000,
+        upload_kbps=60_000,
+        dba_profile_id=100,
+        download_traffic_table_id=101,
+        upload_traffic_table_id=102,
+        line_profile_id=103,
+        service_profile_id=104,
+        gem_id=1,
+        tcont_id=1,
+        command_plan={"groups": []},
+        drift_status="pending",
+        is_active=True,
+    )
+    task = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="approved",
+        trigger="catalog_offer_update",
+        preview_payload={"vlan_id": 203},
+    )
+    db_session.add_all([bundle, task])
+    db_session.commit()
+
+    apply_result = SimpleNamespace(backup_id="backup-1", commands=[1, 2], errors=[])
+    monkeypatch.setattr(
+        web_network_olt_profiles,
+        "apply_saved_profile_bundle",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "message": "applied",
+            "apply_result": apply_result,
+        },
+    )
+
+    ok, message = web_network_olt_profiles.execute_profile_sync_task(
+        db_session,
+        task_id=str(task.id),
+        executed_by="admin@example.test",
+        actor_is_admin=True,
+    )
+
+    assert ok is True
+    assert message == "applied"
+    db_session.refresh(task)
+    assert task.status == "completed"
+    assert task.result_payload["executed_by"] == "admin@example.test"
+    assert task.result_payload["bundle_id"] == str(bundle.id)
+    assert task.result_payload["backup_id"] == "backup-1"
+    assert task.result_payload["commands"] == 2
+    event = db_session.query(AuditEvent).one()
+    assert event.action == "olt_profile_sync_task_completed"
+    assert event.entity_id == str(task.id)
+    assert event.metadata_["status"] == "completed"
+    assert event.metadata_["bundle_id"] == str(bundle.id)
+
+
+def test_execute_profile_sync_task_marks_failed_without_bundle(db_session):
+    olt = OLTDevice(name="Execute Missing Bundle OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Missing Bundle",
+        code="FMB",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=120,
+        speed_upload_mbps=60,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    task = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="approved",
+        trigger="catalog_offer_update",
+        preview_payload={"vlan_id": 203},
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    ok, message = web_network_olt_profiles.execute_profile_sync_task(
+        db_session,
+        task_id=str(task.id),
+        executed_by="admin@example.test",
+        actor_is_admin=True,
+    )
+
+    assert ok is False
+    assert "No active profile bundle" in message
+    db_session.refresh(task)
+    assert task.status == "failed"
+    assert task.error == "No active profile bundle found for task"
+    event = db_session.query(AuditEvent).one()
+    assert event.action == "olt_profile_sync_task_failed"
+    assert event.is_success is False
+
+
+def test_execute_due_profile_sync_tasks_runs_due_tasks_only(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="Due Execute Queue OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Due Execute",
+        code="FDE",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=120,
+        speed_upload_mbps=60,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    bundle = OltProfileBundle(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        name=offer.name,
+        checksum="f" * 64,
+        vlan_id=203,
+        download_kbps=120_000,
+        upload_kbps=60_000,
+        dba_profile_id=100,
+        download_traffic_table_id=101,
+        upload_traffic_table_id=102,
+        line_profile_id=103,
+        service_profile_id=104,
+        gem_id=1,
+        tcont_id=1,
+        command_plan={"groups": []},
+        drift_status="pending",
+        is_active=True,
+    )
+    now = datetime(2026, 5, 10, 9, 30, tzinfo=UTC)
+    approved = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="approved",
+        trigger="catalog_offer_update",
+    )
+    due = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="scheduled",
+        scheduled_for=now,
+        trigger="catalog_offer_update",
+    )
+    future = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="scheduled",
+        scheduled_for=datetime(2026, 5, 10, 10, 30, tzinfo=UTC),
+        trigger="catalog_offer_update",
+    )
+    db_session.add_all([bundle, approved, due, future])
+    db_session.commit()
+
+    apply_result = SimpleNamespace(backup_id="backup-2", commands=[1], errors=[])
+    monkeypatch.setattr(
+        web_network_olt_profiles,
+        "apply_saved_profile_bundle",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "message": "applied",
+            "apply_result": apply_result,
+        },
+    )
+
+    summary = web_network_olt_profiles.execute_due_profile_sync_tasks(
+        db_session,
+        executed_by="admin@example.test",
+        actor_is_admin=True,
+        now=now,
+    )
+
+    assert summary["total"] == 2
+    assert summary["completed"] == 2
+    assert summary["failed"] == 0
+    db_session.refresh(approved)
+    db_session.refresh(due)
+    db_session.refresh(future)
+    assert approved.status == "completed"
+    assert due.status == "completed"
+    assert future.status == "scheduled"
+
+
+def test_retry_profile_sync_task_from_form_marks_pending_and_audits(db_session):
+    olt = OLTDevice(name="Retry Queue OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Retry Queue",
+        code="FRQ",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=120,
+        speed_upload_mbps=60,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    task = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="failed",
+        trigger="catalog_offer_update",
+        error="preflight failed",
+        result_payload={"executed_by": "admin@example.test"},
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    ok, message = web_network_olt_profiles.retry_profile_sync_task_from_form(
+        db_session,
+        task_id=str(task.id),
+        retried_by="admin@example.test",
+        reason="inventory fixed",
+    )
+
+    assert ok is True
+    assert "pending review" in message
+    db_session.refresh(task)
+    assert task.status == "pending"
+    assert task.error is None
+    assert task.result_payload["retries"][0]["previous_error"] == "preflight failed"
+    event = db_session.query(AuditEvent).one()
+    assert event.action == "olt_profile_sync_task_retried"
+    assert event.entity_id == str(task.id)
+    assert event.metadata_["status"] == "pending"
+    assert event.metadata_["reason"] == "inventory fixed"
 
 
 def test_offer_profile_sync_preview_context_builds_dry_run_plan(

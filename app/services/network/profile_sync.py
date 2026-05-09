@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import (
@@ -473,6 +473,75 @@ def approve_profile_sync_task(
     return task
 
 
+def cancel_profile_sync_task(
+    db: Session,
+    *,
+    task_id: str,
+    cancelled_by: str,
+    reason: str | None = None,
+) -> OltProfileSyncTask:
+    """Cancel an open profile sync task without applying it."""
+    task = db.get(OltProfileSyncTask, task_id)
+    if task is None:
+        raise OfferProfileSyncTaskError("Profile sync task not found")
+    if task.status not in PENDING_SYNC_TASK_STATUSES:
+        raise OfferProfileSyncTaskError(
+            f"Only open profile sync tasks can be cancelled, got {task.status}"
+        )
+    result_payload = dict(task.result_payload or {})
+    result_payload.update(
+        {
+            "cancelled_by": cancelled_by,
+            "cancelled_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    reason_text = str(reason or "").strip()
+    if reason_text:
+        result_payload["cancel_reason"] = reason_text[:500]
+    task.status = "cancelled"
+    task.result_payload = result_payload
+    db.flush()
+    return task
+
+
+def retry_profile_sync_task(
+    db: Session,
+    *,
+    task_id: str,
+    retried_by: str,
+    reason: str | None = None,
+) -> OltProfileSyncTask:
+    """Move a failed profile sync task back to pending review."""
+    task = db.get(OltProfileSyncTask, task_id)
+    if task is None:
+        raise OfferProfileSyncTaskError("Profile sync task not found")
+    if task.status != "failed":
+        raise OfferProfileSyncTaskError(
+            f"Only failed profile sync tasks can be retried, got {task.status}"
+        )
+    previous_error = task.error
+    result_payload = dict(task.result_payload or {})
+    retries = list(result_payload.get("retries") or [])
+    retry_payload = {
+        "retried_by": retried_by,
+        "retried_at": datetime.now(UTC).isoformat(),
+        "previous_error": previous_error,
+    }
+    reason_text = str(reason or "").strip()
+    if reason_text:
+        retry_payload["reason"] = reason_text[:500]
+    retries.append({key: value for key, value in retry_payload.items() if value})
+    result_payload["retries"] = retries
+    task.status = "pending"
+    task.error = None
+    task.approved_by = None
+    task.approved_at = None
+    task.scheduled_for = None
+    task.result_payload = result_payload
+    db.flush()
+    return task
+
+
 def list_profile_sync_tasks(
     db: Session,
     *,
@@ -492,6 +561,35 @@ def list_profile_sync_tasks(
     if statuses is not None:
         query = query.where(OltProfileSyncTask.status.in_(tuple(statuses)))
     return list(db.scalars(query))
+
+
+def list_due_profile_sync_tasks(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    limit: int = 25,
+) -> list[OltProfileSyncTask]:
+    """Return approved or due scheduled tasks ready for execution."""
+    now_value = now or datetime.now(UTC)
+    return list(
+        db.scalars(
+            select(OltProfileSyncTask)
+            .where(
+                or_(
+                    OltProfileSyncTask.status == "approved",
+                    (
+                        (OltProfileSyncTask.status == "scheduled")
+                        & (OltProfileSyncTask.scheduled_for <= now_value)
+                    ),
+                )
+            )
+            .order_by(
+                OltProfileSyncTask.scheduled_for.asc().nullsfirst(),
+                OltProfileSyncTask.created_at.asc(),
+            )
+            .limit(max(1, min(int(limit or 25), 100)))
+        )
+    )
 
 
 def _existing_open_sync_task(

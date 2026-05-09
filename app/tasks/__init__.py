@@ -58,6 +58,9 @@ from app.tasks.ont_provisioning import (
     provision_ont,
     queue_bulk_provisioning,
 )
+from app.tasks.profile_sync import (
+    execute_due_profile_sync_tasks,
+)
 from app.tasks.provisioning import (
     retry_pending_compensation_failures,
     run_bulk_activation_job,
@@ -199,4 +202,5 @@ __all__ = [
     # OLT queue processing (Phase 4)
     "process_deferred_olt_operations",
     "retry_failed_operations",
+    "execute_due_profile_sync_tasks",
 ]

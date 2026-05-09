@@ -23,6 +23,7 @@ from app.models.network import (
     OltServiceProfile,
     OntProvisioningProfile,
 )
+from app.services.audit_helpers import log_audit_event
 from app.services.network import olt as olt_service
 from app.services.network import olt_ssh_profiles
 from app.services.network.imported_service_ports import imported_service_port_summary
@@ -53,8 +54,12 @@ from app.services.network.profile_sync import (
     OfferProfileSyncTaskError,
     approve_profile_sync_task,
     build_offer_profile_sync_plan,
+    cancel_profile_sync_task,
+    list_due_profile_sync_tasks,
     list_profile_sync_tasks,
     list_syncable_catalog_offers,
+    resolve_profile_bundle_for_offer,
+    retry_profile_sync_task,
     upsert_profile_bundle,
 )
 from app.services.olt_profile_adapter import olt_profile_adapter
@@ -199,6 +204,7 @@ def approve_profile_sync_task_from_form(
     task_id: str,
     approved_by: str | None,
     scheduled_for_raw: str | None = None,
+    request: Request | None = None,
 ) -> tuple[bool, str]:
     """Approve or schedule a pending sync task without executing OLT commands."""
     actor = str(approved_by or "").strip()
@@ -217,10 +223,284 @@ def approve_profile_sync_task_from_form(
         )
     except OfferProfileSyncTaskError as exc:
         return False, str(exc)
+    _log_profile_sync_task_audit(
+        db,
+        request=request,
+        action="olt_profile_sync_task_scheduled"
+        if task.status == "scheduled"
+        else "olt_profile_sync_task_approved",
+        task=task,
+        actor_id=actor,
+        metadata={
+            "scheduled_for": task.scheduled_for.isoformat()
+            if task.scheduled_for
+            else None,
+        },
+    )
     db.commit()
     if task.status == "scheduled" and task.scheduled_for is not None:
         return True, f"Scheduled profile sync task for {task.scheduled_for.isoformat()}"
     return True, "Approved profile sync task"
+
+
+def cancel_profile_sync_task_from_form(
+    db: Session,
+    *,
+    task_id: str,
+    cancelled_by: str | None,
+    reason: str | None = None,
+    request: Request | None = None,
+) -> tuple[bool, str]:
+    """Cancel an open sync task without executing OLT commands."""
+    actor = str(cancelled_by or "").strip()
+    if not actor:
+        return False, "Cannot cancel profile sync task without an actor"
+    try:
+        task = cancel_profile_sync_task(
+            db,
+            task_id=task_id,
+            cancelled_by=actor,
+            reason=reason,
+        )
+    except OfferProfileSyncTaskError as exc:
+        return False, str(exc)
+    _log_profile_sync_task_audit(
+        db,
+        request=request,
+        action="olt_profile_sync_task_cancelled",
+        task=task,
+        actor_id=actor,
+        metadata={"reason": str(reason or "").strip() or None},
+    )
+    db.commit()
+    return True, "Cancelled profile sync task"
+
+
+def retry_profile_sync_task_from_form(
+    db: Session,
+    *,
+    task_id: str,
+    retried_by: str | None,
+    reason: str | None = None,
+    request: Request | None = None,
+) -> tuple[bool, str]:
+    """Return a failed sync task to pending review."""
+    actor = str(retried_by or "").strip()
+    if not actor:
+        return False, "Cannot retry profile sync task without an actor"
+    try:
+        task = retry_profile_sync_task(
+            db,
+            task_id=task_id,
+            retried_by=actor,
+            reason=reason,
+        )
+    except OfferProfileSyncTaskError as exc:
+        return False, str(exc)
+    _log_profile_sync_task_audit(
+        db,
+        request=request,
+        action="olt_profile_sync_task_retried",
+        task=task,
+        actor_id=actor,
+        metadata={"reason": str(reason or "").strip() or None},
+    )
+    db.commit()
+    return True, "Profile sync task returned to pending review"
+
+
+def execute_profile_sync_task(
+    db: Session,
+    *,
+    task_id: str,
+    executed_by: str | None,
+    actor_is_admin: bool,
+    request: Request | None = None,
+    now: datetime | None = None,
+    backup_runner: BackupRunner | None = None,
+    command_executor: CommandExecutor | None = None,
+) -> tuple[bool, str]:
+    """Execute an approved or due scheduled task through the bundle apply workflow."""
+    actor = str(executed_by or "").strip()
+    if not actor:
+        return False, "Cannot execute profile sync task without an actor"
+    if not actor_is_admin:
+        return False, "Only admin users can execute OLT profile sync tasks"
+
+    task = db.get(OltProfileSyncTask, task_id)
+    if task is None:
+        return False, "Profile sync task not found"
+    current_status = str(task.status or "")
+    if current_status not in {"approved", "scheduled"}:
+        return False, f"Only approved or scheduled profile sync tasks can execute, got {current_status}"
+    now_value = now or datetime.now(UTC)
+    scheduled_for = task.scheduled_for
+    if scheduled_for is not None and scheduled_for.tzinfo is None:
+        scheduled_for = scheduled_for.replace(tzinfo=UTC)
+    if current_status == "scheduled" and scheduled_for and scheduled_for > now_value:
+        return False, f"Profile sync task is scheduled for {scheduled_for.isoformat()}"
+
+    bundle = resolve_profile_bundle_for_offer(
+        db,
+        olt_id=task.olt_id,
+        offer_id=task.offer_id,
+    )
+    if bundle is None:
+        task.status = "failed"
+        task.error = "No active profile bundle found for task"
+        task.result_payload = _task_result_payload(task, executed_by=actor)
+        _log_profile_sync_task_audit(
+            db,
+            request=request,
+            action="olt_profile_sync_task_failed",
+            task=task,
+            actor_id=actor,
+            metadata={"error": task.error},
+            is_success=False,
+        )
+        db.commit()
+        return False, task.error
+
+    task.status = "running"
+    task.error = None
+    task.result_payload = _task_result_payload(task, executed_by=actor)
+    db.flush()
+    result = apply_saved_profile_bundle(
+        db,
+        str(task.olt_id),
+        str(bundle.id),
+        actor_is_admin=True,
+        backup_runner=backup_runner,
+        command_executor=command_executor,
+    )
+    if result.get("ok"):
+        task.status = "completed"
+        task.error = None
+        task.result_payload = _task_result_payload(
+            task,
+            executed_by=actor,
+            bundle_id=str(bundle.id),
+            apply_result=result.get("apply_result"),
+        )
+        _log_profile_sync_task_audit(
+            db,
+            request=request,
+            action="olt_profile_sync_task_completed",
+            task=task,
+            actor_id=actor,
+            metadata={"bundle_id": str(bundle.id)},
+        )
+        db.commit()
+        return True, str(result.get("message") or "Profile sync task completed")
+
+    task.status = "failed"
+    task.error = str(result.get("message") or "Profile sync task failed")
+    task.result_payload = _task_result_payload(
+        task,
+        executed_by=actor,
+        bundle_id=str(bundle.id),
+        apply_result=result.get("apply_result"),
+    )
+    _log_profile_sync_task_audit(
+        db,
+        request=request,
+        action="olt_profile_sync_task_failed",
+        task=task,
+        actor_id=actor,
+        metadata={"bundle_id": str(bundle.id), "error": task.error},
+        is_success=False,
+    )
+    db.commit()
+    return False, task.error
+
+
+def execute_due_profile_sync_tasks(
+    db: Session,
+    *,
+    executed_by: str | None,
+    actor_is_admin: bool,
+    request: Request | None = None,
+    now: datetime | None = None,
+    limit: int = 25,
+    backup_runner: BackupRunner | None = None,
+    command_executor: CommandExecutor | None = None,
+) -> dict[str, object]:
+    """Execute approved and due scheduled tasks up to a bounded limit."""
+    tasks = list_due_profile_sync_tasks(db, now=now, limit=limit)
+    results: list[dict[str, object]] = []
+    for task in tasks:
+        ok, message = execute_profile_sync_task(
+            db,
+            task_id=str(task.id),
+            executed_by=executed_by,
+            actor_is_admin=actor_is_admin,
+            request=request,
+            now=now,
+            backup_runner=backup_runner,
+            command_executor=command_executor,
+        )
+        results.append({"task_id": str(task.id), "ok": ok, "message": message})
+    return {
+        "total": len(results),
+        "completed": sum(1 for result in results if result["ok"]),
+        "failed": sum(1 for result in results if not result["ok"]),
+        "results": results,
+    }
+
+
+def _log_profile_sync_task_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    action: str,
+    task: OltProfileSyncTask,
+    actor_id: str | None,
+    metadata: dict[str, object] | None = None,
+    is_success: bool = True,
+) -> None:
+    payload = {
+        "status": task.status,
+        "olt_id": str(task.olt_id),
+        "offer_id": str(task.offer_id),
+        "trigger": task.trigger,
+    }
+    payload.update({key: value for key, value in (metadata or {}).items() if value})
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="olt_profile_sync_task",
+        entity_id=str(task.id),
+        actor_id=actor_id,
+        metadata=payload,
+        status_code=200,
+        is_success=is_success,
+    )
+
+
+def _task_result_payload(
+    task: OltProfileSyncTask,
+    *,
+    executed_by: str,
+    bundle_id: str | None = None,
+    apply_result: Any | None = None,
+) -> dict[str, object]:
+    payload = dict(task.result_payload or {})
+    payload.update(
+        {
+            "executed_by": executed_by,
+            "executed_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    if bundle_id:
+        payload["bundle_id"] = bundle_id
+    if apply_result is not None:
+        payload["backup_id"] = getattr(apply_result, "backup_id", None)
+        payload["commands"] = len(getattr(apply_result, "commands", []) or [])
+        errors = list(getattr(apply_result, "errors", []) or [])
+        if errors:
+            payload["errors"] = errors
+    return {key: value for key, value in payload.items() if value is not None}
 
 
 def _parse_scheduled_for(value: str | None) -> datetime | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -24,8 +25,11 @@ from app.services.network.profile_sync import (
     OfferProfileSyncTaskRequest,
     approve_profile_sync_task,
     build_offer_profile_sync_plan,
+    cancel_profile_sync_task,
     enqueue_offer_profile_sync_tasks,
+    list_due_profile_sync_tasks,
     list_syncable_catalog_offers,
+    retry_profile_sync_task,
     upsert_profile_bundle,
 )
 
@@ -506,3 +510,142 @@ def test_approve_profile_sync_task_can_approve_or_schedule(db_session) -> None:
         assert "Only pending" in str(exc)
     else:
         raise AssertionError("expected approved task to reject re-approval")
+
+
+def test_cancel_profile_sync_task_closes_task_and_allows_restaging(db_session) -> None:
+    olt = OLTDevice(name="Cancel Sync OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Cancel 100",
+        code="FCAN100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+        olt_profile_auto_sync_enabled=True,
+    )
+    db_session.add_all([olt, offer])
+    db_session.commit()
+
+    task = enqueue_offer_profile_sync_tasks(
+        db_session,
+        offer=offer,
+        requests=[OfferProfileSyncTaskRequest(olt_id=str(olt.id), vlan_id=203)],
+    )[0]
+    cancelled = cancel_profile_sync_task(
+        db_session,
+        task_id=str(task.id),
+        cancelled_by="reviewer@example.test",
+        reason="bad timing",
+    )
+    restaged = enqueue_offer_profile_sync_tasks(
+        db_session,
+        offer=offer,
+        requests=[OfferProfileSyncTaskRequest(olt_id=str(olt.id), vlan_id=203)],
+    )
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.result_payload["cancelled_by"] == "reviewer@example.test"
+    assert cancelled.result_payload["cancel_reason"] == "bad timing"
+    assert len(restaged) == 1
+    assert restaged[0].id != cancelled.id
+
+
+def test_list_due_profile_sync_tasks_returns_approved_and_due_scheduled(db_session) -> None:
+    olt = OLTDevice(name="Due Sync OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Due 100",
+        code="FDUE100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    now = datetime(2026, 5, 10, 9, 30, tzinfo=UTC)
+    approved = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="approved",
+        trigger="manual",
+    )
+    due = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="scheduled",
+        scheduled_for=now,
+        trigger="manual",
+    )
+    future = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="scheduled",
+        scheduled_for=datetime(2026, 5, 10, 10, 30, tzinfo=UTC),
+        trigger="manual",
+    )
+    db_session.add_all([approved, due, future])
+    db_session.commit()
+
+    tasks = list_due_profile_sync_tasks(db_session, now=now)
+
+    assert [task.id for task in tasks] == [approved.id, due.id]
+
+
+def test_retry_profile_sync_task_returns_failed_task_to_pending(db_session) -> None:
+    olt = OLTDevice(name="Retry Sync OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber Retry 100",
+        code="FRET100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    task = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="failed",
+        trigger="manual",
+        error="backup failed",
+        approved_by="admin@example.test",
+        approved_at=datetime(2026, 5, 10, 9, 0, tzinfo=UTC),
+        result_payload={"executed_by": "admin@example.test"},
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    retried = retry_profile_sync_task(
+        db_session,
+        task_id=str(task.id),
+        retried_by="reviewer@example.test",
+        reason="backup fixed",
+    )
+
+    assert retried.status == "pending"
+    assert retried.error is None
+    assert retried.approved_by is None
+    assert retried.approved_at is None
+    assert retried.scheduled_for is None
+    assert retried.result_payload["retries"][0]["retried_by"] == "reviewer@example.test"
+    assert retried.result_payload["retries"][0]["previous_error"] == "backup failed"
+    assert retried.result_payload["retries"][0]["reason"] == "backup fixed"

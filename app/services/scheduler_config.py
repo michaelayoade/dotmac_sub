@@ -824,6 +824,27 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(olt_backup_hours * 3600, 3600),
         )
+        olt_profile_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "olt_profile_sync_worker_enabled",
+            "OLT_PROFILE_SYNC_WORKER_ENABLED",
+            False,
+        )
+        olt_profile_sync_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network,
+            "olt_profile_sync_interval_seconds",
+            "OLT_PROFILE_SYNC_INTERVAL_SECONDS",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="olt_profile_sync_due_task_runner",
+            task_name="app.tasks.profile_sync.execute_due_profile_sync_tasks",
+            enabled=olt_profile_sync_enabled,
+            interval_seconds=max(olt_profile_sync_interval_seconds, 60),
+        )
 
         for removed_task_name in (
             "app.tasks.olt_capture.capture_olt_samples_task",

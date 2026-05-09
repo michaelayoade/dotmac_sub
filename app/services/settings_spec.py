@@ -1732,6 +1732,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="olt_profile_sync_worker_enabled",
+        env_var="OLT_PROFILE_SYNC_WORKER_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="OLT Profile Sync Worker Enabled",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="olt_profile_sync_interval_seconds",
+        env_var="OLT_PROFILE_SYNC_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=300,
+        min_value=60,
+        label="OLT Profile Sync Interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="vendor_quote_approval_threshold",
         env_var="NETWORK_VENDOR_QUOTE_APPROVAL_THRESHOLD",
         value_type=SettingValueType.string,
