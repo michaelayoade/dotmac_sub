@@ -150,6 +150,34 @@ def _set_pppoe_config_omci(
     )
     steps: list[dict[str, object]] = []
 
+    pppoe_result = adapter.configure_pppoe(
+        ctx.fsp,
+        ctx.olt_ont_id,
+        ip_index=ip_index,
+        vlan_id=wan_vlan,
+        username=username,
+        password=password,
+    )
+    steps.append(
+        {
+            "step": "configure_pppoe_omci",
+            "success": pppoe_result.success,
+            "message": pppoe_result.message,
+        }
+    )
+    if not pppoe_result.success:
+        return ActionResult(
+            success=False,
+            message=f"WAN PPPoE OMCI apply failed: {pppoe_result.message}",
+            data={
+                "delivery_transport": "olt_omci",
+                "delivery_pending": False,
+                "steps": steps,
+                "ip_index": ip_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+
     inet_result = adapter.configure_internet_config(
         ctx.fsp,
         ctx.olt_ont_id,
@@ -203,34 +231,6 @@ def _set_pppoe_config_omci(
                     "wan_config_profile_id": wan_profile_id,
                 },
             )
-
-    pppoe_result = adapter.configure_pppoe(
-        ctx.fsp,
-        ctx.olt_ont_id,
-        ip_index=ip_index,
-        vlan_id=wan_vlan,
-        username=username,
-        password=password,
-    )
-    steps.append(
-        {
-            "step": "configure_pppoe_omci",
-            "success": pppoe_result.success,
-            "message": pppoe_result.message,
-        }
-    )
-    if not pppoe_result.success:
-        return ActionResult(
-            success=False,
-            message=f"WAN PPPoE OMCI apply failed: {pppoe_result.message}",
-            data={
-                "delivery_transport": "olt_omci",
-                "delivery_pending": False,
-                "steps": steps,
-                "ip_index": ip_index,
-                "wan_vlan": wan_vlan,
-            },
-        )
 
     return ActionResult(
         success=True,

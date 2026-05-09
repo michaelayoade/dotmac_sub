@@ -1230,7 +1230,6 @@ def test_web_wan_config_routes_pppoe_to_omci_when_enabled(db_session, monkeypatc
     assert result.data["delivery_transport"] == "olt_omci"
     assert result.data["ip_index"] == 1
     assert calls == [
-        ("internet", {"fsp": "0/2/11", "ont_id": 13, "ip_index": 1}),
         (
             "pppoe",
             {
@@ -1242,6 +1241,7 @@ def test_web_wan_config_routes_pppoe_to_omci_when_enabled(db_session, monkeypatc
                 "password": "secret",
             },
         ),
+        ("internet", {"fsp": "0/2/11", "ont_id": 13, "ip_index": 1}),
     ]
 
 

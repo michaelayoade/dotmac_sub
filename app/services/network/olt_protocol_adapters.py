@@ -148,6 +148,7 @@ class OltProtocolAdapterContract(Protocol):
         *,
         ip_index: int,
         vlan_id: int,
+        priority: int = 0,
         username: str,
         password: str,
     ) -> OltOperationResult: ...
@@ -586,6 +587,7 @@ class OltProtocolAdapter:
         *,
         ip_index: int,
         vlan_id: int,
+        priority: int = 0,
         username: str,
         password: str,
     ) -> OltOperationResult:
@@ -601,6 +603,7 @@ class OltProtocolAdapter:
                 ont_id,
                 ip_index=ip_index,
                 vlan_id=vlan_id,
+                priority=priority,
                 username=username,
                 password=password,
             )
