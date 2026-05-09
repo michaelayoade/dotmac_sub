@@ -66,6 +66,14 @@ class TestBillingTask:
 class TestOltProfileSyncTask:
     """Tests for profile_sync.execute_due_profile_sync_tasks task."""
 
+    def test_execute_due_profile_sync_tasks_routes_to_tr069_queue(self):
+        """Profile sync applies OLT commands, so it must run on the OLT queue."""
+        from app.celery_app import celery_app
+
+        assert celery_app.conf.task_routes[
+            "app.tasks.profile_sync.execute_due_profile_sync_tasks"
+        ] == {"queue": "tr069"}
+
     def test_execute_due_profile_sync_tasks_success(self):
         """Test successful due profile sync execution."""
         mock_session = MagicMock()

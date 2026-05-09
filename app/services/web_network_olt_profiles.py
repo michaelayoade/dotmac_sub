@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,7 +13,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.models.audit import AuditEvent
 from app.models.catalog import CatalogOffer
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import (
     OLTDevice,
     OltLineProfile,
@@ -74,6 +78,9 @@ PROFILE_SYNC_TASK_STATUS_FILTERS = {
     "scheduled": ("scheduled",),
     "done": ("completed", "failed", "cancelled"),
 }
+
+_PROFILE_NAME_RE = re.compile(r'profile-name\s+"(?P<name>[^"]+)"', re.IGNORECASE)
+_TRAFFIC_NAME_RE = re.compile(r'name\s+"(?P<name>[^"]+)"', re.IGNORECASE)
 
 
 def line_profiles_context(db: Session, olt_id: str) -> dict[str, Any]:
@@ -177,12 +184,32 @@ def profile_sync_tasks_context(
         statuses = PROFILE_SYNC_TASK_STATUS_FILTERS[selected_status]
 
     tasks = list_profile_sync_tasks(db, statuses=statuses, limit=limit)
+    due_tasks = list_due_profile_sync_tasks(db, limit=100)
     status_rows = db.execute(
         select(OltProfileSyncTask.status, func.count(OltProfileSyncTask.id)).group_by(
             OltProfileSyncTask.status
         )
     ).all()
     status_counts = {str(status): int(count) for status, count in status_rows}
+    drift_rows = db.execute(
+        select(OltProfileBundle.drift_status, func.count(OltProfileBundle.id))
+        .where(OltProfileBundle.is_active.is_(True))
+        .group_by(OltProfileBundle.drift_status)
+    ).all()
+    drift_counts = {str(status or "unknown"): int(count) for status, count in drift_rows}
+    audit_events = list(
+        db.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.entity_type.in_(
+                    ("olt_profile_sync_task", "olt_profile_bundle")
+                )
+            )
+            .where(AuditEvent.is_active.is_(True))
+            .order_by(AuditEvent.occurred_at.desc())
+            .limit(25)
+        )
+    )
     return {
         "tasks": tasks,
         "selected_status": selected_status,
@@ -194,7 +221,13 @@ def profile_sync_tasks_context(
         "pending_count": status_counts.get("pending", 0),
         "approved_count": status_counts.get("approved", 0),
         "scheduled_count": status_counts.get("scheduled", 0),
+        "due_count": len(due_tasks),
         "task_count": len(tasks),
+        "worker_enabled": _profile_sync_worker_enabled(db),
+        "worker_interval_seconds": _profile_sync_worker_interval_seconds(db),
+        "profile_bundle_count": sum(drift_counts.values()),
+        "drift_counts": drift_counts,
+        "audit_events": audit_events,
     }
 
 
@@ -448,6 +481,127 @@ def execute_due_profile_sync_tasks(
     }
 
 
+def execute_due_profile_sync_tasks_from_form(
+    db: Session,
+    *,
+    executed_by: str | None,
+    actor_is_admin: bool,
+    request: Request | None = None,
+    limit: int = 25,
+) -> tuple[bool, str]:
+    """Execute approved/due profile sync tasks from the admin queue."""
+    if not str(executed_by or "").strip():
+        return False, "Cannot execute due profile sync tasks without an actor"
+    if not actor_is_admin:
+        return False, "Only admin users can execute due OLT profile sync tasks"
+    summary = execute_due_profile_sync_tasks(
+        db,
+        executed_by=executed_by,
+        actor_is_admin=actor_is_admin,
+        request=request,
+        limit=limit,
+    )
+    total = int(summary.get("total") or 0)
+    completed = int(summary.get("completed") or 0)
+    failed = int(summary.get("failed") or 0)
+    if total == 0:
+        return True, "No approved or due scheduled profile sync tasks are ready"
+    return failed == 0, (
+        f"Executed {total} due profile sync task(s): "
+        f"{completed} completed, {failed} failed"
+    )
+
+
+def check_profile_bundle_drift(
+    db: Session,
+    *,
+    checked_by: str | None,
+    request: Request | None = None,
+    limit: int = 50,
+) -> tuple[bool, str]:
+    """Read live OLT profile inventory and update active bundle drift status."""
+    actor = str(checked_by or "").strip()
+    if not actor:
+        return False, "Cannot check profile bundle drift without an actor"
+
+    bundles = list(
+        db.scalars(
+            select(OltProfileBundle)
+            .where(OltProfileBundle.is_active.is_(True))
+            .order_by(OltProfileBundle.updated_at.desc())
+            .limit(max(1, min(int(limit or 50), 200)))
+        )
+    )
+    if not bundles:
+        return True, "No active profile bundles to check"
+
+    checked = 0
+    in_sync = 0
+    drifted = 0
+    unknown = 0
+    for bundle in bundles:
+        status, details = _check_one_profile_bundle_drift(bundle)
+        bundle.drift_status = status
+        bundle.drift_details = details
+        bundle.last_verified_at = datetime.now(UTC)
+        checked += 1
+        if status == "in_sync":
+            in_sync += 1
+        elif status == "drifted":
+            drifted += 1
+        else:
+            unknown += 1
+        _log_profile_bundle_audit(
+            db,
+            request=request,
+            action="olt_profile_bundle_drift_checked",
+            bundle=bundle,
+            actor_id=actor,
+            metadata={"drift_status": status, **details},
+            is_success=status != "drift_unknown",
+        )
+
+    db.commit()
+    return unknown == 0 and drifted == 0, (
+        f"Checked {checked} bundle(s): {in_sync} in sync, "
+        f"{drifted} drifted, {unknown} unknown"
+    )
+
+
+def _profile_sync_worker_enabled(db: Session) -> bool:
+    raw = os.getenv("OLT_PROFILE_SYNC_WORKER_ENABLED", "")
+    if not raw:
+        raw = _domain_setting_text(db, "olt_profile_sync_worker_enabled") or ""
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _profile_sync_worker_interval_seconds(db: Session) -> int:
+    raw = os.getenv("OLT_PROFILE_SYNC_INTERVAL_SECONDS", "")
+    if not raw:
+        raw = _domain_setting_text(db, "olt_profile_sync_interval_seconds") or ""
+    try:
+        return max(int(raw), 60)
+    except (TypeError, ValueError):
+        return 300
+
+
+def _domain_setting_text(db: Session, key: str) -> str | None:
+    setting = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.network)
+        .filter(DomainSetting.key == key)
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
+    if setting is None:
+        return None
+    if setting.value_text:
+        return str(setting.value_text)
+    if setting.value_json is not None:
+        return str(setting.value_json)
+    return None
+
+
 def _log_profile_sync_task_audit(
     db: Session,
     *,
@@ -471,6 +625,35 @@ def _log_profile_sync_task_audit(
         action=action,
         entity_type="olt_profile_sync_task",
         entity_id=str(task.id),
+        actor_id=actor_id,
+        metadata=payload,
+        status_code=200,
+        is_success=is_success,
+    )
+
+
+def _log_profile_bundle_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    action: str,
+    bundle: OltProfileBundle,
+    actor_id: str | None,
+    metadata: dict[str, object] | None = None,
+    is_success: bool = True,
+) -> None:
+    payload = {
+        "olt_id": str(bundle.olt_id),
+        "offer_id": str(bundle.offer_id),
+        "bundle_name": bundle.name,
+    }
+    payload.update({key: value for key, value in (metadata or {}).items() if value})
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="olt_profile_bundle",
+        entity_id=str(bundle.id),
         actor_id=actor_id,
         metadata=payload,
         status_code=200,
@@ -511,6 +694,143 @@ def _parse_scheduled_for(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _check_one_profile_bundle_drift(
+    bundle: OltProfileBundle,
+) -> tuple[str, dict[str, object]]:
+    olt = bundle.olt
+    if olt is None:
+        return "drift_unknown", {"message": "Bundle has no linked OLT"}
+
+    live_reads = {
+        "dba": olt_ssh_profiles.get_dba_profiles(olt),
+        "traffic": olt_ssh_profiles.get_traffic_tables(olt),
+        "line": olt_ssh_profiles.get_line_profiles(olt),
+        "service": olt_ssh_profiles.get_service_profiles(olt),
+    }
+    failures = [
+        f"{label}: {message}"
+        for label, (ok, message, _entries) in live_reads.items()
+        if not ok
+    ]
+    if failures:
+        return "drift_unknown", {
+            "message": "Live profile inventory failed",
+            "errors": failures,
+        }
+
+    expected = _expected_bundle_inventory(bundle)
+    actual = {
+        "dba": _profile_entry_map(live_reads["dba"][2], id_attr="profile_id"),
+        "traffic": _profile_entry_map(live_reads["traffic"][2], id_attr="index"),
+        "line": _profile_entry_map(live_reads["line"][2], id_attr="profile_id"),
+        "service": _profile_entry_map(live_reads["service"][2], id_attr="profile_id"),
+    }
+    missing: list[str] = []
+    mismatched: list[str] = []
+    for category, items in expected.items():
+        live_items = actual.get(category, {})
+        for label, profile in items.items():
+            profile_id = int(profile["id"])
+            expected_name = str(profile.get("name") or "").strip()
+            live_name = live_items.get(profile_id)
+            if live_name is None:
+                missing.append(f"{label} {profile_id}")
+                continue
+            if expected_name and live_name and live_name != expected_name:
+                mismatched.append(
+                    f"{label} {profile_id}: expected {expected_name}, got {live_name}"
+                )
+
+    if missing or mismatched:
+        return "drifted", {
+            "message": "Live OLT profiles differ from saved bundle",
+            "missing": missing,
+            "mismatched": mismatched,
+        }
+    return "in_sync", {"message": "Live OLT profiles match saved bundle IDs and names"}
+
+
+def _expected_bundle_inventory(bundle: OltProfileBundle) -> dict[str, dict[str, dict[str, object]]]:
+    names = _expected_bundle_names(bundle)
+    return {
+        "dba": {
+            "DBA profile": {
+                "id": bundle.dba_profile_id,
+                "name": names.get("dba", ""),
+            }
+        },
+        "traffic": {
+            "download traffic table": {
+                "id": bundle.download_traffic_table_id,
+                "name": names.get("traffic_down", ""),
+            },
+            "upload traffic table": {
+                "id": bundle.upload_traffic_table_id,
+                "name": names.get("traffic_up", ""),
+            },
+        },
+        "line": {
+            "line profile": {
+                "id": bundle.line_profile_id,
+                "name": names.get("line", ""),
+            }
+        },
+        "service": {
+            "service profile": {
+                "id": bundle.service_profile_id,
+                "name": names.get("service", ""),
+            }
+        },
+    }
+
+
+def _expected_bundle_names(bundle: OltProfileBundle) -> dict[str, str]:
+    names: dict[str, str] = {}
+    command_plan = bundle.command_plan or {}
+    groups = command_plan.get("groups")
+    if not isinstance(groups, list):
+        return names
+    for raw_group in groups:
+        if not isinstance(raw_group, dict):
+            continue
+        step = str(raw_group.get("step") or "").casefold()
+        commands = raw_group.get("commands")
+        if not isinstance(commands, list) or not commands:
+            continue
+        first_command = str(commands[0] or "")
+        if "traffic" in step:
+            match = _TRAFFIC_NAME_RE.search(first_command)
+            if "download" in step and match:
+                names["traffic_down"] = match.group("name")
+            elif "upload" in step and match:
+                names["traffic_up"] = match.group("name")
+            continue
+        match = _PROFILE_NAME_RE.search(first_command)
+        if not match:
+            continue
+        if "dba" in step:
+            names["dba"] = match.group("name")
+        elif "line" in step:
+            names["line"] = match.group("name")
+        elif "service" in step:
+            names["service"] = match.group("name")
+    return names
+
+
+def _profile_entry_map(entries: object, *, id_attr: str) -> dict[int, str]:
+    mapped: dict[int, str] = {}
+    for entry in list(entries or []):
+        raw_id = getattr(entry, id_attr, None)
+        if raw_id is None:
+            continue
+        try:
+            profile_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        mapped[profile_id] = str(getattr(entry, "name", "") or "")
+    return mapped
 
 
 def offer_profile_sync_preview_context(

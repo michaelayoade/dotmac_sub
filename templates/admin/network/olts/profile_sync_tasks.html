@@ -31,11 +31,12 @@
     </div>
     {% endif %}
 
-    <div class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+    <div class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-6">
         {{ stats_card("Open Tasks", open_count, color="amber") }}
         {{ stats_card("Pending Review", pending_count, color="amber") }}
         {{ stats_card("Approved", approved_count, color="emerald") }}
         {{ stats_card("Scheduled", scheduled_count, color="sky", color2="blue") }}
+        {{ stats_card("Bundles", profile_bundle_count, color="indigo") }}
         {{ stats_card("Showing", task_count, color="slate") }}
     </div>
 
@@ -55,6 +56,60 @@
 
     <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
         Approval only marks a task ready for controlled sync. OLT commands still require the live preflight, backup, and apply workflow.
+        {% if worker_enabled %}
+        The scheduled worker is enabled and runs every {{ worker_interval_seconds }} seconds.
+        {% else %}
+        The scheduled worker is disabled; use manual execution for approved tasks.
+        {% endif %}
+    </div>
+
+    <div class="flex flex-col gap-3 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">Ready to Execute</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">{{ due_count }} approved or due scheduled task(s)</p>
+        </div>
+        <form method="POST" action="/admin/network/profile-sync-tasks/execute-due" class="js-profile-sync-submit" data-loading-label="Executing..." data-confirm="Execute all approved or due scheduled profile sync tasks now? Each task still performs live preflight and running-config backup before OLT commands are applied.">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" {% if due_count == 0 %}disabled{% endif %} class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 dark:disabled:bg-slate-700">
+                Execute Due Tasks
+            </button>
+        </form>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-[1fr_1fr]">
+        <section class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">Bundle Drift</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">
+                        {{ drift_counts.get("in_sync", 0) }} in sync · {{ drift_counts.get("drifted", 0) }} drifted · {{ drift_counts.get("drift_unknown", 0) + drift_counts.get("unknown", 0) }} unknown
+                    </p>
+                </div>
+                <form method="POST" action="/admin/network/profile-sync-tasks/drift-check" class="js-profile-sync-submit" data-loading-label="Checking..." data-confirm="Check all active profile bundles against live OLT inventory? This only reads profiles and does not apply commands.">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" {% if profile_bundle_count == 0 %}disabled{% endif %} class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 dark:disabled:bg-slate-700">
+                        Check Drift
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <section class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">Recent Profile Sync History</p>
+            <div class="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
+                {% for event in audit_events %}
+                <div class="rounded-lg border border-slate-100 px-3 py-2 text-xs dark:border-slate-700">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <span class="font-semibold text-slate-700 dark:text-slate-200">{{ event.action.replace("_", " ")|title }}</span>
+                        <span class="{% if event.is_success %}text-emerald-600 dark:text-emerald-300{% else %}text-red-600 dark:text-red-300{% endif %}">{{ "OK" if event.is_success else "Failed" }}</span>
+                    </div>
+                    <p class="mt-1 text-slate-500 dark:text-slate-400">{{ event.occurred_at }} · {{ event.actor_id or "system" }}</p>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No profile sync audit events yet.</p>
+                {% endfor %}
+            </div>
+        </section>
     </div>
 
     <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
@@ -106,7 +161,12 @@
                             <div class="mt-2 space-y-1 text-xs text-slate-500 dark:text-slate-400">
                                 <p>Requested: {{ task.requested_by or "-" }}</p>
                                 {% if task.approved_by %}<p>Approved: {{ task.approved_by }}</p>{% endif %}
-                                {% if task.scheduled_for %}<p>Runs after: {{ task.scheduled_for }}</p>{% endif %}
+                                {% if task.scheduled_for %}
+                                <p>
+                                    Runs after: {{ task.scheduled_for }}
+                                    <span class="js-profile-sync-countdown font-semibold text-sky-600 dark:text-sky-300" data-scheduled-at="{{ task.scheduled_for.isoformat() }}"></span>
+                                </p>
+                                {% endif %}
                             </div>
                         </td>
                         <td class="px-4 py-3 text-right">
@@ -124,7 +184,7 @@
                                 </form>
                                 {% endif %}
                                 {% if task.status == "approved" %}
-                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/execute" onsubmit="return confirm('Execute this profile sync task now? A live preflight and running-config backup will be required before OLT commands are applied.')">
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/execute" class="js-profile-sync-submit" data-loading-label="Executing..." data-confirm="Execute this profile sync task now? A live preflight and running-config backup will be required before OLT commands are applied.">
                                     {% include "components/forms/csrf_input.html" %}
                                     <button type="submit" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">Execute</button>
                                 </form>
@@ -159,4 +219,79 @@
         </div>
     </div>
 </div>
+
+<div id="profile-sync-progress" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/50 px-4 backdrop-blur-sm">
+    <div class="w-full max-w-md rounded-lg border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+        <p class="text-sm font-semibold text-slate-900 dark:text-white">OLT operation in progress</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Live preflight, backup, and SSH operations can take a while.</p>
+        <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+            <div class="h-full w-1/2 animate-pulse rounded-full bg-indigo-600"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.js-profile-sync-submit').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            const confirmMessage = form.dataset.confirm;
+            if (confirmMessage && !window.confirm(confirmMessage)) {
+                event.preventDefault();
+                return;
+            }
+            const button = form.querySelector('button[type="submit"]');
+            if (!button) {
+                return;
+            }
+            button.dataset.originalLabel = button.textContent.trim();
+            button.textContent = form.dataset.loadingLabel || 'Working...';
+            button.disabled = true;
+            button.classList.add('cursor-wait', 'opacity-75');
+            const progress = document.getElementById('profile-sync-progress');
+            if (progress) {
+                progress.classList.remove('hidden');
+                progress.classList.add('flex');
+            }
+        });
+    });
+
+    const countdowns = Array.from(document.querySelectorAll('.js-profile-sync-countdown'));
+    if (!countdowns.length) {
+        return;
+    }
+
+    function renderCountdown(target) {
+        const value = target.dataset.scheduledAt;
+        const scheduledAt = value ? new Date(value) : null;
+        if (!scheduledAt || Number.isNaN(scheduledAt.getTime())) {
+            target.textContent = '';
+            return;
+        }
+        const seconds = Math.round((scheduledAt.getTime() - Date.now()) / 1000);
+        if (seconds <= 0) {
+            target.textContent = '(due now)';
+            return;
+        }
+        const minutes = Math.floor(seconds / 60);
+        const remainder = seconds % 60;
+        if (minutes >= 60) {
+            const hours = Math.floor(minutes / 60);
+            const extraMinutes = minutes % 60;
+            target.textContent = `(in ${hours}h ${extraMinutes}m)`;
+            return;
+        }
+        target.textContent = `(in ${minutes}m ${remainder}s)`;
+    }
+
+    function renderAllCountdowns() {
+        countdowns.forEach(renderCountdown);
+    }
+
+    renderAllCountdowns();
+    window.setInterval(renderAllCountdowns, 1000);
+});
+</script>
 {% endblock %}

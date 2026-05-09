@@ -854,6 +854,120 @@ def test_apply_saved_profile_bundle_runs_backup_and_commands(db_session, monkeyp
     assert bundle.drift_details["backup_id"] == str(backup.id)
 
 
+def test_check_profile_bundle_drift_updates_status_and_audits(db_session, monkeypatch):
+    olt = OLTDevice(name="Drift Check OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 41",
+        code="F41",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=41,
+        speed_upload_mbps=20,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    bundle = OltProfileBundle(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        name="Fiber 41",
+        checksum="d" * 64,
+        vlan_id=203,
+        download_kbps=41_000,
+        upload_kbps=20_000,
+        dba_profile_id=100,
+        download_traffic_table_id=101,
+        upload_traffic_table_id=102,
+        line_profile_id=103,
+        service_profile_id=104,
+        gem_id=1,
+        tcont_id=1,
+        command_plan={
+            "groups": [
+                {
+                    "step": "Create DBA profile",
+                    "commands": [
+                        'dba-profile add profile-id 100 profile-name "DOTMAC_DBA_F41" type3 assure 20000 max 20000'
+                    ],
+                },
+                {
+                    "step": "Create download traffic table",
+                    "commands": [
+                        'traffic table ip index 101 name "DOTMAC_TT_D_F41" cir 41000 pir 41000'
+                    ],
+                },
+                {
+                    "step": "Create upload traffic table",
+                    "commands": [
+                        'traffic table ip index 102 name "DOTMAC_TT_U_F41" cir 20000 pir 20000'
+                    ],
+                },
+                {
+                    "step": "Create line profile",
+                    "commands": [
+                        'ont-lineprofile gpon profile-id 103 profile-name "DOTMAC_LINE_F41"'
+                    ],
+                },
+                {
+                    "step": "Create service profile",
+                    "commands": [
+                        'ont-srvprofile gpon profile-id 104 profile-name "DOTMAC_SRV_F41"'
+                    ],
+                },
+            ]
+        },
+        drift_status="pending",
+    )
+    db_session.add(bundle)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_dba_profiles",
+        lambda _olt: (True, "ok", [DbaProfileEntry(profile_id=100, name="DOTMAC_DBA_F41")]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_traffic_tables",
+        lambda _olt: (
+            True,
+            "ok",
+            [
+                TrafficTableEntry(index=101, name="DOTMAC_TT_D_F41"),
+                TrafficTableEntry(index=102, name="DOTMAC_TT_U_F41"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_line_profiles",
+        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=103, name="DOTMAC_LINE_F41")]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_service_profiles",
+        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=104, name="DOTMAC_SRV_F41")]),
+    )
+
+    ok, message = web_network_olt_profiles.check_profile_bundle_drift(
+        db_session,
+        checked_by="admin@example.test",
+    )
+
+    assert ok is True
+    assert "1 in sync" in message
+    assert bundle.drift_status == "in_sync"
+    assert bundle.last_verified_at is not None
+    event = db_session.query(AuditEvent).one()
+    assert event.action == "olt_profile_bundle_drift_checked"
+    assert event.entity_type == "olt_profile_bundle"
+
+
 def test_apply_saved_profile_bundle_requires_admin(db_session):
     olt = OLTDevice(name="Apply Bundle Admin OLT", vendor="Huawei")
     offer = CatalogOffer(

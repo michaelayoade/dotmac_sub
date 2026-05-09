@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -29,6 +30,7 @@ from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-olt-profiles"])
+PROFILE_SYNC_FLASH_COOKIE = "dotmac_profile_sync_flash"
 
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
@@ -48,6 +50,43 @@ def _slug(value: str | None) -> str:
 def _actor_is_admin(request: Request) -> bool:
     auth = getattr(request.state, "auth", {}) or {}
     return "admin" in set(auth.get("roles") or [])
+
+
+def _read_profile_sync_flash(request: Request) -> dict[str, str] | None:
+    raw = request.cookies.get(PROFILE_SYNC_FLASH_COOKIE)
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    status = str(payload.get("status") or "").strip()
+    message = str(payload.get("message") or "").strip()
+    if not status or not message:
+        return None
+    return {"status": status, "message": message}
+
+
+def _profile_sync_redirect(
+    *,
+    status: str,
+    message: str,
+    location: str = "/admin/network/profile-sync-tasks",
+) -> RedirectResponse:
+    response = RedirectResponse(location, status_code=303)
+    flash_payload = json.dumps(
+        {"status": status, "message": str(message or "")[:3500]},
+        separators=(",", ":"),
+    )
+    response.set_cookie(
+        PROFILE_SYNC_FLASH_COOKIE,
+        flash_payload,
+        max_age=120,
+        httponly=True,
+        samesite="lax",
+        path="/admin/network/profile-sync-tasks",
+    )
+    return response
 
 
 def _dump_dir_for_olt(olt, dump_root: str | None) -> Path | None:
@@ -263,16 +302,25 @@ def olt_profile_sync_tasks(
             status=status,
         )
     )
+    flash = _read_profile_sync_flash(request)
     context.update(
         {
-            "message": request.query_params.get("message", ""),
-            "result_status": request.query_params.get("status", ""),
+            "message": (flash or {}).get("message")
+            or request.query_params.get("message", ""),
+            "result_status": (flash or {}).get("status")
+            or request.query_params.get("status", ""),
         }
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         "admin/network/olts/profile_sync_tasks.html",
         context,
     )
+    if flash is not None:
+        response.delete_cookie(
+            PROFILE_SYNC_FLASH_COOKIE,
+            path="/admin/network/profile-sync-tasks",
+        )
+    return response
 
 
 @router.post(
@@ -288,10 +336,7 @@ def olt_profile_sync_task_approve(
     """Approve or schedule a pending profile sync task without applying it."""
     if not _actor_is_admin(request):
         message = "Only admin users can approve OLT profile sync tasks"
-        return RedirectResponse(
-            f"/admin/network/profile-sync-tasks?status=error&message={quote_plus(message)}",
-            status_code=303,
-        )
+        return _profile_sync_redirect(status="error", message=message)
     ok, message = web_network_olt_profiles_service.approve_profile_sync_task_from_form(
         db,
         task_id=task_id,
@@ -300,10 +345,7 @@ def olt_profile_sync_task_approve(
         request=request,
     )
     result_status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/profile-sync-tasks?status={result_status}&message={quote_plus(message)}",
-        status_code=303,
-    )
+    return _profile_sync_redirect(status=result_status, message=message)
 
 
 @router.post(
@@ -319,10 +361,7 @@ def olt_profile_sync_task_cancel(
     """Cancel an open profile sync task without applying it."""
     if not _actor_is_admin(request):
         message = "Only admin users can cancel OLT profile sync tasks"
-        return RedirectResponse(
-            f"/admin/network/profile-sync-tasks?status=error&message={quote_plus(message)}",
-            status_code=303,
-        )
+        return _profile_sync_redirect(status="error", message=message)
     ok, message = web_network_olt_profiles_service.cancel_profile_sync_task_from_form(
         db,
         task_id=task_id,
@@ -331,10 +370,7 @@ def olt_profile_sync_task_cancel(
         request=request,
     )
     result_status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/profile-sync-tasks?status={result_status}&message={quote_plus(message)}",
-        status_code=303,
-    )
+    return _profile_sync_redirect(status=result_status, message=message)
 
 
 @router.post(
@@ -355,10 +391,28 @@ def olt_profile_sync_task_execute(
         request=request,
     )
     result_status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/profile-sync-tasks?status={result_status}&message={quote_plus(message)}",
-        status_code=303,
+    return _profile_sync_redirect(status=result_status, message=message)
+
+
+@router.post(
+    "/profile-sync-tasks/execute-due",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_profile_sync_tasks_execute_due(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Execute all approved or due scheduled profile sync tasks."""
+    ok, message = (
+        web_network_olt_profiles_service.execute_due_profile_sync_tasks_from_form(
+            db,
+            executed_by=web_admin_service.get_actor_id(request),
+            actor_is_admin=_actor_is_admin(request),
+            request=request,
+        )
     )
+    result_status = "success" if ok else "error"
+    return _profile_sync_redirect(status=result_status, message=message)
 
 
 @router.post(
@@ -374,10 +428,7 @@ def olt_profile_sync_task_retry(
     """Return a failed profile sync task to pending review."""
     if not _actor_is_admin(request):
         message = "Only admin users can retry OLT profile sync tasks"
-        return RedirectResponse(
-            f"/admin/network/profile-sync-tasks?status=error&message={quote_plus(message)}",
-            status_code=303,
-        )
+        return _profile_sync_redirect(status="error", message=message)
     ok, message = web_network_olt_profiles_service.retry_profile_sync_task_from_form(
         db,
         task_id=task_id,
@@ -386,9 +437,31 @@ def olt_profile_sync_task_retry(
         request=request,
     )
     result_status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/profile-sync-tasks?status={result_status}&message={quote_plus(message)}",
-        status_code=303,
+    return _profile_sync_redirect(status=result_status, message=message)
+
+
+@router.post(
+    "/profile-sync-tasks/drift-check",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_profile_sync_drift_check(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Manually verify active profile bundles against live OLT inventory."""
+    if not _actor_is_admin(request):
+        return _profile_sync_redirect(
+            status="error",
+            message="Only admin users can check OLT profile bundle drift",
+        )
+    ok, message = web_network_olt_profiles_service.check_profile_bundle_drift(
+        db,
+        checked_by=web_admin_service.get_actor_id(request),
+        request=request,
+    )
+    return _profile_sync_redirect(
+        status="success" if ok else "error",
+        message=message,
     )
 
 
