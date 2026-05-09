@@ -118,6 +118,10 @@ def cleanup_olt_state_for_return(
         require_imported_service_port_state,
     )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    from app.services.network.olt_ssh_ont.omci_config import (
+        clear_ont_internet_config,
+        clear_ont_wan_config,
+    )
     from app.services.network.service_port_allocator import release_all_for_ont
 
     completed: list[str] = []
@@ -206,6 +210,20 @@ def cleanup_olt_state_for_return(
             )
         except Exception as exc:
             logger.warning("Failed to emit ont_service_port_deleted event: %s", exc)
+
+    # Clear WAN config before deauthorization (best-effort, non-blocking)
+    # Huawei OLTs retain ipconfig/internet-config/wan-config after deauthorization,
+    # which causes ip-index mismatch errors on reauthorization with different settings.
+    wan_config_cleared = []
+    for ip_index in (0, 1):
+        ok, msg = clear_ont_internet_config(olt, fsp, olt_ont_id, ip_index=ip_index)
+        if ok:
+            wan_config_cleared.append(f"internet-config ip-index {ip_index}")
+        ok, msg = clear_ont_wan_config(olt, fsp, olt_ont_id, ip_index=ip_index)
+        if ok:
+            wan_config_cleared.append(f"wan-config ip-index {ip_index}")
+    if wan_config_cleared:
+        completed.append(f"Cleared WAN config: {', '.join(wan_config_cleared)}")
 
     deauth_result = adapter.deauthorize_ont(fsp, olt_ont_id)
     if not deauth_result.success:

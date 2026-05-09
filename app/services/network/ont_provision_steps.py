@@ -514,36 +514,6 @@ def _provision_wan_service_instances(
                 return steps, needs_input, hard_failures
             adapter = get_protocol_adapter(ctx.olt)
             ip_index = int(effective_values.get("internet_config_ip_index"))
-            inet_result = adapter.configure_internet_config(
-                ctx.fsp,
-                ctx.olt_ont_id,
-                ip_index=ip_index,
-            )
-            steps.append(
-                {
-                    "step": "internet_config_olt:desired_config",
-                    "success": inet_result.success,
-                    "message": inet_result.message,
-                }
-            )
-            wan_profile_id = effective_values.get("wan_config_profile_id")
-            if wan_profile_id is not None:
-                wan_result = adapter.configure_wan_config(
-                    ctx.fsp,
-                    ctx.olt_ont_id,
-                    ip_index=ip_index,
-                    profile_id=int(wan_profile_id),
-                )
-                steps.append(
-                    {
-                        "step": "configure_wan_olt:desired_config",
-                        "success": wan_result.success,
-                        "message": wan_result.message,
-                    }
-                )
-                if not wan_result.success and pppoe_provisioning_method == "omci":
-                    hard_failures.append(f"configure_wan_olt: {wan_result.message}")
-                    return steps, needs_input, hard_failures
             pppoe_result = adapter.configure_pppoe(
                 ctx.fsp,
                 ctx.olt_ont_id,
@@ -560,7 +530,43 @@ def _provision_wan_service_instances(
                     "message": pppoe_result.message,
                 }
             )
+            if not pppoe_result.success and pppoe_provisioning_method == "omci":
+                hard_failures.append(f"configure_pppoe_omci: {pppoe_result.message}")
+                return steps, needs_input, hard_failures
             if pppoe_result.success:
+                inet_result = adapter.configure_internet_config(
+                    ctx.fsp,
+                    ctx.olt_ont_id,
+                    ip_index=ip_index,
+                )
+                steps.append(
+                    {
+                        "step": "internet_config_olt:desired_config",
+                        "success": inet_result.success,
+                        "message": inet_result.message,
+                    }
+                )
+                if not inet_result.success and pppoe_provisioning_method == "omci":
+                    hard_failures.append(f"internet_config_olt: {inet_result.message}")
+                    return steps, needs_input, hard_failures
+                wan_profile_id = effective_values.get("wan_config_profile_id")
+                if inet_result.success and wan_profile_id is not None:
+                    wan_result = adapter.configure_wan_config(
+                        ctx.fsp,
+                        ctx.olt_ont_id,
+                        ip_index=ip_index,
+                        profile_id=int(wan_profile_id),
+                    )
+                    steps.append(
+                        {
+                            "step": "configure_wan_olt:desired_config",
+                            "success": wan_result.success,
+                            "message": wan_result.message,
+                        }
+                    )
+                    if not wan_result.success and pppoe_provisioning_method == "omci":
+                        hard_failures.append(f"configure_wan_olt: {wan_result.message}")
+                        return steps, needs_input, hard_failures
                 return steps, needs_input, hard_failures
             if pppoe_provisioning_method == "omci":
                 hard_failures.append(f"configure_pppoe_omci: {pppoe_result.message}")
@@ -1304,7 +1310,27 @@ def provision_with_reconciliation(
                 return step_result
             steps_completed.append(f"native_vlan_{wan_vlan}_eth_1")
 
-    # 2. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
+    # 2. Clear any stale WAN config before applying new configuration (best-effort)
+    # Huawei OLTs retain ipconfig/internet-config/wan-config after deauthorization or from
+    # factory defaults, which can cause ip-index mismatch errors on new provisioning.
+    stale_cleared = []
+    for ip_index in (0, 1):
+        result = adapter.clear_internet_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
+        if result.success:
+            stale_cleared.append(f"internet-config:{ip_index}")
+        result = adapter.clear_wan_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
+        if result.success:
+            stale_cleared.append(f"wan-config:{ip_index}")
+    if stale_cleared:
+        steps_completed.append(f"cleared_stale_wan_config({','.join(stale_cleared)})")
+        logger.info(
+            "Cleared stale WAN config for ONT %s on %s: %s",
+            ctx.ont.serial_number,
+            ctx.olt.name,
+            stale_cleared,
+        )
+
+    # 3. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
     if mgmt_vlan:
         raw_mgmt_gem_index = values.get("mgmt_gem_index")
         mgmt_spec = create_batched_mgmt_spec_from_config_pack(

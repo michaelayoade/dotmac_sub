@@ -9,7 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
+from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber, UserType
+from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import search_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +156,101 @@ def can_authorize_ont_from_request(
         db,
         allow_missing_auth=allow_missing_auth,
     )
+
+
+def resolve_authorization_redirect_ont(
+    db: Session,
+    *,
+    ont_id: object | None,
+    olt_id: object,
+    fsp: str,
+    serial_number: str,
+) -> OntUnit | None:
+    """Find the ONT detail target after an authorization request.
+
+    Uses discovery context (OLT + FSP + serial) to find the ONT via autofind candidate.
+    No fallback searches - we have exact info from discovery.
+    """
+    # Direct ONT ID takes precedence
+    ont_uuid = _uuid_or_none(ont_id)
+    if ont_uuid is not None:
+        ont = db.get(OntUnit, ont_uuid)
+        if ont is not None:
+            return ont
+
+    serials = {
+        normalize_serial(candidate)
+        for candidate in search_candidates(serial_number)
+        if normalize_serial(candidate)
+    }
+    if not serials:
+        return None
+
+    # Look up autofind candidate by OLT + FSP + serial - it links to the ONT record
+    autofind_stmt = (
+        select(OltAutofindCandidate)
+        .where(OltAutofindCandidate.olt_id == olt_id)
+        .where(OltAutofindCandidate.fsp == fsp)
+        .where(OltAutofindCandidate.is_active.is_(True))
+    )
+    for candidate in db.scalars(autofind_stmt).all():
+        candidate_serials = {
+            normalize_serial(s)
+            for s in (candidate.serial_number, candidate.serial_hex)
+            if s and normalize_serial(s)
+        }
+        if serials.intersection(candidate_serials) and candidate.ont_unit_id:
+            return db.get(OntUnit, candidate.ont_unit_id)
+
+    return None
+
+
+def submitted_authorization_ont_matches_scope(
+    db: Session,
+    *,
+    ont_id: object,
+    olt_id: object,
+    fsp: str,
+    serial_number: str,
+) -> bool:
+    """Validate that a submitted ONT id belongs to the discovered ONT scope."""
+    ont_uuid = _uuid_or_none(ont_id)
+    if ont_uuid is None:
+        return False
+    direct_ont = db.get(OntUnit, ont_uuid)
+    if direct_ont is None:
+        return False
+
+    submitted_serial = normalize_serial(serial_number)
+    direct_serial = normalize_serial(getattr(direct_ont, "serial_number", None))
+    direct_olt_id = getattr(direct_ont, "olt_device_id", None)
+    direct_match = (
+        str(direct_olt_id) == str(olt_id)
+        and direct_serial == submitted_serial
+    )
+    if direct_match:
+        return True
+
+    if direct_olt_id is not None or direct_serial != submitted_serial:
+        return False
+
+    candidate = db.scalars(
+        select(OltAutofindCandidate)
+        .where(OltAutofindCandidate.ont_unit_id == direct_ont.id)
+        .where(OltAutofindCandidate.olt_id == olt_id)
+        .where(OltAutofindCandidate.fsp == fsp)
+        .where(OltAutofindCandidate.is_active.is_(True))
+        .limit(1)
+    ).first()
+    if candidate is None:
+        return False
+
+    candidate_serials = {
+        normalize_serial(getattr(candidate, "serial_number", None)),
+        normalize_serial(getattr(candidate, "serial_hex", None)),
+        normalize_serial(getattr(candidate, "equipment_sn", None)),
+    }
+    return submitted_serial in candidate_serials
 
 
 def filter_manageable_ont_ids_from_request(

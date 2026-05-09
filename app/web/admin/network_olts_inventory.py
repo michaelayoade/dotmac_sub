@@ -9,13 +9,11 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.network import (
     OLTDevice,
-    OntUnit,
 )
 from app.services import network as network_service
 from app.services import web_admin as web_admin_service
@@ -34,8 +32,11 @@ from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
-from app.services.network.ont_scope import can_authorize_ont_from_request
-from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.ont_scope import (
+    can_authorize_ont_from_request,
+    resolve_authorization_redirect_ont,
+    submitted_authorization_ont_matches_scope,
+)
 from app.services.olt_detail_adapter import olt_detail_adapter
 from app.services.queue_adapter import enqueue_task
 from app.web.request_parsing import parse_form_data_sync
@@ -106,43 +107,13 @@ def _authorization_detail_redirect_url(
     message: str,
 ) -> str | None:
     """Resolve the ONT detail URL to use after an authorization request."""
-    from app.services.network.serial_utils import normalize as normalize_serial
-    from app.services.network.serial_utils import search_candidates
-
-    ont: OntUnit | None = None
-    if ont_id:
-        try:
-            ont = db.get(OntUnit, ont_id)
-        except Exception:
-            ont = None
-
-    if ont is None:
-        serials = {
-            normalize_serial(candidate)
-            for candidate in search_candidates(serial_number)
-            if normalize_serial(candidate)
-        }
-        if serials:
-            board = None
-            port = None
-            parts = [part.strip() for part in str(fsp or "").split("/") if part.strip()]
-            if len(parts) == 3:
-                board = f"{parts[0]}/{parts[1]}"
-                port = parts[2]
-            stmt = select(OntUnit).where(OntUnit.olt_device_id == olt_id)
-            if board and port:
-                stmt = stmt.where(OntUnit.board == board, OntUnit.port == port)
-            candidates = db.scalars(stmt).all()
-            ont = next(
-                (
-                    candidate
-                    for candidate in candidates
-                    if normalize_serial(getattr(candidate, "serial_number", ""))
-                    in serials
-                ),
-                None,
-            )
-
+    ont = resolve_authorization_redirect_ont(
+        db,
+        ont_id=ont_id,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
+    )
     if ont is None:
         return None
     return (
@@ -1200,49 +1171,13 @@ def olt_authorize_ont(
         return RedirectResponse(target, status_code=303)
 
     if isinstance(ont_id, str) and ont_id:
-        from uuid import UUID
-
-        from app.models.network import OntUnit
-        from app.models.ont_autofind import OltAutofindCandidate
-
-        try:
-            direct_ont = db.get(OntUnit, UUID(str(ont_id)))
-        except ValueError:
-            direct_ont = None
-        submitted_serial = normalize_serial(serial_number)
-        direct_serial = normalize_serial(
-            getattr(direct_ont, "serial_number", None) if direct_ont else None
-        )
-        direct_olt_id = (
-            getattr(direct_ont, "olt_device_id", None) if direct_ont else None
-        )
-        direct_match = (
-            direct_ont is not None
-            and str(direct_olt_id) == str(olt_id)
-            and direct_serial == submitted_serial
-        )
-        returned_inventory_match = False
-        if (
-            direct_ont is not None
-            and direct_olt_id is None
-            and direct_serial == submitted_serial
+        if not submitted_authorization_ont_matches_scope(
+            db,
+            ont_id=ont_id,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
         ):
-            candidate = db.scalars(
-                select(OltAutofindCandidate)
-                .where(OltAutofindCandidate.ont_unit_id == direct_ont.id)
-                .where(OltAutofindCandidate.olt_id == olt_id)
-                .where(OltAutofindCandidate.fsp == fsp)
-                .where(OltAutofindCandidate.is_active.is_(True))
-                .limit(1)
-            ).first()
-            if candidate is not None:
-                candidate_serials = {
-                    normalize_serial(getattr(candidate, "serial_number", None)),
-                    normalize_serial(getattr(candidate, "serial_hex", None)),
-                    normalize_serial(getattr(candidate, "equipment_sn", None)),
-                }
-                returned_inventory_match = submitted_serial in candidate_serials
-        if direct_ont is None or not (direct_match or returned_inventory_match):
             error_msg = "ONT authorization scope check failed"
             if is_htmx:
                 return Response(
@@ -1312,22 +1247,13 @@ def olt_authorize_ont(
         )
         if detail_target:
             target = detail_target
-        elif return_to in (
-            "/admin/network/unconfigured-onts",
-            "/admin/network/onts",
-            "/admin/network/onts?view=unconfigured",
-        ):
-            target_base = (
-                "/admin/network/onts?view=unconfigured"
-                if return_to != "/admin/network/onts"
-                else return_to
-            )
-            separator = "&" if "?" in target_base else "?"
-            target = f"{target_base}{separator}status=success&message={quote_plus(auth_msg)}"
         else:
-            target_base = "/admin/network/onts"
-            separator = "&" if "?" in target_base else "?"
-            target = f"{target_base}{separator}status=success&message={quote_plus(auth_msg)}"
+            # Redirect to unconfigured ONTs list with serial search
+            target = (
+                f"/admin/network/onts?view=unconfigured"
+                f"&search={quote_plus(serial_number)}"
+                f"&status=success&message={quote_plus(auth_msg)}"
+            )
         if is_htmx:
             return Response(
                 status_code=200,
