@@ -310,12 +310,29 @@ def _hosts_partial_response(
     "/onts/{ont_id}/reboot", dependencies=[Depends(require_permission("network:write"))]
 )
 def ont_reboot(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
+    request: Request,
+    ont_id: str,
+    source: str = "tr069",
+    db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Send reboot command to ONT via GenieACS."""
+    """Send reboot command to ONT via the selected transport."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
+    if (source or "").strip().lower() in {"olt", "omci"}:
+        ok, msg = web_network_ont_actions_service.execute_omci_reboot(
+            db,
+            ont_id,
+            initiated_by=None,
+        )
+        return _action_json_response(
+            success=ok,
+            message=msg,
+            action="OLT Reboot",
+            request=request,
+            ont_id=ont_id,
+            status_code=200 if ok else 400,
+        )
     result = web_network_ont_actions_service.execute_reboot(db, ont_id, request=request)
     return _action_json_response(
         success=result.success,

@@ -1,22 +1,42 @@
 """Tests for imported OLT profile admin helpers."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
 
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    OfferStatus,
+    PlanCategory,
+    PriceBasis,
+    ServiceType,
+)
 from app.models.network import (
     OLTDevice,
-    OltLineProfileGemMapping,
     OltLineProfile,
+    OltLineProfileGemMapping,
     OltOntRegistration,
     OltOnuTypeProfileMapping,
-    OltServiceProfile,
+    OltProfileBundle,
+    OltProfileSyncTask,
     OltServicePort,
+    OltServiceProfile,
 )
 from app.services import web_network_olt_profiles
+from app.services.network.olt_ssh_profiles import (
+    DbaProfileEntry,
+    OltProfileEntry,
+    TrafficTableEntry,
+)
 from app.services.network.olt_state_import import (
     _import_line_profile_gem_mappings_from_config,
     _import_observed_service_ports_from_config,
     _import_service_port_gem_mappings_from_config,
 )
+from app.services.network.profile_apply_workflow import AppliedCommand
 
 
 def test_imported_profile_state_context_returns_db_profiles(db_session):
@@ -79,6 +99,492 @@ def test_imported_profile_state_context_returns_db_profiles(db_session):
     assert [mapping.gem_index for mapping in context["gem_mappings"]] == [1]
     assert context["service_port_summary"]["count"] == 1
     assert context["service_ports"][0].port_index == 42
+    assert context["profile_bundles"] == []
+    assert context["syncable_catalog_offers"] == []
+
+
+def test_imported_profile_state_context_includes_syncable_offers(db_session):
+    olt = OLTDevice(name="Imported Profiles Offers OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 50",
+        code="F50",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=50,
+        speed_upload_mbps=20,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+
+    context = web_network_olt_profiles.imported_profile_state_context(
+        db_session,
+        str(olt.id),
+    )
+
+    assert [item.name for item in context["syncable_catalog_offers"]] == ["Fiber 50"]
+
+
+def test_profile_sync_tasks_context_lists_open_tasks(db_session):
+    olt = OLTDevice(name="Queue OLT", vendor="Huawei", mgmt_ip="10.0.0.10")
+    offer = CatalogOffer(
+        name="Fiber 75",
+        code="F75",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=75,
+        speed_upload_mbps=30,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    db_session.add(
+        OltProfileSyncTask(
+            olt_id=olt.id,
+            offer_id=offer.id,
+            status="pending",
+            trigger="catalog_offer_update",
+            requested_by="admin@example.test",
+            preview_payload={
+                "offer_name": offer.name,
+                "vlan_id": 203,
+                "download_kbps": 75_000,
+                "upload_kbps": 30_000,
+            },
+        )
+    )
+    db_session.commit()
+
+    context = web_network_olt_profiles.profile_sync_tasks_context(db_session)
+
+    assert context["task_count"] == 1
+    assert context["pending_count"] == 1
+    assert context["open_count"] == 1
+    assert context["tasks"][0].offer.name == "Fiber 75"
+    assert context["tasks"][0].olt.name == "Queue OLT"
+
+
+def test_approve_profile_sync_task_from_form_can_schedule(db_session):
+    olt = OLTDevice(name="Schedule Queue OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 120",
+        code="F120",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=120,
+        speed_upload_mbps=60,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    task = OltProfileSyncTask(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        status="pending",
+        trigger="catalog_offer_update",
+        preview_payload={"vlan_id": 203},
+    )
+    db_session.add(task)
+    db_session.commit()
+
+    ok, message = web_network_olt_profiles.approve_profile_sync_task_from_form(
+        db_session,
+        task_id=str(task.id),
+        approved_by="admin@example.test",
+        scheduled_for_raw="2026-05-10T09:30",
+    )
+
+    assert ok is True
+    assert "Scheduled profile sync task" in message
+    db_session.refresh(task)
+    assert task.status == "scheduled"
+    assert task.approved_by == "admin@example.test"
+    assert task.scheduled_for is not None
+    assert task.scheduled_for.replace(tzinfo=UTC) == datetime(
+        2026, 5, 10, 9, 30, tzinfo=UTC
+    )
+
+
+def test_offer_profile_sync_preview_context_builds_dry_run_plan(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="Preview OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 100",
+        code="F100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_dba_profiles",
+        lambda _olt: (True, "ok", [DbaProfileEntry(profile_id=100)]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_traffic_tables",
+        lambda _olt: (True, "ok", [TrafficTableEntry(index=100)]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_line_profiles",
+        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="LINE")]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_service_profiles",
+        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="SRV")]),
+    )
+
+    preview = web_network_olt_profiles.offer_profile_sync_preview_context(
+        db_session,
+        str(olt.id),
+        offer_id=str(offer.id),
+        vlan_id=203,
+    )
+
+    assert preview["ok"] is True
+    assert preview["bundle"].download_kbps == 100_000
+    assert preview["bundle"].dba_profile_id == 101
+    assert preview["bundle"].download_traffic_table_id == 101
+    assert preview["bundle"].upload_traffic_table_id == 102
+    assert preview["apply_plan"].commands[0].startswith("dba-profile add")
+    assert len(preview["allocations"]) == 5
+
+
+def test_offer_profile_sync_preview_context_fails_when_live_inventory_fails(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="Preview Failure OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 50",
+        code="F50",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=50,
+        speed_upload_mbps=20,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_dba_profiles",
+        lambda _olt: (False, "ssh timeout", []),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_traffic_tables",
+        lambda _olt: (True, "ok", []),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_line_profiles",
+        lambda _olt: (True, "ok", []),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_service_profiles",
+        lambda _olt: (True, "ok", []),
+    )
+
+    preview = web_network_olt_profiles.offer_profile_sync_preview_context(
+        db_session,
+        str(olt.id),
+        offer_id=str(offer.id),
+        vlan_id=203,
+    )
+
+    assert preview["ok"] is False
+    assert "DBA profiles: ssh timeout" in preview["message"]
+
+
+def test_save_offer_profile_bundle_persists_validated_preview(
+    db_session,
+    monkeypatch,
+):
+    olt = OLTDevice(name="Save Bundle OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 150",
+        code="F150",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=150,
+        speed_upload_mbps=75,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_dba_profiles",
+        lambda _olt: (True, "ok", [DbaProfileEntry(profile_id=100)]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_traffic_tables",
+        lambda _olt: (True, "ok", [TrafficTableEntry(index=100)]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_line_profiles",
+        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="LINE")]),
+    )
+    monkeypatch.setattr(
+        web_network_olt_profiles.olt_ssh_profiles,
+        "get_service_profiles",
+        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="SRV")]),
+    )
+
+    preview = web_network_olt_profiles.save_offer_profile_bundle(
+        db_session,
+        str(olt.id),
+        offer_id=str(offer.id),
+        vlan_id=203,
+    )
+
+    assert preview["ok"] is True
+    assert preview["saved_bundle"].id is not None
+    assert preview["saved_bundle"].download_kbps == 150_000
+    assert preview["saved_bundle"].command_plan["groups"][0]["step"] == (
+        "Create DBA profile"
+    )
+    persisted = db_session.get(OltProfileBundle, preview["saved_bundle"].id)
+    assert persisted is not None
+    assert persisted.offer_id == offer.id
+
+
+def test_imported_profile_state_context_returns_saved_profile_bundles(db_session):
+    olt = OLTDevice(name="Saved Bundle Context OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 25",
+        code="F25",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=25,
+        speed_upload_mbps=10,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    db_session.add(
+        OltProfileBundle(
+            olt_id=olt.id,
+            offer_id=offer.id,
+            name="Fiber 25",
+            checksum="a" * 64,
+            vlan_id=203,
+            download_kbps=25_000,
+            upload_kbps=10_000,
+            dba_profile_id=100,
+            download_traffic_table_id=101,
+            upload_traffic_table_id=102,
+            line_profile_id=103,
+            service_profile_id=104,
+            gem_id=1,
+            tcont_id=1,
+            command_plan={"groups": []},
+            drift_status="pending",
+        )
+    )
+    db_session.flush()
+
+    context = web_network_olt_profiles.imported_profile_state_context(
+        db_session,
+        str(olt.id),
+    )
+
+    assert [bundle.name for bundle in context["profile_bundles"]] == ["Fiber 25"]
+
+
+def test_apply_saved_profile_bundle_runs_backup_and_commands(db_session, monkeypatch):
+    olt = OLTDevice(name="Apply Bundle OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 40",
+        code="F40",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=40,
+        speed_upload_mbps=20,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    bundle = OltProfileBundle(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        name="Fiber 40",
+        checksum="b" * 64,
+        vlan_id=203,
+        download_kbps=40_000,
+        upload_kbps=20_000,
+        dba_profile_id=100,
+        download_traffic_table_id=101,
+        upload_traffic_table_id=102,
+        line_profile_id=103,
+        service_profile_id=104,
+        gem_id=1,
+        tcont_id=1,
+        command_plan={
+            "groups": [
+                {
+                    "step": "Create DBA profile",
+                    "commands": [
+                        'dba-profile add profile-id 100 profile-name "DOTMAC_DBA_F40" type3 assure 20000 max 20000'
+                    ],
+                    "requires_config_mode": True,
+                }
+            ]
+        },
+        drift_status="pending",
+    )
+    db_session.add(bundle)
+    db_session.flush()
+    calls: list[str] = []
+    backup = SimpleNamespace(id=uuid4())
+
+    def backup_runner(_db, olt_id):
+        calls.append(f"backup:{olt_id}")
+        return backup, "ok"
+
+    def command_executor(_olt, plan):
+        calls.append("execute")
+        return [
+            AppliedCommand(command=command, success=True, message="ok")
+            for command in plan.commands
+        ]
+
+    monkeypatch.setattr(
+        web_network_olt_profiles,
+        "_validate_saved_bundle_against_live_inventory",
+        lambda *_args: (True, "ok"),
+    )
+
+    result = web_network_olt_profiles.apply_saved_profile_bundle(
+        db_session,
+        str(olt.id),
+        str(bundle.id),
+        actor_is_admin=True,
+        backup_runner=backup_runner,
+        command_executor=command_executor,
+    )
+
+    assert result["ok"] is True
+    assert calls == [f"backup:{olt.id}", "execute"]
+    assert bundle.drift_status == "applied"
+    assert bundle.last_applied_at is not None
+    assert bundle.drift_details["backup_id"] == str(backup.id)
+
+
+def test_apply_saved_profile_bundle_requires_admin(db_session):
+    olt = OLTDevice(name="Apply Bundle Admin OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Fiber 45",
+        code="F45",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=45,
+        speed_upload_mbps=20,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    bundle = OltProfileBundle(
+        olt_id=olt.id,
+        offer_id=offer.id,
+        name="Fiber 45",
+        checksum="c" * 64,
+        vlan_id=203,
+        download_kbps=45_000,
+        upload_kbps=20_000,
+        dba_profile_id=100,
+        download_traffic_table_id=101,
+        upload_traffic_table_id=102,
+        line_profile_id=103,
+        service_profile_id=104,
+        gem_id=1,
+        tcont_id=1,
+        command_plan={
+            "groups": [
+                {
+                    "step": "Create DBA profile",
+                    "commands": [
+                        'dba-profile add profile-id 100 profile-name "DOTMAC_DBA_F45" type3 assure 20000 max 20000'
+                    ],
+                }
+            ]
+        },
+        drift_status="pending",
+    )
+    db_session.add(bundle)
+    db_session.flush()
+
+    result = web_network_olt_profiles.apply_saved_profile_bundle(
+        db_session,
+        str(olt.id),
+        str(bundle.id),
+        actor_is_admin=False,
+        backup_runner=lambda *_args: (_ for _ in ()).throw(AssertionError()),
+    )
+
+    assert result["ok"] is False
+    assert "admin" in result["message"].lower()
+    assert bundle.drift_status == "pending"
 
 
 def test_save_imported_profile_mapping_requires_imported_profiles(db_session):

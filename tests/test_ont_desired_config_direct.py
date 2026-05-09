@@ -236,6 +236,144 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     assert values["mgmt_ip_address"] == "192.0.2.20"
 
 
+def test_effective_config_prefers_active_offer_profile_bundle(db_session):
+    from app.models.catalog import (
+        AccessType,
+        BillingCycle,
+        BillingMode,
+        CatalogOffer,
+        OfferStatus,
+        PlanCategory,
+        PriceBasis,
+        RegionZone,
+        ServiceType,
+        Subscription,
+        SubscriptionStatus,
+    )
+    from app.models.network import (
+        OLTDevice,
+        OltLineProfile,
+        OltLineProfileGemMapping,
+        OltOnuTypeProfileMapping,
+        OltProfileBundle,
+        OltServiceProfile,
+        OntAssignment,
+        OntUnit,
+        Vlan,
+        VlanPurpose,
+    )
+    from app.models.subscriber import Subscriber
+    from app.services.network.effective_ont_config import resolve_effective_ont_config
+
+    region = RegionZone(name="Bundle Region", code="bundle-config")
+    olt = OLTDevice(name="Bundle Defaults")
+    subscriber = Subscriber(
+        first_name="Bundle",
+        last_name="Subscriber",
+        email="bundle-subscriber@example.test",
+    )
+    offer = CatalogOffer(
+        name="Fiber Bundle 100",
+        code="FB100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+    )
+    db_session.add_all([region, olt, subscriber, offer])
+    db_session.flush()
+
+    internet_vlan = Vlan(
+        region_id=region.id,
+        olt_device_id=olt.id,
+        name="Legacy Internet",
+        tag=100,
+        purpose=VlanPurpose.internet,
+    )
+    db_session.add(internet_vlan)
+    db_session.flush()
+    olt.config_pack = {"internet_vlan_id": str(internet_vlan.id)}
+
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-BUNDLE",
+        model="EG8145V5",
+        olt_device_id=olt.id,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=10, name="LEGACY_LINE"),
+            OltServiceProfile(olt_id=olt.id, profile_id=20, name="LEGACY_SERVICE"),
+        ]
+    )
+    db_session.flush()
+    db_session.add_all(
+        [
+            Subscription(
+                subscriber_id=subscriber.id,
+                offer_id=offer.id,
+                status=SubscriptionStatus.active,
+                billing_mode=BillingMode.prepaid,
+            ),
+            OntAssignment(
+                ont_unit_id=ont.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            ),
+            OltOnuTypeProfileMapping(
+                olt_id=olt.id,
+                equipment_id="EG8145V5",
+                line_profile_id=10,
+                service_profile_id=20,
+            ),
+            OltLineProfileGemMapping(
+                olt_id=olt.id,
+                line_profile_id=10,
+                source="service_port",
+                source_key="service-port:vlan:100:gem:7",
+                gem_index=7,
+                vlan_id=100,
+                usage_count=3,
+            ),
+            OltProfileBundle(
+                olt_id=olt.id,
+                offer_id=offer.id,
+                name=offer.name,
+                checksum="1" * 64,
+                vlan_id=203,
+                download_kbps=100_000,
+                upload_kbps=50_000,
+                dba_profile_id=100,
+                download_traffic_table_id=101,
+                upload_traffic_table_id=102,
+                line_profile_id=150,
+                service_profile_id=151,
+                gem_id=1,
+                tcont_id=1,
+                command_plan={"groups": []},
+                drift_status="applied",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    values = resolve_effective_ont_config(db_session, ont)["values"]
+
+    assert values["wan_vlan"] == 203
+    assert values["wan_gem_index"] == 1
+    assert values["authorization_line_profile_id"] == 150
+    assert values["authorization_service_profile_id"] == 151
+    assert values["profile_bundle_id"] is not None
+
+
 def test_effective_config_ignores_legacy_ont_flat_config_fields(db_session):
     from app.models.network import OntUnit, OnuMode
     from app.models.tr069 import Tr069AcsServer

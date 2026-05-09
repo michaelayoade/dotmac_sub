@@ -1,10 +1,16 @@
+from starlette.datastructures import FormData
+
 from app.models.catalog import (
     AccessType,
     BillingCycle,
+    CatalogOffer,
     NasVendor,
+    OfferStatus,
+    PlanCategory,
     PriceBasis,
     ServiceType,
 )
+from app.models.network import OLTDevice, OltProfileBundle, OltProfileSyncTask
 from app.schemas.catalog import (
     CatalogOfferCreate,
     CatalogOfferUpdate,
@@ -230,6 +236,75 @@ def test_ensure_offer_radius_profile_updates_existing_generated_profile(db_sessi
     assert profile.download_speed == 7000
     assert profile.upload_speed == 5000
     assert profile.mikrotik_rate_limit == "7000k/5000k"
+
+
+def test_update_offer_with_audit_stages_profile_sync_task_for_existing_bundle(
+    db_session,
+) -> None:
+    olt = OLTDevice(name="Catalog Sync OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Catalog Fiber 100",
+        code="CF100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+        olt_profile_auto_sync_enabled=True,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    db_session.add(
+        OltProfileBundle(
+            olt_id=olt.id,
+            offer_id=offer.id,
+            name=offer.name,
+            checksum="2" * 64,
+            vlan_id=203,
+            download_kbps=100_000,
+            upload_kbps=50_000,
+            dba_profile_id=100,
+            download_traffic_table_id=101,
+            upload_traffic_table_id=102,
+            line_profile_id=150,
+            service_profile_id=151,
+            gem_id=1,
+            tcont_id=1,
+            command_plan={"groups": []},
+            drift_status="applied",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    offer_data, _ = web_catalog_offers_service.offer_edit_form_data(
+        db_session,
+        str(offer.id),
+        offer,
+    )
+    offer_data["speed_download_mbps"] = "150"
+    offer_data["price_amount"] = ""
+
+    web_catalog_offers_service.update_offer_with_audit(
+        db_session,
+        str(offer.id),
+        offer,
+        offer_data,
+        FormData([]),
+        request=None,
+        actor_id="admin@example.test",
+    )
+    db_session.commit()
+
+    task = db_session.query(OltProfileSyncTask).one()
+    assert task.status == "pending"
+    assert task.trigger == "catalog_offer_update"
+    assert task.requested_by == "admin@example.test"
+    assert task.preview_payload["vlan_id"] == 203
+    assert task.preview_payload["download_kbps"] == 150_000
 
 
 def test_offer_form_context_exposes_full_billing_cycle_set(db_session):

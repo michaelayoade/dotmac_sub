@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from starlette.requests import Request
 
 from app.models.compensation_failure import CompensationFailure
 from app.models.network import (
@@ -1681,3 +1682,101 @@ def test_factory_reset_buttons_require_confirmation():
     for template in (hero_template, health_template):
         assert "/factory-reset" in template
         assert expected in template
+
+
+def _request_for_action() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/admin/network/onts/test/reboot",
+            "headers": [],
+        }
+    )
+
+
+def test_ont_reboot_source_olt_uses_omci_transport(monkeypatch):
+    """The OLT reboot button must not fall through to the TR-069 reboot path."""
+    from app.web.admin import network_onts_actions
+
+    omci_calls: list[tuple[object, str, object]] = []
+    tr069_calls: list[tuple[object, str]] = []
+
+    def fake_omci_reboot(db, ont_id, *, initiated_by=None):
+        omci_calls.append((db, ont_id, initiated_by))
+        return True, "ONT reboot command sent via OLT."
+
+    def fake_tr069_reboot(db, ont_id, *, request=None):
+        tr069_calls.append((db, ont_id))
+        return ActionResult(True, "TR-069 reboot sent")
+
+    monkeypatch.setattr(
+        network_onts_actions,
+        "_ensure_ont_write_scope",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "execute_omci_reboot",
+        fake_omci_reboot,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "execute_reboot",
+        fake_tr069_reboot,
+    )
+
+    db = object()
+    response = network_onts_actions.ont_reboot(
+        _request_for_action(),
+        "ont-1",
+        source="olt",
+        db=db,
+    )
+
+    assert response.status_code == 200
+    assert omci_calls == [(db, "ont-1", None)]
+    assert tr069_calls == []
+
+
+def test_ont_reboot_default_uses_tr069_transport(monkeypatch):
+    """Plain soft reboot remains the ACS/TR-069 reboot action."""
+    from app.web.admin import network_onts_actions
+
+    omci_calls: list[tuple[object, str]] = []
+    tr069_calls: list[tuple[object, str]] = []
+
+    def fake_omci_reboot(db, ont_id, *, initiated_by=None):
+        omci_calls.append((db, ont_id))
+        return True, "ONT reboot command sent via OLT."
+
+    def fake_tr069_reboot(db, ont_id, *, request=None):
+        tr069_calls.append((db, ont_id))
+        return ActionResult(True, "TR-069 reboot sent")
+
+    monkeypatch.setattr(
+        network_onts_actions,
+        "_ensure_ont_write_scope",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "execute_omci_reboot",
+        fake_omci_reboot,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "execute_reboot",
+        fake_tr069_reboot,
+    )
+
+    db = object()
+    response = network_onts_actions.ont_reboot(
+        _request_for_action(),
+        "ont-1",
+        db=db,
+    )
+
+    assert response.status_code == 200
+    assert tr069_calls == [(db, "ont-1")]
+    assert omci_calls == []

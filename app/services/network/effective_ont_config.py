@@ -28,6 +28,9 @@ from app.services.network.ont_desired_config import (
     get_desired_config_value,
 )
 from app.services.network.ont_management_ipam import get_ont_management_ip_record
+from app.services.network.profile_sync import (
+    resolve_profile_bundle_for_active_subscription,
+)
 
 
 def _resolve_config_pack(
@@ -251,6 +254,18 @@ def _values_from_assignment(
     wan_vlan = config_pack.internet_vlan if config_pack else None
     mgmt_vlan = config_pack.management_vlan if config_pack else None
     olt_id = config_pack.olt_id if config_pack else getattr(ont, "olt_device_id", None)
+    active_assignment = (
+        assignment if assignment is not None else (_get_active_assignment(ont) if ont else None)
+    )
+    profile_bundle = (
+        resolve_profile_bundle_for_active_subscription(
+            db,
+            olt_id=olt_id,
+            subscriber_id=getattr(active_assignment, "subscriber_id", None),
+        )
+        if active_assignment is not None
+        else None
+    )
     profile_mapping = _resolve_imported_profile_mapping(db, ont, olt_id)
     imported_line_profile_id = (
         int(profile_mapping.line_profile_id) if profile_mapping else None
@@ -270,13 +285,33 @@ def _values_from_assignment(
         line_profile_id=imported_line_profile_id,
         vlan_tag=mgmt_vlan.tag if mgmt_vlan else None,
     )
+    authorization_line_profile_id = (
+        int(profile_bundle.line_profile_id)
+        if profile_bundle is not None
+        else imported_line_profile_id
+    )
+    authorization_service_profile_id = (
+        int(profile_bundle.service_profile_id)
+        if profile_bundle is not None
+        else imported_service_profile_id
+    )
+    internet_gem_index = (
+        int(profile_bundle.gem_id)
+        if profile_bundle is not None
+        else imported_wan_gem_index
+    )
+    internet_vlan_tag = (
+        int(profile_bundle.vlan_id)
+        if profile_bundle is not None
+        else (wan_vlan.tag if wan_vlan else None)
+    )
 
     values = {
         "config_method": None,
         "onu_mode": asn_wan_mode,
         "ip_protocol": None,
         "wan_mode": asn_ip_mode,
-        "wan_vlan": wan_vlan.tag if wan_vlan else None,
+        "wan_vlan": internet_vlan_tag,
         "wan_vlan_id": str(wan_vlan.id) if wan_vlan and wan_vlan.id else None,
         "pppoe_username": asn_pppoe_username,
         "pppoe_password": asn_pppoe_password,
@@ -285,7 +320,7 @@ def _values_from_assignment(
         "wan_static_gateway": asn_static_gateway,
         "wan_static_dns": asn_static_dns,
         "wan_instance_index": cfg("wan", "instance_index", default=1),
-        "wan_gem_index": imported_wan_gem_index,
+        "wan_gem_index": internet_gem_index,
         "mgmt_ip_mode": asn_mgmt_ip_mode,
         "mgmt_vlan": mgmt_vlan.tag if mgmt_vlan else None,
         "mgmt_vlan_id": str(mgmt_vlan.id) if mgmt_vlan and mgmt_vlan.id else None,
@@ -341,8 +376,9 @@ def _values_from_assignment(
         "voip_wcd_index": _coalesce_mapping_config(
             profile_mapping, config_pack, "voip_wcd_index"
         ),
-        "authorization_line_profile_id": imported_line_profile_id,
-        "authorization_service_profile_id": imported_service_profile_id,
+        "authorization_line_profile_id": authorization_line_profile_id,
+        "authorization_service_profile_id": authorization_service_profile_id,
+        "profile_bundle_id": str(profile_bundle.id) if profile_bundle else None,
         "primary_wan_service": _mapping_value(profile_mapping, "primary_wan_service")
         or cfg("wan", "primary_service"),
     }

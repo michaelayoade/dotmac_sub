@@ -45,6 +45,11 @@ def _slug(value: str | None) -> str:
     return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
 
+def _actor_is_admin(request: Request) -> bool:
+    auth = getattr(request.state, "auth", {}) or {}
+    return "admin" in set(auth.get("roles") or [])
+
+
 def _dump_dir_for_olt(olt, dump_root: str | None) -> Path | None:
     if not dump_root:
         return None
@@ -240,6 +245,66 @@ def olt_enforce_provisioning(
     return JSONResponse(payload, status_code=status_code)
 
 
+@router.get(
+    "/profile-sync-tasks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_profile_sync_tasks(
+    request: Request,
+    status: str = "open",
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Admin queue for tariff-driven OLT profile sync tasks."""
+    context = _base_context(request, db, active_page="olts")
+    context.update(
+        web_network_olt_profiles_service.profile_sync_tasks_context(
+            db,
+            status=status,
+        )
+    )
+    context.update(
+        {
+            "message": request.query_params.get("message", ""),
+            "result_status": request.query_params.get("status", ""),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/network/olts/profile_sync_tasks.html",
+        context,
+    )
+
+
+@router.post(
+    "/profile-sync-tasks/{task_id}/approve",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_profile_sync_task_approve(
+    request: Request,
+    task_id: str,
+    scheduled_for: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Approve or schedule a pending profile sync task without applying it."""
+    if not _actor_is_admin(request):
+        message = "Only admin users can approve OLT profile sync tasks"
+        return RedirectResponse(
+            f"/admin/network/profile-sync-tasks?status=error&message={quote_plus(message)}",
+            status_code=303,
+        )
+    ok, message = web_network_olt_profiles_service.approve_profile_sync_task_from_form(
+        db,
+        task_id=task_id,
+        approved_by=web_admin_service.get_actor_id(request),
+        scheduled_for_raw=scheduled_for,
+    )
+    result_status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/profile-sync-tasks?status={result_status}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
 @router.post(
     "/olts/{olt_id}/backfill-pon-ports",
     dependencies=[Depends(require_permission("network:write"))],
@@ -365,6 +430,93 @@ def olt_imported_profile_dependency_audit(
         {
             "request": request,
             "audit": audit.to_dict(),
+        },
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/profiles/offer-sync/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_offer_profile_sync_preview(
+    request: Request,
+    olt_id: str,
+    offer_id: str = Form(""),
+    vlan_id: int = Form(...),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: dry-run generated OLT profile commands for an offer."""
+    preview = web_network_olt_profiles_service.offer_profile_sync_preview_context(
+        db,
+        olt_id,
+        offer_id=offer_id,
+        vlan_id=vlan_id,
+    )
+    return templates.TemplateResponse(
+        "admin/network/olts/_profile_sync_preview.html",
+        {
+            "request": request,
+            "preview": preview,
+        },
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/profiles/offer-sync/save",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_offer_profile_sync_save(
+    request: Request,
+    olt_id: str,
+    offer_id: str = Form(""),
+    vlan_id: int = Form(...),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: persist a generated offer profile bundle without OLT writes."""
+    preview = web_network_olt_profiles_service.save_offer_profile_bundle(
+        db,
+        olt_id,
+        offer_id=offer_id,
+        vlan_id=vlan_id,
+    )
+    if not preview.get("ok"):
+        db.rollback()
+    return templates.TemplateResponse(
+        "admin/network/olts/_profile_sync_preview.html",
+        {
+            "request": request,
+            "preview": preview,
+        },
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/profiles/bundles/{bundle_id}/apply",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_saved_profile_bundle_apply(
+    request: Request,
+    olt_id: str,
+    bundle_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: apply a saved profile bundle to an OLT."""
+    result = web_network_olt_profiles_service.apply_saved_profile_bundle(
+        db,
+        olt_id,
+        bundle_id,
+        actor_is_admin=_actor_is_admin(request),
+    )
+    if not result.get("ok"):
+        db.rollback()
+    return templates.TemplateResponse(
+        "admin/network/olts/_profile_bundle_apply_result.html",
+        {
+            "request": request,
+            "result": result,
         },
     )
 

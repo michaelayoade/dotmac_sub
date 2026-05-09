@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from app.models.network import (
 )
 from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_ssh_profiles import OltProfileEntry, _parse_profile_table
+from app.services.network.profile_sync import resolve_profile_bundle_for_offer
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +231,25 @@ def resolve_authorization_profiles_from_import(
     olt: OLTDevice,
     *,
     equipment_id: str | None,
+    offer_id: str | UUID | None = None,
 ) -> tuple[bool, str, AuthorizationProfileResolution | None]:
-    """Resolve authorization profiles from imported OLT state only."""
+    """Resolve authorization profiles from a bundle first, then imported OLT state."""
+    bundle = resolve_profile_bundle_for_offer(db, olt_id=olt.id, offer_id=offer_id)
+    if bundle is not None:
+        message = (
+            f"Resolved OLT profile bundle for offer {bundle.offer_id}: "
+            f"line {bundle.line_profile_id}, service {bundle.service_profile_id}."
+        )
+        return (
+            True,
+            message,
+            AuthorizationProfileResolution(
+                line_profile_id=bundle.line_profile_id,
+                service_profile_id=bundle.service_profile_id,
+                message=message,
+            ),
+        )
+
     normalized_equipment_id = normalize_ont_equipment_id(equipment_id)
     if not normalized_equipment_id:
         return (

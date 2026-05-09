@@ -666,6 +666,20 @@ def _validate_positive_index(value: int, field: str) -> int:
     return value
 
 
+def _validate_non_negative_int(value: int, field: str) -> int:
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _validate_optional_bandwidth(value: int | None, field: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field} must be a positive integer when provided")
+    return value
+
+
 def _extract_bridge_eth_ports(raw: Any) -> list[int]:
     if not raw:
         return [1]
@@ -710,6 +724,95 @@ def generate_service_profile_commands(
         cmds.append(f"port vlan eth 1 {validate_vlan_id(int(vlan))}")
     cmds.extend(["commit", "quit"])
     return cmds
+
+
+def generate_dba_profile_commands(
+    *,
+    profile_id: int,
+    name: str,
+    profile_type: str,
+    fixed_bw: int | None = None,
+    assured_bw: int | None = None,
+    max_bw: int | None = None,
+) -> list[str]:
+    """Generate Huawei DBA profile creation commands.
+
+    Supported DBA types:
+        type1: fixed bandwidth
+        type2: assured bandwidth
+        type3: assured + maximum bandwidth
+        type4: maximum bandwidth
+        type5: fixed + assured + maximum bandwidth
+    """
+    profile_id = _validate_positive_index(profile_id, "profile_id")
+    name = validate_profile_name(name)
+    normalized_type = str(profile_type or "").strip().lower()
+    if normalized_type not in {"type1", "type2", "type3", "type4", "type5"}:
+        raise ValueError(f"profile_type must be type1-type5: {profile_type}")
+
+    fixed_bw = _validate_optional_bandwidth(fixed_bw, "fixed_bw")
+    assured_bw = _validate_optional_bandwidth(assured_bw, "assured_bw")
+    max_bw = _validate_optional_bandwidth(max_bw, "max_bw")
+
+    required_by_type = {
+        "type1": ("fixed_bw",),
+        "type2": ("assured_bw",),
+        "type3": ("assured_bw", "max_bw"),
+        "type4": ("max_bw",),
+        "type5": ("fixed_bw", "assured_bw", "max_bw"),
+    }
+    values = {
+        "fixed_bw": fixed_bw,
+        "assured_bw": assured_bw,
+        "max_bw": max_bw,
+    }
+    missing = [
+        field for field in required_by_type[normalized_type] if values[field] is None
+    ]
+    if missing:
+        raise ValueError(
+            f"{normalized_type} DBA profile requires {', '.join(missing)}"
+        )
+    if max_bw is not None and assured_bw is not None and max_bw < assured_bw:
+        raise ValueError("max_bw must be greater than or equal to assured_bw")
+    if assured_bw is not None and fixed_bw is not None and assured_bw < fixed_bw:
+        raise ValueError("assured_bw must be greater than or equal to fixed_bw")
+
+    parts = [
+        "dba-profile add",
+        f"profile-id {profile_id}",
+        f'profile-name "{name}"',
+        normalized_type,
+    ]
+    if fixed_bw is not None:
+        parts.append(f"fix {fixed_bw}")
+    if assured_bw is not None:
+        parts.append(f"assure {assured_bw}")
+    if max_bw is not None:
+        parts.append(f"max {max_bw}")
+    return [" ".join(parts)]
+
+
+def generate_traffic_table_commands(
+    *,
+    index: int,
+    name: str,
+    cir: int,
+    pir: int,
+    priority: int = 0,
+) -> list[str]:
+    """Generate Huawei IP traffic table creation commands."""
+    index = _validate_positive_index(index, "index")
+    name = validate_profile_name(name, "name")
+    cir = _validate_non_negative_int(cir, "cir")
+    pir = _validate_non_negative_int(pir, "pir")
+    if pir < cir:
+        raise ValueError("pir must be greater than or equal to cir")
+    if priority < 0 or priority > 7:
+        raise ValueError(f"priority must be 0-7: {priority}")
+    return [
+        f'traffic table ip index {index} name "{name}" cir {cir} pir {pir} priority {priority}'
+    ]
 
 
 def generate_line_profile_commands(

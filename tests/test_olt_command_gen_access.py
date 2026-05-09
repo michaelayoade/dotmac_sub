@@ -40,9 +40,31 @@ def test_generate_native_vlan_commands_for_bridged_service() -> None:
 
 def test_profile_creation_command_generators_validate_and_render() -> None:
     from app.services.network.olt_command_gen import (
+        generate_dba_profile_commands,
         generate_line_profile_commands,
         generate_service_profile_commands,
+        generate_traffic_table_commands,
     )
+
+    assert generate_dba_profile_commands(
+        profile_id=50,
+        name="DOTMAC_100M",
+        profile_type="type3",
+        assured_bw=50000,
+        max_bw=100000,
+    ) == [
+        'dba-profile add profile-id 50 profile-name "DOTMAC_100M" type3 assure 50000 max 100000'
+    ]
+
+    assert generate_traffic_table_commands(
+        index=6,
+        name="DOTMAC_100M_IN",
+        cir=50000,
+        pir=100000,
+        priority=0,
+    ) == [
+        'traffic table ip index 6 name "DOTMAC_100M_IN" cir 50000 pir 100000 priority 0'
+    ]
 
     assert generate_service_profile_commands(
         profile_id=41,
@@ -75,6 +97,66 @@ def test_profile_creation_command_generators_validate_and_render() -> None:
 
     with pytest.raises(Exception):
         generate_service_profile_commands(profile_id=41, name='bad"name')
+
+
+def test_dba_profile_generator_validates_type_requirements() -> None:
+    from app.services.network.olt_command_gen import generate_dba_profile_commands
+
+    assert generate_dba_profile_commands(
+        profile_id=51,
+        name="FIXED",
+        profile_type="type1",
+        fixed_bw=10000,
+    ) == ['dba-profile add profile-id 51 profile-name "FIXED" type1 fix 10000']
+
+    assert generate_dba_profile_commands(
+        profile_id=52,
+        name="MIXED",
+        profile_type="type5",
+        fixed_bw=1000,
+        assured_bw=5000,
+        max_bw=10000,
+    ) == [
+        'dba-profile add profile-id 52 profile-name "MIXED" type5 fix 1000 assure 5000 max 10000'
+    ]
+
+    with pytest.raises(ValueError, match="type3 DBA profile requires"):
+        generate_dba_profile_commands(
+            profile_id=50,
+            name="BAD",
+            profile_type="type3",
+            assured_bw=50000,
+        )
+
+    with pytest.raises(ValueError, match="max_bw"):
+        generate_dba_profile_commands(
+            profile_id=50,
+            name="BAD",
+            profile_type="type3",
+            assured_bw=100000,
+            max_bw=50000,
+        )
+
+
+def test_traffic_table_generator_validates_rates_and_priority() -> None:
+    from app.services.network.olt_command_gen import generate_traffic_table_commands
+
+    with pytest.raises(ValueError, match="pir"):
+        generate_traffic_table_commands(
+            index=6,
+            name="BAD",
+            cir=100000,
+            pir=50000,
+        )
+
+    with pytest.raises(ValueError, match="priority"):
+        generate_traffic_table_commands(
+            index=6,
+            name="BAD",
+            cir=0,
+            pir=100000,
+            priority=8,
+        )
 
 
 def test_service_port_command_validates_vlan_and_gem() -> None:

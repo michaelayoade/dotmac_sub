@@ -982,6 +982,110 @@ class OltServiceProfile(Base):
     olt = relationship("OLTDevice")
 
 
+class OltProfileBundle(Base):
+    """Persisted offer-to-OLT profile bundle generated from catalog speed data."""
+
+    __tablename__ = "olt_profile_bundles"
+    __table_args__ = (
+        UniqueConstraint(
+            "olt_id",
+            "offer_id",
+            name="uq_olt_profile_bundles_olt_offer",
+        ),
+        Index("ix_olt_profile_bundles_olt_active", "olt_id", "is_active"),
+        Index("ix_olt_profile_bundles_checksum", "checksum"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    offer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("catalog_offers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    vlan_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    download_kbps: Mapped[int] = mapped_column(Integer, nullable=False)
+    upload_kbps: Mapped[int] = mapped_column(Integer, nullable=False)
+    dba_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    download_traffic_table_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    upload_traffic_table_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    line_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    service_profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    wan_profile_id: Mapped[int | None] = mapped_column(Integer)
+    tr069_profile_id: Mapped[int | None] = mapped_column(Integer)
+    gem_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    tcont_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    command_plan: Mapped[dict | None] = mapped_column(JSON)
+    drift_status: Mapped[str] = mapped_column(String(40), default="pending")
+    drift_details: Mapped[dict | None] = mapped_column(JSON)
+    last_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt = relationship("OLTDevice")
+    offer = relationship("CatalogOffer")
+
+
+class OltProfileSyncTask(Base):
+    """Reviewable task for syncing a catalog offer to an OLT profile bundle."""
+
+    __tablename__ = "olt_profile_sync_tasks"
+    __table_args__ = (
+        Index("ix_olt_profile_sync_tasks_status", "status"),
+        Index("ix_olt_profile_sync_tasks_olt_offer_status", "olt_id", "offer_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    offer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("catalog_offers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    trigger: Mapped[str] = mapped_column(String(80), default="manual", nullable=False)
+    requested_by: Mapped[str | None] = mapped_column(String(120))
+    approved_by: Mapped[str | None] = mapped_column(String(120))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    preview_payload: Mapped[dict | None] = mapped_column(JSON)
+    result_payload: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt = relationship("OLTDevice")
+    offer = relationship("CatalogOffer")
+
+
 class OltOntRegistration(Base):
     """Imported ONT registration observed on an OLT."""
 

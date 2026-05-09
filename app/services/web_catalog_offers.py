@@ -54,6 +54,9 @@ from app.services.audit_helpers import (
 )
 from app.services.catalog.subscriptions import apply_offer_radius_profile
 from app.services.common import coerce_uuid
+from app.services.network.profile_sync import (
+    enqueue_offer_profile_sync_tasks_for_existing_bundles,
+)
 from app.services.radius import reconcile_subscription_connectivity
 
 logger = logging.getLogger(__name__)
@@ -174,6 +177,7 @@ def default_offer_form() -> dict[str, object]:
         "priority": "",
         "available_for_services": True,
         "show_on_customer_portal": True,
+        "olt_profile_auto_sync_enabled": False,
         "plan_category": PlanCategory.internet.value,
         "hide_on_admin_portal": False,
         "service_description": "",
@@ -231,6 +235,8 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
         "priority": _form_str(form, "priority").strip(),
         "available_for_services": form.get("available_for_services") == "true",
         "show_on_customer_portal": form.get("show_on_customer_portal") == "true",
+        "olt_profile_auto_sync_enabled": form.get("olt_profile_auto_sync_enabled")
+        == "true",
         "plan_category": _form_str(form, "plan_category").strip()
         or PlanCategory.internet.value,
         "hide_on_admin_portal": form.get("hide_on_admin_portal") == "true",
@@ -283,6 +289,7 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         "with_vat": offer["with_vat"],
         "available_for_services": offer["available_for_services"],
         "show_on_customer_portal": offer["show_on_customer_portal"],
+        "olt_profile_auto_sync_enabled": offer["olt_profile_auto_sync_enabled"],
         "plan_category": offer.get("plan_category") or PlanCategory.internet.value,
         "hide_on_admin_portal": offer.get("hide_on_admin_portal", False),
         "description": normalize_offer_description(
@@ -627,6 +634,7 @@ def offer_edit_form_data(
         "priority": offer.priority or "",
         "available_for_services": offer.available_for_services,
         "show_on_customer_portal": offer.show_on_customer_portal,
+        "olt_profile_auto_sync_enabled": offer.olt_profile_auto_sync_enabled,
         "plan_category": offer.plan_category.value
         if offer.plan_category
         else PlanCategory.internet.value,
@@ -1107,6 +1115,17 @@ def update_offer_with_audit(
     after_snapshot = model_to_dict(updated_offer)
     changes = diff_dicts(before_snapshot, after_snapshot)
     metadata = {"changes": changes} if changes else None
+    staged_profile_sync_tasks = []
+    if _should_stage_profile_sync_tasks(changes):
+        staged_profile_sync_tasks = enqueue_offer_profile_sync_tasks_for_existing_bundles(
+            db,
+            offer=updated_offer,
+            trigger="catalog_offer_update",
+            requested_by=actor_id,
+        )
+        if staged_profile_sync_tasks:
+            metadata = metadata or {}
+            metadata["profile_sync_tasks_staged"] = len(staged_profile_sync_tasks)
 
     log_audit_event(
         db=db,
@@ -1149,6 +1168,21 @@ def update_offer_with_audit(
         )
 
     return updated_offer
+
+
+def _should_stage_profile_sync_tasks(changes: dict[str, object]) -> bool:
+    watched_fields = {
+        "name",
+        "code",
+        "status",
+        "is_active",
+        "access_type",
+        "plan_category",
+        "speed_download_mbps",
+        "speed_upload_mbps",
+        "olt_profile_auto_sync_enabled",
+    }
+    return bool(watched_fields.intersection(changes))
 
 
 def handle_offer_create_form(

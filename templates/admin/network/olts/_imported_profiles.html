@@ -27,6 +27,42 @@
         <div id="profile-dependency-audit" class="mt-4"></div>
     </div>
 
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div class="mb-3">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Offer Profile Sync Preview</h3>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Generate DBA, traffic-table, line, and service profile commands from an active fiber internet offer. This is dry-run only.</p>
+        </div>
+        <form hx-post="/admin/network/olts/{{ olt.id }}/profiles/offer-sync/preview"
+              hx-target="#profile-sync-preview"
+              hx-swap="innerHTML"
+              hx-indicator="#profile-sync-preview-spinner"
+              class="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto]">
+            {% include "components/forms/csrf_input.html" %}
+            <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Catalog offer</label>
+                <select name="offer_id" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                    {% for offer in syncable_catalog_offers %}
+                    <option value="{{ offer.id }}">{{ offer.name }}{% if offer.speed_download_mbps and offer.speed_upload_mbps %} — {{ offer.speed_download_mbps }}/{{ offer.speed_upload_mbps }} Mbps{% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Internet VLAN</label>
+                <input name="vlan_id" required inputmode="numeric" placeholder="203" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50" {% if not syncable_catalog_offers %}disabled{% endif %}>
+                    Preview
+                </button>
+                <span id="profile-sync-preview-spinner" class="htmx-indicator ml-3 pb-2 text-xs text-slate-500 dark:text-slate-400">Building...</span>
+            </div>
+        </form>
+        {% if not syncable_catalog_offers %}
+        <p class="mt-3 text-xs text-amber-600 dark:text-amber-300">No active fiber internet offers with download and upload speeds are available.</p>
+        {% endif %}
+        <div id="profile-sync-preview" class="mt-4"></div>
+    </div>
+
     <div class="grid gap-4 md:grid-cols-4">
         <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
             <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Line profiles</p>
@@ -51,6 +87,59 @@
                 {% endif %}
             </p>
         </div>
+    </div>
+
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Saved Profile Bundles</h3>
+        {% if profile_bundles %}
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <caption class="sr-only">Saved OLT profile bundles</caption>
+                <thead class="bg-slate-50 dark:bg-slate-800">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Offer</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">VLAN</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Speed</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Profile IDs</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
+                    {% for bundle in profile_bundles %}
+                    <tr>
+                        <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ bundle.name }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ bundle.vlan_id }}</td>
+                        <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ bundle.download_kbps // 1000 }}/{{ bundle.upload_kbps // 1000 }} Mbps</td>
+                        <td class="px-4 py-3 text-xs font-mono text-slate-700 dark:text-slate-300">
+                            DBA {{ bundle.dba_profile_id }} · TT {{ bundle.download_traffic_table_id }}/{{ bundle.upload_traffic_table_id }} · line {{ bundle.line_profile_id }} · srv {{ bundle.service_profile_id }}
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-700 dark:text-slate-300">
+                            <div id="profile-bundle-apply-status-{{ bundle.id }}">{{ bundle.drift_status or "pending" }}</div>
+                            <div class="font-mono">{{ bundle.checksum[:12] }}</div>
+                            {% if bundle.last_applied_at %}
+                            <div>{{ bundle.last_applied_at.strftime("%Y-%m-%d %H:%M") }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            <form hx-post="/admin/network/olts/{{ olt.id }}/profiles/bundles/{{ bundle.id }}/apply"
+                                  hx-target="#profile-bundle-apply-status-{{ bundle.id }}"
+                                  hx-swap="innerHTML"
+                                  hx-confirm="Apply this saved profile bundle to the OLT? A running-config backup will be taken first.">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                                    Apply
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        {{ empty_state("No Saved Profile Bundles", "Preview and save a catalog offer profile bundle before applying OLT profile commands.", icon="settings") }}
+        {% endif %}
     </div>
 
     <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">

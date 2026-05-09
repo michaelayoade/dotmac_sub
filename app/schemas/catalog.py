@@ -293,6 +293,7 @@ class CatalogOfferBase(BaseModel):
     priority: str | None = Field(default=None, max_length=40)
     available_for_services: bool = True
     show_on_customer_portal: bool = True
+    olt_profile_auto_sync_enabled: bool = False
     plan_category: PlanCategory = PlanCategory.internet
     hide_on_admin_portal: bool = False
     service_description: str | None = None
@@ -334,6 +335,7 @@ class CatalogOfferUpdate(BaseModel):
     priority: str | None = Field(default=None, max_length=40)
     available_for_services: bool | None = None
     show_on_customer_portal: bool | None = None
+    olt_profile_auto_sync_enabled: bool | None = None
     plan_category: PlanCategory | None = None
     hide_on_admin_portal: bool | None = None
     service_description: str | None = None

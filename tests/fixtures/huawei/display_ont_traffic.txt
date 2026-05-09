@@ -1,0 +1,10 @@
+  --------------------------------------------------------------------------
+  F/S/P               : 0/2/11
+  ONT-ID              : 13
+  Upstream bytes      : 123456789
+  Downstream bytes    : 987654321
+  Upstream packets    : 12345
+  Downstream packets  : 54321
+  Upstream rate(kbps) : 1024
+  Downstream rate(kbps): 2048.5
+  --------------------------------------------------------------------------

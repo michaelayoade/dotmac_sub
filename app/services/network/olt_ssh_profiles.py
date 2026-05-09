@@ -234,6 +234,61 @@ def _extract_dba_bandwidths(text: str) -> tuple[int | None, int | None, int | No
     return fixed, assured, max_bw
 
 
+def _parse_int_token(value: str) -> int | None:
+    value = str(value or "").strip()
+    if not value.isdigit():
+        return None
+    return int(value)
+
+
+def _is_huawei_echo_or_footer(line: str) -> bool:
+    normalized = line.strip()
+    if not normalized:
+        return True
+    lowered = normalized.lower()
+    return (
+        normalized.startswith("$")
+        or "#" in normalized
+        or lowered.startswith("display ")
+        or lowered.startswith("total")
+        or lowered.startswith("note ")
+        or lowered.startswith("in ")
+    )
+
+
+def _parse_dba_table_row(parts: list[str]) -> DbaProfileEntry | None:
+    if len(parts) < 2 or not parts[0].isdigit():
+        return None
+    profile_id = int(parts[0])
+
+    # Named table form:
+    # Profile-ID  Profile-name  Type   Fix(kbps)  Assure(kbps)  Max(kbps)
+    if len(parts) >= 6 and re.fullmatch(r"type[1-5]", parts[2], re.IGNORECASE):
+        return DbaProfileEntry(
+            profile_id=profile_id,
+            name=parts[1],
+            type=parts[2].lower(),
+            fixed_bandwidth=_parse_int_token(parts[3]),
+            assured_bandwidth=_parse_int_token(parts[4]),
+            max_bandwidth=_parse_int_token(parts[5]),
+        )
+
+    # Huawei MA5800 compact table form:
+    # Profile-ID type Bandwidth-compensation Fix Assure Max Bind-times
+    if len(parts) >= 6 and parts[1].isdigit():
+        return DbaProfileEntry(
+            profile_id=profile_id,
+            name="",
+            type=f"type{parts[1]}",
+            fixed_bandwidth=_parse_int_token(parts[3]),
+            assured_bandwidth=_parse_int_token(parts[4]),
+            max_bandwidth=_parse_int_token(parts[5]),
+            extra={"binding_count": parts[6]} if len(parts) > 6 else {},
+        )
+
+    return None
+
+
 def parse_dba_profiles(output: str) -> list[DbaProfileEntry]:
     """Parse ``display dba-profile all`` output into DBA profile entries."""
     entries: list[DbaProfileEntry] = []
@@ -278,33 +333,10 @@ def parse_dba_profiles(output: str) -> list[DbaProfileEntry]:
             continue
 
         parts = line.split()
-        if len(parts) >= 2 and parts[0].isdigit():
+        table_entry = _parse_dba_table_row(parts)
+        if table_entry is not None:
             flush_block()
-            fixed, assured, max_bw = _extract_dba_bandwidths(line)
-            type_match = _DBA_TYPE_RE.search(line)
-            if type_match and fixed is None and assured is None and max_bw is None:
-                type_idx = parts.index(type_match.group("type"))
-                numbers = [
-                    int(part)
-                    for part in parts[type_idx + 1 :]
-                    if part.isdigit()
-                ]
-                if len(numbers) >= 3:
-                    fixed, assured, max_bw = numbers[:3]
-                elif len(numbers) == 2:
-                    assured, max_bw = numbers
-                elif len(numbers) == 1:
-                    max_bw = numbers[0]
-            entries.append(
-                DbaProfileEntry(
-                    profile_id=int(parts[0]),
-                    name=parts[1],
-                    type=(type_match.group("type").lower() if type_match else ""),
-                    fixed_bandwidth=fixed,
-                    assured_bandwidth=assured,
-                    max_bandwidth=max_bw,
-                )
-            )
+            entries.append(table_entry)
             block = []
             continue
 
@@ -326,6 +358,47 @@ def _extract_traffic_rates(text: str) -> tuple[int | None, int | None]:
         elif label == "pir":
             pir = value
     return cir, pir
+
+
+def _parse_rate_token(value: str) -> int | None:
+    value = str(value or "").strip().lower()
+    if value == "off":
+        return None
+    if not value.isdigit():
+        return None
+    return int(value)
+
+
+def _parse_traffic_table_row(parts: list[str]) -> TrafficTableEntry | None:
+    if not parts or not parts[0].isdigit():
+        return None
+    index = int(parts[0])
+
+    # Named table form:
+    # Index Name CIR PIR Priority Priority-policy
+    if len(parts) >= 5 and not parts[1].isdigit() and parts[1].lower() != "off":
+        return TrafficTableEntry(
+            index=index,
+            name=parts[1],
+            cir=_parse_rate_token(parts[2]),
+            pir=_parse_rate_token(parts[3]),
+            priority=_parse_int_token(parts[4]),
+            priority_policy=parts[5] if len(parts) > 5 else "",
+        )
+
+    # Huawei MA5800 compact table form:
+    # TID CIR CBS PIR PBS Pri Copy-policy Pri-Policy
+    if len(parts) >= 6:
+        return TrafficTableEntry(
+            index=index,
+            name="",
+            cir=_parse_rate_token(parts[1]),
+            pir=_parse_rate_token(parts[3]),
+            priority=_parse_int_token(parts[5]),
+            priority_policy=parts[7] if len(parts) > 7 else "",
+        )
+
+    return None
 
 
 def parse_traffic_tables(output: str) -> list[TrafficTableEntry]:
@@ -363,31 +436,18 @@ def parse_traffic_tables(output: str) -> list[TrafficTableEntry]:
         line = raw_line.strip()
         if not line or line.startswith("-") or line.startswith("="):
             continue
+        if _is_huawei_echo_or_footer(line):
+            continue
         if _TRAFFIC_TABLE_INDEX_RE.search(line) and block:
             flush_block()
             block = [line]
             continue
 
         parts = line.split()
-        if parts and parts[0].isdigit():
+        table_entry = _parse_traffic_table_row(parts)
+        if table_entry is not None:
             flush_block()
-            cir, pir = _extract_traffic_rates(line)
-            if cir is None and pir is None:
-                numbers = [int(part) for part in parts[2:] if part.isdigit()]
-                if len(numbers) >= 2:
-                    cir, pir = numbers[:2]
-            priority = None
-            if len(parts) >= 5 and parts[4].isdigit():
-                priority = int(parts[4])
-            entries.append(
-                TrafficTableEntry(
-                    index=int(parts[0]),
-                    name=parts[1] if len(parts) > 1 else "",
-                    cir=cir,
-                    pir=pir,
-                    priority=priority,
-                )
-            )
+            entries.append(table_entry)
             block = []
             continue
 
@@ -625,7 +685,7 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
         channel.send("screen-length 0 temporary\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
-        output = _run_huawei_cmd(channel, "display traffic table ip from-index 0")
+        output = _run_huawei_cmd(channel, "display traffic table ip all")
         entries = parse_traffic_tables(output)
         return True, f"Found {len(entries)} traffic table(s)", entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:

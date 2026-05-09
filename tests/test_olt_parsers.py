@@ -147,6 +147,35 @@ class TestProfileParser:
         assert entries[1].name == "DOTMAC_100M"
         assert entries[1].assured_bandwidth == 50000
 
+    def test_parse_dba_profiles_ma5800_compact_table(self):
+        """Parse MA5800 DBA profile listing without profile names."""
+        from app.services.network.olt_ssh_profiles import parse_dba_profiles
+
+        output = """
+        $ display dba-profile all
+        display dba-profile all
+          ----------------------------------------------------------------------------
+          Profile-ID   type   Bandwidth      Fix        Assure        Max        Bind
+                             compensation    (kbps)     (kbps)        (kbps)     times
+          ----------------------------------------------------------------------------
+                   0      3           No          0       8192         20480         1
+                  50      4           No          0          0       1048000        12
+          ----------------------------------------------------------------------------
+
+        MA5800-X2#
+        """
+
+        entries = parse_dba_profiles(output)
+
+        assert [entry.profile_id for entry in entries] == [0, 50]
+        assert entries[0].name == ""
+        assert entries[0].type == "type3"
+        assert entries[0].fixed_bandwidth == 0
+        assert entries[0].assured_bandwidth == 8192
+        assert entries[0].max_bandwidth == 20480
+        assert entries[1].type == "type4"
+        assert entries[1].max_bandwidth == 1048000
+
     def test_parse_dba_profiles_detail_blocks(self):
         """Parse DBA profile detail-style output."""
         from app.services.network.olt_ssh_profiles import parse_dba_profiles
@@ -188,6 +217,38 @@ class TestProfileParser:
         assert entries[0].priority == 0
         assert entries[2].index == 20
         assert entries[2].priority == 3
+
+    def test_parse_traffic_tables_ma5800_compact_table(self):
+        """Parse MA5800 traffic table output without names."""
+        from app.services.network.olt_ssh_profiles import parse_traffic_tables
+
+        output = """
+        $ display traffic table ip from-index 0
+        display traffic table ip from-index 0
+          ---------------------------------------------------------------------------
+           TID CIR      CBS        PIR      PBS        Pri Copy-policy     Pri-Policy
+               (kbps)   (bytes)    (kbps)   (bytes)
+          ---------------------------------------------------------------------------
+             0 1024     34768      2048     69536        6 -                  tag-pri
+             6 off      off        off      off          0 -                  tag-pri
+            44 1024     329680     99968    329680       7 -                local-pri
+          ---------------------------------------------------------------------------
+          Total Num : 3
+
+        MA5800-X2#
+        """
+
+        entries = parse_traffic_tables(output)
+
+        assert [entry.index for entry in entries] == [0, 6, 44]
+        assert entries[0].name == ""
+        assert entries[0].cir == 1024
+        assert entries[0].pir == 2048
+        assert entries[0].priority == 6
+        assert entries[0].priority_policy == "tag-pri"
+        assert entries[1].cir is None
+        assert entries[1].pir is None
+        assert entries[2].priority_policy == "local-pri"
 
     def test_parse_traffic_tables_detail_blocks(self):
         """Parse detail-style IP traffic table output."""

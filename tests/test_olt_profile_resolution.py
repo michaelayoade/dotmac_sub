@@ -4,11 +4,22 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    OfferStatus,
+    PlanCategory,
+    PriceBasis,
+    ServiceType,
+)
 from app.models.network import (
     OLTDevice,
     OltLineProfile,
     OltOntRegistration,
     OltOnuTypeProfileMapping,
+    OltProfileBundle,
     OltServiceProfile,
     OntUnit,
 )
@@ -128,6 +139,76 @@ def test_resolve_authorization_profiles_requires_imported_mapping(db_session):
     assert resolved is not None
     assert resolved.line_profile_id == 40
     assert resolved.service_profile_id == 41
+
+
+def test_resolve_authorization_profiles_prefers_offer_bundle(db_session):
+    olt = OLTDevice(name="Bundle Mapping OLT", vendor="Huawei")
+    offer = CatalogOffer(
+        name="Bundle Fiber 100",
+        code="BF100",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=BillingMode.prepaid,
+        plan_category=PlanCategory.internet,
+        status=OfferStatus.active,
+        is_active=True,
+        speed_download_mbps=100,
+        speed_upload_mbps=50,
+    )
+    db_session.add_all([olt, offer])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=40, name="LEGACY_LINE"),
+            OltServiceProfile(olt_id=olt.id, profile_id=41, name="LEGACY_SERVICE"),
+        ]
+    )
+    db_session.flush()
+    db_session.add_all(
+        [
+            OltOnuTypeProfileMapping(
+                olt_id=olt.id,
+                equipment_id="EG8145V5",
+                line_profile_id=40,
+                service_profile_id=41,
+            ),
+            OltProfileBundle(
+                olt_id=olt.id,
+                offer_id=offer.id,
+                name=offer.name,
+                checksum="0" * 64,
+                vlan_id=203,
+                download_kbps=100_000,
+                upload_kbps=50_000,
+                dba_profile_id=100,
+                download_traffic_table_id=101,
+                upload_traffic_table_id=102,
+                line_profile_id=150,
+                service_profile_id=151,
+                gem_id=1,
+                tcont_id=1,
+                command_plan={"groups": []},
+                drift_status="applied",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    ok, message, resolved = resolve_authorization_profiles_from_import(
+        db_session,
+        olt,
+        equipment_id="EG8145V5",
+        offer_id=offer.id,
+    )
+
+    assert ok is True
+    assert "Resolved OLT profile bundle" in message
+    assert resolved is not None
+    assert resolved.line_profile_id == 150
+    assert resolved.service_profile_id == 151
 
 
 def test_resolve_authorization_profiles_fails_without_imported_mapping(db_session):

@@ -446,6 +446,7 @@ class CatalogOffer(Base):
     priority: Mapped[str | None] = mapped_column(String(40))
     available_for_services: Mapped[bool] = mapped_column(Boolean, default=True)
     show_on_customer_portal: Mapped[bool] = mapped_column(Boolean, default=True)
+    olt_profile_auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     plan_category: Mapped[PlanCategory] = mapped_column(
         Enum(PlanCategory, name="plancategory", create_constraint=False),
         default=PlanCategory.internet,

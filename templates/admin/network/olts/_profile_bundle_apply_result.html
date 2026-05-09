@@ -1,0 +1,18 @@
+{% set ok = result.ok if result else false %}
+{% set bundle = result.bundle if result else none %}
+<div class="space-y-1">
+    {% if ok %}
+    <div class="text-xs font-medium text-emerald-700 dark:text-emerald-300">Applied</div>
+    {% else %}
+    <div class="text-xs font-medium text-rose-700 dark:text-rose-300">Apply failed</div>
+    {% endif %}
+    <div class="text-xs text-slate-600 dark:text-slate-400">{{ result.message if result else "No result returned" }}</div>
+    {% if bundle %}
+    <div class="text-xs text-slate-500 dark:text-slate-400">
+        Status: {{ bundle.drift_status or "pending" }}
+        {% if bundle.last_applied_at %}
+        · Applied {{ bundle.last_applied_at.strftime("%Y-%m-%d %H:%M") }}
+        {% endif %}
+    </div>
+    {% endif %}
+</div>

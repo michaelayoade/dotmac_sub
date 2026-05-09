@@ -1,0 +1,15 @@
+  ----------------------------------------------------------------------------
+  Sequence                : 1024
+  Alarm ID                : 0x2e11
+  Severity                : Major
+  Alarm name              : The ONT is offline
+  Alarm raised time       : 2026-05-08 09:29:14
+  Location Info           : FrameID:0, SlotID:2, PortID:11, ONT ID:13
+
+  Sequence                : 1025
+  Alarm ID                : 0x2e12
+  Severity                : Warning
+  Alarm name              : ONT optical power is lower than threshold
+  Alarm raised time       : 2026-05-08 09:30:02
+  Location Info           : FrameID:0, SlotID:2, PortID:10, ONT ID:7
+  ----------------------------------------------------------------------------
