@@ -55,6 +55,39 @@
         </div>
     </div>
     {% endif %}
+    {% if request.query_params.get('rebooted') == 'true' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/20">
+        <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+            </svg>
+            <p class="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+                {{ request.query_params.get('message') or 'Reboot request submitted.' }}
+            </p>
+        </div>
+    </div>
+    {% endif %}
+    {% if request.query_params.get('reboot_error') == 'true' %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-900 dark:bg-rose-900/20">
+        <p class="text-sm font-medium text-rose-700 dark:text-rose-300">
+            {{ request.query_params.get('message') or 'Unable to reboot this service.' }}
+        </p>
+    </div>
+    {% endif %}
+    {% if request.query_params.get('wifi_updated') == 'true' %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-900/20">
+        <p class="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+            {{ request.query_params.get('message') or 'WiFi update submitted.' }}
+        </p>
+    </div>
+    {% endif %}
+    {% if request.query_params.get('wifi_error') == 'true' %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-900 dark:bg-rose-900/20">
+        <p class="text-sm font-medium text-rose-700 dark:text-rose-300">
+            {{ request.query_params.get('message') or 'Unable to update WiFi settings.' }}
+        </p>
+    </div>
+    {% endif %}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400 mb-2">
@@ -76,6 +109,17 @@
         </div>
         <div class="flex flex-wrap items-center gap-3">
             {% if status_value == 'active' %}
+            {% if can_reboot_ont %}
+            <form method="POST" action="/portal/services/{{ subscription.id }}/reboot" onsubmit="return confirm('Restart your connection device now? Your internet may be unavailable for a few minutes.')">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl border-2 border-sky-200 bg-sky-50 px-5 py-2.5 text-sm font-semibold text-sky-700 shadow-sm transition-all hover:border-sky-300 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300 dark:hover:border-sky-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19A9 9 0 0019 5M19 5h-5M5 19h5"/>
+                    </svg>
+                    Reboot Device
+                </button>
+            </form>
+            {% endif %}
             <a href="/portal/services/{{ subscription.id }}/change" class="inline-flex items-center gap-2 rounded-xl bg-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-600)]/20 transition-all hover:bg-[var(--color-brand-700)]">
                 Change Plan
             </a>
@@ -198,6 +242,31 @@
     {% endif %}
 
     <div class="grid gap-6 lg:grid-cols-2">
+        {% if can_update_wifi %}
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">WiFi Settings</h2>
+            <form method="POST" action="/portal/services/{{ subscription.id }}/wifi" class="mt-4 grid gap-3">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">WiFi Name</label>
+                    <input name="ssid" maxlength="32" required value="{{ customer_wifi_ssid or '' }}" class="w-full rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 dark:border-stone-700 dark:bg-stone-800 dark:text-white">
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">New Password</label>
+                        <input name="password" type="password" minlength="8" autocomplete="new-password" class="w-full rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 dark:border-stone-700 dark:bg-stone-800 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Confirm Password</label>
+                        <input name="password_confirm" type="password" minlength="8" autocomplete="new-password" class="w-full rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm text-stone-900 dark:border-stone-700 dark:bg-stone-800 dark:text-white">
+                    </div>
+                </div>
+                <button type="submit" class="w-fit rounded-lg bg-[var(--color-brand-600)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--color-brand-700)]">
+                    Update WiFi
+                </button>
+            </form>
+        </div>
+        {% endif %}
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
             <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white">Plan Summary</h2>
             <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
+from app.models.network import OntAssignment, OntUnit
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.usage import UsageRecord
 from app.services import catalog as catalog_service
@@ -35,6 +36,8 @@ from app.services.customer_portal_flow_common import (
     _compute_total_pages,
     _resolve_next_billing_date,
 )
+from app.services.web_network_ont_actions import config_setters as ont_config_setters
+from app.services.web_network_ont_actions import device_actions as ont_device_actions
 
 logger = logging.getLogger(__name__)
 
@@ -581,6 +584,8 @@ def get_service_detail(
     pppoe_creds = _get_pppoe_credentials(
         db, str(subscription.subscriber_id) if subscription else None
     )
+    customer_assignment = _resolve_customer_subscription_assignment(db, subscription)
+    customer_ont = customer_assignment.ont_unit if customer_assignment else None
 
     # Renewal context: show renewal banner when contract nearing expiration
     renewal_context: dict[str, Any] = {"show_renewal": False}
@@ -610,11 +615,124 @@ def get_service_detail(
         "next_billing_date": next_billing_date,
         "fup_status": fup_status,
         "pppoe_credentials": pppoe_creds,
+        "customer_ont": customer_ont,
+        "customer_wifi_ssid": getattr(customer_assignment, "wifi_ssid", None),
+        "can_reboot_ont": bool(
+            customer_ont is not None and subscription.status == SubscriptionStatus.active
+        ),
+        "can_update_wifi": bool(
+            customer_ont is not None and subscription.status == SubscriptionStatus.active
+        ),
         "billing_mode": billing_mode,
         "billing_mode_display": "Prepaid" if billing_mode == "prepaid" else "Postpaid",
         **renewal_context,
         **copy,
     }
+
+
+def reboot_customer_subscription_ont(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+) -> tuple[bool, str]:
+    """Reboot the active ONT associated with a customer's subscription."""
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription:
+        return False, "Subscription not found"
+
+    account_id = customer.get("account_id")
+    if not account_id or str(subscription.subscriber_id) != str(account_id):
+        return False, "Subscription not found"
+    if subscription.status != SubscriptionStatus.active:
+        return False, "Only active services can be rebooted"
+
+    ont = _resolve_customer_subscription_ont(db, subscription)
+    if ont is None:
+        return False, "No active ONT is linked to this service"
+
+    actor = f"customer:{customer.get('id') or customer.get('account_id') or account_id}"
+    result = ont_device_actions.execute_reboot(
+        db,
+        str(ont.id),
+        initiated_by=actor,
+        request=None,
+    )
+    return bool(result.success), str(result.message or "Reboot request submitted")
+
+
+def update_customer_subscription_wifi(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+    *,
+    ssid: str,
+    password: str | None = None,
+    password_confirm: str | None = None,
+) -> tuple[bool, str]:
+    """Update customer-managed WiFi SSID/password for a linked active ONT."""
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
+    if not subscription:
+        return False, "Subscription not found"
+    account_id = customer.get("account_id")
+    if not account_id or str(subscription.subscriber_id) != str(account_id):
+        return False, "Subscription not found"
+    if subscription.status != SubscriptionStatus.active:
+        return False, "Only active services can update WiFi settings"
+
+    ssid_value = str(ssid or "").strip()
+    password_value = str(password or "").strip()
+    password_confirm_value = str(password_confirm or "").strip()
+    if not ssid_value or len(ssid_value) > 32:
+        return False, "WiFi name must be 1-32 characters"
+    if password_value or password_confirm_value:
+        if password_value != password_confirm_value:
+            return False, "WiFi passwords do not match"
+        if len(password_value) < 8:
+            return False, "WiFi password must be at least 8 characters"
+
+    ont = _resolve_customer_subscription_ont(db, subscription)
+    if ont is None:
+        return False, "No active ONT is linked to this service"
+
+    result = ont_config_setters.set_wifi_config(
+        db,
+        str(ont.id),
+        ssid=ssid_value,
+        password=password_value or None,
+        request=None,
+    )
+    return bool(result.success), str(result.message or "WiFi update submitted")
+
+
+def _resolve_customer_subscription_ont(
+    db: Session,
+    subscription: Subscription,
+) -> OntUnit | None:
+    """Resolve the active ONT currently assigned to a subscription's subscriber."""
+    assignment = _resolve_customer_subscription_assignment(db, subscription)
+    return assignment.ont_unit if assignment else None
+
+
+def _resolve_customer_subscription_assignment(
+    db: Session,
+    subscription: Subscription,
+) -> OntAssignment | None:
+    """Resolve the active ONT assignment for a subscription's subscriber."""
+    if not subscription.subscriber_id:
+        return None
+    return db.scalars(
+        select(OntAssignment)
+        .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+        .where(OntAssignment.subscriber_id == subscription.subscriber_id)
+        .where(OntAssignment.active.is_(True))
+        .where(OntUnit.is_active.is_(True))
+        .order_by(OntAssignment.assigned_at.desc().nullslast())
+        .limit(1)
+    ).first()
 
 
 def get_service_orders_page(

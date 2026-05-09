@@ -2,6 +2,7 @@
 
 import logging
 from datetime import UTC, datetime
+from urllib.parse import quote_plus
 from uuid import UUID
 
 import anyio
@@ -754,6 +755,74 @@ def customer_service_detail(
             **detail,
             "active_page": "services",
         },
+    )
+
+
+@router.post("/services/{subscription_id}/reboot", response_class=HTMLResponse)
+def customer_reboot_service_ont(
+    request: Request,
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Submit a customer self-service ONT reboot request."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services.customer_portal_flow_services import (
+        reboot_customer_subscription_ont,
+    )
+
+    ok, message = reboot_customer_subscription_ont(db, customer, str(subscription_id))
+    if ok:
+        _emit_customer_event(
+            db,
+            "customer_service_reboot_requested",
+            {"subscription_id": str(subscription_id)},
+        )
+    status = "rebooted" if ok else "reboot_error"
+    return RedirectResponse(
+        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post("/services/{subscription_id}/wifi", response_class=HTMLResponse)
+def customer_update_service_wifi(
+    request: Request,
+    subscription_id: UUID,
+    ssid: str = Form(""),
+    password: str = Form(""),
+    password_confirm: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Submit a customer self-service WiFi SSID/password update."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services.customer_portal_flow_services import (
+        update_customer_subscription_wifi,
+    )
+
+    ok, message = update_customer_subscription_wifi(
+        db,
+        customer,
+        str(subscription_id),
+        ssid=ssid,
+        password=password,
+        password_confirm=password_confirm,
+    )
+    if ok:
+        _emit_customer_event(
+            db,
+            "customer_wifi_updated",
+            {"subscription_id": str(subscription_id), "ssid_updated": True},
+        )
+    status = "wifi_updated" if ok else "wifi_error"
+    return RedirectResponse(
+        url=f"/portal/services/{subscription_id}?{status}=true&message={quote_plus(message)}",
+        status_code=303,
     )
 
 

@@ -128,6 +128,26 @@ class TestCustomerRouteRegistration:
         assert ("/portal/contacts", "POST") in routes
         assert ("/portal/contacts/{contact_id}", "POST") in routes
 
+    def test_service_reboot_post_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/services/{subscription_id}/reboot", "POST") in routes
+
+    def test_service_wifi_post_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        routes = {
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/portal/services/{subscription_id}/wifi", "POST") in routes
+
 
 # ---------------------------------------------------------------------------
 # 3. Ticket creation schema
