@@ -81,6 +81,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.domains_provisioning", "router", "api", "user"),
     ("app.api.domains_monitoring", "router", "api", "user"),
     ("app.api.domains_network_access", "router", "api", "user"),
+    ("app.api.network_device_groups", "router", "api", "user"),
     ("app.api.network_catalog", "router", "api", "user"),
     ("app.api.domains_network_fiber", "router", "api", "user"),
     ("app.api.domains_usage", "router", "api", "user"),

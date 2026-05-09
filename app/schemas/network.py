@@ -76,6 +76,39 @@ class CPEDeviceRead(CPEDeviceBase):
     updated_at: datetime
 
 
+class DeviceGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    kind: str = Field(default="manual", max_length=40)
+    description: str | None = None
+
+
+class DeviceGroupRead(DeviceGroupCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeviceGroupMemberCreate(BaseModel):
+    device_type: Literal["ont", "cpe"]
+    device_id: UUID
+
+
+class DeviceGroupActionRequest(BaseModel):
+    action: Literal[
+        "reboot",
+        "factory_reset",
+        "speed_update",
+        "catv_toggle",
+        "wifi_update",
+        "voip_toggle",
+        "provision",
+    ]
+    params: dict | None = None
+
+
 class PortFields(BaseModel):
     olt_id: UUID | None = None
     port_number: int | None = Field(default=None, ge=1)

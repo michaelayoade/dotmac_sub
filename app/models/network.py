@@ -982,6 +982,73 @@ class OltServiceProfile(Base):
     olt = relationship("OLTDevice")
 
 
+class DeviceGroup(Base):
+    """Operator-defined group for batch device operations and audits."""
+
+    __tablename__ = "device_groups"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_device_groups_name"),
+        Index("ix_device_groups_kind_active", "kind", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    criteria: Mapped[dict | None] = mapped_column(JSON)
+    created_by: Mapped[str | None] = mapped_column(String(120))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    members = relationship(
+        "DeviceGroupMember",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+
+class DeviceGroupMember(Base):
+    """Device membership row for a device group."""
+
+    __tablename__ = "device_group_members"
+    __table_args__ = (
+        UniqueConstraint(
+            "group_id",
+            "device_type",
+            "device_id",
+            name="uq_device_group_members_group_device",
+        ),
+        Index("ix_device_group_members_group_type", "group_id", "device_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("device_groups.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    device_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    device_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    added_by: Mapped[str | None] = mapped_column(String(120))
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+    group = relationship("DeviceGroup", back_populates="members")
+
+
 class OltProfileBundle(Base):
     """Persisted offer-to-OLT profile bundle generated from catalog speed data."""
 

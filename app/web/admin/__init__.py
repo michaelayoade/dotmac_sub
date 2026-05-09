@@ -37,8 +37,12 @@ from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
 from app.web.admin.nas import router as nas_router
 from app.web.admin.network import router as network_router
+from app.web.admin.network_authorization_presets import (
+    router as network_authorization_presets_router,
+)
 from app.web.admin.network_core_devices import router as network_core_devices_router
 from app.web.admin.network_cpes import router as network_cpes_router
+from app.web.admin.network_device_groups import router as network_device_groups_router
 from app.web.admin.network_dns_threats import router as network_dns_threats_router
 from app.web.admin.network_fiber_plant import router as network_fiber_plant_router
 from app.web.admin.network_fiber_splice import router as network_fiber_splice_router
@@ -46,9 +50,6 @@ from app.web.admin.network_ip_management import router as network_ip_management_
 from app.web.admin.network_monitoring import router as network_monitoring_router
 from app.web.admin.network_olts_inventory import router as network_olts_inventory_router
 from app.web.admin.network_olts_profiles import router as network_olts_profiles_router
-from app.web.admin.network_authorization_presets import (
-    router as network_authorization_presets_router,
-)
 from app.web.admin.network_onts import router as network_onts_router
 from app.web.admin.network_onts_actions import router as network_onts_actions_router
 from app.web.admin.network_onts_inventory import router as network_onts_inventory_router
@@ -202,6 +203,10 @@ router.include_router(
 )
 router.include_router(
     network_core_devices_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_device_groups_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
