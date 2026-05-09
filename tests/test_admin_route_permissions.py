@@ -9,6 +9,7 @@ from app.web.admin import design_system as admin_design_system
 from app.web.admin import gis as admin_gis
 from app.web.admin import integrations as admin_integrations
 from app.web.admin import legal as admin_legal
+from app.web.admin import network_olts_profiles as admin_network_olts_profiles
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import usage as admin_usage
@@ -83,6 +84,39 @@ def test_gis_routes_require_network_permissions():
     assert _route_has_permission(admin_gis.router, "/gis", "GET", "network:read")
     assert _route_has_permission(
         admin_gis.router, "/gis/locations/new", "POST", "network:write"
+    )
+
+
+def test_profile_sync_task_routes_require_network_permissions():
+    assert _route_has_permission(
+        admin_network_olts_profiles.router,
+        "/network/profile-sync-tasks",
+        "GET",
+        "network:read",
+    )
+    assert _route_has_permission(
+        admin_network_olts_profiles.router,
+        "/network/profile-sync-tasks/{task_id}/approve",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_olts_profiles.router,
+        "/network/profile-sync-tasks/{task_id}/cancel",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_olts_profiles.router,
+        "/network/profile-sync-tasks/{task_id}/execute",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_olts_profiles.router,
+        "/network/profile-sync-tasks/{task_id}/retry",
+        "POST",
+        "network:write",
     )
 
 

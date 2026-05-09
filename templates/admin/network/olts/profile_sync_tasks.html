@@ -1,0 +1,162 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+
+{% block title %}OLT Profile Sync Tasks - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("sky", "blue") }}
+
+<div class="relative space-y-8">
+    <div>
+        <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Network
+        </a>
+    </div>
+
+    {% call page_header(
+        title="OLT Profile Sync Tasks",
+        subtitle="Review tariff-driven profile sync requests before any OLT mutation is allowed",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5h6M9 12h6M9 19h6M5 5h.01M5 12h.01M5 19h.01"/></svg>',
+        color="sky",
+        color2="blue",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Profile Sync Tasks"}]
+    ) %}{% endcall %}
+
+    {% if message %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if result_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300{% endif %}">
+        {{ message }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+        {{ stats_card("Open Tasks", open_count, color="amber") }}
+        {{ stats_card("Pending Review", pending_count, color="amber") }}
+        {{ stats_card("Approved", approved_count, color="emerald") }}
+        {{ stats_card("Scheduled", scheduled_count, color="sky", color2="blue") }}
+        {{ stats_card("Showing", task_count, color="slate") }}
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <form method="GET" action="/admin/network/profile-sync-tasks" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div class="flex-1">
+                <label for="status" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
+                <select id="status" name="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% for value, label in [("open", "Open"), ("pending", "Pending"), ("approved", "Approved"), ("scheduled", "Scheduled"), ("done", "Done"), ("all", "All")] %}
+                    <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">Filter</button>
+        </form>
+    </div>
+
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+        Approval only marks a task ready for controlled sync. OLT commands still require the live preflight, backup, and apply workflow.
+    </div>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="border-b border-slate-100 px-4 py-3 dark:border-slate-700">
+            <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">Tasks ({{ task_count }})</h3>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full">
+                <thead>
+                    <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Offer</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">OLT</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Preview</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for task in tasks %}
+                    {% set preview = task.preview_payload or {} %}
+                    <tr class="align-top hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                        <td class="px-4 py-3">
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ task.offer.name if task.offer else preview.get("offer_name", "-") }}</p>
+                            <p class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ task.offer.code if task.offer and task.offer.code else task.offer_id }}</p>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Trigger: {{ task.trigger }}</p>
+                        </td>
+                        <td class="px-4 py-3">
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ task.olt.name if task.olt else "-" }}</p>
+                            <p class="font-mono text-xs text-slate-500 dark:text-slate-400">{{ task.olt.mgmt_ip if task.olt and task.olt.mgmt_ip else task.olt_id }}</p>
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="grid gap-1 font-mono text-xs text-slate-600 dark:text-slate-300">
+                                <span>VLAN {{ preview.get("vlan_id", "-") }}</span>
+                                <span>{{ preview.get("download_kbps", "-") }} / {{ preview.get("upload_kbps", "-") }} kbps</span>
+                                <span>Line {{ preview.get("line_profile_id", "-") }} · Service {{ preview.get("service_profile_id", "-") }}</span>
+                                <span>DBA {{ preview.get("dba_profile_id", "-") }} · TT {{ preview.get("download_traffic_table_id", "-") }}/{{ preview.get("upload_traffic_table_id", "-") }}</span>
+                            </div>
+                        </td>
+                        <td class="px-4 py-3">
+                            {% if task.status == "pending" %}
+                            <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Pending</span>
+                            {% elif task.status == "approved" %}
+                            <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Approved</span>
+                            {% elif task.status == "scheduled" %}
+                            <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">Scheduled</span>
+                            {% else %}
+                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ task.status|title }}</span>
+                            {% endif %}
+                            <div class="mt-2 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+                                <p>Requested: {{ task.requested_by or "-" }}</p>
+                                {% if task.approved_by %}<p>Approved: {{ task.approved_by }}</p>{% endif %}
+                                {% if task.scheduled_for %}<p>Runs after: {{ task.scheduled_for }}</p>{% endif %}
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            {% if task.status in ["pending", "approved", "scheduled", "failed"] %}
+                            <div class="flex flex-col items-end gap-2">
+                                {% if task.status == "pending" %}
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/approve">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">Approve</button>
+                                </form>
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/approve" class="flex items-center justify-end gap-2">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="datetime-local" name="scheduled_for" class="w-44 rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <button type="submit" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Schedule</button>
+                                </form>
+                                {% endif %}
+                                {% if task.status == "approved" %}
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/execute" onsubmit="return confirm('Execute this profile sync task now? A live preflight and running-config backup will be required before OLT commands are applied.')">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">Execute</button>
+                                </form>
+                                {% endif %}
+                                {% if task.status in ["pending", "approved", "scheduled"] %}
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/cancel" class="flex items-center justify-end gap-2" onsubmit="return confirm('Cancel this profile sync task?')">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="reason" value="Cancelled from admin queue">
+                                    <button type="submit" class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300 dark:hover:bg-rose-900/20">Cancel</button>
+                                </form>
+                                {% endif %}
+                                {% if task.status == "failed" %}
+                                <form method="POST" action="/admin/network/profile-sync-tasks/{{ task.id }}/retry" onsubmit="return confirm('Return this failed task to pending review?')">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="reason" value="Retried from admin queue">
+                                    <button type="submit" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">Retry</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <span class="text-xs text-slate-500 dark:text-slate-400">No action</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No OLT profile sync tasks match this filter.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
