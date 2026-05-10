@@ -32,7 +32,7 @@ services:
       SESSION_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -53,8 +53,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
       openbao:
         condition: service_healthy
     cap_add:
@@ -97,7 +95,7 @@ services:
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -116,8 +114,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
       openbao:
         condition: service_healthy
     volumes:
@@ -197,7 +193,7 @@ services:
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -215,8 +211,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
       openbao:
         condition: service_healthy
     volumes:
@@ -253,7 +247,7 @@ services:
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -271,8 +265,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
       openbao:
         condition: service_healthy
     volumes:
@@ -304,7 +296,7 @@ services:
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -321,8 +313,6 @@ services:
       redis:
         condition: service_healthy
       victoriametrics:
-        condition: service_started
-      minio:
         condition: service_started
       openbao:
         condition: service_healthy
@@ -355,7 +345,7 @@ services:
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -372,8 +362,6 @@ services:
       redis:
         condition: service_healthy
       victoriametrics:
-        condition: service_started
-      minio:
         condition: service_started
       openbao:
         condition: service_healthy
@@ -404,7 +392,7 @@ services:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -422,8 +410,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_started
       openbao:
         condition: service_healthy
     volumes:
@@ -473,23 +459,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-  minio:
-    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
-    container_name: dotmac_sub_minio
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 128m
-    cpus: 0.5
-    pids_limit: 64
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-    command: server /data --console-address ":9001"
-    ports:
-    - 9000:9000
-    - 9001:9001
-    volumes:
-    - minio_data:/data
+
+  # MinIO moved to shared S3 server (194.163.130.216)
+
   nominatim:
     image: mediagis/nominatim:4.4
     container_name: dotmac_sub_nominatim
@@ -645,7 +617,7 @@ services:
       BANDWIDTH_POLL_INTERVAL_MS: '1000'
       BANDWIDTH_HOT_RETENTION_HOURS: '24'
       BANDWIDTH_REDIS_STREAM: bandwidth:samples
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
@@ -661,8 +633,6 @@ services:
       redis:
         condition: service_healthy
       victoriametrics:
-        condition: service_started
-      minio:
         condition: service_started
       openbao:
         condition: service_healthy
@@ -873,7 +843,6 @@ volumes:
   genieacs_mongodb_data: null
   victoriametrics_data: null
   promtail_positions: null
-  minio_data: null
 secrets:
   zabbix_db_password:
     file: ${ZABBIX_DB_PASSWORD_FILE:-./secrets/zabbix_db_password}
