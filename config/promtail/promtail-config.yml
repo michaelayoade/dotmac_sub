@@ -6,9 +6,10 @@ positions:
   filename: /positions/positions.yaml
 
 clients:
-  - url: http://loki:3100/loki/api/v1/push
+  - url: http://75.119.128.247:3100/loki/api/v1/push
     external_labels:
       host: dotmac_sub
+      server: 149.102.135.97
 
 scrape_configs:
   # Docker container logs via docker socket
