@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_admin as web_admin_service
+from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
 from app.services.network import device_groups as device_group_service
 from app.web.templates import templates
@@ -67,6 +68,15 @@ def device_groups_create(
             description=description,
             created_by=web_admin_service.get_actor_id(request),
         )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_created",
+            entity_type="device_group",
+            entity_id=str(group.id),
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata={"name": group.name},
+        )
         db.commit()
         return RedirectResponse(
             f"/admin/network/device-groups/{group.id}?status=success&message={quote_plus('Device group created')}",
@@ -109,6 +119,79 @@ def device_group_detail(
 
 
 @router.post(
+    "/{group_id}/settings",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def device_group_update(
+    request: Request,
+    group_id: str,
+    name: str = Form(""),
+    description: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        group = device_group_service.update_device_group(
+            db,
+            group_id=group_id,
+            name=name,
+            description=description,
+        )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_updated",
+            entity_type="device_group",
+            entity_id=str(group.id),
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata={"name": group.name},
+        )
+        db.commit()
+        status = "success"
+        message = "Device group updated"
+    except Exception as exc:
+        db.rollback()
+        status = "error"
+        message = str(exc)
+    return RedirectResponse(
+        f"/admin/network/device-groups/{group_id}?status={status}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{group_id}/archive",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def device_group_archive(
+    request: Request,
+    group_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        group = device_group_service.archive_device_group(db, group_id=group_id)
+        log_audit_event(
+            db,
+            request,
+            action="device_group_archived",
+            entity_type="device_group",
+            entity_id=str(group.id),
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata={"name": group.name},
+        )
+        db.commit()
+        return RedirectResponse(
+            "/admin/network/device-groups?status=success&message=Device+group+archived",
+            status_code=303,
+        )
+    except Exception as exc:
+        db.rollback()
+        return RedirectResponse(
+            f"/admin/network/device-groups/{group_id}?status=error&message={quote_plus(str(exc))}",
+            status_code=303,
+        )
+
+
+@router.post(
     "/{group_id}/members",
     dependencies=[Depends(require_permission("network:write"))],
 )
@@ -117,15 +200,30 @@ def device_group_add_member(
     group_id: str,
     device_type: str = Form("ont"),
     device_id: str = Form(""),
+    member_selector: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     try:
+        selected_type, selected_id = _parse_member_selector(
+            member_selector,
+            fallback_type=device_type,
+            fallback_id=device_id,
+        )
         device_group_service.add_device_group_member(
             db,
             group_id=group_id,
-            device_type=device_type,
-            device_id=device_id,
+            device_type=selected_type,
+            device_id=selected_id,
             added_by=web_admin_service.get_actor_id(request),
+        )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_member_added",
+            entity_type="device_group",
+            entity_id=group_id,
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata={"device_type": selected_type, "device_id": selected_id},
         )
         db.commit()
         status = "success"
@@ -145,6 +243,7 @@ def device_group_add_member(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def device_group_remove_member(
+    request: Request,
     group_id: str,
     member_id: str,
     db: Session = Depends(get_db),
@@ -154,6 +253,15 @@ def device_group_remove_member(
             db,
             group_id=group_id,
             member_id=member_id,
+        )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_member_removed",
+            entity_type="device_group",
+            entity_id=group_id,
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata={"member_id": member_id},
         )
         db.commit()
         status = "success"
@@ -185,6 +293,15 @@ def device_group_action(
             action=action,
             initiated_by=web_admin_service.get_actor_id(request),
         )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_action_queued",
+            entity_type="device_group",
+            entity_id=group_id,
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata=result,
+        )
         db.commit()
         message = (
             f"Queued {result['action']} for {result['ont_count']} ONT(s)"
@@ -198,3 +315,16 @@ def device_group_action(
         f"/admin/network/device-groups/{group_id}?status={status}&message={quote_plus(message)}",
         status_code=303,
     )
+
+
+def _parse_member_selector(
+    value: str | None,
+    *,
+    fallback_type: str,
+    fallback_id: str,
+) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if ":" in text:
+        device_type, _, device_id = text.partition(":")
+        return device_type.strip(), device_id.strip()
+    return str(fallback_type or "").strip(), str(fallback_id or "").strip()

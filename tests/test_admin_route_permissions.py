@@ -155,6 +155,18 @@ def test_device_group_routes_require_network_permissions():
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
+        "/network/device-groups/{group_id}/settings",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_device_groups.router,
+        "/network/device-groups/{group_id}/archive",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_device_groups.router,
         "/network/device-groups/{group_id}/members",
         "POST",
         "network:write",
@@ -191,6 +203,18 @@ def test_device_group_api_routes_require_network_permissions():
         "/network/device-groups/{group_id}",
         "GET",
         "network:read",
+    )
+    assert _route_has_permission(
+        api_network_device_groups.router,
+        "/network/device-groups/{group_id}",
+        "PATCH",
+        "network:write",
+    )
+    assert _route_has_permission(
+        api_network_device_groups.router,
+        "/network/device-groups/{group_id}",
+        "DELETE",
+        "network:write",
     )
     assert _route_has_permission(
         api_network_device_groups.router,

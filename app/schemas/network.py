@@ -91,6 +91,11 @@ class DeviceGroupRead(DeviceGroupCreate):
     updated_at: datetime
 
 
+class DeviceGroupUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = None
+
+
 class DeviceGroupMemberCreate(BaseModel):
     device_type: Literal["ont", "cpe"]
     device_id: UUID

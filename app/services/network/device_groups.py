@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditEvent
 from app.models.network import CPEDevice, DeviceGroup, DeviceGroupMember, OntUnit
 
 DEVICE_GROUP_MEMBER_TYPES = {"ont", "cpe"}
@@ -48,6 +49,36 @@ def create_device_group(
         is_active=True,
     )
     db.add(group)
+    db.flush()
+    return group
+
+
+def update_device_group(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    name: str,
+    description: str | None = None,
+) -> DeviceGroup:
+    """Update editable device group fields."""
+    group = _get_active_group(db, group_id)
+    name_value = str(name or "").strip()
+    if not name_value:
+        raise DeviceGroupError("Device group name is required")
+    group.name = name_value[:120]
+    group.description = str(description).strip() if description else None
+    db.flush()
+    return group
+
+
+def archive_device_group(
+    db: Session,
+    *,
+    group_id: str | UUID,
+) -> DeviceGroup:
+    """Archive a group without deleting history or memberships."""
+    group = _get_active_group(db, group_id)
+    group.is_active = False
     db.flush()
     return group
 
@@ -135,7 +166,109 @@ def device_group_detail_context(db: Session, group_id: str | UUID) -> dict[str, 
         "member_rows": rows,
         "ont_count": len(ont_ids),
         "cpe_count": len(cpe_ids),
+        "ont_candidates": list_device_group_member_candidates(
+            db,
+            group_id=group.id,
+            device_type="ont",
+        ),
+        "cpe_candidates": list_device_group_member_candidates(
+            db,
+            group_id=group.id,
+            device_type="cpe",
+        ),
+        "action_events": list_device_group_action_events(db, group_id=group.id),
     }
+
+
+def list_device_group_member_candidates(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    device_type: str,
+    search: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Return selectable devices that are not already in the group."""
+    group = _get_active_group(db, group_id)
+    normalized_type = _normalize_member_type(device_type)
+    existing_ids = set(
+        db.scalars(
+            select(DeviceGroupMember.device_id)
+            .where(DeviceGroupMember.group_id == group.id)
+            .where(DeviceGroupMember.device_type == normalized_type)
+        )
+    )
+    query_limit = max(1, min(int(limit or 100), 250))
+    search_text = str(search or "").strip()
+    if normalized_type == "ont":
+        query = (
+            select(OntUnit)
+            .where(OntUnit.is_active.is_(True))
+            .order_by(OntUnit.serial_number.asc())
+            .limit(query_limit)
+        )
+        if existing_ids:
+            query = query.where(OntUnit.id.not_in(existing_ids))
+        if search_text:
+            like = f"%{search_text}%"
+            query = query.where(
+                or_(
+                    OntUnit.serial_number.ilike(like),
+                    OntUnit.vendor_serial_number.ilike(like),
+                    OntUnit.name.ilike(like),
+                    OntUnit.mac_address.ilike(like),
+                )
+            )
+        return [
+            {
+                "id": str(ont.id),
+                "label": _device_label("ont", ont, ont.id),
+                "detail": _device_detail("ont", ont),
+            }
+            for ont in db.scalars(query)
+        ]
+
+    query = select(CPEDevice).order_by(CPEDevice.created_at.desc()).limit(query_limit)
+    if existing_ids:
+        query = query.where(CPEDevice.id.not_in(existing_ids))
+    if search_text:
+        like = f"%{search_text}%"
+        query = query.where(
+            or_(
+                CPEDevice.serial_number.ilike(like),
+                CPEDevice.mac_address.ilike(like),
+                CPEDevice.model.ilike(like),
+                CPEDevice.vendor.ilike(like),
+            )
+        )
+    return [
+        {
+            "id": str(cpe.id),
+            "label": _device_label("cpe", cpe, cpe.id),
+            "detail": _device_detail("cpe", cpe),
+        }
+        for cpe in db.scalars(query)
+    ]
+
+
+def list_device_group_action_events(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    limit: int = 20,
+) -> list[AuditEvent]:
+    """Return recent device-group audit events."""
+    group = _get_active_group(db, group_id)
+    return list(
+        db.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.entity_type == "device_group")
+            .where(AuditEvent.entity_id == str(group.id))
+            .where(AuditEvent.is_active.is_(True))
+            .order_by(AuditEvent.occurred_at.desc())
+            .limit(max(1, min(int(limit or 20), 100)))
+        )
+    )
 
 
 def add_device_group_member(
@@ -278,3 +411,19 @@ def _device_label(device_type: str, device: Any, fallback_id: UUID) -> str:
         or getattr(device, "mac_address", None)
         or fallback_id
     )
+
+
+def _device_detail(device_type: str, device: Any) -> str:
+    if device_type == "ont":
+        parts = [
+            getattr(device, "name", None),
+            getattr(device, "model", None),
+            getattr(device, "mac_address", None),
+        ]
+    else:
+        parts = [
+            getattr(device, "vendor", None),
+            getattr(device, "model", None),
+            getattr(device, "mac_address", None),
+        ]
+    return " · ".join(str(part) for part in parts if part)

@@ -10,6 +10,7 @@ from app.schemas.network import (
     DeviceGroupActionRequest,
     DeviceGroupCreate,
     DeviceGroupMemberCreate,
+    DeviceGroupUpdate,
 )
 from app.services.auth_dependencies import require_permission
 from app.services.network import device_groups as device_group_service
@@ -82,6 +83,43 @@ def get_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
             for row in context["member_rows"]
         ],
     }
+
+
+@router.patch(
+    "/{group_id}",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def update_device_group(
+    group_id: str,
+    payload: DeviceGroupUpdate,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        group = device_group_service.update_device_group(
+            db,
+            group_id=group_id,
+            name=payload.name,
+            description=payload.description,
+        )
+        db.commit()
+        return {"id": str(group.id), "name": group.name}
+    except device_group_service.DeviceGroupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/{group_id}",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def archive_device_group(group_id: str, db: Session = Depends(get_db)) -> dict:
+    try:
+        group = device_group_service.archive_device_group(db, group_id=group_id)
+        db.commit()
+        return {"id": str(group.id), "archived": True}
+    except device_group_service.DeviceGroupError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(
