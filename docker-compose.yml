@@ -1,10 +1,8 @@
-# Default logging configuration to prevent disk exhaustion
-x-logging: &default-logging
+x-logging: &id001
   driver: json-file
   options:
-    max-size: "10m"
-    max-file: "3"
-
+    max-size: 10m
+    max-file: '3'
 services:
   app:
     build: .
@@ -14,13 +12,13 @@ services:
     mem_reservation: 512m
     cpus: 2.0
     pids_limit: 256
-    logging: *default-logging
+    logging: *id001
     ports:
     - 127.0.0.1:8001:8001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -28,8 +26,8 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      SESSION_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      SESSION_REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
@@ -39,22 +37,15 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
-      # Monitoring
       SERVER_NAME: ${SERVER_NAME:-dotmac-sub-prod}
       GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     cap_add:
     - NET_ADMIN
     privileged: true
@@ -73,7 +64,8 @@ services:
     command:
     - /bin/sh
     - -c
-    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log --workers ${WEB_CONCURRENCY:-1}
+    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
+      --workers ${WEB_CONCURRENCY:-1}
   celery-worker:
     build: .
     container_name: dotmac_sub_celery_worker
@@ -82,11 +74,11 @@ services:
     mem_reservation: 1g
     cpus: 2.0
     pids_limit: 128
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -94,7 +86,7 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -102,20 +94,14 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
       NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -137,28 +123,22 @@ services:
     mem_reservation: 256m
     cpus: 0.5
     pids_limit: 64
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -180,11 +160,11 @@ services:
     mem_reservation: 512m
     cpus: 1.0
     pids_limit: 96
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -192,7 +172,7 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -200,19 +180,13 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -234,11 +208,11 @@ services:
     mem_reservation: 512m
     cpus: 1.0
     pids_limit: 96
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
       CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-840}
       CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-900}
@@ -246,7 +220,7 @@ services:
       CELERY_ACS_TASK_TIME_LIMIT: ${CELERY_ACS_TASK_TIME_LIMIT:-300}
       CELERY_LONG_TASK_SOFT_TIME_LIMIT: ${CELERY_LONG_TASK_SOFT_TIME_LIMIT:-1740}
       CELERY_LONG_TASK_TIME_LIMIT: ${CELERY_LONG_TASK_TIME_LIMIT:-1800}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -254,19 +228,13 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -288,34 +256,28 @@ services:
     mem_reservation: 256m
     cpus: 0.5
     pids_limit: 64
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       victoriametrics:
         condition: service_started
-      openbao:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -337,34 +299,28 @@ services:
     mem_reservation: 256m
     cpus: 0.5
     pids_limit: 64
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
       CELERY_WORKER_PREFETCH_MULTIPLIER: ${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       victoriametrics:
         condition: service_started
-      openbao:
-        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -386,12 +342,12 @@ services:
     mem_reservation: 256m
     cpus: 0.5
     pids_limit: 64
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -399,19 +355,13 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     volumes:
     - ./app:/app/app
     command:
@@ -420,48 +370,6 @@ services:
     - app.celery_app.celery_app
     - beat
     - --loglevel=info
-  db:
-    image: postgis/postgis:16-3.4
-    container_name: dotmac_sub_db
-    restart: unless-stopped
-    mem_limit: 3g
-    mem_reservation: 1g
-    cpus: 2.0
-    pids_limit: 160
-    logging: *default-logging
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: dotmac_sub
-    ports:
-    - 127.0.0.1:5434:5432
-    volumes:
-    - dotmac_sub_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  redis:
-    image: redis:7
-    container_name: dotmac_sub_redis
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 128m
-    cpus: 0.5
-    pids_limit: 64
-    logging: *default-logging
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    ports:
-    - 127.0.0.1:6379:6379
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # MinIO moved to shared S3 server (194.163.130.216)
-
   nominatim:
     image: mediagis/nominatim:4.4
     container_name: dotmac_sub_nominatim
@@ -486,7 +394,7 @@ services:
     mem_reservation: 64m
     cpus: 0.5
     pids_limit: 64
-    logging: *default-logging
+    logging: *id001
     ports:
     - 1812:1812/udp
     - 1813:1813/udp
@@ -530,10 +438,7 @@ services:
     mem_reservation: 1g
     cpus: 2.0
     pids_limit: 384
-    logging: *default-logging
-    # GenieACS must originate connection requests from the host routing
-    # namespace. The CPE management pools are reached via wg0 from 10.10.41.1;
-    # Docker bridge source addresses cannot reliably reach those subnets.
+    logging: *id001
     network_mode: host
     depends_on:
     - genieacs-mongodb
@@ -581,10 +486,6 @@ services:
     command:
     - -retentionPeriod=365d
     - -search.maxUniqueTimeseries=1000000
-
-  # Logging Stack - Promtail sends to shared observability server
-  # Loki and Grafana moved to shared observability server (75.119.128.247)
-
   promtail:
     image: grafana/promtail:3.0.0
     container_name: dotmac_sub_promtail
@@ -599,7 +500,6 @@ services:
     - /var/run/docker.sock:/var/run/docker.sock:ro
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: -config.file=/etc/promtail/config.yml
-
   bandwidth-poller:
     build: .
     container_name: dotmac_sub_bandwidth_poller
@@ -608,10 +508,10 @@ services:
     mem_reservation: 256m
     cpus: 1.0
     pids_limit: 96
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       BANDWIDTH_POLLING_ENABLED: 'true'
       BANDWIDTH_POLL_INTERVAL_MS: '1000'
@@ -622,20 +522,14 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       WIREGUARD_USE_NSENTER: '1'
     env_file:
     - .env
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
       victoriametrics:
         condition: service_started
-      openbao:
-        condition: service_healthy
     cap_add:
     - NET_ADMIN
     privileged: true
@@ -647,7 +541,6 @@ services:
     - python
     - -m
     - app.poller
-
   syslog-listener:
     build: .
     container_name: dotmac_sub_syslog_listener
@@ -656,28 +549,22 @@ services:
     mem_reservation: 128m
     cpus: 0.5
     pids_limit: 64
-    logging: *default-logging
+    logging: *id001
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      DATABASE_URL: postgresql+psycopg://dotmac_app:${DOTMAC_APP_PASSWORD}@75.119.157.91:5432/dotmac_sub
+      REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       SYSLOG_ENABLED: ${SYSLOG_ENABLED:-true}
-      SYSLOG_LISTEN_HOST: '0.0.0.0'
+      SYSLOG_LISTEN_HOST: 0.0.0.0
       SYSLOG_LISTEN_PORT: '514'
       AUTOFIND_COOLDOWN_SECONDS: ${AUTOFIND_COOLDOWN_SECONDS:-30}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      OPENBAO_ADDR: http://openbao:8200
-      OPENBAO_TOKEN: dotmac-sub-dev-token
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
       APP_RELEASE: ${APP_RELEASE:-}
       GIT_SHA: ${GIT_SHA:-}
     env_file:
     - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      openbao:
-        condition: service_healthy
+    depends_on: {}
     ports:
     - 514:514/udp
     volumes:
@@ -686,39 +573,6 @@ services:
     - python
     - -m
     - app.syslog
-
-  # Local SMTP sink disabled.
-  # mailhog:
-  #   image: mailhog/mailhog:latest
-  #   container_name: dotmac_sub_mailhog
-  #   restart: unless-stopped
-  #   ports:
-  #   - 1025:1025
-  #   - 8025:8025
-  openbao:
-    image: quay.io/openbao/openbao:latest
-    container_name: dotmac_sub_openbao
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 128m
-    cpus: 0.5
-    pids_limit: 96
-    ports:
-    - 127.0.0.1:8200:8200
-    environment:
-      BAO_DEV_ROOT_TOKEN_ID: dotmac-sub-dev-token
-      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-    cap_add:
-    - IPC_LOCK
-    command: server -dev
-    volumes:
-    - openbao_data:/openbao/data
-    healthcheck:
-      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-  # Zabbix Monitoring Stack
   zabbix-db:
     image: postgres:16-alpine
     container_name: dotmac_zabbix_db
@@ -736,11 +590,12 @@ services:
     volumes:
     - zabbix_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zabbix"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U zabbix
       interval: 10s
       timeout: 5s
       retries: 5
-
   zabbix-server:
     image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
     container_name: dotmac_zabbix_server
@@ -749,10 +604,9 @@ services:
     mem_reservation: 1g
     cpus: 2
     pids_limit: 512
-    logging: *default-logging
+    logging: *id001
     depends_on:
-      zabbix-db:
-        condition: service_healthy
+    - zabbix-db
     environment:
       DB_SERVER_HOST: zabbix-db
       POSTGRES_USER: zabbix
@@ -771,12 +625,13 @@ services:
     - ./config/zabbix/alertscripts:/usr/lib/zabbix/alertscripts:ro
     - ./config/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 10051 || exit 1"]
+      test:
+      - CMD-SHELL
+      - nc -z localhost 10051 || exit 1
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-
   zabbix-web:
     image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
     container_name: dotmac_zabbix_web
@@ -797,7 +652,6 @@ services:
     - zabbix_db_password
     ports:
     - 8085:8080
-
   zabbix-agent:
     image: zabbix/zabbix-agent2:7.0-alpine-latest
     container_name: dotmac_zabbix_agent
@@ -812,8 +666,6 @@ services:
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro
     privileged: true
-
-  # vmagent for scraping Zabbix metrics into VictoriaMetrics
   vmagent:
     image: victoriametrics/vmagent:v1.96.0
     container_name: dotmac_vmagent
@@ -831,11 +683,9 @@ services:
       victoriametrics:
         condition: service_started
       zabbix-server:
-        condition: service_healthy
-
+        condition: service_started
 volumes:
   zabbix_db_data: null
-  openbao_data: null
   dotmac_sub_db_data: null
   nominatim_data: null
   nominatim_flatnode: null
