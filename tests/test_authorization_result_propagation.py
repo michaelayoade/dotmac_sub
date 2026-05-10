@@ -8,13 +8,14 @@ from app.services.network import olt_api_operations
 def test_api_authorize_ont_returns_workflow_result(monkeypatch):
     """API authorization returns the completed workflow result directly."""
     failed_result = SimpleNamespace(
-        success=False,
-        status="error",
-        message="ONT authorization failed.",
+        success=True,
+        status="warning",
+        message="ONT authorized, but OLT service baseline failed.",
         ont_unit_id="ont-1",
         ont_id_on_olt=7,
         completed_authorization=True,
         partial_success=True,
+        baseline_applied=False,
         duration_ms=123,
         steps=[
             SimpleNamespace(
@@ -39,14 +40,15 @@ def test_api_authorize_ont_returns_workflow_result(monkeypatch):
         serial_number="HWTCWARNQUEUE",
     )
 
-    assert response.success is False
-    assert response.message == "ONT authorization failed."
+    assert response.success is True
+    assert response.message == "ONT authorized, but OLT service baseline failed."
     assert response.data == {
-        "status": "error",
+        "status": "warning",
         "ont_unit_id": "ont-1",
         "ont_id_on_olt": 7,
         "completed_authorization": True,
         "partial_success": True,
+        "baseline_applied": False,
         "duration_ms": 123,
         "steps": [
             {

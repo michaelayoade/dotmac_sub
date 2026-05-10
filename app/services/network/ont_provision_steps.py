@@ -1,7 +1,7 @@
 """ONT provisioning services — direct config application.
 
 RECOMMENDED APPROACH:
-    provision_with_reconciliation(db, ont_id)
+    apply_authorization_baseline(db, ont_id)
 
 This function reads config from the source of truth (OntAssignment + OltConfigPack)
 and applies it directly to the OLT. The OLT adapter handles idempotency by treating
@@ -14,8 +14,8 @@ The direct approach:
 4. No state reconciliation needed - adapter layer is idempotent
 
 Other functions in this module:
-- wait_tr069_bootstrap() — Poll for ACS registration after TR-069 binding
-- apply_saved_service_config() — Apply TR-069 service config after bootstrap
+- apply_authorization_baseline() — Apply OLT-side internet and ACS reachability
+- apply_saved_service_config() — Apply TR-069/CPE service config after bootstrap
 - deprovision() — Remove service-ports and return ONT to inventory
 - rollback_service_ports() — Cleanup on provisioning failure
 - preview_provisioning() — Show what config would be applied
@@ -437,8 +437,18 @@ def _mark_ppp_wan_requires_precreated(ont: OntUnit) -> None:
 def _provision_wan_service_instances(
     db: Session,
     ont_id: str,
+    *,
+    ont: OntUnit | None = None,
+    effective_values: dict | None = None,
 ) -> tuple[list[dict[str, object]], list[str], list[str]]:
-    """Provision WAN from resolved desired_config only."""
+    """Provision WAN from resolved desired_config only.
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit primary key.
+        ont: Optional pre-fetched ONT to avoid redundant lookup.
+        effective_values: Optional pre-resolved config values to avoid redundant resolution.
+    """
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.network.ont_action_wan import (
         set_pppoe_credentials,
@@ -446,12 +456,14 @@ def _provision_wan_service_instances(
         set_wan_static,
     )
 
-    ont = db.get(OntUnit, ont_id)
+    if ont is None:
+        ont = db.get(OntUnit, ont_id)
     if not ont:
         return [], [], ["ONT not found"]
 
-    effective = resolve_effective_ont_config(db, ont)
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    if effective_values is None:
+        effective = resolve_effective_ont_config(db, ont)
+        effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
     wan_mode = str(effective_values.get("wan_mode") or "").strip().lower()
     wan_vlan = effective_values.get("wan_vlan")
     wan_vlan_int = int(wan_vlan) if wan_vlan not in (None, "") else None
@@ -659,7 +671,12 @@ def _provision_wan_service_instances(
     return steps, needs_input, hard_failures
 
 
-def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
+def apply_saved_service_config(
+    db: Session,
+    ont_id: str,
+    *,
+    effective_config: dict | None = None,
+) -> StepResult:
     """Apply saved TR-069 service intent once the ONT is visible in ACS.
 
     WAN service provisioning is instance-backed. ONT-level desired settings are
@@ -668,6 +685,11 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     Missing operator inputs are reported in ``data["needs_input"]`` and fail the
     ACS apply step so the end-to-end provisioning result is not marked complete
     before the intended service config can be pushed.
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit primary key.
+        effective_config: Optional pre-resolved config to avoid redundant resolution.
     """
 
     from app.services.credential_crypto import decrypt_credential
@@ -680,7 +702,13 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
     if ont is None:
         return StepResult("apply_saved_service_config", False, "ONT not found")
     acs = genieacs_service
-    effective_values = resolve_effective_ont_config(db, ont).get("values", {})
+
+    # Use pre-resolved config if provided, otherwise resolve once
+    if effective_config is not None:
+        resolved = effective_config
+    else:
+        resolved = resolve_effective_ont_config(db, ont)
+    effective_values = resolved.get("values", {})
 
     steps: list[dict[str, object]] = []
     needs_input: list[str] = []
@@ -713,7 +741,9 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         _append("probe_wan_capabilities", probe_result)
 
         wan_instance_steps, wan_instance_needs, wan_instance_failures = (
-            _provision_wan_service_instances(db, ont_id)
+            _provision_wan_service_instances(
+                db, ont_id, ont=ont, effective_values=effective_values
+            )
         )
         for step in wan_instance_steps:
             step.pop("waiting", None)  # Sync-only: no waiting semantics
@@ -753,8 +783,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             ),
         )
 
-    effective = resolve_effective_ont_config(db, ont)
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    # Reuse already-resolved effective_values (no second resolution needed)
     wifi_password = None
     raw_wifi_password = effective_values.get("wifi_password")
     if raw_wifi_password:
@@ -1148,8 +1177,105 @@ def _ensure_static_management_ip_from_profile(
 
 
 # ---------------------------------------------------------------------------
-# DIRECT CONFIG-BASED PROVISIONING
+# AUTHORIZATION BASELINE / DIRECT CONFIG APPLICATION
 # ---------------------------------------------------------------------------
+
+
+def apply_authorization_baseline(
+    db: Session,
+    ont_id: str,
+    *,
+    dry_run: bool = False,
+    allow_low_optical_margin: bool = False,
+    effective_config: dict | None = None,
+) -> StepResult:
+    """Apply the OLT-side baseline required after ONT authorization.
+
+    The baseline owns network plumbing: internet service-port/VLAN/GEM mapping,
+    management service-port/IPHOST, WAN OLT binding, and TR-069 profile binding.
+    Customer CPE settings such as PPPoE credentials, WiFi, and LAN settings stay
+    in ``apply_saved_service_config`` and can be pushed from the UI after ACS
+    visibility.
+    """
+    from app.models.network import OntProvisioningStatus
+    from app.services.network.ont_status import set_provisioning_status
+
+    t0 = time.monotonic()
+    try:
+        ont = db.get(OntUnit, ont_id)
+    except Exception:
+        ont = None
+    if ont is None:
+        return StepResult("authorization_baseline", False, "ONT not found")
+
+    if effective_config is None:
+        effective_config = resolve_effective_ont_config(db, ont)
+
+    if not dry_run:
+        preflight = validate_prerequisites(
+            db,
+            ont_id,
+            ont=ont,
+            effective_config=effective_config,
+        )
+        if not bool(preflight.get("ready_to_provision", preflight.get("ready"))):
+            failed_checks = [
+                check
+                for check in preflight.get("checks", [])
+                if check.get("status") == "fail"
+            ]
+            message = "Authorization baseline blocked: prerequisites are incomplete."
+            if failed_checks:
+                message = f"{message} {failed_checks[0].get('message') or ''}".strip()
+            result = StepResult(
+                "authorization_baseline",
+                False,
+                message,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                data={
+                    "checks": preflight.get("checks", []),
+                    "failed_checks": failed_checks,
+                },
+            )
+            set_provisioning_status(ont, OntProvisioningStatus.failed, strict=False)
+            db.flush()
+            _record_step(db, ont, "authorization_baseline", result)
+            return result
+
+        set_provisioning_status(ont, OntProvisioningStatus.partial, strict=False)
+        db.flush()
+
+    result = provision_with_reconciliation(
+        db,
+        ont_id,
+        dry_run=dry_run,
+        allow_low_optical_margin=allow_low_optical_margin,
+        effective_config=effective_config,
+    )
+    baseline_result = StepResult(
+        "authorization_baseline",
+        result.success,
+        result.message,
+        result.duration_ms,
+        critical=result.critical,
+        skipped=result.skipped,
+        waiting=result.waiting,
+        data=result.data,
+    )
+
+    if not dry_run:
+        set_provisioning_status(
+            ont,
+            (
+                OntProvisioningStatus.provisioned
+                if baseline_result.success
+                else OntProvisioningStatus.failed
+            ),
+            strict=False,
+        )
+        db.flush()
+
+    return baseline_result
 
 
 def provision_with_reconciliation(
@@ -1158,6 +1284,8 @@ def provision_with_reconciliation(
     *,
     dry_run: bool = False,
     allow_low_optical_margin: bool = False,
+    effective_config: dict | None = None,
+    skip_dependency_check: bool = False,
 ) -> StepResult:
     """Provision an ONT by applying config directly. Adapter handles idempotency.
 
@@ -1173,6 +1301,8 @@ def provision_with_reconciliation(
         ont_id: OntUnit primary key.
         dry_run: If True, show what would be configured without executing.
         allow_low_optical_margin: Ignored (kept for API compatibility).
+        effective_config: Optional pre-resolved config to avoid redundant resolution.
+        skip_dependency_check: Skip OLT dependency validation (if already done by caller).
 
     Returns:
         StepResult with provisioning outcome.
@@ -1189,8 +1319,11 @@ def provision_with_reconciliation(
     if not ctx:
         return StepResult("provision", False, err)
 
-    # Resolve config from source of truth
-    effective = resolve_effective_ont_config(db, ctx.ont)
+    # Use pre-resolved config if provided, otherwise resolve
+    if effective_config is not None:
+        effective = effective_config
+    else:
+        effective = resolve_effective_ont_config(db, ctx.ont)
     values = effective.get("values", {}) if isinstance(effective, dict) else {}
     config_pack = effective.get("config_pack")
 
@@ -1243,19 +1376,21 @@ def provision_with_reconciliation(
             },
         )
 
-    olt_id = getattr(ctx.olt, "id", None)
-    if olt_id is None:
-        ms = int((time.monotonic() - t0) * 1000)
-        return StepResult("provision", False, "OLT ID not available for dependency audit", ms)
-    dependency_failure = _validate_olt_profile_dependencies(
-        db,
-        olt_id=str(olt_id),
-        duration_start=t0,
-    )
-    if dependency_failure is not None:
-        _record_step(db, ctx.ont, "provision", dependency_failure)
-        _send_failure_notification(ctx, ont_id, dependency_failure)
-        return dependency_failure
+    # Skip dependency validation if caller already validated (e.g., orchestrator preflight)
+    if not skip_dependency_check:
+        olt_id = getattr(ctx.olt, "id", None)
+        if olt_id is None:
+            ms = int((time.monotonic() - t0) * 1000)
+            return StepResult("provision", False, "OLT ID not available for dependency audit", ms)
+        dependency_failure = _validate_olt_profile_dependencies(
+            db,
+            olt_id=str(olt_id),
+            duration_start=t0,
+        )
+        if dependency_failure is not None:
+            _record_step(db, ctx.ont, "provision", dependency_failure)
+            _send_failure_notification(ctx, ont_id, dependency_failure)
+            return dependency_failure
 
     adapter = get_protocol_adapter(ctx.olt)
     steps_completed: list[str] = []

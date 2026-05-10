@@ -173,6 +173,24 @@ def test_device_group_routes_require_network_permissions():
     )
     assert _route_has_permission(
         admin_network_device_groups.router,
+        "/network/device-groups/{group_id}/member-candidates",
+        "GET",
+        "network:read",
+    )
+    assert _route_has_permission(
+        admin_network_device_groups.router,
+        "/network/device-groups/{group_id}/members/import",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_device_groups.router,
+        "/network/device-groups/{group_id}/members/import-filter",
+        "POST",
+        "network:write",
+    )
+    assert _route_has_permission(
+        admin_network_device_groups.router,
         "/network/device-groups/{group_id}/actions",
         "POST",
         "network:write",

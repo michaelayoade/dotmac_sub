@@ -443,10 +443,8 @@ def test_effective_config_backfills_management_network_from_ip_pool(db_session):
     assert values["mgmt_gateway"] == "172.16.201.1"
 
 
-def test_direct_orchestrator_stops_after_reconciliation_failure(db_session, monkeypatch):
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+def test_authorization_baseline_stops_when_ont_is_missing(db_session, monkeypatch):
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.ont_provisioning.result import StepResult
 
     calls: list[str] = []
@@ -468,20 +466,18 @@ def test_direct_orchestrator_stops_after_reconciliation_failure(db_session, monk
         lambda *args, **kwargs: calls.append("apply"),
     )
 
-    result = provision_ont_from_desired_config(db_session, "missing-ont")
+    result = apply_authorization_baseline(db_session, "missing-ont")
 
     assert result.success is False
-    assert result.failed_step == "ont_lookup"
+    assert result.step_name == "authorization_baseline"
     assert calls == []
 
 
-def test_direct_orchestrator_skips_acs_when_tr069_not_configured(
+def test_authorization_baseline_does_not_push_acs_service_config(
     db_session, monkeypatch
 ):
     from app.models.network import OntUnit
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.ont_provisioning.result import StepResult
 
     ont = OntUnit(serial_number="DESIRED-CFG-003", desired_config={"wan": {"mode": "dhcp"}})
@@ -504,11 +500,11 @@ def test_direct_orchestrator_skips_acs_when_tr069_not_configured(
         lambda *args, **kwargs: calls.append("apply"),
     )
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
 
-    result = provision_ont_from_desired_config(db_session, str(ont.id))
+    result = apply_authorization_baseline(db_session, str(ont.id))
 
     assert result.success is True
     assert calls == ["provision"]
@@ -802,13 +798,11 @@ def test_direct_provision_route_ignores_posted_tr069_profile_override(
             success=True,
             message="ok",
             duration_ms=1,
-            steps=[],
-            failed_step=None,
-            to_dict=lambda: {"success": True},
+            step_name="authorization_baseline",
         )
 
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
         fake_provision,
     )
     monkeypatch.setattr(
@@ -864,11 +858,9 @@ def test_provisioning_step_route_rejects_out_of_scope_ont(db_session, monkeypatc
     assert called is False
 
 
-def test_direct_orchestrator_updates_provisioning_status(db_session, monkeypatch):
+def test_authorization_baseline_updates_provisioning_status(db_session, monkeypatch):
     from app.models.network import OntProvisioningStatus, OntUnit
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.ont_provisioning.result import StepResult
 
     ont = OntUnit(
@@ -884,21 +876,19 @@ def test_direct_orchestrator_updates_provisioning_status(db_session, monkeypatch
         lambda *args, **kwargs: StepResult("provision_reconciled", True, "ok"),
     )
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
 
-    result = provision_ont_from_desired_config(db_session, str(ont.id))
+    result = apply_authorization_baseline(db_session, str(ont.id))
 
     assert result.success is True
     assert ont.provisioning_status == OntProvisioningStatus.provisioned
 
 
-def test_direct_orchestrator_marks_failed_status(db_session, monkeypatch):
+def test_authorization_baseline_marks_failed_status(db_session, monkeypatch):
     from app.models.network import OntProvisioningStatus, OntUnit
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.ont_provisioning.result import StepResult
 
     ont = OntUnit(
@@ -916,23 +906,21 @@ def test_direct_orchestrator_marks_failed_status(db_session, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
 
-    result = provision_ont_from_desired_config(db_session, str(ont.id))
+    result = apply_authorization_baseline(db_session, str(ont.id))
 
     assert result.success is False
     assert ont.provisioning_status == OntProvisioningStatus.failed
 
 
-def test_direct_orchestrator_blocks_before_olt_write_when_acs_not_ready(
+def test_authorization_baseline_blocks_before_olt_write_when_preflight_fails(
     db_session, monkeypatch
 ):
     from app.models.network import OntProvisioningStatus, OntUnit
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-ACS-BLOCK",
@@ -943,14 +931,14 @@ def test_direct_orchestrator_blocks_before_olt_write_when_acs_not_ready(
     db_session.flush()
 
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.preflight.validate_prerequisites",
+        "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {
             "ready_to_provision": False,
             "checks": [
                 {
                     "name": "ACS connection",
                     "status": "fail",
-                    "message": "Authorize the ONT and wait for ACS inform before provisioning",
+                    "message": "Complete ACS configuration before provisioning",
                 }
             ],
         },
@@ -960,15 +948,78 @@ def test_direct_orchestrator_blocks_before_olt_write_when_acs_not_ready(
         lambda *args, **kwargs: pytest.fail("OLT provisioning should not start"),
     )
 
-    result = provision_ont_from_desired_config(db_session, str(ont.id))
+    result = apply_authorization_baseline(db_session, str(ont.id))
 
     assert result.success is False
-    assert result.failed_step == "preflight"
-    assert result.steps[0].step_name == "preflight"
+    assert result.step_name == "authorization_baseline"
     assert ont.provisioning_status == OntProvisioningStatus.failed
 
 
-def test_preflight_requires_acs_inform_before_provisioning(db_session, monkeypatch):
+def test_authorization_baseline_continues_when_acs_inform_is_warning(
+    db_session, monkeypatch
+):
+    from app.models.network import OntProvisioningStatus, OntUnit
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
+    from app.services.network.ont_provisioning.result import StepResult
+
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-ACS-WARN",
+        desired_config={
+            "tr069_acs_server_id": "00000000-0000-0000-0000-000000000001",
+            "tr069_olt_profile_id": 7,
+        },
+        provisioning_status=OntProvisioningStatus.unprovisioned,
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.validate_prerequisites",
+        lambda *args, **kwargs: {
+            "ready_to_provision": True,
+            "checks": [
+                {
+                    "name": "ACS connection",
+                    "status": "warn",
+                    "message": "ONT has not informed ACS yet; provisioning will bind TR-069 and wait for inform",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.network.effective_ont_config.resolve_effective_ont_config",
+        lambda *args, **kwargs: {
+            "values": {
+                "tr069_acs_server_id": "00000000-0000-0000-0000-000000000001",
+                "tr069_olt_profile_id": 7,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.provision_with_reconciliation",
+        lambda *args, **kwargs: calls.append("provision")
+        or StepResult("provision_reconciled", True, "ok"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
+        lambda *args, **kwargs: calls.append("wait")
+        or StepResult("wait_tr069_bootstrap", True, "informed"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.apply_saved_service_config",
+        lambda *args, **kwargs: calls.append("apply")
+        or StepResult("apply_saved_service_config", True, "applied"),
+    )
+
+    result = apply_authorization_baseline(db_session, str(ont.id))
+
+    assert result.success is True
+    assert calls == ["provision"]
+    assert ont.provisioning_status == OntProvisioningStatus.provisioned
+
+
+def test_preflight_warns_when_acs_has_not_informed_yet(db_session, monkeypatch):
     from app.models.network import OntAuthorizationStatus, OntUnit
     from app.services.network.ont_provisioning import preflight
 
@@ -998,9 +1049,8 @@ def test_preflight_requires_acs_inform_before_provisioning(db_session, monkeypat
         check for check in result["checks"] if check["name"] == "ACS connection"
     )
 
-    assert result["ready_to_provision"] is False
-    assert acs_connection["status"] == "fail"
-    assert "wait for ACS inform" in acs_connection["message"]
+    assert acs_connection["status"] == "warn"
+    assert "has not informed ACS yet" in acs_connection["message"]
 
 
 def test_web_wan_config_uses_config_pack_vlan_and_persists_desired_state(

@@ -12,6 +12,7 @@ from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice
+from app.services.network.config_evidence import build_ont_config_evidence
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_status import (
@@ -450,6 +451,7 @@ def operational_health_context(
         ont_plan=ont_plan,
         snapshots=snapshots,
     )
+    config_evidence = build_ont_config_evidence(db, ont_id) if ont else None
 
     # Compute internet credentials status for health checks
     effective = resolve_effective_ont_config(db, ont) if ont else {}
@@ -546,6 +548,7 @@ def operational_health_context(
         "operation_message": message,
         "operation_message_type": message_type,
         "operations_runbook": operations_runbook,
+        "config_evidence": config_evidence,
         "config_snapshots": snapshots,
         "return_impact": {
             "service_ports": "OLT service ports will be removed when reachable.",

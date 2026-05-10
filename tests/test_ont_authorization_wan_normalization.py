@@ -45,8 +45,12 @@ def _allocate_management_ip_for_ont(
     )
 
 
-def test_authorization_does_not_apply_followup_tasks_inline(db_session, monkeypatch):
-    """Authorization only registers the ONT."""
+def test_authorization_applies_olt_baseline_but_not_followup_tasks_inline(
+    db_session, monkeypatch
+):
+    """Authorization registers the ONT and applies OLT-side service plumbing."""
+    from app.services.network.ont_provisioning.result import StepResult
+
     result = ont_authorization.AuthorizationWorkflowResult(
         success=True,
         message="ONT authorization completed.",
@@ -61,6 +65,10 @@ def test_authorization_does_not_apply_followup_tasks_inline(db_session, monkeypa
         "authorize_autofind_ont",
         lambda *args, **kwargs: result,
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        lambda *args, **kwargs: StepResult("authorization_baseline", True, "baseline ok"),
+    )
     response = ont_authorization.authorize_ont(
         db_session,
         "olt-1",
@@ -72,7 +80,7 @@ def test_authorization_does_not_apply_followup_tasks_inline(db_session, monkeypa
     assert response.completed_authorization is True
     assert response.partial_success is False
     assert response.message == "ONT authorization completed."
-    assert [step.name for step in response.steps] == []
+    assert [step.name for step in response.steps] == ["Apply Authorization Baseline"]
 
 
 def test_management_ip_allocation_rejects_released_address_from_different_pool(
@@ -677,7 +685,9 @@ def test_authorization_fails_before_adapter_when_dependency_audit_fails(
 def test_authorization_ignores_explicit_foundation_failures(
     db_session, monkeypatch
 ):
-    """Authorization does not run follow-up service configuration inline."""
+    """A failed OLT baseline is reported as partial authorization."""
+    from app.services.network.ont_provisioning.result import StepResult
+
     result = ont_authorization.AuthorizationWorkflowResult(
         success=True,
         message="ONT authorization completed.",
@@ -692,6 +702,12 @@ def test_authorization_ignores_explicit_foundation_failures(
         "authorize_autofind_ont",
         lambda *args, **kwargs: result,
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        lambda *args, **kwargs: StepResult(
+            "authorization_baseline", False, "OLT baseline failed"
+        ),
+    )
     response = ont_authorization.authorize_ont(
         db_session,
         "olt-1",
@@ -701,16 +717,21 @@ def test_authorization_ignores_explicit_foundation_failures(
 
     assert response.success is True
     assert response.completed_authorization is True
-    assert response.partial_success is False
-    assert response.status == "success"
-    assert response.message == "ONT authorization completed."
-    assert response.steps == []
+    assert response.partial_success is True
+    assert response.baseline_applied is False
+    assert response.status == "warning"
+    assert response.message == (
+        "ONT authorized, but OLT service baseline failed: OLT baseline failed"
+    )
+    assert [step.name for step in response.steps] == ["Apply Authorization Baseline"]
 
 
-def test_authorization_duration_excludes_explicit_foundation_work(
+def test_authorization_duration_includes_olt_baseline_work(
     db_session, monkeypatch
 ):
-    """The synchronous result duration covers only OLT registration work."""
+    """The synchronous result duration covers authorization and baseline work."""
+    from app.services.network.ont_provisioning.result import StepResult
+
     result = ont_authorization.AuthorizationWorkflowResult(
         success=True,
         message="ONT authorization completed.",
@@ -728,6 +749,10 @@ def test_authorization_duration_excludes_explicit_foundation_work(
         "authorize_autofind_ont",
         lambda *args, **kwargs: result,
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        lambda *args, **kwargs: StepResult("authorization_baseline", True, "baseline ok"),
+    )
     response = ont_authorization.authorize_ont(
         db_session,
         "olt-1",
@@ -736,4 +761,4 @@ def test_authorization_duration_excludes_explicit_foundation_work(
     )
 
     assert response.duration_ms == 5000
-    assert response.steps == []
+    assert [step.name for step in response.steps] == ["Apply Authorization Baseline"]

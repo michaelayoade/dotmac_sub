@@ -45,7 +45,7 @@ def authorize_ont(
         request=request,
     )
     return OltApiWriteResult(
-        result.success,
+        result.success or result.partial_success,
         result.message,
         _serialize_authorization_result(result),
     )
@@ -60,6 +60,7 @@ def _serialize_authorization_result(
         "ont_id_on_olt": result.ont_id_on_olt,
         "completed_authorization": result.completed_authorization,
         "partial_success": result.partial_success,
+        "baseline_applied": getattr(result, "baseline_applied", None),
         "duration_ms": result.duration_ms,
         "steps": [
             {

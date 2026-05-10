@@ -132,7 +132,12 @@ def provision_ont(
     wait_for_acs: bool = True,
     apply_acs_config: bool = True,
 ) -> dict[str, Any]:
-    """Provision one ONT from OLT defaults plus OntUnit.desired_config."""
+    """Repair/re-apply OLT authorization baseline for one ONT.
+
+    Normal authorization applies this baseline automatically. The ACS flags are
+    retained for backward-compatible task payloads and intentionally ignored.
+    """
+    del wait_for_acs, apply_acs_config
     del initiated_by  # Reserved for audit propagation when needed.
     with db_session_adapter.session() as db:
         if bulk_item_id:
@@ -142,8 +147,8 @@ def provision_ont(
             db.commit()
 
         try:
-            from app.services.network.ont_provisioning.orchestrator import (
-                provision_ont_from_desired_config,
+            from app.services.network.ont_provision_steps import (
+                apply_authorization_baseline,
             )
             from app.services.network.provisioning_events import (
                 provisioning_correlation,
@@ -151,22 +156,22 @@ def provision_ont(
 
             effective_correlation = correlation_key or f"provision:{ont_id}"
             with provisioning_correlation(effective_correlation):
-                result = provision_ont_from_desired_config(
+                result = apply_authorization_baseline(
                     db,
                     ont_id,
                     dry_run=dry_run,
                     allow_low_optical_margin=allow_low_optical_margin,
-                    wait_for_acs=wait_for_acs,
-                    apply_acs_config=apply_acs_config,
                 )
-            payload = result.to_dict()
-            payload.update(
-                {
-                    "bulk_run_id": bulk_run_id,
-                    "bulk_item_id": bulk_item_id,
-                    "correlation_key": effective_correlation,
-                }
-            )
+            payload = {
+                "success": result.success,
+                "message": result.message,
+                "ont_id": ont_id,
+                "duration_ms": result.duration_ms,
+                "step_name": result.step_name,
+                "bulk_run_id": bulk_run_id,
+                "bulk_item_id": bulk_item_id,
+                "correlation_key": effective_correlation,
+            }
             if bulk_item_id:
                 from app.services.network.bulk_provisioning import (
                     mark_bulk_item_completed,
@@ -176,7 +181,7 @@ def provision_ont(
                 db.commit()
             return payload
         except Exception as exc:
-            logger.exception("Direct ONT provisioning task failed for %s", ont_id)
+            logger.exception("ONT provisioning task failed for %s", ont_id)
             if bulk_item_id:
                 from app.services.network.bulk_provisioning import mark_bulk_item_failed
 
@@ -205,11 +210,12 @@ def queue_bulk_provisioning(
     wait_for_acs: bool = True,
     apply_acs_config: bool = True,
 ) -> dict[str, Any]:
-    """Execute direct provisioning for many ONTs synchronously.
+    """Repair/re-apply OLT authorization baseline for many ONTs synchronously.
 
-    The task name is retained for compatibility with old callers, but it no
-    longer dispatches child provisioning jobs.
+    Normal authorization applies this baseline automatically. The ACS flags are
+    retained for backward-compatible task payloads and intentionally ignored.
     """
+    del wait_for_acs, apply_acs_config
     bulk_items_by_ont_id: dict[str, Any] = {}
     if bulk_run_id:
         with db_session_adapter.read_session() as session:
@@ -234,15 +240,12 @@ def queue_bulk_provisioning(
             "tasks": [],
         }
 
-    max_parallel = max(1, min(int(max_parallel or 10), 50))
-    chunk_delay_seconds = max(0, int(chunk_delay_seconds or 0))
-    del max_parallel, chunk_delay_seconds
+    del max_parallel, chunk_delay_seconds  # No longer used
     tasks: list[dict[str, Any]] = []
     errors = 0
+    failed_results = 0
 
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.provisioning_events import provisioning_correlation
 
     for ont_id in unique_ont_ids:
@@ -264,25 +267,26 @@ def queue_bulk_provisioning(
                     db.flush()
 
                 with provisioning_correlation(item_correlation_key):
-                    result = provision_ont_from_desired_config(
+                    result = apply_authorization_baseline(
                         db,
                         ont_id,
                         dry_run=dry_run,
                         allow_low_optical_margin=allow_low_optical_margin,
-                        wait_for_acs=wait_for_acs,
-                        apply_acs_config=apply_acs_config,
                     )
-                payload = result.to_dict()
-                payload.update(
-                    {
-                        "bulk_run_id": bulk_run_id,
-                        "bulk_item_id": str(bulk_item.id) if bulk_item is not None else None,
-                        "correlation_key": item_correlation_key,
-                    }
-                )
+                payload = {
+                    "success": result.success,
+                    "message": result.message,
+                    "ont_id": ont_id,
+                    "duration_ms": result.duration_ms,
+                    "bulk_run_id": bulk_run_id,
+                    "bulk_item_id": str(bulk_item.id) if bulk_item is not None else None,
+                    "correlation_key": item_correlation_key,
+                }
                 if bulk_item is not None:
                     mark_bulk_item_completed(db, bulk_item.id, payload)
                 db.commit()
+            if not result.success:
+                failed_results += 1
             tasks.append(
                 {
                     "ont_id": ont_id,
@@ -314,12 +318,12 @@ def queue_bulk_provisioning(
 
     stats = {
         "processed": len(tasks) - errors,
-        "errors": errors,
+        "errors": errors + failed_results,
+        "exceptions": errors,
+        "failed": failed_results,
         "skipped": len(ont_ids) - len(unique_ont_ids),
-        "max_parallel": 1,
-        "chunks": 1,
         "bulk_run_id": bulk_run_id,
         "tasks": tasks,
     }
-    logger.info("Bulk direct provisioning executed: %s", stats)
+    logger.info("Bulk provisioning executed: %s", stats)
     return stats

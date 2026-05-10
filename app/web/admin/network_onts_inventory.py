@@ -303,7 +303,14 @@ def ont_detail(
         )
 
     # New tabbed UI tabs
-    allowed_tabs = {"overview", "configuration", "diagnostics", "hosts", "files"}
+    allowed_tabs = {
+        "overview",
+        "configuration",
+        "diagnostics",
+        "operations",
+        "hosts",
+        "files",
+    }
     tab_aliases = {
         # Legacy tab names -> new tabs
         "status": "overview",
@@ -321,6 +328,8 @@ def ont_detail(
         "tr069": "diagnostics",
         "charts": "diagnostics",
         "history": "overview",
+        "operational-health": "operations",
+        "runbook": "operations",
     }
     tab = tab_aliases.get(tab, tab)
     active_tab = tab if tab in allowed_tabs else "overview"

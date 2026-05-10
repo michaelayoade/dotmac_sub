@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -118,6 +118,29 @@ def device_group_detail(
     return templates.TemplateResponse("admin/network/device-groups/detail.html", context)
 
 
+@router.get(
+    "/{group_id}/member-candidates",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def device_group_member_candidates(
+    group_id: str,
+    device_type: str = Query("ont"),
+    q: str = Query(""),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    try:
+        items = device_group_service.list_device_group_member_candidates(
+            db,
+            group_id=group_id,
+            device_type=device_type,
+            search=q,
+            limit=50,
+        )
+        return JSONResponse({"items": items})
+    except device_group_service.DeviceGroupError as exc:
+        return JSONResponse({"items": [], "error": str(exc)}, status_code=400)
+
+
 @router.post(
     "/{group_id}/settings",
     dependencies=[Depends(require_permission("network:write"))],
@@ -228,6 +251,91 @@ def device_group_add_member(
         db.commit()
         status = "success"
         message = "Device added to group"
+    except Exception as exc:
+        db.rollback()
+        status = "error"
+        message = str(exc)
+    return RedirectResponse(
+        f"/admin/network/device-groups/{group_id}?status={status}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{group_id}/members/import",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def device_group_import_members(
+    request: Request,
+    group_id: str,
+    device_type: str = Form("ont"),
+    identifiers: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        result = device_group_service.add_device_group_members_from_text(
+            db,
+            group_id=group_id,
+            device_type=device_type,
+            identifiers=identifiers,
+            added_by=web_admin_service.get_actor_id(request),
+        )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_members_imported",
+            entity_type="device_group",
+            entity_id=group_id,
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata=result,
+        )
+        db.commit()
+        message = (
+            f"Imported {result['added']} device(s); "
+            f"{result['existing']} already present, {len(result['missing'])} not found"
+        )
+        status = "success" if not result["missing"] else "error"
+    except Exception as exc:
+        db.rollback()
+        status = "error"
+        message = str(exc)
+    return RedirectResponse(
+        f"/admin/network/device-groups/{group_id}?status={status}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{group_id}/members/import-filter",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def device_group_import_members_by_filter(
+    request: Request,
+    group_id: str,
+    device_type: str = Form("ont"),
+    search: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        result = device_group_service.add_device_group_members_from_filter(
+            db,
+            group_id=group_id,
+            device_type=device_type,
+            search=search,
+            added_by=web_admin_service.get_actor_id(request),
+        )
+        log_audit_event(
+            db,
+            request,
+            action="device_group_members_imported_by_filter",
+            entity_type="device_group",
+            entity_id=group_id,
+            actor_id=web_admin_service.get_actor_id(request),
+            metadata=result,
+        )
+        db.commit()
+        status = "success"
+        message = f"Imported {result['added']} matching device(s)"
     except Exception as exc:
         db.rollback()
         status = "error"

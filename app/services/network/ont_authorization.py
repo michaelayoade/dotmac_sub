@@ -68,6 +68,7 @@ class AuthorizationWorkflowResult:
     status: str = "error"
     completed_authorization: bool = False
     partial_success: bool = False
+    baseline_applied: bool | None = None
     duration_ms: int = 0
 
     @property
@@ -84,6 +85,7 @@ class AuthorizationWorkflowResult:
             "status": self.status,
             "completed_authorization": self.completed_authorization,
             "partial_success": self.partial_success,
+            "baseline_applied": self.baseline_applied,
             "duration_ms": self.duration_ms,
             "steps": [
                 {
@@ -688,20 +690,33 @@ def authorize_ont(
     force_reauthorize: bool = False,
     preset_id: str | None = None,
     request: Request | None = None,
+    provision: bool = True,
 ) -> AuthorizationWorkflowResult:
-    """Authorize ONT on the OLT, persist inventory state, and audit log.
+    """Authorize ONT on the OLT, apply the OLT baseline, and audit log.
 
     This is the main entry point for ONT authorization. It:
-    1. Registers the ONT serial on the OLT
+    1. Registers the ONT serial on the OLT (line/service profiles)
     2. Creates/updates the OntUnit record
-    3. Logs the action for audit
+    3. Applies OLT-side internet and ACS reachability config
+    4. Logs the action for audit
 
-    Connectivity setup is intentionally not run inline here. After authorization,
-    callers should apply the OMCI configuration through explicit ONT config actions.
+    After TR-069 binding, the ONT reboots and connects to ACS automatically.
+
+    Args:
+        db: Database session.
+        olt_id: OLT device ID.
+        fsp: Frame/Slot/Port (e.g., "0/1/0").
+        serial_number: ONT serial number.
+        force_reauthorize: Remove existing registration before authorizing.
+        preset_id: Optional preset ID (unused, kept for compatibility).
+        request: Optional request for audit logging.
+        provision: If True, apply OLT baseline after authorization (default True).
     """
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
+
     started_at = monotonic()
 
-    # Step 1: Core OLT authorization
+    # Step 1: Core OLT authorization (register serial, create record, link PON)
     result = authorize_autofind_ont(
         db,
         olt_id,
@@ -718,6 +733,41 @@ def authorize_ont(
         return result
 
     db.commit()
+
+    # Step 2: Apply OLT baseline (internet service port + ACS reachability)
+    if provision and result.ont_unit_id:
+        provision_result = apply_authorization_baseline(db, result.ont_unit_id)
+        if provision_result.success:
+            result.baseline_applied = True
+            result.steps.append(
+                AuthorizationStepResult(
+                    step=len(result.steps) + 1,
+                    name="Apply Authorization Baseline",
+                    success=True,
+                    message=provision_result.message,
+                    duration_ms=provision_result.duration_ms,
+                )
+            )
+            db.commit()
+        else:
+            # Provisioning failed but authorization succeeded - partial success
+            result.baseline_applied = False
+            result.steps.append(
+                AuthorizationStepResult(
+                    step=len(result.steps) + 1,
+                    name="Apply Authorization Baseline",
+                    success=False,
+                    message=provision_result.message,
+                    duration_ms=provision_result.duration_ms,
+                )
+            )
+            result.status = "warning"
+            result.partial_success = True
+            result.message = (
+                "ONT authorized, but OLT service baseline failed: "
+                f"{provision_result.message}"
+            )
+
     _audit_authorization(
         db, request, olt_id, fsp, serial_number, force_reauthorize, result
     )

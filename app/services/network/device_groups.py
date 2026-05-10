@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 from typing import Any
 from uuid import UUID
 
@@ -177,6 +179,7 @@ def device_group_detail_context(db: Session, group_id: str | UUID) -> dict[str, 
             device_type="cpe",
         ),
         "action_events": list_device_group_action_events(db, group_id=group.id),
+        "action_history": list_device_group_action_history(db, group_id=group.id),
     }
 
 
@@ -198,7 +201,7 @@ def list_device_group_member_candidates(
             .where(DeviceGroupMember.device_type == normalized_type)
         )
     )
-    query_limit = max(1, min(int(limit or 100), 250))
+    query_limit = max(1, min(int(limit or 100), 500))
     search_text = str(search or "").strip()
     if normalized_type == "ont":
         query = (
@@ -271,6 +274,29 @@ def list_device_group_action_events(
     )
 
 
+def list_device_group_action_history(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return display-ready device-group audit events with task status."""
+    rows: list[dict[str, Any]] = []
+    for event in list_device_group_action_events(db, group_id=group_id, limit=limit):
+        metadata = dict(getattr(event, "metadata_", None) or {})
+        task_id = str(metadata.get("task_id") or "").strip()
+        task_state = _celery_task_state(task_id) if task_id else None
+        rows.append(
+            {
+                "event": event,
+                "metadata": metadata,
+                "task_id": task_id or None,
+                "task_state": task_state,
+            }
+        )
+    return rows
+
+
 def add_device_group_member(
     db: Session,
     *,
@@ -305,6 +331,104 @@ def add_device_group_member(
     db.add(member)
     db.flush()
     return member
+
+
+def add_device_group_members_from_text(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    device_type: str,
+    identifiers: str,
+    added_by: str | None = None,
+) -> dict[str, Any]:
+    """Bulk-add members from pasted CSV/text identifiers."""
+    group = _get_active_group(db, group_id)
+    normalized_type = _normalize_member_type(device_type)
+    tokens = _parse_identifier_text(identifiers)
+    if not tokens:
+        raise DeviceGroupError("No device identifiers provided")
+
+    added = 0
+    existing = 0
+    missing: list[str] = []
+    for token in tokens:
+        device_id = _resolve_device_identifier(db, normalized_type, token)
+        if device_id is None:
+            missing.append(token)
+            continue
+        before = db.scalars(
+            select(DeviceGroupMember.id)
+            .where(DeviceGroupMember.group_id == group.id)
+            .where(DeviceGroupMember.device_type == normalized_type)
+            .where(DeviceGroupMember.device_id == device_id)
+            .limit(1)
+        ).first()
+        add_device_group_member(
+            db,
+            group_id=group.id,
+            device_type=normalized_type,
+            device_id=device_id,
+            added_by=added_by,
+            metadata={"source": "bulk_import", "identifier": token},
+        )
+        if before is None:
+            added += 1
+        else:
+            existing += 1
+
+    db.flush()
+    return {
+        "group_id": str(group.id),
+        "device_type": normalized_type,
+        "submitted": len(tokens),
+        "added": added,
+        "existing": existing,
+        "missing": missing,
+    }
+
+
+def add_device_group_members_from_filter(
+    db: Session,
+    *,
+    group_id: str | UUID,
+    device_type: str,
+    search: str,
+    added_by: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """Bulk-add currently matching candidate devices."""
+    search_text = str(search or "").strip()
+    if not search_text:
+        raise DeviceGroupError("Filter text is required")
+    normalized_type = _normalize_member_type(device_type)
+    candidates = list_device_group_member_candidates(
+        db,
+        group_id=group_id,
+        device_type=normalized_type,
+        search=search_text,
+        limit=limit,
+    )
+    added = 0
+    for item in candidates:
+        add_device_group_member(
+            db,
+            group_id=group_id,
+            device_type=normalized_type,
+            device_id=item["id"],
+            added_by=added_by,
+            metadata={"source": "filter_import", "filter": search_text},
+        )
+        added += 1
+
+    db.flush()
+    return {
+        "group_id": str(group_id),
+        "device_type": normalized_type,
+        "filter": search_text,
+        "matched": len(candidates),
+        "added": added,
+        "limit": max(1, min(int(limit or 500), 500)),
+    }
 
 
 def remove_device_group_member(
@@ -403,6 +527,44 @@ def _validate_device_exists(
     return device_uuid
 
 
+def _resolve_device_identifier(
+    db: Session,
+    device_type: str,
+    identifier: str,
+) -> UUID | None:
+    text = str(identifier or "").strip()
+    if not text:
+        return None
+    try:
+        candidate_id = UUID(text)
+    except (TypeError, ValueError):
+        candidate_id = None
+    model = OntUnit if device_type == "ont" else CPEDevice
+    if candidate_id is not None and db.get(model, candidate_id) is not None:
+        return candidate_id
+
+    if device_type == "ont":
+        device = db.scalars(
+            select(OntUnit)
+            .where(
+                or_(
+                    OntUnit.serial_number == text,
+                    OntUnit.vendor_serial_number == text,
+                    OntUnit.mac_address == text,
+                )
+            )
+            .limit(1)
+        ).first()
+        return device.id if device else None
+
+    device = db.scalars(
+        select(CPEDevice)
+        .where(or_(CPEDevice.serial_number == text, CPEDevice.mac_address == text))
+        .limit(1)
+    ).first()
+    return device.id if device else None
+
+
 def _device_label(device_type: str, device: Any, fallback_id: UUID) -> str:
     if device_type == "ont":
         return str(getattr(device, "serial_number", None) or fallback_id)
@@ -427,3 +589,35 @@ def _device_detail(device_type: str, device: Any) -> str:
             getattr(device, "mac_address", None),
         ]
     return " · ".join(str(part) for part in parts if part)
+
+
+def _parse_identifier_text(value: str) -> list[str]:
+    reader = csv.reader(io.StringIO(str(value or "")))
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for row in reader:
+        for cell in row:
+            token = str(cell or "").strip()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def _celery_task_state(task_id: str) -> dict[str, Any] | None:
+    try:
+        from celery.result import AsyncResult
+
+        result = AsyncResult(task_id)
+        payload: dict[str, Any] = {
+            "state": str(result.state or "PENDING"),
+            "ready": bool(result.ready()),
+        }
+        if result.ready() and result.successful():
+            payload["result"] = result.result
+        elif result.failed():
+            payload["error"] = str(result.result)
+        return payload
+    except Exception:
+        return None

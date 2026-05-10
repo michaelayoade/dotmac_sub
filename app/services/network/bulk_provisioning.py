@@ -150,16 +150,16 @@ def bulk_provision_onts(
     step_data: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> BulkProvisioningDispatchResult:
-    """Create a durable bulk run and execute direct provisioning synchronously."""
-    del provisioning_mode
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
+    """Create a durable bulk run and execute OLT baseline repair synchronously.
+
+    Normal authorization applies this baseline automatically. This function is
+    retained for manual repair and bulk re-apply operations.
+    """
+    del provisioning_mode, chunk_delay_seconds, step_data
+    from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.provisioning_events import provisioning_correlation
 
     workers = max(1, min(int(max_workers or 10), 50))
-    delay = max(0, int(chunk_delay_seconds or 0))
-    del delay
     unique_ont_ids, input_skipped_count = _dedupe_ont_ids(ont_ids)
     run_correlation = correlation_key or f"bulk_provision:{uuid.uuid4()}"
     run = _create_bulk_run(
@@ -187,29 +187,26 @@ def bulk_provision_onts(
         run.status = BulkProvisioningRunStatus.running
         db.flush()
 
-        wait_for_acs = bool((step_data or {}).get("wait_for_acs", True))
-        apply_acs_config = bool((step_data or {}).get("apply_acs_config", True))
         pending_items = list_pending_bulk_items(db, run.id)
         for item in pending_items:
             mark_bulk_item_running(db, item.id)
             try:
                 with provisioning_correlation(item.correlation_key):
-                    result = provision_ont_from_desired_config(
+                    result = apply_authorization_baseline(
                         db,
                         str(item.ont_unit_id),
                         dry_run=dry_run,
                         allow_low_optical_margin=allow_low_optical_margin,
-                        wait_for_acs=wait_for_acs,
-                        apply_acs_config=apply_acs_config,
                     )
-                payload = result.to_dict()
-                payload.update(
-                    {
-                        "bulk_run_id": str(run.id),
-                        "bulk_item_id": str(item.id),
-                        "correlation_key": item.correlation_key,
-                    }
-                )
+                payload = {
+                    "success": result.success,
+                    "message": result.message,
+                    "ont_id": str(item.ont_unit_id),
+                    "duration_ms": result.duration_ms,
+                    "bulk_run_id": str(run.id),
+                    "bulk_item_id": str(item.id),
+                    "correlation_key": item.correlation_key,
+                }
                 mark_bulk_item_completed(db, item.id, payload)
             except Exception as exc:
                 mark_bulk_item_failed(db, item.id, str(exc))

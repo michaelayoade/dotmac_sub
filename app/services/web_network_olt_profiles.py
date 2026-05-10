@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException
@@ -29,7 +31,6 @@ from app.models.network import (
 )
 from app.services.audit_helpers import log_audit_event
 from app.services.network import olt as olt_service
-from app.services.network import olt_ssh_profiles
 from app.services.network.imported_service_ports import imported_service_port_summary
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -37,6 +38,10 @@ from app.services.network.olt_command_gen import (
     OntProvisioningContext,
     build_spec_from_profile,
 )
+from app.services.network.olt_config_snapshot_reader import (
+    BackupRunner as SnapshotBackupRunner,
+)
+from app.services.network.olt_config_snapshot_reader import OltConfigSnapshotReader
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.profile_apply_workflow import (
@@ -47,7 +52,6 @@ from app.services.network.profile_apply_workflow import (
     build_profile_apply_plan,
 )
 from app.services.network.profile_inventory_preflight import (
-    build_profile_inventory,
     validate_dotmac_profile_apply_plan,
     validate_offer_profile_sync_plan_inventory,
 )
@@ -518,8 +522,9 @@ def check_profile_bundle_drift(
     checked_by: str | None,
     request: Request | None = None,
     limit: int = 50,
+    backup_runner: SnapshotBackupRunner | None = None,
 ) -> tuple[bool, str]:
-    """Read live OLT profile inventory and update active bundle drift status."""
+    """Capture OLT snapshots and update active bundle validation status."""
     actor = str(checked_by or "").strip()
     if not actor:
         return False, "Cannot check profile bundle drift without an actor"
@@ -539,8 +544,16 @@ def check_profile_bundle_drift(
     in_sync = 0
     drifted = 0
     unknown = 0
+    readers: dict[str, OltConfigSnapshotReader] = {}
+    backup_failures: dict[str, str] = {}
     for bundle in bundles:
-        status, details = _check_one_profile_bundle_drift(bundle)
+        status, details = _check_one_profile_bundle_drift(
+            bundle,
+            db=db,
+            readers=readers,
+            backup_failures=backup_failures,
+            backup_runner=backup_runner,
+        )
         bundle.drift_status = status
         bundle.drift_details = details
         bundle.last_verified_at = datetime.now(UTC)
@@ -563,8 +576,8 @@ def check_profile_bundle_drift(
 
     db.commit()
     return unknown == 0 and drifted == 0, (
-        f"Checked {checked} bundle(s): {in_sync} in sync, "
-        f"{drifted} drifted, {unknown} unknown"
+        f"Validated {checked} bundle(s) from running-config snapshot(s): "
+        f"{in_sync} in sync, {drifted} need action, {unknown} snapshot failures"
     )
 
 
@@ -698,58 +711,44 @@ def _parse_scheduled_for(value: str | None) -> datetime | None:
 
 def _check_one_profile_bundle_drift(
     bundle: OltProfileBundle,
+    db: Session | None = None,
+    readers: dict[str, OltConfigSnapshotReader] | None = None,
+    backup_failures: dict[str, str] | None = None,
+    backup_runner: SnapshotBackupRunner | None = None,
 ) -> tuple[str, dict[str, object]]:
+    """Validate bundle profiles from one captured running-config snapshot."""
     olt = bundle.olt
     if olt is None:
         return "drift_unknown", {"message": "Bundle has no linked OLT"}
-
-    live_reads = {
-        "dba": olt_ssh_profiles.get_dba_profiles(olt),
-        "traffic": olt_ssh_profiles.get_traffic_tables(olt),
-        "line": olt_ssh_profiles.get_line_profiles(olt),
-        "service": olt_ssh_profiles.get_service_profiles(olt),
-    }
-    failures = [
-        f"{label}: {message}"
-        for label, (ok, message, _entries) in live_reads.items()
-        if not ok
-    ]
-    if failures:
-        return "drift_unknown", {
-            "message": "Live profile inventory failed",
-            "errors": failures,
-        }
+    if db is None:
+        return "drift_unknown", {"message": "Database session is required"}
 
     expected = _expected_bundle_inventory(bundle)
-    actual = {
-        "dba": _profile_entry_map(live_reads["dba"][2], id_attr="profile_id"),
-        "traffic": _profile_entry_map(live_reads["traffic"][2], id_attr="index"),
-        "line": _profile_entry_map(live_reads["line"][2], id_attr="profile_id"),
-        "service": _profile_entry_map(live_reads["service"][2], id_attr="profile_id"),
-    }
-    missing: list[str] = []
-    mismatched: list[str] = []
-    for category, items in expected.items():
-        live_items = actual.get(category, {})
-        for label, profile in items.items():
-            profile_id = int(profile["id"])
-            expected_name = str(profile.get("name") or "").strip()
-            live_name = live_items.get(profile_id)
-            if live_name is None:
-                missing.append(f"{label} {profile_id}")
-                continue
-            if expected_name and live_name and live_name != expected_name:
-                mismatched.append(
-                    f"{label} {profile_id}: expected {expected_name}, got {live_name}"
-                )
-
-    if missing or mismatched:
-        return "drifted", {
-            "message": "Live OLT profiles differ from saved bundle",
-            "missing": missing,
-            "mismatched": mismatched,
+    olt_key = str(olt.id)
+    readers = readers if readers is not None else {}
+    backup_failures = backup_failures if backup_failures is not None else {}
+    if olt_key in backup_failures:
+        return "drift_unknown", {
+            "message": backup_failures[olt_key],
+            "errors": [backup_failures[olt_key]],
+            "source": "running_config_backup",
         }
-    return "in_sync", {"message": "Live OLT profiles match saved bundle IDs and names"}
+    reader = readers.get(olt_key)
+    if reader is None:
+        kwargs: dict[str, object] = {}
+        if backup_runner is not None:
+            kwargs["backup_runner"] = backup_runner
+        reader, message = OltConfigSnapshotReader.capture(db, olt, **kwargs)
+        if reader is None:
+            error = f"Snapshot capture failed before validation: {message}"
+            backup_failures[olt_key] = error
+            return "drift_unknown", {
+                "message": error,
+                "errors": [error],
+                "source": "running_config_backup",
+            }
+        readers[olt_key] = reader
+    return reader.validate_profile_bundle(expected)
 
 
 def _expected_bundle_inventory(bundle: OltProfileBundle) -> dict[str, dict[str, dict[str, object]]]:
@@ -831,6 +830,17 @@ def _profile_entry_map(entries: object, *, id_attr: str) -> dict[int, str]:
             continue
         mapped[profile_id] = str(getattr(entry, "name", "") or "")
     return mapped
+
+
+def _profile_inventory_entries(
+    inventory: dict[int, str],
+    *,
+    id_attr: str,
+) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(**{id_attr: profile_id, "name": name})
+        for profile_id, name in inventory.items()
+    ]
 
 
 def offer_profile_sync_preview_context(
@@ -934,22 +944,42 @@ def apply_saved_profile_bundle(
         db.flush()
         return {"ok": False, "message": ownership_preflight.message, "bundle": bundle}
 
-    live_preflight_ok, live_preflight_message = _validate_saved_bundle_against_live_inventory(
-        olt,
-        bundle,
-        plan,
-    )
-    if not live_preflight_ok:
-        bundle.drift_status = "preflight_failed"
-        bundle.drift_details = {"message": live_preflight_message}
-        db.flush()
-        return {"ok": False, "message": live_preflight_message, "bundle": bundle}
-
     kwargs: dict[str, Any] = {}
     if backup_runner is not None:
         kwargs["backup_runner"] = backup_runner
+    reader, snapshot_message = OltConfigSnapshotReader.capture(db, olt, **kwargs)
+    if reader is None:
+        bundle.drift_status = "preflight_failed"
+        bundle.drift_details = {
+            "message": f"Snapshot capture failed before profile apply: {snapshot_message}",
+            "source": "running_config_backup",
+        }
+        db.flush()
+        return {
+            "ok": False,
+            "message": f"Snapshot capture failed before profile apply: {snapshot_message}",
+            "bundle": bundle,
+        }
+
+    snapshot_preflight_ok, snapshot_preflight_message = _validate_saved_bundle_against_snapshot(
+        bundle,
+        plan,
+        reader,
+    )
+    if not snapshot_preflight_ok:
+        bundle.drift_status = "preflight_failed"
+        bundle.drift_details = {
+            "message": snapshot_preflight_message,
+            "backup_id": reader.snapshot.backup_id,
+            "captured_at": reader.snapshot.provenance().get("captured_at"),
+            "source": "running_config_backup",
+        }
+        db.flush()
+        return {"ok": False, "message": snapshot_preflight_message, "bundle": bundle}
+
+    apply_kwargs: dict[str, Any] = {}
     if command_executor is not None:
-        kwargs["command_executor"] = command_executor
+        apply_kwargs["command_executor"] = command_executor
     result = apply_profile_bundle(
         db,
         olt,
@@ -957,15 +987,17 @@ def apply_saved_profile_bundle(
         actor_is_admin=actor_is_admin,
         dry_run=False,
         require_admin=True,
-        require_backup=True,
-        **kwargs,
+        require_backup=False,
+        **apply_kwargs,
     )
+    result = replace(result, backup_id=reader.snapshot.backup_id)
     if not result.success:
         bundle.drift_status = "apply_failed"
         bundle.drift_details = {
             "message": result.message,
             "errors": list(result.errors),
-            "backup_id": result.backup_id,
+            "backup_id": reader.snapshot.backup_id,
+            "captured_at": reader.snapshot.provenance().get("captured_at"),
         }
         db.flush()
         return {
@@ -980,7 +1012,8 @@ def apply_saved_profile_bundle(
     bundle.drift_status = "applied"
     bundle.drift_details = {
         "message": result.message,
-        "backup_id": result.backup_id,
+        "backup_id": reader.snapshot.backup_id,
+        "captured_at": reader.snapshot.provenance().get("captured_at"),
         "commands": len(result.commands),
     }
     db.commit()
@@ -1016,35 +1049,11 @@ def _build_apply_plan_from_saved_bundle(bundle: OltProfileBundle):
     return build_profile_apply_plan(bundle.name, command_groups)
 
 
-def _validate_saved_bundle_against_live_inventory(
-    olt: OLTDevice,
+def _validate_saved_bundle_against_snapshot(
     bundle: OltProfileBundle,
     plan,
+    reader: OltConfigSnapshotReader,
 ) -> tuple[bool, str]:
-    live_reads = {
-        "DBA profiles": olt_ssh_profiles.get_dba_profiles(olt),
-        "traffic tables": olt_ssh_profiles.get_traffic_tables(olt),
-        "line profiles": olt_ssh_profiles.get_line_profiles(olt),
-        "service profiles": olt_ssh_profiles.get_service_profiles(olt),
-    }
-    failures = [
-        f"{label}: {message}"
-        for label, (ok, message, _entries) in live_reads.items()
-        if not ok
-    ]
-    if failures:
-        return (
-            False,
-            "Cannot apply profile bundle because live OLT inventory failed: "
-            + "; ".join(failures),
-        )
-
-    inventory = build_profile_inventory(
-        dba_profiles=live_reads["DBA profiles"][2],
-        traffic_tables=live_reads["traffic tables"][2],
-        line_profiles=live_reads["line profiles"][2],
-        service_profiles=live_reads["service profiles"][2],
-    )
     sync_plan = OfferProfileSyncPlan(
         bundle=OfferProfileBundle(
             offer_id=str(bundle.offer_id),
@@ -1064,7 +1073,10 @@ def _validate_saved_bundle_against_live_inventory(
         apply_plan=plan,
         allocations=(),
     )
-    preflight = validate_offer_profile_sync_plan_inventory(sync_plan, inventory)
+    preflight = validate_offer_profile_sync_plan_inventory(
+        sync_plan,
+        reader.profile_preflight_inventory(),
+    )
     return preflight.success, preflight.message
 
 
@@ -1083,50 +1095,48 @@ def _build_offer_profile_sync_plan_from_live(
     if offer is None:
         return False, "Catalog offer not found", olt, None, None
 
-    live_reads = {
-        "DBA profiles": olt_ssh_profiles.get_dba_profiles(olt),
-        "traffic tables": olt_ssh_profiles.get_traffic_tables(olt),
-        "line profiles": olt_ssh_profiles.get_line_profiles(olt),
-        "service profiles": olt_ssh_profiles.get_service_profiles(olt),
-    }
-    failures = [
-        f"{label}: {message}"
-        for label, (ok, message, _entries) in live_reads.items()
-        if not ok
-    ]
-    if failures:
+    reader, snapshot_message = OltConfigSnapshotReader.capture(db, olt)
+    if reader is None:
         message = (
-            "Cannot build profile sync preview because live OLT inventory failed: "
-            + "; ".join(failures)
+            "Cannot build profile sync preview because running-config snapshot "
+            f"capture failed: {snapshot_message}"
         )
         return False, message, olt, offer, None
+    snapshot_profiles = reader.profile_inventory()
 
     try:
         plan = build_offer_profile_sync_plan(
             offer,
             vlan_id=vlan_id,
-            live_dba_profiles=live_reads["DBA profiles"][2],
-            live_traffic_tables=live_reads["traffic tables"][2],
-            live_line_profiles=live_reads["line profiles"][2],
-            live_service_profiles=live_reads["service profiles"][2],
+            live_dba_profiles=_profile_inventory_entries(
+                snapshot_profiles["dba"],
+                id_attr="profile_id",
+            ),
+            live_traffic_tables=_profile_inventory_entries(
+                snapshot_profiles["traffic"],
+                id_attr="index",
+            ),
+            live_line_profiles=_profile_inventory_entries(
+                snapshot_profiles["line"],
+                id_attr="profile_id",
+            ),
+            live_service_profiles=_profile_inventory_entries(
+                snapshot_profiles["service"],
+                id_attr="profile_id",
+            ),
         )
     except (OfferProfileSyncError, ValueError) as exc:
         return False, str(exc), olt, offer, None
 
     try:
-        inventory = build_profile_inventory(
-            dba_profiles=live_reads["DBA profiles"][2],
-            traffic_tables=live_reads["traffic tables"][2],
-            line_profiles=live_reads["line profiles"][2],
-            service_profiles=live_reads["service profiles"][2],
-        )
+        inventory = reader.profile_preflight_inventory()
         preflight = validate_offer_profile_sync_plan_inventory(plan, inventory)
     except ValueError as exc:
         return False, str(exc), olt, offer, None
     if not preflight.success:
         return False, preflight.message, olt, offer, None
 
-    return True, "Profile sync plan built", olt, offer, plan
+    return True, f"Profile sync plan built from snapshot {reader.snapshot.backup_id}", olt, offer, plan
 
 
 def save_imported_profile_mapping(

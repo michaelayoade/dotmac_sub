@@ -19,6 +19,7 @@ from app.models.catalog import (
 )
 from app.models.network import OLTDevice, OltProfileBundle, OltProfileSyncTask
 from app.services import web_network_olt_profiles
+from app.services.network.profile_inventory_preflight import ProfileInventory
 from app.services.network.profile_sync import (
     OfferProfileSyncError,
     OfferProfileSyncTaskError,
@@ -272,7 +273,7 @@ def test_upsert_profile_bundle_updates_existing_record(db_session) -> None:
     assert second.checksum == second_plan.bundle.checksum
 
 
-def test_apply_saved_profile_bundle_reruns_live_inventory_preflight(
+def test_apply_saved_profile_bundle_reruns_snapshot_inventory_preflight(
     db_session,
     monkeypatch,
 ) -> None:
@@ -299,29 +300,24 @@ def test_apply_saved_profile_bundle_reruns_live_inventory_preflight(
     db_session.commit()
     calls: list[str] = []
 
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_dba_profiles",
-        lambda _olt: (
-            True,
-            "ok",
-            [ProfileEntry(plan.bundle.dba_profile_id)],
+    fake_reader = SimpleNamespace(
+        snapshot=SimpleNamespace(
+            backup_id="backup-conflict",
+            provenance=lambda: {"captured_at": datetime.now(UTC).isoformat()},
+        ),
+        profile_preflight_inventory=lambda: ProfileInventory(
+            dba_profile_ids=frozenset({plan.bundle.dba_profile_id})
         ),
     )
+
+    def fake_capture(*_args, **_kwargs):
+        calls.append("capture_snapshot")
+        return fake_reader, "snapshot ok"
+
     monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_traffic_tables",
-        lambda _olt: (True, "ok", []),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_line_profiles",
-        lambda _olt: (True, "ok", []),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_service_profiles",
-        lambda _olt: (True, "ok", []),
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        fake_capture,
     )
 
     result = web_network_olt_profiles.apply_saved_profile_bundle(
@@ -329,16 +325,15 @@ def test_apply_saved_profile_bundle_reruns_live_inventory_preflight(
         str(olt.id),
         str(bundle.id),
         actor_is_admin=True,
-        backup_runner=lambda *_args: calls.append("backup"),  # type: ignore[arg-type,return-value]
         command_executor=lambda *_args: calls.append("execute"),  # type: ignore[arg-type,return-value]
     )
 
     assert result["ok"] is False
     assert "DBA profile ID" in result["message"]
-    assert calls == []
+    assert calls == ["capture_snapshot"]
 
 
-def test_apply_saved_profile_bundle_rejects_non_admin_before_live_reads(
+def test_apply_saved_profile_bundle_rejects_non_admin_before_snapshot_capture(
     db_session,
     monkeypatch,
 ) -> None:
@@ -364,13 +359,13 @@ def test_apply_saved_profile_bundle_rejects_non_admin_before_live_reads(
     bundle = upsert_profile_bundle(db_session, olt=olt, sync_plan=plan)
     db_session.commit()
 
-    def fail_live_read(_olt):
-        raise AssertionError("non-admin apply should not read live inventory")
+    def fail_capture(*_args, **_kwargs):
+        raise AssertionError("non-admin apply should not capture snapshots")
 
     monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_dba_profiles",
-        fail_live_read,
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        fail_capture,
     )
 
     result = web_network_olt_profiles.apply_saved_profile_bundle(

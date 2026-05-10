@@ -64,6 +64,55 @@
     </div>
     {% endif %}
 
+    {% if config_evidence %}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800/60">
+        <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+            <div>
+                <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Config Evidence</p>
+                <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ config_evidence.summary }}</p>
+            </div>
+            {% set evidence_badge_class = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if config_evidence.status == 'in_sync' else 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' if config_evidence.status == 'drift' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' %}
+            <span class="rounded-full px-2 py-0.5 text-xs font-semibold {{ evidence_badge_class }}">{{ config_evidence.status | replace("_", " ") | title }}</span>
+        </div>
+        <div class="grid gap-2 lg:grid-cols-2">
+            <div class="space-y-2">
+                <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Sources</p>
+                {% for source in config_evidence.sources %}
+                {% set source_class = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if source.status == 'ok' else 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' if source.status == 'drift' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' %}
+                <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900/30">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="font-semibold text-slate-700 dark:text-slate-200">{{ source.label }}</p>
+                            <p class="mt-0.5 break-words text-slate-500 dark:text-slate-400">{{ source.message }}</p>
+                        </div>
+                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ source_class }}">{{ source.status | replace("_", " ") | title }}</span>
+                    </div>
+                    {% if source.href %}
+                    <a href="{{ source.href }}" class="mt-1 inline-flex text-[11px] font-semibold text-blue-600 hover:text-blue-700 dark:text-blue-400">Open source</a>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            <div class="space-y-2">
+                <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Drift Checks</p>
+                {% for check in config_evidence.drift_checks %}
+                {% set check_class = 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if check.status == 'in_sync' else 'bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300' if check.status == 'drift' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' %}
+                <div class="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900/30">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <p class="font-semibold text-slate-700 dark:text-slate-200">{{ check.label }}</p>
+                            <p class="mt-0.5 text-slate-500 dark:text-slate-400">Expected: {{ check.expected if check.expected not in (none, '') else 'Not set' }} · Observed: {{ check.observed if check.observed not in (none, '', []) else 'Not seen' }}</p>
+                            <p class="mt-0.5 text-slate-400 dark:text-slate-500">{{ check.source }} · {{ check.message }}</p>
+                        </div>
+                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold {{ check_class }}">{{ check.status | replace("_", " ") | title }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <div>
         <p class="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Readiness</p>
         <div class="space-y-2">

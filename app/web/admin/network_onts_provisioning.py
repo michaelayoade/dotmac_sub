@@ -411,25 +411,17 @@ def provision_ont_direct(
     async_execution: bool = Form(default=False),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Execute direct ONT provisioning from desired config."""
+    """Repair/re-apply OLT authorization baseline for an ONT.
+
+    Normal authorization applies this baseline automatically. This endpoint is
+    kept for manual repair of already-authorized ONTs.
+    """
+    del async_execution
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    from app.services.network.action_logging import actor_label
 
-    initiated_by = actor_label(request)
-    del async_execution
-
-    # Synchronous execution
-    from app.services.network.ont_provisioning.orchestrator import (
-        provision_ont_from_desired_config,
-    )
-
-    result = provision_ont_from_desired_config(
-        db,
-        ont_id,
-        dry_run=dry_run,
-    )
+    result = steps.apply_authorization_baseline(db, ont_id, dry_run=dry_run)
 
     log_network_action_result(
         request=request,
@@ -440,8 +432,7 @@ def provision_ont_direct(
         message=result.message,
         metadata={
             "duration_ms": result.duration_ms,
-            "steps_executed": [s.step_name for s in result.steps],
-            "failed_step": result.failed_step,
+            "step_name": result.step_name,
         },
     )
 
@@ -449,7 +440,13 @@ def provision_ont_direct(
     status_code = 200 if result.success else 400
 
     return JSONResponse(
-        content=result.to_dict(),
+        content={
+            "success": result.success,
+            "message": result.message,
+            "ont_id": ont_id,
+            "duration_ms": result.duration_ms,
+            "step_name": result.step_name,
+        },
         status_code=status_code,
         headers=_toast_headers(result.message, toast_type),
     )

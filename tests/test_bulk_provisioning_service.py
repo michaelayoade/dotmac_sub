@@ -29,11 +29,12 @@ def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
         return SimpleNamespace(
             success=True,
             message=f"provisioned {ont_id}",
-            to_dict=lambda: {"success": True, "message": f"provisioned {ont_id}"},
+            duration_ms=1,
+            step_name="authorization_baseline",
         )
 
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
         fake_provision,
     )
 
@@ -108,11 +109,12 @@ def test_bulk_item_completion_finalizes_run_and_events_are_queryable(
         return SimpleNamespace(
             success=result["success"],
             message=result["message"],
-            to_dict=lambda: result,
+            duration_ms=1,
+            step_name="authorization_baseline",
         )
 
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
         fake_provision,
     )
 

@@ -230,3 +230,12 @@ def test_olt_detail_template_uses_imported_state_sections() -> None:
     assert "x-show=\"activeTab" not in template
     assert "Subscriber Impact" not in template
     assert "Runtime and hardware state" not in template
+
+
+def test_ont_operations_tab_lazy_loads_only_when_selected() -> None:
+    template = Path("templates/admin/network/onts/detail.html").read_text()
+
+    assert 'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"' in template
+    assert 'hx-trigger="loadOperationalHealth from:window"' in template
+    assert "load, revealed, loadOperationalHealth" not in template
+    assert "activeTab === 'operations'" in template

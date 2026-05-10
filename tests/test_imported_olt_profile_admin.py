@@ -27,17 +27,13 @@ from app.models.network import (
     OltServiceProfile,
 )
 from app.services import web_network_olt_profiles
-from app.services.network.olt_ssh_profiles import (
-    DbaProfileEntry,
-    OltProfileEntry,
-    TrafficTableEntry,
-)
 from app.services.network.olt_state_import import (
     _import_line_profile_gem_mappings_from_config,
     _import_observed_service_ports_from_config,
     _import_service_port_gem_mappings_from_config,
 )
 from app.services.network.profile_apply_workflow import AppliedCommand
+from app.services.network.profile_inventory_preflight import ProfileInventory
 
 
 def test_imported_profile_state_context_returns_db_profiles(db_session):
@@ -570,25 +566,27 @@ def test_offer_profile_sync_preview_context_builds_dry_run_plan(
     db_session.add_all([olt, offer])
     db_session.flush()
 
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_dba_profiles",
-        lambda _olt: (True, "ok", [DbaProfileEntry(profile_id=100)]),
+    fake_reader = SimpleNamespace(
+        snapshot=SimpleNamespace(backup_id="backup-preview"),
+        profile_inventory=lambda: {
+            "dba": {100: ""},
+            "traffic": {100: ""},
+            "line": {100: "LINE"},
+            "service": {100: "SRV"},
+        },
+        profile_preflight_inventory=lambda: ProfileInventory(
+            dba_profile_ids=frozenset({100}),
+            traffic_table_ids=frozenset({100}),
+            line_profile_ids=frozenset({100}),
+            line_profile_names=frozenset({"line"}),
+            service_profile_ids=frozenset({100}),
+            service_profile_names=frozenset({"srv"}),
+        ),
     )
     monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_traffic_tables",
-        lambda _olt: (True, "ok", [TrafficTableEntry(index=100)]),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_line_profiles",
-        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="LINE")]),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_service_profiles",
-        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="SRV")]),
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        lambda *_args, **_kwargs: (fake_reader, "snapshot ok"),
     )
 
     preview = web_network_olt_profiles.offer_profile_sync_preview_context(
@@ -630,24 +628,9 @@ def test_offer_profile_sync_preview_context_fails_when_live_inventory_fails(
     db_session.flush()
 
     monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_dba_profiles",
-        lambda _olt: (False, "ssh timeout", []),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_traffic_tables",
-        lambda _olt: (True, "ok", []),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_line_profiles",
-        lambda _olt: (True, "ok", []),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_service_profiles",
-        lambda _olt: (True, "ok", []),
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        lambda *_args, **_kwargs: (None, "ssh timeout"),
     )
 
     preview = web_network_olt_profiles.offer_profile_sync_preview_context(
@@ -658,7 +641,7 @@ def test_offer_profile_sync_preview_context_fails_when_live_inventory_fails(
     )
 
     assert preview["ok"] is False
-    assert "DBA profiles: ssh timeout" in preview["message"]
+    assert "running-config snapshot capture failed: ssh timeout" in preview["message"]
 
 
 def test_save_offer_profile_bundle_persists_validated_preview(
@@ -683,25 +666,27 @@ def test_save_offer_profile_bundle_persists_validated_preview(
     db_session.add_all([olt, offer])
     db_session.flush()
 
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_dba_profiles",
-        lambda _olt: (True, "ok", [DbaProfileEntry(profile_id=100)]),
+    fake_reader = SimpleNamespace(
+        snapshot=SimpleNamespace(backup_id="backup-save"),
+        profile_inventory=lambda: {
+            "dba": {100: ""},
+            "traffic": {100: ""},
+            "line": {100: "LINE"},
+            "service": {100: "SRV"},
+        },
+        profile_preflight_inventory=lambda: ProfileInventory(
+            dba_profile_ids=frozenset({100}),
+            traffic_table_ids=frozenset({100}),
+            line_profile_ids=frozenset({100}),
+            line_profile_names=frozenset({"line"}),
+            service_profile_ids=frozenset({100}),
+            service_profile_names=frozenset({"srv"}),
+        ),
     )
     monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_traffic_tables",
-        lambda _olt: (True, "ok", [TrafficTableEntry(index=100)]),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_line_profiles",
-        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="LINE")]),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_service_profiles",
-        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=100, name="SRV")]),
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        lambda *_args, **_kwargs: (fake_reader, "snapshot ok"),
     )
 
     preview = web_network_olt_profiles.save_offer_profile_bundle(
@@ -811,7 +796,44 @@ def test_apply_saved_profile_bundle_runs_backup_and_commands(db_session, monkeyp
                         'dba-profile add profile-id 100 profile-name "DOTMAC_DBA_F40" type3 assure 20000 max 20000'
                     ],
                     "requires_config_mode": True,
-                }
+                },
+                {
+                    "step": "Create download traffic table",
+                    "commands": [
+                        'traffic table ip index 101 name "DOTMAC_TT_D_F40" cir 40000 pir 40000'
+                    ],
+                    "requires_config_mode": True,
+                },
+                {
+                    "step": "Create upload traffic table",
+                    "commands": [
+                        'traffic table ip index 102 name "DOTMAC_TT_U_F40" cir 20000 pir 20000'
+                    ],
+                    "requires_config_mode": True,
+                },
+                {
+                    "step": "Create line profile",
+                    "commands": [
+                        'ont-lineprofile gpon profile-id 103 profile-name "DOTMAC_LINE_F40"',
+                        "tcont 1 dba-profile-id 100",
+                        "gem add 1 eth tcont 1",
+                        "gem mapping 1 1 vlan 203",
+                        "commit",
+                        "quit",
+                    ],
+                    "requires_config_mode": True,
+                },
+                {
+                    "step": "Create service profile",
+                    "commands": [
+                        'ont-srvprofile gpon profile-id 104 profile-name "DOTMAC_SRV_F40"',
+                        "ont-port eth 1",
+                        "port vlan eth 1 203",
+                        "commit",
+                        "quit",
+                    ],
+                    "requires_config_mode": True,
+                },
             ]
         },
         drift_status="pending",
@@ -832,10 +854,22 @@ def test_apply_saved_profile_bundle_runs_backup_and_commands(db_session, monkeyp
             for command in plan.commands
         ]
 
+    fake_reader = SimpleNamespace(
+        snapshot=SimpleNamespace(
+            backup_id=str(backup.id),
+            provenance=lambda: {"captured_at": datetime.now(UTC).isoformat()},
+        ),
+        profile_preflight_inventory=lambda: ProfileInventory(),
+    )
+    def fake_capture(db, olt, **kwargs):
+        runner = kwargs["backup_runner"]
+        runner(db, str(olt.id))
+        return fake_reader, "snapshot ok"
+
     monkeypatch.setattr(
-        web_network_olt_profiles,
-        "_validate_saved_bundle_against_live_inventory",
-        lambda *_args: (True, "ok"),
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        fake_capture,
     )
 
     result = web_network_olt_profiles.apply_saved_profile_bundle(
@@ -926,32 +960,20 @@ def test_check_profile_bundle_drift_updates_status_and_audits(db_session, monkey
     db_session.add(bundle)
     db_session.flush()
 
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_dba_profiles",
-        lambda _olt: (True, "ok", [DbaProfileEntry(profile_id=100, name="DOTMAC_DBA_F41")]),
+    fake_reader = SimpleNamespace(
+        validate_profile_bundle=lambda _expected: (
+            "in_sync",
+            {
+                "message": "Snapshot profiles match saved bundle IDs and names",
+                "source": "running_config_backup",
+                "backup_id": "backup-1",
+            },
+        )
     )
     monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_traffic_tables",
-        lambda _olt: (
-            True,
-            "ok",
-            [
-                TrafficTableEntry(index=101, name="DOTMAC_TT_D_F41"),
-                TrafficTableEntry(index=102, name="DOTMAC_TT_U_F41"),
-            ],
-        ),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_line_profiles",
-        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=103, name="DOTMAC_LINE_F41")]),
-    )
-    monkeypatch.setattr(
-        web_network_olt_profiles.olt_ssh_profiles,
-        "get_service_profiles",
-        lambda _olt: (True, "ok", [OltProfileEntry(profile_id=104, name="DOTMAC_SRV_F41")]),
+        web_network_olt_profiles.OltConfigSnapshotReader,
+        "capture",
+        lambda *_args, **_kwargs: (fake_reader, "snapshot ok"),
     )
 
     ok, message = web_network_olt_profiles.check_profile_bundle_drift(

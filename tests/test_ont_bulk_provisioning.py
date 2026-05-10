@@ -86,11 +86,12 @@ def test_bulk_direct_compat_task_dedupes_and_executes(monkeypatch):
         return SimpleNamespace(
             success=True,
             message=f"provisioned {ont_id}",
-            to_dict=lambda: {"success": True, "message": f"provisioned {ont_id}"},
+            duration_ms=1,
+            step_name="authorization_baseline",
         )
 
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
         fake_provision,
     )
 
@@ -105,7 +106,6 @@ def test_bulk_direct_compat_task_dedupes_and_executes(monkeypatch):
     assert result["processed"] == 3
     assert result["skipped"] == 2
     assert result["errors"] == 0
-    assert result["chunks"] == 1
     assert [task["ont_id"] for task in result["tasks"]] == ["ont-1", "ont-2", "ont-3"]
     assert provisioned == ["ont-1", "ont-2", "ont-3"]
 
@@ -153,11 +153,12 @@ def test_bulk_direct_compat_task_uses_bulk_item_correlation(
         return SimpleNamespace(
             success=True,
             message="ok",
-            to_dict=lambda: {"success": True, "message": "ok"},
+            duration_ms=1,
+            step_name="authorization_baseline",
         )
 
     monkeypatch.setattr(
-        "app.services.network.ont_provisioning.orchestrator.provision_ont_from_desired_config",
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
         fake_provision,
     )
     monkeypatch.setattr(
@@ -183,3 +184,28 @@ def test_bulk_direct_compat_task_uses_bulk_item_correlation(
     assert captured["ont_id"] == str(ont.id)
     db_session.refresh(item)
     assert item.status == BulkProvisioningItemStatus.succeeded
+
+
+def test_bulk_direct_compat_task_counts_failed_results(monkeypatch):
+    from app.tasks.ont_provisioning import queue_bulk_provisioning
+
+    def fake_provision(db, ont_id, **kwargs):  # type: ignore[no-untyped-def]
+        success = ont_id != "ont-fail"
+        return SimpleNamespace(
+            success=success,
+            message="ok" if success else "baseline failed",
+            duration_ms=1,
+            step_name="authorization_baseline",
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.apply_authorization_baseline",
+        fake_provision,
+    )
+
+    result = queue_bulk_provisioning.run(["ont-ok", "ont-fail"])
+
+    assert result["processed"] == 2
+    assert result["failed"] == 1
+    assert result["exceptions"] == 0
+    assert result["errors"] == 1

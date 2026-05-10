@@ -104,10 +104,21 @@ def _has_acs_inform(db: Session, ont: OntUnit, acs_server_id: object | None) -> 
 def validate_prerequisites(
     db: Session,
     ont_id: str,
+    *,
+    ont: OntUnit | None = None,
+    effective_config: dict | None = None,
 ) -> dict:
-    """Check prerequisites before provisioning."""
+    """Check prerequisites before provisioning.
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit primary key.
+        ont: Optional pre-fetched ONT to avoid redundant lookup.
+        effective_config: Optional pre-resolved config from resolve_effective_ont_config().
+    """
     checks: list[dict] = []
-    ont = db.get(OntUnit, coerce_uuid(ont_id))
+    if ont is None:
+        ont = db.get(OntUnit, coerce_uuid(ont_id))
     olt: OLTDevice | None = None
 
     if not ont:
@@ -200,7 +211,11 @@ def validate_prerequisites(
         }
     )
 
-    resolved_config = resolve_effective_ont_config(db, ont, olt=olt)
+    # Use pre-resolved config if provided, otherwise resolve
+    if effective_config is not None:
+        resolved_config = effective_config
+    else:
+        resolved_config = resolve_effective_ont_config(db, ont, olt=olt)
     resolved_values = resolved_config.get("values", {})
     acs_server_id = resolved_values.get("tr069_acs_server_id")
     tr069_profile_id = resolved_values.get("tr069_olt_profile_id")
@@ -253,8 +268,8 @@ def validate_prerequisites(
         checks.append(
             {
                 "name": "ACS connection",
-                "status": "fail",
-                "message": "Authorize the ONT and wait for ACS inform before provisioning",
+                "status": "warn",
+                "message": "ONT has not informed ACS yet; provisioning will bind TR-069 and wait for inform",
                 "can_auto_fix": False,
             }
         )

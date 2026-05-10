@@ -122,3 +122,100 @@ def test_device_group_update_and_archive(db_session):
     assert updated.name == "New Name"
     assert updated.description == "Updated"
     assert archived.is_active is False
+
+
+def test_bulk_import_members_resolves_identifiers_and_reports_missing(db_session):
+    group = device_groups.create_device_group(db_session, name="Import Cohort")
+    first = OntUnit(serial_number="DG-BULK-001", is_active=True)
+    second = OntUnit(
+        serial_number="DG-BULK-002",
+        vendor_serial_number="VENDOR-BULK-002",
+        is_active=True,
+    )
+    db_session.add_all([first, second])
+    db_session.flush()
+    device_groups.add_device_group_member(
+        db_session,
+        group_id=group.id,
+        device_type="ont",
+        device_id=first.id,
+    )
+
+    result = device_groups.add_device_group_members_from_text(
+        db_session,
+        group_id=group.id,
+        device_type="ont",
+        identifiers="DG-BULK-001,VENDOR-BULK-002\nmissing-serial",
+        added_by="admin",
+    )
+
+    assert result["submitted"] == 3
+    assert result["added"] == 1
+    assert result["existing"] == 1
+    assert result["missing"] == ["missing-serial"]
+    assert (
+        db_session.query(DeviceGroupMember)
+        .filter(DeviceGroupMember.group_id == group.id)
+        .count()
+        == 2
+    )
+
+
+def test_bulk_import_members_from_filter_adds_matching_candidates(db_session):
+    group = device_groups.create_device_group(db_session, name="Filter Import Cohort")
+    matching = OntUnit(
+        serial_number="FILTER-BULK-001",
+        name="North Estate",
+        is_active=True,
+    )
+    other = OntUnit(
+        serial_number="OTHER-BULK-001",
+        name="South Estate",
+        is_active=True,
+    )
+    db_session.add_all([matching, other])
+    db_session.flush()
+
+    result = device_groups.add_device_group_members_from_filter(
+        db_session,
+        group_id=group.id,
+        device_type="ont",
+        search="North",
+        added_by="admin",
+    )
+
+    assert result["matched"] == 1
+    assert result["added"] == 1
+    rows = (
+        db_session.query(DeviceGroupMember)
+        .filter(DeviceGroupMember.group_id == group.id)
+        .all()
+    )
+    assert [row.device_id for row in rows] == [matching.id]
+
+
+def test_action_history_includes_celery_task_state(db_session, monkeypatch):
+    group = device_groups.create_device_group(db_session, name="Task History Cohort")
+    db_session.add(
+        AuditEvent(
+            actor_type=AuditActorType.user,
+            actor_id="admin",
+            action="device_group_action_queued",
+            entity_type="device_group",
+            entity_id=str(group.id),
+            is_success=True,
+            metadata_={"task_id": "task-1"},
+        )
+    )
+    db_session.flush()
+
+    monkeypatch.setattr(
+        device_groups,
+        "_celery_task_state",
+        lambda task_id: {"state": "SUCCESS", "ready": True, "result": {"processed": 1}},
+    )
+
+    history = device_groups.list_device_group_action_history(db_session, group_id=group.id)
+
+    assert history[0]["task_id"] == "task-1"
+    assert history[0]["task_state"]["state"] == "SUCCESS"
