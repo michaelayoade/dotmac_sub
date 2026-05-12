@@ -1100,6 +1100,7 @@ def refresh_autofind_candidates(
                 request=request,
             )
         )
+        db.commit()
     log_network_action_result(
         request=request,
         resource_type="olt",

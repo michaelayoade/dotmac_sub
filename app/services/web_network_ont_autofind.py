@@ -175,30 +175,33 @@ def restore_candidate_by_serial(
         for candidate in dict.fromkeys(serial_search_candidates(clean_serial))
         if candidate
     ]
-    normalized_serials = {
-        normalize_serial(candidate) for candidate in serial_variants if candidate
-    }
+    normalized_serials = [
+        normalized
+        for normalized in dict.fromkeys(
+            normalize_serial(candidate) for candidate in serial_variants if candidate
+        )
+        if normalized
+    ]
     if not normalized_serials:
         return False, "No serial number provided"
 
-    # Find candidates matching any serial variant
-    all_candidates = list(
-        db.scalars(
-            select(OltAutofindCandidate).order_by(
-                OltAutofindCandidate.last_seen_at.desc().nulls_last(),
-                OltAutofindCandidate.created_at.desc(),
+    candidate = db.scalars(
+        select(OltAutofindCandidate)
+        .where(
+            or_(
+                _normalized_serial_expr(OltAutofindCandidate.serial_number).in_(
+                    normalized_serials
+                ),
+                _normalized_serial_expr(OltAutofindCandidate.serial_hex).in_(
+                    normalized_serials
+                ),
             )
-        ).all()
-    )
-
-    candidate = next(
-        (
-            item
-            for item in all_candidates
-            if normalized_serials.intersection(_candidate_serial_values(item))
-        ),
-        None,
-    )
+        )
+        .order_by(
+            OltAutofindCandidate.last_seen_at.desc().nulls_last(),
+            OltAutofindCandidate.created_at.desc(),
+        )
+    ).first()
 
     if candidate is None:
         return False, "No autofind candidate found for serial"
@@ -458,7 +461,7 @@ def refresh_autofind_from_olt(
         candidate.notes = "Marked disappeared by explicit OLT autofind refresh"
         disappeared += 1
 
-    db.commit()
+    db.flush()  # Let caller control transaction boundary
     stats = {"created": created, "updated": updated, "disappeared": disappeared}
     return (
         True,
@@ -791,5 +794,5 @@ def upsert_autofind_from_syslog(
             },
         )
 
-    db.commit()
+    db.flush()  # Let caller control transaction boundary
     return True

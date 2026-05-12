@@ -395,6 +395,73 @@ def test_restore_candidate_clears_disappeared_state_for_authorization(db_session
     )
 
 
+def test_restore_candidate_by_serial_matches_hex_variant(db_session):
+    olt = OLTDevice(name="OLT-Restore-Serial", mgmt_ip="198.51.100.221", is_active=True)
+    ont = OntUnit(serial_number="HWTC8535819A", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    # Decoy candidate with a different serial — must not match
+    decoy = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/1/2",
+        serial_number="HWTCDEADBEEF",
+        serial_hex="48575443DEADBEEF",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    target = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/1/3",
+        serial_number="HWTC8535819A",
+        serial_hex="485754438535819A",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    db_session.add_all([decoy, target])
+    db_session.commit()
+
+    # Look up by hex form even though the stored serial_number is the display form
+    ok, message = autofind_service.restore_candidate_by_serial(
+        db_session,
+        serial_number="485754438535819A",
+        ont_unit_id=ont.id,
+    )
+
+    assert ok is True
+    assert "Restored" in message
+    db_session.refresh(target)
+    db_session.refresh(decoy)
+    assert target.is_active is True
+    assert target.resolution_reason is None
+    assert target.ont_unit_id == ont.id
+    assert decoy.is_active is False  # Unaffected
+
+
+def test_restore_candidate_by_serial_returns_false_when_no_match(db_session):
+    olt = OLTDevice(name="OLT-Restore-Serial-Miss", mgmt_ip="198.51.100.222", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+    db_session.add(
+        OltAutofindCandidate(
+            olt_id=olt.id,
+            fsp="0/1/4",
+            serial_number="HWTCAAAAAAAA",
+            serial_hex="48575443AAAAAAAA",
+            is_active=False,
+            resolution_reason="disappeared",
+        )
+    )
+    db_session.commit()
+
+    ok, message = autofind_service.restore_candidate_by_serial(
+        db_session,
+        serial_number="HWTCBBBBBBBB",
+    )
+    assert ok is False
+    assert "No autofind candidate" in message
+
+
 def test_build_unconfigured_onts_page_data_supports_history_filters(db_session):
     olt = OLTDevice(name="OLT-History", mgmt_ip="198.51.100.202", is_active=True)
     db_session.add(olt)
