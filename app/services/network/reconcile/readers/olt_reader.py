@@ -15,8 +15,12 @@ Current scope:
 * Optical Rx/Tx/temperature via ``display ont optical-info`` —
   best-effort; an unsupported / out-of-range reply leaves the optical
   fields as ``None`` without failing the whole read.
-* Service-port enumeration (``display service-port port <fsp>`` filtered
-  by ONT-ID) is still a follow-up.
+* Service-port enumeration filtered by ONT-ID via
+  ``get_service_ports_for_ont`` (which runs ``display service-port port``
+  on the PON and filters the table to one ONT). Each entry is recorded as
+  a plain dict ``{index, vlan_id, ont_id, gem_index, flow_type,
+  flow_para, state, fsp, tag_transform}`` so the JSONB observation row
+  stays portable across versions of ``ServicePortEntry``.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from app.services.network.olt_ssh_ont.status import (
     get_ont_info_detail,
     get_ont_status,
 )
+from app.services.network.olt_ssh_service_ports import get_service_ports_for_ont
 
 from ..state import OltObservedFields, OntDesiredState
 from ._types import ReadResult
@@ -157,6 +162,14 @@ def read_olt_state(
         olt, desired.fsp, desired.olt_ont_id
     )
 
+    # 5. Service-port enumeration. Same best-effort policy: if the SSH read
+    # fails, leave the tuple empty so the planner falls back to the
+    # imported state. Failing here would block all sync writes against an
+    # otherwise-healthy ONT.
+    olt_service_ports = _read_service_ports(
+        olt, desired.fsp, desired.olt_ont_id
+    )
+
     return ReadResult(
         success=True,
         unreachable=False,
@@ -181,10 +194,7 @@ def read_olt_state(
             olt_service_profile_id=_int_or_none(
                 detail.get("service_profile_id")
             ),
-            # Service-port enumeration is a third SSH function
-            # (``display service-port port <fsp>`` + per-row filtering on
-            # ONT-ID), deferred.
-            olt_service_ports=(),
+            olt_service_ports=olt_service_ports,
         ),
         error=None,
     )
@@ -307,3 +317,38 @@ def _read_optical(
     temp_raw = info.temperature_c
     temperature = int(round(temp_raw)) if temp_raw is not None else None
     return rx, tx, temperature
+
+
+def _read_service_ports(
+    olt: Any, fsp: str, ont_id: int
+) -> tuple[dict[str, Any], ...]:
+    """Best-effort service-port enumeration for one ONT.
+
+    Each ``ServicePortEntry`` is converted to a plain dict so the planner
+    can index it with ``sp.get("index")`` regardless of whether the
+    underlying dataclass shape evolves. Returns an empty tuple on SSH
+    failure / exception — the planner will then plan against the
+    imported service-port state rather than blocking writes.
+    """
+    try:
+        ok, _msg, entries = get_service_ports_for_ont(olt, fsp, ont_id)
+    except Exception:
+        logger.debug("olt_reader_service_ports_unavailable", exc_info=True)
+        return ()
+    if not ok or not entries:
+        return ()
+
+    return tuple(
+        {
+            "index": int(entry.index),
+            "vlan_id": int(entry.vlan_id),
+            "ont_id": int(entry.ont_id),
+            "gem_index": int(entry.gem_index),
+            "flow_type": str(entry.flow_type or ""),
+            "flow_para": str(entry.flow_para or ""),
+            "state": str(entry.state or ""),
+            "fsp": str(entry.fsp or ""),
+            "tag_transform": str(entry.tag_transform or ""),
+        }
+        for entry in entries
+    )

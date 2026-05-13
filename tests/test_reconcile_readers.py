@@ -32,6 +32,17 @@ def _stub_optical(monkeypatch):
         lambda *_a, **_k: (False, "not stubbed", None),
     )
 
+
+@pytest.fixture(autouse=True)
+def _stub_service_ports(monkeypatch):
+    """Default to a no-op service-port enumeration so existing tests stay
+    deterministic. Specific tests override this when they need to assert
+    on the populated tuple."""
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_service_ports_for_ont",
+        lambda *_a, **_k: (False, "not stubbed", []),
+    )
+
 # ── Shared in-memory OntDesiredState ────────────────────────────────────────
 
 
@@ -486,6 +497,152 @@ def test_olt_reader_tolerates_optical_failure(monkeypatch):
     assert obs.olt_rx_dbm is None
     assert obs.olt_tx_dbm is None
     assert obs.olt_temperature_c is None
+
+
+def test_olt_reader_populates_service_ports_from_get_service_ports_for_ont(
+    monkeypatch,
+):
+    from app.services.network.parsers.loader import ServicePortEntry
+
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_service_ports_for_ont",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            [
+                ServicePortEntry(
+                    index=22,
+                    vlan_id=203,
+                    ont_id=11,
+                    gem_index=1,
+                    flow_type="vlan",
+                    flow_para="203",
+                    state="up",
+                    fsp="0/1/3",
+                    tag_transform="translate",
+                ),
+                ServicePortEntry(
+                    index=23,
+                    vlan_id=201,
+                    ont_id=11,
+                    gem_index=2,
+                    flow_type="vlan",
+                    flow_para="201",
+                    state="up",
+                    fsp="0/1/3",
+                    tag_transform="translate",
+                ),
+            ],
+        ),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    ports = result.observed.olt_service_ports
+    assert len(ports) == 2
+    assert ports[0] == {
+        "index": 22,
+        "vlan_id": 203,
+        "ont_id": 11,
+        "gem_index": 1,
+        "flow_type": "vlan",
+        "flow_para": "203",
+        "state": "up",
+        "fsp": "0/1/3",
+        "tag_transform": "translate",
+    }
+    # Tuple, not list — planner expects an immutable observation.
+    assert isinstance(result.observed.olt_service_ports, tuple)
+
+
+def test_olt_reader_service_ports_empty_on_failure(monkeypatch):
+    """SSH failure on service-port read leaves olt_service_ports as ()
+    without failing the whole read."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_service_ports_for_ont",
+        lambda *_a, **_k: (False, "SSH error", []),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.observed.olt_service_ports == ()
+
+
+def test_olt_reader_catches_service_ports_exception(monkeypatch):
+    """A raised exception inside service-port enumeration is swallowed so
+    the rest of the read still produces a useful observation."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("ssh torn down mid-read")
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_service_ports_for_ont",
+        _boom,
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.observed.olt_service_ports == ()
 
 
 def test_olt_reader_catches_optical_exception(monkeypatch):
