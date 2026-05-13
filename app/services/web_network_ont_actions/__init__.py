@@ -23,12 +23,15 @@ from app.services.web_network_ont_actions._common import (
     _persist_ont_plan_step,
     _resolve_return_olt_context,
     actor_name_from_request,
+    cache_current_user_context,
 )
 
 # Configuration setters
 from app.services.web_network_ont_actions.config_setters import (
     bind_tr069_profile,
     configure_management_ip,
+    force_push_wifi_password,
+    force_resync_ont,
     set_connection_request_credentials,
     set_http_management,
     set_lan_config,
@@ -127,6 +130,7 @@ __all__ = [
     "_resolve_return_olt_context",
     # Public helpers
     "actor_name_from_request",
+    "cache_current_user_context",
     # Credentials
     "resolve_stored_pppoe_password",
     "reveal_stored_pppoe_password",
@@ -154,6 +158,8 @@ __all__ = [
     # Configuration setters
     "bind_tr069_profile",
     "configure_management_ip",
+    "force_push_wifi_password",
+    "force_resync_ont",
     "set_connection_request_credentials",
     "set_http_management",
     "set_lan_config",

@@ -266,29 +266,77 @@ def set_wifi_ssid(
     return result
 
 
+def _reconcile_to_action_result(result_obj, *, success_message: str) -> ActionResult:
+    """Translate a ``ReconcileResult`` to the legacy ``ActionResult`` shape.
+
+    ``actionable=True`` flags a failure whose message carries operator-actionable
+    instructions the UI should surface verbatim (today: ``ACS_CR_FAILED`` tells
+    the operator to drain via OLT ``ont reset``). The UI renders that text
+    as-is when ``actionable`` is set.
+    """
+    from app.services.network.reconcile import ReconcileFailureReason
+
+    if result_obj.success:
+        return ActionResult(
+            success=True,
+            message=success_message,
+            data={
+                "sync_status": result_obj.sync_status,
+                "actions_applied": [
+                    a.field for a in result_obj.actions_applied
+                ],
+            },
+        )
+    failure = result_obj.failure
+    return ActionResult(
+        success=False,
+        message=failure.message if failure else "Reconcile failed",
+        data={
+            "sync_status": result_obj.sync_status,
+            "failure_reason": failure.reason if failure else None,
+            "actionable": (
+                failure is not None
+                and failure.reason == ReconcileFailureReason.ACS_CR_FAILED
+            ),
+        },
+    )
+
+
+def _emit_wifi_password_event(
+    db: Session, ont_id: str, *, method: str, request: Request | None
+) -> None:
+    """Audit-event emission for any successful WiFi-password change path."""
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    ont = db.get(OntUnit, ont_id)
+    emit_event(
+        db,
+        EventType.ont_wifi_password_set,
+        {
+            "ont_id": ont_id,
+            "ont_serial": ont.serial_number if ont else None,
+            "password_set": True,
+            "method": method,
+            "result": "success",
+        },
+        actor=actor_name_from_request(request),
+    )
+
+
 def set_wifi_password(
     db: Session, ont_id: str, password: str, *, request: Request | None = None
 ) -> ActionResult:
-    """Set WiFi password by routing through ``reconcile_ont``.
-
-    First production caller of the reconciler. The legacy direct path
-    (``genieacs_service.set_wifi_password``) is replaced wholesale — there
-    is no fall-back. A reconcile failure is a real failure surfaced to the
-    operator, with the ``OntUnit.sync_status`` flipped to ``out_of_sync``.
+    """Set WiFi password by routing through ``reconcile_ont`` in sync mode.
 
     Per Hole 3 of the design: on a present-and-observed ONT in ``sync``
     mode, the reconciler updates ``OntDesiredState.wifi_password_ref`` but
     doesn't push the PSK to the device — there's no observable to confirm
     drift. The push happens on the next BOOTSTRAP event (after a factory
-    reset, where the device's PSK was wiped) or on an explicit operator
-    "force re-push" action. This is a deliberate behavior change from the
-    legacy unconditional-push semantics; the legacy path was theatre on
-    HG8546M because the firmware doesn't return PSK on reads either.
+    reset, where the device's PSK was wiped) or via ``force_push_wifi_password``
+    (which uses ``mode=bootstrap`` to force an immediate push).
     """
-    from app.services.network.reconcile import (
-        ReconcileFailureReason,
-        reconcile_ont,
-    )
+    from app.services.network.reconcile import reconcile_ont
 
     result_obj = reconcile_ont(
         db,
@@ -297,57 +345,112 @@ def set_wifi_password(
         mode="sync",
     )
 
-    ont = db.get(OntUnit, ont_id)
-
-    if result_obj.success:
-        from app.services.events import emit_event
-        from app.services.events.types import EventType
-
-        emit_event(
-            db,
-            EventType.ont_wifi_password_set,
-            {
-                "ont_id": ont_id,
-                "ont_serial": ont.serial_number if ont else None,
-                "password_set": True,
-                "method": "reconciler",
-                "result": "success",
-            },
-            actor=actor_name_from_request(request),
-        )
-        action_result = ActionResult(
-            success=True,
-            message="WiFi password updated.",
-            data={
-                "sync_status": result_obj.sync_status,
-                "actions_applied": [
-                    a.field for a in result_obj.actions_applied
-                ],
-            },
-        )
-    else:
-        failure = result_obj.failure
-        action_result = ActionResult(
-            success=False,
-            message=failure.message if failure else "Reconcile failed",
-            data={
-                "sync_status": result_obj.sync_status,
-                "failure_reason": failure.reason if failure else None,
-                # An ACS_CR_FAILED outcome carries actionable instructions the
-                # operator UI should surface verbatim — the message already
-                # tells them to drain via OLT ``ont reset``.
-                "actionable": (
-                    failure is not None
-                    and failure.reason
-                    == ReconcileFailureReason.ACS_CR_FAILED
-                ),
-            },
+    action_result = _reconcile_to_action_result(
+        result_obj, success_message="WiFi password updated."
+    )
+    if action_result.success:
+        _emit_wifi_password_event(
+            db, ont_id, method="reconciler", request=request
         )
 
     _log_action_audit(
         db,
         request=request,
         action="set_wifi_password",
+        ont_id=ont_id,
+        metadata={
+            "success": action_result.success,
+            "sync_status": result_obj.sync_status,
+            "failure_reason": (
+                result_obj.failure.reason if result_obj.failure else None
+            ),
+        },
+    )
+    return action_result
+
+
+def force_push_wifi_password(
+    db: Session, ont_id: str, password: str, *, request: Request | None = None
+) -> ActionResult:
+    """Force-push the WiFi password to the device.
+
+    Uses ``mode=bootstrap`` so the planner emits an ``AcsSetWifiPassword``
+    action regardless of whether the ONT is currently present and observed.
+    The legacy ``set_wifi_password`` semantics — "push every time, trust it
+    landed" — are restored here for operators who explicitly want immediate
+    push. Sync-mode remains the default for routine changes.
+
+    Use cases:
+      * Customer reports WiFi password doesn't work after a sync change
+        (suggesting the device PSK drifted from desired_state — for instance
+        after a factory reset that wasn't accompanied by a BOOTSTRAP event).
+      * Field tech setting up a new ONT mid-bootstrap and wants the PSK
+        applied immediately rather than waiting for the next Inform.
+    """
+    from app.services.network.reconcile import reconcile_ont
+
+    result_obj = reconcile_ont(
+        db,
+        ont_id,
+        proposed_change={"wifi_password_ref": password},
+        mode="bootstrap",
+    )
+
+    action_result = _reconcile_to_action_result(
+        result_obj, success_message="WiFi password push attempted."
+    )
+    if action_result.success:
+        _emit_wifi_password_event(
+            db, ont_id, method="reconciler_force_push", request=request
+        )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="force_push_wifi_password",
+        ont_id=ont_id,
+        metadata={
+            "success": action_result.success,
+            "sync_status": result_obj.sync_status,
+            "failure_reason": (
+                result_obj.failure.reason if result_obj.failure else None
+            ),
+        },
+    )
+    return action_result
+
+
+def force_resync_ont(
+    db: Session, ont_id: str, *, request: Request | None = None
+) -> ActionResult:
+    """Force a reconcile in sweep mode — used to clear an ``out_of_sync`` row.
+
+    Sync-mode reconciles refuse against ``out_of_sync`` rows (the design
+    principle is that ``sync_status=out_of_sync`` means "the system noticed
+    something went wrong, an operator should look"). This endpoint is how
+    operators clear the state once they've checked: a sweep-mode reconcile
+    that re-attempts whatever the prior pass couldn't finish.
+
+    No ``proposed_change`` — the function only triggers reconciliation of the
+    existing desired state against live observed state.
+    """
+    from app.services.network.reconcile import reconcile_ont
+
+    result_obj = reconcile_ont(
+        db,
+        ont_id,
+        proposed_change=None,
+        mode="sweep",
+    )
+
+    action_result = _reconcile_to_action_result(
+        result_obj, success_message="ONT reconciled."
+    )
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="force_resync_ont",
         ont_id=ont_id,
         metadata={
             "success": action_result.success,

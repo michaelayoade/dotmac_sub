@@ -605,7 +605,12 @@ def ont_set_wifi_password(
     db: Session = Depends(get_db),
     password: str = Form(""),
 ) -> JSONResponse:
-    """Set WiFi password on ONT via GenieACS TR-069."""
+    """Set WiFi password on ONT via the reconciler (sync mode).
+
+    Updates ``OntDesiredState.wifi_password_ref`` durably; the actual push
+    to the device happens on the next BOOTSTRAP event (e.g. after a factory
+    reset). Use ``/wifi-password/push`` to force an immediate push.
+    """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
@@ -617,6 +622,67 @@ def ont_set_wifi_password(
         request=request,
         ont_id=ont_id,
         action="Set WiFi Password",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wifi-password/push",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_force_push_wifi_password(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+    password: str = Form(""),
+) -> JSONResponse:
+    """Force an immediate WiFi password push to the device.
+
+    Uses ``reconcile_ont(mode=bootstrap)`` so the planner emits the
+    ``AcsSetWifiPassword`` action regardless of whether the device is
+    currently present and observed. Restores legacy "push every time"
+    semantics for operators who need them.
+    """
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    result = web_network_ont_actions_service.force_push_wifi_password(
+        db, ont_id, password, request=request
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Force-Push WiFi Password",
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/force-resync",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_force_resync(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Force a sweep-mode reconcile — clears an ``out_of_sync`` row.
+
+    Sync-mode endpoints refuse against ``out_of_sync`` rows so an operator
+    has to acknowledge the prior failure before mutating state further.
+    This endpoint is the explicit acknowledgement: re-run reconciliation
+    of the existing desired state against the live OLT/ACS state.
+    """
+    denied = _ensure_ont_write_scope(request, db, ont_id)
+    if denied is not None:
+        return denied
+    result = web_network_ont_actions_service.force_resync_ont(
+        db, ont_id, request=request
+    )
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Force Resync ONT",
     )
 
 
