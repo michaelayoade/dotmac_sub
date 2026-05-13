@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 
 from sqlalchemy.orm import Session
@@ -12,6 +13,10 @@ from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_ssh import ServicePortEntry
 
 logger = logging.getLogger(__name__)
+
+_CONFLICTED_SERVICE_PORT_RE = re.compile(
+    r"Conflicted service virtual port index:\s*(\d+)", re.IGNORECASE
+)
 
 
 def get_service_ports_for_ont(
@@ -218,6 +223,33 @@ def create_single_service_port(
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
+            normalized = output.casefold()
+            conflict_match = _CONFLICTED_SERVICE_PORT_RE.search(output)
+            if (
+                "service virtual port has existed already" in normalized
+                and conflict_match
+            ):
+                conflicted_index = int(conflict_match.group(1))
+                logger.info(
+                    "Service-port already exists on OLT %s: index=%d VLAN=%d GEM=%d ONT=%d %s",
+                    olt.name,
+                    conflicted_index,
+                    vlan_id,
+                    gem_index,
+                    ont_id,
+                    fsp,
+                )
+                core._invalidate_olt_read_cache(
+                    olt, "service_ports", "running_config"
+                )
+                return (
+                    True,
+                    (
+                        "Service-port already exists "
+                        f"(index {conflicted_index}, VLAN {vlan_id}, GEM {gem_index})"
+                    ),
+                    conflicted_index,
+                )
             logger.warning(
                 "Service-port creation failed on OLT %s: %s",
                 olt.name,

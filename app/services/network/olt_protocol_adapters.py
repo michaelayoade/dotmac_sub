@@ -479,7 +479,12 @@ class OltProtocolAdapter:
             return OltOperationResult(
                 success=ok,
                 message=message,
-                data={"port_index": created_index} if created_index else {},
+                data={
+                    "port_index": created_index,
+                    "service_port_index": created_index,
+                }
+                if created_index
+                else {},
                 service_port_index=created_index,
             )
         except Exception as exc:
