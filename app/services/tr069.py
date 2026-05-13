@@ -1166,7 +1166,10 @@ class CpeDevices(ListResponseMixin):
                 ),
                 {"acs_server_id": str(server.id)},
             )
-            synced_ont_status = result.rowcount or 0
+            # SQLAlchemy `Result` is the generic supertype; UPDATE statements
+            # always return a `CursorResult` which carries `.rowcount`. mypy
+            # only sees the supertype on `db.execute`.
+            synced_ont_status = result.rowcount or 0  # type: ignore[attr-defined]
             db.commit()
         except Exception as e:
             logger.warning("Bulk ONT ACS status refresh after sync failed: %s", e)

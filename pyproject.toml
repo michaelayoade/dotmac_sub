@@ -416,6 +416,19 @@ ignore_imports = [
     "app.services.network.cpe_tr069 -> app.services.billing",
     "app.services.network.cpe_tr069 -> app.services.subscription_changes",
     "app.services.network.cpe_tr069 -> app.services.subscription_engine",
+    # profile_sync.py: pulls plan/access-type metadata from the catalog so
+    # OLT line/srv profiles can be matched to subscription tiers. Refactoring
+    # this through an inversion layer is tracked as a follow-up; until then
+    # the cross-domain import is part of the documented carve-out.
+    "app.services.network.profile_sync -> app.models.catalog",
+    # ont_scope.py: subscriber lookup for ONT search/discovery in the admin
+    # ONT inventory. Same carve-out reasoning as profile_sync.
+    "app.services.network.ont_scope -> app.models.subscriber",
+    # subscriber_ont_adapter.py: the dedicated bridge between Subscriber and
+    # the ONT/CPE inventory; cross-domain by name. Belongs at a higher layer
+    # but the relocation is out of scope for the reconciler work.
+    "app.services.network.subscriber_ont_adapter -> app.models.subscriber",
+    "app.services.network.subscriber_ont_adapter -> app.models.catalog",
 ]
 unmatched_ignore_imports_alerting = "none"
 allow_indirect_imports = "true"

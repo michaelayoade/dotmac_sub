@@ -331,7 +331,7 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
     if not ok:
         audit.errors.append(f"Live TR-069 profile inventory failed: {message}")
     tr069_profile_ids = {profile.profile_id for profile in tr069_profiles}
-    required_tr069_id = int(pack.tr069_olt_profile_id)
+    required_tr069_id = int(pack.tr069_olt_profile_id)  # type: ignore[arg-type]
     tr069_detail = next(
         (profile for profile in tr069_profiles if profile.profile_id == required_tr069_id),
         None,

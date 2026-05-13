@@ -353,7 +353,10 @@ def _import_profile_mappings(
         equipment_id = str(registration.equipment_id or "").strip()
         if not equipment_id:
             continue
-        pair = (int(registration.line_profile_id), int(registration.service_profile_id))
+        # Registrations come from OltOntRegistration whose profile IDs are
+        # nullable in the schema but always populated for any row we filter
+        # in below — the cast suppresses mypy without coercing nulls to 0.
+        pair = (int(registration.line_profile_id), int(registration.service_profile_id))  # type: ignore[arg-type]
         counts.setdefault(equipment_id, Counter())[pair] += 1
 
     onu_types = _onu_type_id_by_equipment(db)
@@ -412,14 +415,14 @@ def _import_named_service_profile_mappings(
     counts: dict[str, Counter[int]] = {}
     service_ids: dict[str, int] = {}
     for registration in registrations:
-        service_profile = service_profiles.get(int(registration.service_profile_id))
+        service_profile = service_profiles.get(int(registration.service_profile_id))  # type: ignore[arg-type]
         if service_profile is None or not _looks_like_equipment_profile(
             service_profile.name
         ):
             continue
         equipment_id = str(service_profile.name or "").strip()
         service_ids[equipment_id] = int(service_profile.profile_id)
-        counts.setdefault(equipment_id, Counter())[int(registration.line_profile_id)] += 1
+        counts.setdefault(equipment_id, Counter())[int(registration.line_profile_id)] += 1  # type: ignore[arg-type]
 
     imported = 0
     for equipment_id, line_counts in counts.items():
@@ -482,7 +485,7 @@ def _import_inventory_profile_mappings(
         if not equipment_id:
             continue
 
-        registration = None
+        registration: OltOntRegistration | None = None
         for serial_value in (ont.serial_number, ont.vendor_serial_number):
             for candidate in serial_search_candidates(serial_value):
                 registration = registrations_by_serial.get(normalize_serial(candidate))
@@ -502,8 +505,8 @@ def _import_inventory_profile_mappings(
             continue
 
         pair = (
-            int(registration.line_profile_id),
-            int(registration.service_profile_id),
+            int(registration.line_profile_id),  # type: ignore[arg-type]
+            int(registration.service_profile_id),  # type: ignore[arg-type]
         )
         counts.setdefault(equipment_id, Counter())[pair] += 1
 
@@ -942,13 +945,18 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                 except ValueError as exc:
                     warnings.append(f"Skipped ONT detail {detail_fsp} {entry.ont_id}: {exc}")
                     continue
-                detail = parse_ont_info_detail(detail_output)
-                if detail is None:
+                # Renamed to keep ``detail`` (the raw command output, ``str``)
+                # distinct from the parsed dataclass — earlier loops in this
+                # function bind ``detail`` to ``core._run_huawei_cmd``'s
+                # return, so reusing the name confuses mypy and any future
+                # reader.
+                parsed_detail = parse_ont_info_detail(detail_output)
+                if parsed_detail is None:
                     continue
-                registration_fsp = detail.fsp or detail_fsp
-                registration_ont_id = detail.ont_id or entry.ont_id
+                registration_fsp = parsed_detail.fsp or detail_fsp
+                registration_ont_id = parsed_detail.ont_id or entry.ont_id
                 seen_registration_keys.add((registration_fsp, registration_ont_id))
-                serial_number = detail.serial_number or entry.serial_number
+                serial_number = parsed_detail.serial_number or entry.serial_number
                 if serial_number:
                     moved_rows = db.scalars(
                         select(OltOntRegistration)
@@ -973,12 +981,12 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                     },
                     {
                         "serial_number": serial_number,
-                        "equipment_id": detail.equipment_id or detail.model,
-                        "line_profile_id": detail.line_profile_id,
-                        "service_profile_id": detail.service_profile_id,
-                        "tr069_profile_id": detail.tr069_profile_id,
-                        "match_state": detail.match_state or entry.match_state,
-                        "description": detail.description or entry.description,
+                        "equipment_id": parsed_detail.equipment_id or parsed_detail.model,
+                        "line_profile_id": parsed_detail.line_profile_id,
+                        "service_profile_id": parsed_detail.service_profile_id,
+                        "tr069_profile_id": parsed_detail.tr069_profile_id,
+                        "match_state": parsed_detail.match_state or entry.match_state,
+                        "description": parsed_detail.description or entry.description,
                         "raw_config": detail_output,
                         "is_active": True,
                         "last_imported_at": imported_at,

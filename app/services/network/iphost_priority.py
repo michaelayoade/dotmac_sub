@@ -124,8 +124,8 @@ def resolve_management_iphost_priority(
     fsp: str | None,
     ont_id_on_olt: int | str | None,
     mgmt_vlan_tag: int | str | None,
-    mgmt_gem_index: int | str | None = None,
-    line_profile_id: int | str | None = None,
+    mgmt_gem_index: object | None = None,
+    line_profile_id: object | None = None,
 ) -> int | None:
     """Return the OLT IPHOST priority that matches management service-port GEM.
 
