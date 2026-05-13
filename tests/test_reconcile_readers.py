@@ -1,0 +1,478 @@
+"""Tests for the OLT and ACS readers.
+
+Both readers take their I/O dependency as a parameter, so tests use minimal
+stub classes rather than mocking SSH or HTTP. The dataclass return shape is
+exercised end-to-end against synthetic inputs.
+
+These tests don't hit a DB; they construct ``OntDesiredState`` instances
+in-memory.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+from app.services.genieacs_client import GenieACSError
+from app.services.network.reconcile import (
+    OntDesiredState,
+    read_acs_state,
+    read_olt_state,
+)
+
+# ── Shared in-memory OntDesiredState ────────────────────────────────────────
+
+
+def _desired(**overrides) -> OntDesiredState:
+    defaults = dict(
+        ont_unit_id="ont-1",
+        serial_number="HWTC8535819A",
+        olt_id="olt-spdc",
+        fsp="0/1/3",
+        olt_ont_id=11,
+        line_profile_id=40,
+        service_profile_id=42,
+        description="stub_authd_20260513",
+        mgmt_vlan=201,
+        mgmt_ip="172.16.210.20",
+        mgmt_subnet_mask="255.255.255.0",
+        mgmt_gateway="172.16.210.1",
+        mgmt_dns_primary="8.8.8.8",
+        mgmt_dns_secondary="4.2.2.2",
+        mgmt_iphost_priority=2,
+        tr069_profile_id=2,
+        acs_server_id="acs-dotmac",
+        cr_username="admin",
+        cr_password_ref="bao://cr",
+        periodic_inform_interval_sec=300,
+        wan_mode="pppoe",
+        wan_vlan=203,
+        wan_gem_index=1,
+        wan_pppoe_username="100024456",
+        wan_pppoe_password_ref="bao://pppoe",
+        wan_pppoe_provisioning_method="tr069",
+        wan_pppoe_wcd_index=1,
+        wan_pppoe_instance_index=1,
+        wan_config_profile_id=None,
+        wan_internet_config_ip_index=None,
+        nat_enabled=True,
+        ipv6_enabled=False,
+        dhcp_enabled=True,
+        dhcp_pool_min="192.168.100.2",
+        dhcp_pool_max="192.168.100.254",
+        dhcp_subnet_mask="255.255.255.0",
+        wifi_ssid="KURSI",
+        wifi_password_ref="bao://wifi",
+        wifi_password_pushed_at=None,
+        mgmt_service_port_index=23,
+        wan_service_port_index=22,
+        subscriber_external_id=None,
+        wan_uprate_kbps=None,
+        wan_downrate_kbps=None,
+    )
+    defaults.update(overrides)
+    return OntDesiredState(**defaults)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OLT reader
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _StubAdapter:
+    """Minimal OltProtocolAdapter stub.
+
+    Drives the two branches the reader cares about:
+    - ``find_ont_by_serial`` outcome (success / failure / unreachable)
+    - whether a registration is present in the result
+    """
+
+    def __init__(
+        self,
+        *,
+        find_success: bool = True,
+        find_message: str = "ok",
+        registration: object | None = None,
+    ):
+        self.olt = SimpleNamespace(name="OLT-TEST")
+        self._find_success = find_success
+        self._find_message = find_message
+        self._registration = registration
+        self.find_calls: list[str] = []
+
+    def find_ont_by_serial(self, serial_number: str):
+        self.find_calls.append(serial_number)
+        return SimpleNamespace(
+            success=self._find_success,
+            message=self._find_message,
+            data={"registration": self._registration},
+        )
+
+
+def test_olt_reader_returns_unreachable_when_ssh_connection_failed(
+    monkeypatch,
+):
+    adapter = _StubAdapter(
+        find_success=False,
+        find_message="Connection failed: timed out",
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is False
+    assert result.unreachable is True
+    assert "timed out" in (result.error or "")
+    assert result.observed is None
+
+
+def test_olt_reader_returns_clean_absent_when_ont_not_registered(monkeypatch):
+    adapter = _StubAdapter(find_success=True, registration=None)
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.unreachable is False
+    assert result.observed is not None
+    assert result.observed.olt_present is False
+    assert result.observed.olt_match_state is None
+
+
+def test_olt_reader_returns_failure_when_olt_command_errored(monkeypatch):
+    adapter = _StubAdapter(
+        find_success=False,
+        find_message="OLT error: Failure: insufficient privilege",
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is False
+    assert result.unreachable is False
+    assert "insufficient privilege" in (result.error or "")
+
+
+def test_olt_reader_populates_present_match_and_run_state(monkeypatch):
+    """When find returns a registration AND get_ont_status succeeds, the reader
+    reports present=True with normalized state strings."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="HWTC8535819A",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.observed is not None
+    assert result.observed.olt_present is True
+    assert result.observed.olt_run_state == "online"
+    assert result.observed.olt_match_state == "match"
+
+
+def test_olt_reader_treats_present_but_status_dark_as_unknown_state(monkeypatch):
+    """If the ONT is registered but get_ont_status fails (non-connection),
+    report present=True with unknown state — the planner should still see it
+    in the OLT table."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (False, "Failure: ONT busy", None),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.observed.olt_present is True
+    assert result.observed.olt_run_state is None
+    assert result.observed.olt_match_state is None
+
+
+def test_olt_reader_normalises_legacy_normal_run_state(monkeypatch):
+    """Older Huawei firmware reports 'normal' for healthy ONTs."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="HWTC8535819A",
+                run_state="normal",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.observed.olt_run_state == "online"
+
+
+def test_olt_reader_unknown_state_strings_normalise_to_none(monkeypatch):
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="HWTC8535819A",
+                run_state="weird-state",
+                match_state="unknown",
+                config_state="normal",
+            ),
+        ),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.observed.olt_run_state is None
+    assert result.observed.olt_match_state is None
+
+
+def test_olt_reader_rejects_adapter_without_olt_attribute():
+    adapter = SimpleNamespace(find_ont_by_serial=lambda s: None)
+    result = read_olt_state(adapter, _desired())
+    assert result.success is False
+    assert result.unreachable is False
+    assert "no .olt" in (result.error or "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACS reader
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _StubGenieAcsClient:
+    """Drives the list_devices outcomes the reader cares about."""
+
+    def __init__(self, *, devices=None, raises=None):
+        self._devices = devices if devices is not None else []
+        self._raises = raises
+        self.list_calls: list[tuple] = []
+
+    def list_devices(self, query=None, projection=None):
+        self.list_calls.append((query, projection))
+        if self._raises is not None:
+            raise self._raises
+        return self._devices
+
+
+def _leaf(value):
+    """Build a GenieACS leaf dict (the ``_value``-bearing shape)."""
+    return {"_value": value, "_object": False, "_writable": True}
+
+
+def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
+    """Construct a representative GenieACS device document."""
+    overrides = overrides or {}
+    base = {
+        "_id": f"00259E-HG8546M-{serial}",
+        "_lastInform": "2026-05-13T00:00:00.000Z",
+        "_lastBoot": "2026-05-13T00:00:00.000Z",
+        "_lastBootstrap": "2026-05-12T19:28:25.000Z",
+        "InternetGatewayDevice": {
+            "DeviceInfo": {"SoftwareVersion": _leaf("V5R019C10S100")},
+            "ManagementServer": {
+                "PeriodicInformInterval": _leaf("300"),
+                "ConnectionRequestUsername": _leaf("admin"),
+                "ConnectionRequestPassword": _leaf("admin"),
+            },
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        "1": {
+                            "WANPPPConnection": {
+                                "1": {
+                                    "Username": _leaf("100024456"),
+                                    "Enable": _leaf("true"),
+                                    "X_HW_VLAN": _leaf("203"),
+                                    "NATEnabled": _leaf("true"),
+                                    "ConnectionStatus": _leaf("Connected"),
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "LANDevice": {
+                "1": {
+                    "LANHostConfigManagement": {
+                        "DHCPServerEnable": _leaf("true")
+                    },
+                    "WLANConfiguration": {
+                        "1": {"SSID": _leaf("KURSI")}
+                    },
+                }
+            },
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_acs_reader_returns_unreachable_when_genieacs_errors():
+    client = _StubGenieAcsClient(raises=GenieACSError("502 Bad Gateway"))
+    result = read_acs_state(client, _desired())
+    assert result.success is False
+    assert result.unreachable is True
+    assert "Bad Gateway" in (result.error or "")
+
+
+def test_acs_reader_returns_unreachable_on_unexpected_exception():
+    client = _StubGenieAcsClient(raises=RuntimeError("socket reset"))
+    result = read_acs_state(client, _desired())
+    assert result.success is False
+    assert result.unreachable is True
+
+
+def test_acs_reader_returns_absent_when_device_not_in_genieacs():
+    """ONT hasn't bootstrapped yet — clean read, present=False."""
+    client = _StubGenieAcsClient(devices=[])
+    result = read_acs_state(client, _desired())
+    assert result.success is True
+    assert result.unreachable is False
+    assert result.observed is not None
+    assert result.observed.acs_present is False
+
+
+def test_acs_reader_uses_trailing_serial_regex_match():
+    """The query should match any device-id ending with the desired serial."""
+    client = _StubGenieAcsClient(devices=[])
+    read_acs_state(client, _desired(serial_number="HWTCABC123"))
+    assert len(client.list_calls) == 1
+    query, projection = client.list_calls[0]
+    assert query == {"_id": {"$regex": r".*-HWTCABC123$"}}
+    assert "InternetGatewayDevice.ManagementServer.PeriodicInformInterval" in projection
+
+
+def test_acs_reader_parses_a_full_device_document():
+    client = _StubGenieAcsClient(devices=[_device_doc()])
+    result = read_acs_state(client, _desired())
+    obs = result.observed
+    assert obs is not None
+    assert obs.acs_present is True
+    assert obs.acs_last_inform_at == datetime(2026, 5, 13, 0, 0, tzinfo=UTC)
+    assert obs.acs_observed_software_version == "V5R019C10S100"
+    assert obs.acs_observed_pppoe_username == "100024456"
+    assert obs.acs_observed_pppoe_enable is True
+    assert obs.acs_observed_wan_vlan == 203
+    assert obs.acs_observed_nat_enabled is True
+    assert obs.acs_observed_dhcp_enabled is True
+    assert obs.acs_observed_ssid == "KURSI"
+    assert obs.acs_observed_periodic_inform_interval_sec == 300
+    assert obs.acs_observed_cr_username_set is True
+    assert obs.acs_observed_cr_password_set is True
+    assert obs.acs_observed_wan_wcd_index == 1
+    assert obs.acs_observed_wan_instance_index == 1
+
+
+def test_acs_reader_locates_wan_ppp_on_alternate_wcd_slot():
+    """Multi-WCD device — WANPPPConnection actually lives on
+    WANConnectionDevice.2.WANPPPConnection.1. Reader must find it."""
+    doc = _device_doc()
+    doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"] = {
+        "1": {},
+        "2": {
+            "WANPPPConnection": {
+                "1": {
+                    "Username": _leaf("100099999"),
+                    "Enable": _leaf("true"),
+                    "X_HW_VLAN": _leaf("203"),
+                }
+            }
+        },
+    }
+    client = _StubGenieAcsClient(devices=[doc])
+    result = read_acs_state(client, _desired())
+    assert result.observed.acs_observed_wan_wcd_index == 2
+    assert result.observed.acs_observed_wan_instance_index == 1
+    assert result.observed.acs_observed_pppoe_username == "100099999"
+
+
+def test_acs_reader_handles_device_with_no_wan_ppp_instance():
+    """Fresh ONT: bootstrap done, but operator hasn't created
+    WANPPPConnection yet. PPPoE fields should be None, present=True."""
+    doc = _device_doc()
+    doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"] = {"1": {}}
+    client = _StubGenieAcsClient(devices=[doc])
+    result = read_acs_state(client, _desired())
+    assert result.observed.acs_present is True
+    assert result.observed.acs_observed_pppoe_username is None
+    assert result.observed.acs_observed_wan_wcd_index is None
+    assert result.observed.acs_observed_wan_instance_index is None
+
+
+def test_acs_reader_handles_empty_cr_credentials_as_set_false():
+    """Empty string for CR username is 'set but blank' — equivalent to unset
+    for the precondition layer's purposes. acs_observed_cr_username_set is
+    False, not None."""
+    doc = _device_doc()
+    doc["InternetGatewayDevice"]["ManagementServer"][
+        "ConnectionRequestUsername"
+    ] = _leaf("")
+    client = _StubGenieAcsClient(devices=[doc])
+    result = read_acs_state(client, _desired())
+    # Empty value → present check returns False
+    assert result.observed.acs_observed_cr_username_set is False
+
+
+def test_acs_reader_uses_tr181_root_when_present():
+    """For future TR-181 devices, the reader falls through to the Device.*
+    root for software version and management-server fields."""
+    doc = {
+        "_id": "00ABCD-TR181Box-HWTC1111",
+        "_lastInform": "2026-05-13T00:00:00Z",
+        "Device": {
+            "DeviceInfo": {"SoftwareVersion": _leaf("FW-1.0")},
+            "ManagementServer": {"PeriodicInformInterval": _leaf("600")},
+        },
+    }
+    client = _StubGenieAcsClient(devices=[doc])
+    result = read_acs_state(client, _desired())
+    assert result.observed.acs_observed_software_version == "FW-1.0"
+    assert result.observed.acs_observed_periodic_inform_interval_sec == 600
+    # No TR-098 → all WAN/LAN/WiFi fields None
+    assert result.observed.acs_observed_pppoe_username is None
+    assert result.observed.acs_observed_ssid is None
+
+
+def test_acs_reader_handles_malformed_timestamps():
+    """A malformed _lastInform string shouldn't crash the parser."""
+    doc = _device_doc()
+    doc["_lastInform"] = "not-a-timestamp"
+    client = _StubGenieAcsClient(devices=[doc])
+    result = read_acs_state(client, _desired())
+    assert result.success is True
+    assert result.observed.acs_last_inform_at is None
+
+
+def test_acs_reader_handles_genieacs_z_timestamp_format():
+    """GenieACS commonly emits trailing-Z ISO timestamps."""
+    doc = _device_doc()
+    doc["_lastInform"] = "2026-05-13T12:34:56.789Z"
+    client = _StubGenieAcsClient(devices=[doc])
+    result = read_acs_state(client, _desired())
+    assert result.observed.acs_last_inform_at == datetime(
+        2026, 5, 13, 12, 34, 56, 789_000, tzinfo=UTC
+    )
+
+
+# ── Smoke: every field on AcsObservedFields has a reachable type ────────────
+
+
+def test_absent_acs_observation_dataclass_round_trips():
+    """An absent observation should be a valid frozen dataclass — sanity
+    against the field set drifting against the state.py definition."""
+    client = _StubGenieAcsClient(devices=[])
+    result = read_acs_state(client, _desired())
+    assert dataclasses.is_dataclass(result.observed)
+    assert result.observed.acs_present is False

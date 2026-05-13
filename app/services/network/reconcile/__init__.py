@@ -31,6 +31,7 @@ from .adapters import (
     upsert_ont_observation,
 )
 from .locking import LockConflict, LockError, OntNotFound, acquire_reconcile_lock
+from .readers import ReadResult, read_acs_state, read_olt_state
 from .state import (
     AcsObservedFields,
     AppliedAction,
@@ -62,6 +63,7 @@ __all__ = (
     "OntNotFound",
     "OntObservedState",
     "PppoeProvisioningMethod",
+    "ReadResult",
     "ReconcileFailure",
     "ReconcileFailureReason",
     "ReconcileMode",
@@ -74,6 +76,8 @@ __all__ = (
     "apply_proposed_change",
     "desired_from_ont_unit",
     "observed_from_ont_observation",
+    "read_acs_state",
+    "read_olt_state",
     "upsert_ont_observation",
     "validate_desired",
 )
