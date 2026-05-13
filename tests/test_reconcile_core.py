@@ -85,6 +85,18 @@ def _make_desired(ont, **overrides) -> OntDesiredState:
     return OntDesiredState(**defaults)
 
 
+@pytest.fixture(autouse=True)
+def stub_ping(monkeypatch):
+    """Stub the mgmt-IP ping so tests don't shell out to the real ``ping``
+    binary (which sits on a 2s timeout per packet and slows the suite
+    dramatically). Returns False — tests that need a different outcome
+    override this fixture per-test."""
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.is_pingable",
+        lambda ip, **kwargs: False,
+    )
+
+
 @pytest.fixture
 def stub_desired(monkeypatch, ont):
     """Make ``desired_from_ont_unit`` return a known-valid desired state for

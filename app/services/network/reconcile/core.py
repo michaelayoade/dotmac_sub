@@ -55,6 +55,7 @@ from .applier import ApplyContext, SecretResolver, apply_plan, passthrough_secre
 from .locking import OntNotFound, acquire_reconcile_lock
 from .planner import compute_plan
 from .readers import read_acs_state, read_olt_state
+from .readers.reachability import PingFunction, is_pingable
 from .state import (
     AcsObservedFields,
     OltObservedFields,
@@ -81,6 +82,7 @@ def reconcile_ont(
     olt_adapter: Any = None,
     acs_client: Any = None,
     secret_resolver: SecretResolver = passthrough_secret,
+    ping_function: PingFunction | None = None,
 ) -> ReconcileResult:
     """Reconcile one ONT — bring live state into agreement with desired state.
 
@@ -187,15 +189,23 @@ def reconcile_ont(
                 olt_adapter, acs_client, target, deadline=deadline
             )
 
+            # ICMP reachability check on the mgmt IP. Runs from the reconciler
+            # host which has the wg0 route to per-OLT mgmt subnets. Doesn't
+            # gate the apply pass on its own (the precondition layer uses the
+            # OLT/ACS reader unreachable flags) — it's stored on the
+            # observation row so the operator UI can flag "ONT mgmt plane
+            # was down at last reconcile" without needing to re-ping later.
+            mgmt_ip_pingable = is_pingable(
+                target.mgmt_ip,
+                ping_function=ping_function,
+            )
+
             observed_before = OntObservedState(
                 last_reconciled_at=started_at,
                 last_reconcile_duration_ms=int(
                     (time.monotonic() - started_monotonic) * 1000
                 ),
-                # Mgmt-IP ping check is a follow-up; for now we report False
-                # so the planner doesn't read into reachability beyond what
-                # the read paths returned.
-                mgmt_ip_pingable=False,
+                mgmt_ip_pingable=mgmt_ip_pingable,
                 consecutive_sweep_unreachable=(
                     ont.consecutive_sweep_unreachable
                 ),
