@@ -558,6 +558,14 @@ def refresh_ont_status(
 
     zabbix_status = get_ont_signal_from_zabbix(ont)
     status = OnuOnlineStatus.online if zabbix_status.online else OnuOnlineStatus.offline
+    if zabbix_status.error is None:
+        ont.olt_status = status
+        ont.olt_status_seen_at = zabbix_status.updated_at or datetime.now(UTC)
+        if status == OnuOnlineStatus.online:
+            ont.last_seen_at = ont.olt_status_seen_at
+            ont.offline_reason = None
+        else:
+            ont.offline_reason = OnuOfflineReason.unknown
     if zabbix_status.updated_at is not None:
         ont.last_seen_at = zabbix_status.updated_at
     ont.olt_rx_signal_dbm = zabbix_status.olt_rx_dbm
