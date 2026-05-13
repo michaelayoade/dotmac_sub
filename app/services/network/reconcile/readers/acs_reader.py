@@ -54,7 +54,7 @@ def read_acs_state(
     client: Any,
     desired: OntDesiredState,
     *,
-    deadline: "datetime | None" = None,
+    deadline: datetime | None = None,
 ) -> ReadResult[AcsObservedFields]:
     """Read the ACS-observed fields for one ONT.
 
@@ -293,7 +293,7 @@ def _value_int(node: dict[str, Any] | None, key: str) -> int | None:
         return None
 
 
-def _parse_timestamp(raw: Any) -> "datetime | None":
+def _parse_timestamp(raw: Any) -> datetime | None:
     """GenieACS emits ISO-8601 timestamps with trailing ``Z``. Tolerate both."""
     if raw is None:
         return None

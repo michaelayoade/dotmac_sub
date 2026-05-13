@@ -262,7 +262,7 @@ class OltSession:
             CommandResult with success/error classification.
         """
         from app.services.network.olt_ssh import (
-            _HUAWEI_OPTIONAL_ARG_PROMPT,
+            HUAWEI_OPTIONAL_ARG_PROMPT,
             _needs_huawei_command_confirm,
             _read_until_prompt,
         )
@@ -284,7 +284,7 @@ class OltSession:
             # Read response
             output = _read_until_prompt(
                 self.channel,
-                rf"{self.prompt_regex}|<cr>|{_HUAWEI_OPTIONAL_ARG_PROMPT}",
+                rf"{self.prompt_regex}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}",
                 timeout_sec=timeout_sec,
             )
 

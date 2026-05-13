@@ -49,7 +49,6 @@ from .state import (
     OntObservedState,
 )
 
-
 _FSP_RE = re.compile(r"^\d+/\d+/\d+$")
 
 
