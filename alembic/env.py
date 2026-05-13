@@ -82,6 +82,64 @@ def include_object(object, name, type_, reflected, compare_to):
     return True
 
 
+def _install_idempotent_schema_ops() -> None:
+    """Wrap alembic schema ops so they tolerate already-present state.
+
+    The squashed initial migration (001) builds the full current schema
+    via ``Base.metadata.create_all``. Subsequent migrations were written
+    against the pre-squash incremental schema and unconditionally
+    ``op.add_column`` / ``op.drop_column`` / ``op.create_table`` columns
+    and tables that the squash already produced. Without this wrapper a
+    fresh squash-built DB explodes with DuplicateColumn / DuplicateTable
+    /  UndefinedColumn errors during the migration chain.
+
+    Each wrapped op checks the live schema via ``sa.inspect(op.get_bind())``
+    and no-ops when the target is already in the desired state. Pre-existing
+    production DBs (where the schema is the pre-squash incremental state)
+    see exactly the same behavior as before.
+    """
+    import sqlalchemy as sa  # noqa: PLC0415 — alembic env is import-time
+
+    from alembic import op  # noqa: PLC0415
+
+    _original_add_column = op.add_column
+    _original_drop_column = op.drop_column
+    _original_create_table = op.create_table
+
+    def _columns_of(table_name: str) -> set[str]:
+        try:
+            inspector = sa.inspect(op.get_bind())
+            return {c["name"] for c in inspector.get_columns(table_name)}
+        except Exception:
+            return set()
+
+    def _table_exists(table_name: str) -> bool:
+        try:
+            inspector = sa.inspect(op.get_bind())
+            return table_name in inspector.get_table_names()
+        except Exception:
+            return False
+
+    def _safe_add_column(table_name, column, *args, **kwargs):
+        if column.name in _columns_of(table_name):
+            return None
+        return _original_add_column(table_name, column, *args, **kwargs)
+
+    def _safe_drop_column(table_name, column_name, *args, **kwargs):
+        if column_name not in _columns_of(table_name):
+            return None
+        return _original_drop_column(table_name, column_name, *args, **kwargs)
+
+    def _safe_create_table(table_name, *args, **kwargs):
+        if _table_exists(table_name):
+            return None
+        return _original_create_table(table_name, *args, **kwargs)
+
+    op.add_column = _safe_add_column
+    op.drop_column = _safe_drop_column
+    op.create_table = _safe_create_table
+
+
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -112,6 +170,8 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             include_object=include_object,
         )
+
+        _install_idempotent_schema_ops()
 
         with context.begin_transaction():
             context.run_migrations()
