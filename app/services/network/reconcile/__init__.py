@@ -53,6 +53,14 @@ from .adapters import (
     observed_from_ont_observation,
     upsert_ont_observation,
 )
+from .applier import (
+    ApplyContext,
+    ApplyError,
+    ApplyResult,
+    SecretResolver,
+    apply_plan,
+    passthrough_secret,
+)
 from .locking import LockConflict, LockError, OntNotFound, acquire_reconcile_lock
 from .planner import Plan, compute_plan
 from .readers import ReadResult, read_acs_state, read_olt_state
@@ -85,6 +93,9 @@ __all__ = (
     "AcsSetWifiPassword",
     "AcsSetWifiSsid",
     "Action",
+    "ApplyContext",
+    "ApplyError",
+    "ApplyResult",
     "AppliedAction",
     "Drift",
     "LockConflict",
@@ -114,15 +125,18 @@ __all__ = (
     "ReconcileFailureReason",
     "ReconcileMode",
     "ReconcileResult",
+    "SecretResolver",
     "SyncStatus",
     "Validation",
     "WanMode",
     "WriteSurface",
     "acquire_reconcile_lock",
+    "apply_plan",
     "apply_proposed_change",
     "compute_plan",
     "desired_from_ont_unit",
     "observed_from_ont_observation",
+    "passthrough_secret",
     "read_acs_state",
     "read_olt_state",
     "upsert_ont_observation",
