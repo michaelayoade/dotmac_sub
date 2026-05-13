@@ -240,6 +240,9 @@ class _StubOltAdapter:
     def configure_internet_config(self, *a, **k):
         return self._ok("configure_internet_config")
 
+    def set_ont_description(self, *a, **k):
+        return self._ok("set_ont_description")
+
     def configure_wan_config(self, *a, **k):
         return self._ok("configure_wan_config")
 
@@ -764,3 +767,230 @@ def test_sync_refuses_after_crashed_prior_is_detected(
     )
     # The crash detection message surfaces in last_error.
     assert "did not finalise" in result.failure.message
+
+
+# ── Verification re-read after apply ────────────────────────────────────────
+
+
+def test_verification_re_read_passes_when_state_matches_after_apply(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Bootstrap reconciles always emit a WiFi PSK action (unobservable, gated
+    open in bootstrap mode). After apply, the verify re-read uses the same
+    fully-synced stub observation and produces zero drift, so the reconcile
+    finalises as synced."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert result.sync_status == "synced"
+    # actions_applied must be non-empty for this test to exercise the verify
+    # path — if it ever becomes empty, the verify short-circuit makes this a
+    # weaker test.
+    assert len(result.actions_applied) >= 1
+    assert result.drift_after == ()
+
+
+def test_verification_re_read_marks_out_of_sync_when_drift_remains(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """If the post-apply re-read shows drift (e.g. an ACS write claimed
+    success but the device snapshot still reports the old value), the
+    reconcile must refuse to acknowledge convergence."""
+    from app.services.network.reconcile import OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    call_count = {"n": 0}
+
+    def _drifty_olt_read(adapter, desired, *, deadline=None):
+        call_count["n"] += 1
+        # Observed description is a non-None stale value that differs from
+        # desired — _observed_differs returns True (None-observed would mean
+        # "field not read", per planner semantics).
+        observed = OltObservedFields(
+            olt_present=True,
+            olt_match_state="match",
+            olt_run_state="online",
+            olt_distance_m=4000,
+            olt_rx_dbm=-28.0,
+            olt_tx_dbm=2.0,
+            olt_temperature_c=40,
+            olt_description="stale_authd_20251101",  # ← differs from desired
+            olt_mgmt_ip=desired.mgmt_ip,
+            olt_mgmt_vlan=desired.mgmt_vlan,
+            olt_line_profile_id=desired.line_profile_id,
+            olt_service_profile_id=desired.service_profile_id,
+            olt_service_ports=(
+                {
+                    "index": desired.mgmt_service_port_index,
+                    "vlan": desired.mgmt_vlan,
+                    "gem": 2,
+                    "state": "up",
+                },
+                {
+                    "index": desired.wan_service_port_index,
+                    "vlan": desired.wan_vlan,
+                    "gem": desired.wan_gem_index,
+                    "state": "up",
+                },
+            ),
+        )
+        return ReadResult(
+            success=True, unreachable=False, observed=observed, error=None
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state", _drifty_olt_read
+    )
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert (
+        result.failure.reason == ReconcileFailureReason.VERIFICATION_MISMATCH
+    )
+    assert "description" in result.failure.message.lower()
+    # The pre-apply read AND the verify re-read both happened
+    assert call_count["n"] == 2
+    assert result.drift_after != ()
+
+    db_session.flush()
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.out_of_sync
+
+
+def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """If the post-apply OLT read returns unreachable (network blip
+    immediately after the write), we cannot confirm convergence and the
+    reconcile must refuse to mark synced even though the writes appeared
+    to succeed."""
+    from app.services.network.reconcile import OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    call_count = {"n": 0}
+
+    def _flaky_olt_read(adapter, desired, *, deadline=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # Pre-apply: drift on description forces at least one action so
+            # the verify path is exercised (no actions ⇒ verify short-circuit).
+            return ReadResult(
+                success=True,
+                unreachable=False,
+                observed=OltObservedFields(
+                    olt_present=True,
+                    olt_match_state="match",
+                    olt_run_state="online",
+                    olt_distance_m=4000,
+                    olt_rx_dbm=-28.0,
+                    olt_tx_dbm=2.0,
+                    olt_temperature_c=40,
+                    olt_description="stale_authd_20251101",
+                    olt_mgmt_ip=desired.mgmt_ip,
+                    olt_mgmt_vlan=desired.mgmt_vlan,
+                    olt_line_profile_id=desired.line_profile_id,
+                    olt_service_profile_id=desired.service_profile_id,
+                    olt_service_ports=(
+                        {
+                            "index": desired.mgmt_service_port_index,
+                            "vlan": desired.mgmt_vlan,
+                            "gem": 2,
+                            "state": "up",
+                        },
+                        {
+                            "index": desired.wan_service_port_index,
+                            "vlan": desired.wan_vlan,
+                            "gem": desired.wan_gem_index,
+                            "state": "up",
+                        },
+                    ),
+                ),
+                error=None,
+            )
+        # Verify read: SSH connection dropped
+        return ReadResult(
+            success=False,
+            unreachable=True,
+            observed=None,
+            error="Connection failed: timed out",
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state", _flaky_olt_read
+    )
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert (
+        result.failure.reason == ReconcileFailureReason.OLT_UNREACHABLE
+    )
+    assert "verification" in result.failure.message.lower()
+    assert call_count["n"] == 2
+
+
+def test_verification_re_read_marks_out_of_sync_when_acs_unreachable_post_apply(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Same shape for ACS — post-apply NBI 502 means we cannot verify
+    convergence, so refuse to mark synced."""
+
+    class _FlakyAcs(_StubAcsClient):
+        def __init__(self, device):
+            super().__init__(device=device)
+            self.list_calls = 0
+
+        def list_devices(self, query=None, projection=None):
+            self.list_calls += 1
+            if self.list_calls == 1:
+                return [self._device]
+            # Verify re-read: GenieACS NBI errors out
+            from app.services.genieacs_client import GenieACSError
+
+            raise GenieACSError("502 Bad Gateway")
+
+    olt = _StubOltAdapter(present=True)
+    acs = _FlakyAcs(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert (
+        result.failure.reason == ReconcileFailureReason.ACS_UNREACHABLE
+    )
+    assert "verification" in result.failure.message.lower()
+    assert acs.list_calls == 2

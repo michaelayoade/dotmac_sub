@@ -277,16 +277,107 @@ def reconcile_ont(
             # Reset the sweep-unreachable counter on any successful reconcile.
             ont.consecutive_sweep_unreachable = 0
 
-            # Verification re-read is a deliberate follow-up: relies on the
-            # next sweep to catch any stale-cache mismatch. The applier's
-            # per-action checks already cover the immediate write outcomes.
+            # ── Verification re-read ────────────────────────────────────────
+            # No-drift-tolerance: refuse to acknowledge convergence unless we
+            # can re-read and confirm the planner produces an empty plan
+            # against the post-apply state. If actions_applied is empty
+            # (drift was zero from the start), there is nothing to verify.
+            if not apply_outcome.actions_applied:
+                return _finalise(
+                    db,
+                    ont,
+                    success=True,
+                    failure=None,
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_before,
+                    actions_applied=apply_outcome.actions_applied,
+                    drift_before=plan.drifts,
+                    drift_after=(),
+                )
+
+            verify_olt_result, verify_acs_result = _read_observed_parallel(
+                olt_adapter, acs_client, target, deadline=deadline
+            )
+            observed_after = OntObservedState(
+                last_reconciled_at=started_at,
+                last_reconcile_duration_ms=int(
+                    (time.monotonic() - started_monotonic) * 1000
+                ),
+                mgmt_ip_pingable=is_pingable(
+                    target.mgmt_ip,
+                    ping_function=ping_function,
+                ),
+                consecutive_sweep_unreachable=0,
+                olt=verify_olt_result.observed or _absent_olt(),
+                acs=verify_acs_result.observed or _absent_acs(),
+            )
+
+            # Verify-read couldn't reach OLT or ACS → can't confirm
+            # convergence, refuse to mark synced.
+            if verify_olt_result.unreachable:
+                return _finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=ReconcileFailure(
+                        reason=ReconcileFailureReason.OLT_UNREACHABLE,
+                        message=(
+                            "Post-apply verification could not reach OLT: "
+                            f"{verify_olt_result.error or 'no detail'}"
+                        ),
+                    ),
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_after,
+                    actions_applied=apply_outcome.actions_applied,
+                    drift_before=plan.drifts,
+                    drift_after=plan.drifts,
+                )
+            if verify_acs_result.unreachable:
+                return _finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=ReconcileFailure(
+                        reason=ReconcileFailureReason.ACS_UNREACHABLE,
+                        message=(
+                            "Post-apply verification could not reach ACS: "
+                            f"{verify_acs_result.error or 'no detail'}"
+                        ),
+                    ),
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_after,
+                    actions_applied=apply_outcome.actions_applied,
+                    drift_before=plan.drifts,
+                    drift_after=plan.drifts,
+                )
+
+            verify_plan = compute_plan(target, observed_after, mode)
+            if verify_plan.drifts:
+                return _finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=ReconcileFailure(
+                        reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
+                        message=(
+                            "Post-apply state still diverges from desired: "
+                            f"{_summarise_drifts(verify_plan.drifts)}"
+                        ),
+                    ),
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_after,
+                    actions_applied=apply_outcome.actions_applied,
+                    drift_before=plan.drifts,
+                    drift_after=verify_plan.drifts,
+                )
+
             return _finalise(
                 db,
                 ont,
                 success=True,
                 failure=None,
                 started_monotonic=started_monotonic,
-                observed_after=observed_before,  # pre-apply read for now
+                observed_after=observed_after,
                 actions_applied=apply_outcome.actions_applied,
                 drift_before=plan.drifts,
                 drift_after=(),
@@ -492,6 +583,20 @@ def _failure_result(
         duration_ms=int((time.monotonic() - started_monotonic) * 1000),
         reconciled_at=now,
     )
+
+
+def _summarise_drifts(drifts) -> str:
+    """One-line summary of residual drift after the verification re-read.
+
+    Surfaces the first three field names; longer lists collapse to
+    ``"<a>, <b>, <c>, +N more"`` so the operator UI message stays short.
+    """
+    fields = [str(getattr(d, "field", "?")) for d in drifts]
+    if not fields:
+        return "no drift"
+    if len(fields) <= 3:
+        return ", ".join(fields)
+    return f"{', '.join(fields[:3])}, +{len(fields) - 3} more"
 
 
 __all__ = ("reconcile_ont",)
