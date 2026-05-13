@@ -994,7 +994,7 @@ class TestReturnToInventoryWebAction:
 
         assert result.success is False
         assert "acs device" in result.message.lower()
-        mock_adapter.get_service_ports_for_ont.assert_not_called()
+        mock_adapter.get_service_ports_for_ont.assert_called_once()
         mock_adapter.deauthorize_ont.assert_called_once()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
@@ -1128,6 +1128,11 @@ class TestReturnToInventoryWebAction:
         _add_imported_service_port(db_session, sample_olt, sample_ont)
 
         mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
         mock_adapter.delete_service_port.return_value = ActionResult(
             success=False,
             message="SSH delete failed",
@@ -1151,7 +1156,7 @@ class TestReturnToInventoryWebAction:
         assert result.success is False
         assert "local cleanup" in result.message.lower()
         mock_client.delete_device.assert_not_called()
-        mock_adapter.get_service_ports_for_ont.assert_not_called()
+        mock_adapter.get_service_ports_for_ont.assert_called_once()
         db_session.refresh(sample_ont)
         db_session.refresh(sample_assignment)
         db_session.refresh(tr069_device)
@@ -1395,6 +1400,11 @@ class TestCleanupOltStateForReturn:
 
         _add_imported_service_port(db_session, sample_olt, sample_ont)
         mock_adapter = MagicMock()
+        mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
+            success=True,
+            message="OK",
+            data={"service_ports": []},
+        )
         mock_adapter.delete_service_port.return_value = ActionResult(
             success=False,
             message="Connection timeout",
@@ -1410,7 +1420,7 @@ class TestCleanupOltStateForReturn:
 
         assert success is False
         assert any("service-port" in e.lower() for e in errors)
-        mock_adapter.get_service_ports_for_ont.assert_not_called()
+        mock_adapter.get_service_ports_for_ont.assert_called_once()
 
     def test_reconciles_stale_imported_service_port_when_absent_on_olt(
         self, db_session, sample_ont, sample_olt
@@ -1584,7 +1594,7 @@ class TestCleanupOltStateForReturn:
         assert any("service-port 42" in c.lower() for c in completed)
         assert any("deauthorized" in c.lower() for c in completed)
         assert any("allocation" in c.lower() for c in completed)
-        mock_adapter.get_service_ports_for_ont.assert_not_called()
+        mock_adapter.get_service_ports_for_ont.assert_called_once()
 
 
 class TestOntWithoutOltBinding:

@@ -115,13 +115,8 @@ def cleanup_olt_state_for_return(
         ImportedServicePortStateMissing,
         delete_imported_service_port,
         list_imported_service_ports,
-        require_imported_service_port_state,
     )
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
-    from app.services.network.olt_ssh_ont.omci_config import (
-        clear_ont_internet_config,
-        clear_ont_wan_config,
-    )
     from app.services.network.service_port_allocator import release_all_for_ont
 
     completed: list[str] = []
@@ -134,18 +129,32 @@ def cleanup_olt_state_for_return(
         return True, completed, errors
 
     adapter = get_protocol_adapter(olt)
+    service_ports_by_index = {}
     try:
-        require_imported_service_port_state(db, olt_id=olt.id)
-        service_ports = list_imported_service_ports(
+        imported_ports = list_imported_service_ports(
             db,
             olt_id=olt.id,
             fsp=fsp,
             ont_id_on_olt=olt_ont_id,
         )
+        for service_port in imported_ports:
+            service_ports_by_index[service_port.index] = service_port
     except ImportedServicePortStateMissing as exc:
-        errors.append(str(exc))
+        completed.append(f"Imported service-port state unavailable: {exc}")
+
+    live_ports_result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
+    if live_ports_result.success:
+        for service_port in (live_ports_result.data or {}).get("service_ports", []):
+            service_ports_by_index[service_port.index] = service_port
+    elif not service_ports_by_index:
+        errors.append(
+            "Failed to read live service-ports and no imported service-port "
+            f"state is available: {live_ports_result.message}"
+        )
         return False, completed, errors
-    for service_port in service_ports:
+
+    deleted_service_ports = []
+    for service_port in service_ports_by_index.values():
         delete_result = adapter.delete_service_port(service_port.index)
         if not delete_result.success:
             verify_message = "not checked"
@@ -194,6 +203,7 @@ def cleanup_olt_state_for_return(
             port_index=service_port.index,
         )
         db.flush()
+        deleted_service_ports.append(service_port)
         completed.append(f"Removed service-port {service_port.index}")
         try:
             emit_event(
@@ -211,26 +221,34 @@ def cleanup_olt_state_for_return(
         except Exception as exc:
             logger.warning("Failed to emit ont_service_port_deleted event: %s", exc)
 
-    # Clear WAN config before deauthorization (best-effort, non-blocking)
-    # Huawei OLTs retain ipconfig/internet-config/wan-config after deauthorization,
-    # which causes ip-index mismatch errors on reauthorization with different settings.
-    wan_config_cleared = []
-    for ip_index in (0, 1):
-        ok, msg = clear_ont_internet_config(olt, fsp, olt_ont_id, ip_index=ip_index)
-        if ok:
-            wan_config_cleared.append(f"internet-config ip-index {ip_index}")
-        ok, msg = clear_ont_wan_config(olt, fsp, olt_ont_id, ip_index=ip_index)
-        if ok:
-            wan_config_cleared.append(f"wan-config ip-index {ip_index}")
-    if wan_config_cleared:
-        completed.append(f"Cleared WAN config: {', '.join(wan_config_cleared)}")
-
     deauth_result = adapter.deauthorize_ont(fsp, olt_ont_id)
     if not deauth_result.success:
         if _is_ont_already_absent(deauth_result.message):
             completed.append("ONT already absent from OLT")
         else:
+            rollback_messages = []
+            for service_port in reversed(deleted_service_ports):
+                create_result = adapter.create_service_port(
+                    fsp,
+                    olt_ont_id,
+                    gem_index=service_port.gem_index,
+                    vlan_id=service_port.vlan_id,
+                    user_vlan=service_port.flow_para or service_port.vlan_id,
+                    tag_transform=service_port.tag_transform or "translate",
+                    port_index=service_port.index,
+                )
+                if create_result.success:
+                    rollback_messages.append(
+                        f"restored service-port {service_port.index}"
+                    )
+                else:
+                    rollback_messages.append(
+                        "failed to restore service-port "
+                        f"{service_port.index}: {create_result.message}"
+                    )
             errors.append(f"Failed to deauthorize ONT: {deauth_result.message}")
+            if rollback_messages:
+                errors.append("Rollback: " + "; ".join(rollback_messages))
             return False, completed, errors
     else:
         completed.append("Deauthorized ONT from OLT")
