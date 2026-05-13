@@ -17,16 +17,25 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add released_at and release_reason columns to ont_assignments for audit trail
-    # These track when an assignment was closed and why (e.g., "returned_to_inventory")
-    op.add_column(
-        "ont_assignments",
-        sa.Column("released_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        "ont_assignments",
-        sa.Column("release_reason", sa.String(64), nullable=True),
-    )
+    # Add released_at and release_reason columns to ont_assignments for audit
+    # trail. These track when an assignment was closed and why
+    # (e.g., "returned_to_inventory"). The squashed initial migration
+    # builds the table from current models which already include these
+    # columns, so guard with an existence check to keep this migration
+    # idempotent against fresh-from-squash and pre-existing DBs alike.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    columns = {c["name"] for c in inspector.get_columns("ont_assignments")}
+    if "released_at" not in columns:
+        op.add_column(
+            "ont_assignments",
+            sa.Column("released_at", sa.DateTime(timezone=True), nullable=True),
+        )
+    if "release_reason" not in columns:
+        op.add_column(
+            "ont_assignments",
+            sa.Column("release_reason", sa.String(64), nullable=True),
+        )
 
 
 def downgrade() -> None:
