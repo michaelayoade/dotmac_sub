@@ -454,7 +454,7 @@ def _resolve_acs_client(db: Session, ont: OntUnit) -> Any:
     """Production path: build a GenieACS client from the ONT's ACS binding."""
     # Prefer the OntUnit's explicit ACS server FK. If absent, fall back to a
     # default URL — most fleet ONTs share a single GenieACS instance.
-    from app.models.network import Tr069AcsServer
+    from app.models.tr069 import Tr069AcsServer
     from app.services.genieacs_client import GenieACSClient
 
     if ont.tr069_acs_server_id:

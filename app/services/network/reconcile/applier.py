@@ -58,6 +58,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .actions import (
+    AcsAction,
     AcsAddObject,
     AcsSetDhcpServer,
     AcsSetManagementServer,
@@ -546,7 +547,7 @@ def _olt_check(action: Action, result: Any) -> None:
         )
 
 
-def _acs_set(action: Action, ctx: ApplyContext, params: dict) -> None:
+def _acs_set(action: AcsAction, ctx: ApplyContext, params: dict) -> None:
     """Push a setParameterValues batch via the NBI client.
 
     Today's Fix #5 made ``set_parameter_values`` pass ``connection_request=True``

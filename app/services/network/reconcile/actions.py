@@ -389,7 +389,7 @@ class AcsSetManagementServer:
 # ── Type alias for everything the applier might see ─────────────────────────
 
 
-Action = (
+OltAction = (
     OltAuthorize
     | OltModifyDescription
     | OltModifyLineProfile
@@ -403,7 +403,11 @@ Action = (
     | OltOmciInternetConfig
     | OltOmciWanConfig
     | OltReset
-    | AcsAddObject
+)
+
+
+AcsAction = (
+    AcsAddObject
     | AcsSetPppoe
     | AcsSetWifiSsid
     | AcsSetWifiPassword
@@ -413,8 +417,13 @@ Action = (
 )
 
 
+Action = OltAction | AcsAction
+
+
 __all__ = (
+    "AcsAction",
     "Action",
+    "OltAction",
     "AcsAddObject",
     "AcsSetDhcpServer",
     "AcsSetManagementServer",

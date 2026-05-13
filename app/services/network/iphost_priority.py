@@ -21,7 +21,7 @@ def _int_or_none(value: object) -> int | None:
     try:
         if value in (None, ""):
             return None
-        return int(value)  # type: ignore[arg-type]
+        return int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return None
 

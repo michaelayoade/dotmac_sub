@@ -32,7 +32,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -206,8 +206,20 @@ def observed_from_ont_observation(
         consecutive_sweep_unreachable=0,
         olt=OltObservedFields(
             olt_present=obs.olt_present,
-            olt_match_state=obs.olt_match_state,
-            olt_run_state=obs.olt_run_state,
+            # The DB row stores these as plain strings; the dataclass narrows
+            # to ``Literal[...]``. Validation happens in the reader via
+            # ``_normalise_state`` before the value is persisted, so the cast
+            # here is sound — if a row carries an unrecognised state it'll
+            # surface as a downstream planner mismatch rather than a type
+            # crash.
+            olt_match_state=cast(
+                "Literal['match', 'mismatch', 'initial'] | None",
+                obs.olt_match_state,
+            ),
+            olt_run_state=cast(
+                "Literal['online', 'offline', 'los'] | None",
+                obs.olt_run_state,
+            ),
             olt_distance_m=obs.olt_distance_m,
             olt_rx_dbm=obs.olt_rx_dbm,
             olt_tx_dbm=obs.olt_tx_dbm,
@@ -338,7 +350,7 @@ def _default_description(ont: OntUnit) -> str:
     return f"{ont.serial_number}_authd_{datetime.now(UTC).strftime('%Y%m%d')}"
 
 
-def _normalise_wan_mode(ip_mode: Any, onu_mode: Any) -> str:
+def _normalise_wan_mode(ip_mode: Any, onu_mode: Any) -> Literal["pppoe", "bridge"]:
     """Reduce the effective config's two related fields to the reconciler's
     single ``pppoe`` / ``bridge`` contract.
 

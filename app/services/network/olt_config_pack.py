@@ -197,7 +197,7 @@ def _int_or_none(value: object) -> int | None:
     if value in (None, ""):
         return None
     try:
-        return int(value)
+        return int(value)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return None
 

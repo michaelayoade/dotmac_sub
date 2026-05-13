@@ -26,7 +26,7 @@ Current scope:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from app.services.network.olt_ssh_diagnostics import get_ont_optical_info
 from app.services.network.olt_ssh_ont.status import (
@@ -175,13 +175,21 @@ def read_olt_state(
         unreachable=False,
         observed=OltObservedFields(
             olt_present=True,
-            olt_match_state=_normalise_state(
-                status_entry.match_state if status_entry else None,
-                allowed={"match", "mismatch", "initial"},
+            # ``_normalise_state`` narrows the string to the allowed set or
+            # returns None; the cast tells mypy that runtime invariant.
+            olt_match_state=cast(
+                "Literal['match', 'mismatch', 'initial'] | None",
+                _normalise_state(
+                    status_entry.match_state if status_entry else None,
+                    allowed={"match", "mismatch", "initial"},
+                ),
             ),
-            olt_run_state=_normalise_state(
-                status_entry.run_state if status_entry else None,
-                allowed={"online", "offline", "los"},
+            olt_run_state=cast(
+                "Literal['online', 'offline', 'los'] | None",
+                _normalise_state(
+                    status_entry.run_state if status_entry else None,
+                    allowed={"online", "offline", "los"},
+                ),
             ),
             olt_distance_m=_int_or_none(detail.get("distance_m")),
             olt_rx_dbm=olt_rx_dbm,
