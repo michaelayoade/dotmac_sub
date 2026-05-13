@@ -21,6 +21,7 @@ from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
     _log_action_audit,
     _persist_ont_plan_step,
+    action_result_audit_metadata,
     actor_name_from_request,
 )
 
@@ -268,11 +269,37 @@ def set_wifi_ssid(
 def set_wifi_password(
     db: Session, ont_id: str, password: str, *, request: Request | None = None
 ) -> ActionResult:
-    """Set WiFi password and return result."""
-    result = genieacs_service.set_wifi_password(db, ont_id, password)
-    if result.success:
-        ont = db.get(OntUnit, ont_id)
-        # Emit audit event for credential change
+    """Set WiFi password by routing through ``reconcile_ont``.
+
+    First production caller of the reconciler. The legacy direct path
+    (``genieacs_service.set_wifi_password``) is replaced wholesale — there
+    is no fall-back. A reconcile failure is a real failure surfaced to the
+    operator, with the ``OntUnit.sync_status`` flipped to ``out_of_sync``.
+
+    Per Hole 3 of the design: on a present-and-observed ONT in ``sync``
+    mode, the reconciler updates ``OntDesiredState.wifi_password_ref`` but
+    doesn't push the PSK to the device — there's no observable to confirm
+    drift. The push happens on the next BOOTSTRAP event (after a factory
+    reset, where the device's PSK was wiped) or on an explicit operator
+    "force re-push" action. This is a deliberate behavior change from the
+    legacy unconditional-push semantics; the legacy path was theatre on
+    HG8546M because the firmware doesn't return PSK on reads either.
+    """
+    from app.services.network.reconcile import (
+        ReconcileFailureReason,
+        reconcile_ont,
+    )
+
+    result_obj = reconcile_ont(
+        db,
+        ont_id,
+        proposed_change={"wifi_password_ref": password},
+        mode="sync",
+    )
+
+    ont = db.get(OntUnit, ont_id)
+
+    if result_obj.success:
         from app.services.events import emit_event
         from app.services.events.types import EventType
 
@@ -283,19 +310,54 @@ def set_wifi_password(
                 "ont_id": ont_id,
                 "ont_serial": ont.serial_number if ont else None,
                 "password_set": True,
-                "method": "tr069",
+                "method": "reconciler",
                 "result": "success",
             },
             actor=actor_name_from_request(request),
         )
+        action_result = ActionResult(
+            success=True,
+            message="WiFi password updated.",
+            data={
+                "sync_status": result_obj.sync_status,
+                "actions_applied": [
+                    a.field for a in result_obj.actions_applied
+                ],
+            },
+        )
+    else:
+        failure = result_obj.failure
+        action_result = ActionResult(
+            success=False,
+            message=failure.message if failure else "Reconcile failed",
+            data={
+                "sync_status": result_obj.sync_status,
+                "failure_reason": failure.reason if failure else None,
+                # An ACS_CR_FAILED outcome carries actionable instructions the
+                # operator UI should surface verbatim — the message already
+                # tells them to drain via OLT ``ont reset``.
+                "actionable": (
+                    failure is not None
+                    and failure.reason
+                    == ReconcileFailureReason.ACS_CR_FAILED
+                ),
+            },
+        )
+
     _log_action_audit(
         db,
         request=request,
         action="set_wifi_password",
         ont_id=ont_id,
-        metadata={"success": result.success},
+        metadata={
+            "success": action_result.success,
+            "sync_status": result_obj.sync_status,
+            "failure_reason": (
+                result_obj.failure.reason if result_obj.failure else None
+            ),
+        },
     )
-    return result
+    return action_result
 
 
 def set_wifi_config(
@@ -354,13 +416,20 @@ def set_wifi_config(
             actor=actor_name_from_request(request),
         )
         result = _intent_saved_result(result)
+    else:
+        logger.warning(
+            "WiFi config apply failed for ONT %s: %s data=%s",
+            ont_id,
+            result.message,
+            action_result_audit_metadata(result).get("data"),
+        )
     _log_action_audit(
         db,
         request=request,
         action="set_wifi_config",
         ont_id=ont_id,
         metadata={
-            "success": result.success,
+            **action_result_audit_metadata(result),
             "enabled": enabled,
             "ssid": ssid,
             "channel": channel,
@@ -433,13 +502,20 @@ def set_lan_config(
             },
         )
         result = _intent_saved_result(result)
+    else:
+        logger.warning(
+            "LAN config apply failed for ONT %s: %s data=%s",
+            ont_id,
+            result.message,
+            action_result_audit_metadata(result).get("data"),
+        )
     _log_action_audit(
         db,
         request=request,
         action="set_lan_config",
         ont_id=ont_id,
         metadata={
-            "success": result.success,
+            **action_result_audit_metadata(result),
             "lan_ip": lan_ip,
             "lan_subnet": lan_subnet,
             "dhcp_enabled": dhcp_enabled,
@@ -460,6 +536,7 @@ def configure_management_ip(
     gateway: str | None = None,
 ) -> tuple[bool, str]:
     """Configure ONT management IP via OLT IPHOST command."""
+    from app.services.network.iphost_priority import resolve_management_iphost_priority
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
@@ -479,12 +556,33 @@ def configure_management_ip(
     )
     if vlan_id is None:
         return False, "OLT config pack management VLAN is not configured."
+    resolved_priority = priority
+    if resolved_priority is None:
+        effective = resolve_effective_ont_config(db, ont)
+        values = effective.get("values", {}) if isinstance(effective, dict) else {}
+        resolved_priority = resolve_management_iphost_priority(
+            db,
+            olt_id=olt.id,
+            fsp=fsp,
+            ont_id_on_olt=olt_ont_id,
+            mgmt_vlan_tag=vlan_id,
+            mgmt_gem_index=values.get("mgmt_gem_index"),
+            line_profile_id=values.get("authorization_line_profile_id"),
+        )
+    if resolved_priority is None and str(ip_mode or "").strip().lower() in {
+        "static",
+        "static_ip",
+    }:
+        return (
+            False,
+            "Management IPHOST priority could not be resolved from imported OLT state.",
+        )
     result = get_protocol_adapter(olt).configure_iphost(
         fsp,
         olt_ont_id,
         vlan=vlan_id,
         mode=ip_mode,
-        priority=priority,
+        priority=resolved_priority,
         ip_address=ip_address,
         subnet_mask=subnet,
         gateway=gateway,
@@ -766,7 +864,7 @@ def set_wan_config(
             action="set_wan_config",
             ont_id=ont_id,
             metadata={
-                "success": False,
+                **action_result_audit_metadata(result),
                 "wan_mode": wan_mode,
                 "missing_config_pack_vlan": True,
             },
@@ -836,6 +934,13 @@ def set_wan_config(
                 ),
             },
         )
+    else:
+        logger.warning(
+            "WAN config apply failed for ONT %s: %s data=%s",
+            ont_id,
+            result.message,
+            action_result_audit_metadata(result).get("data"),
+        )
 
     _log_action_audit(
         db,
@@ -843,8 +948,7 @@ def set_wan_config(
         action="set_wan_config",
         ont_id=ont_id,
         metadata={
-            "success": result.success,
-            "waiting": result.waiting,
+            **action_result_audit_metadata(result),
             "wan_mode": wan_mode,
             "instance_index": instance_index,
             "effective_instance_index": effective_instance_index,
