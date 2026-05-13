@@ -254,16 +254,41 @@ def _set_pppoe_config_omci(
 def set_wifi_ssid(
     db: Session, ont_id: str, ssid: str, *, request: Request | None = None
 ) -> ActionResult:
-    """Set WiFi SSID and return result."""
-    result = genieacs_service.set_wifi_ssid(db, ont_id, ssid)
+    """Set WiFi SSID by routing through ``reconcile_ont`` in sync mode.
+
+    SSID is observable (the device returns it on reads), so unlike WiFi
+    password this push DOES land on the device immediately — the planner
+    emits ``AcsSetWifiSsid`` whenever ``desired.wifi_ssid`` differs from
+    the observed value, in any mode.
+    """
+    from app.services.network.reconcile import reconcile_ont
+
+    result_obj = reconcile_ont(
+        db,
+        ont_id,
+        proposed_change={"wifi_ssid": ssid},
+        mode="sync",
+    )
+
+    action_result = _reconcile_to_action_result(
+        result_obj, success_message="WiFi SSID updated."
+    )
+
     _log_action_audit(
         db,
         request=request,
         action="set_wifi_ssid",
         ont_id=ont_id,
-        metadata={"success": result.success, "ssid": ssid},
+        metadata={
+            "success": action_result.success,
+            "ssid": ssid,
+            "sync_status": result_obj.sync_status,
+            "failure_reason": (
+                result_obj.failure.reason if result_obj.failure else None
+            ),
+        },
     )
-    return result
+    return action_result
 
 
 def _reconcile_to_action_result(result_obj, *, success_message: str) -> ActionResult:
@@ -753,35 +778,44 @@ def set_pppoe_credentials(
     wan_vlan: int | None = None,
     request: Request | None = None,
 ) -> ActionResult:
-    """Push PPPoE credentials to ONT via TR-069."""
-    from app.services.network.ont_action_wan import (
-        set_pppoe_credentials as _set_pppoe_credentials,
-    )
+    """Set PPPoE credentials by routing through ``reconcile_ont``.
 
-    ont = db.get(OntUnit, ont_id)
-    if ont is not None:
-        from app.services.network.effective_ont_config import (
-            resolve_internet_wcd_index,
-        )
+    Unlike WiFi password, PPPoE creds ARE observable (the device returns
+    ``Username`` on TR-069 reads), so the planner pushes on every change
+    when the observed username differs from desired.
 
-        effective_instance_index = resolve_internet_wcd_index(db, ont)
-        if instance_index == 1 and effective_instance_index != 1:
-            instance_index = effective_instance_index
+    The legacy ``instance_index`` parameter is honored as
+    ``wan_pppoe_instance_index``; ``wan_vlan`` likewise maps to ``wan_vlan``.
+    Both flow into the reconciler's desired-state target.
+    """
+    from app.services.network.reconcile import reconcile_ont
 
-    result = _set_pppoe_credentials(
+    proposed: dict[str, object] = {
+        "wan_pppoe_username": username,
+        "wan_pppoe_password_ref": password,
+    }
+    if wan_vlan is not None:
+        proposed["wan_vlan"] = wan_vlan
+    if instance_index != 1:
+        proposed["wan_pppoe_instance_index"] = instance_index
+
+    result_obj = reconcile_ont(
         db,
         ont_id,
-        username=username,
-        password=password,
-        instance_index=instance_index,
-        wan_vlan=wan_vlan,
+        proposed_change=proposed,
+        mode="sync",
     )
 
-    if result.success:
+    action_result = _reconcile_to_action_result(
+        result_obj, success_message="PPPoE credentials updated."
+    )
+
+    if action_result.success:
+        ont = db.get(OntUnit, ont_id)
         _persist_ont_plan_step(
             db,
             ont_id,
-            "set_pppoe_credentials_tr069",
+            "set_pppoe_credentials_reconciler",
             {
                 "username": username,
                 "password_set": True,
@@ -800,7 +834,7 @@ def set_pppoe_credentials(
                 "ont_serial": ont.serial_number if ont else None,
                 "wan_mode": "pppoe",
                 "pppoe_username": username,
-                "method": "tr069",
+                "method": "reconciler",
                 "result": "success",
             },
             actor=actor_name_from_request(request),
@@ -812,14 +846,17 @@ def set_pppoe_credentials(
         action="set_pppoe_credentials",
         ont_id=ont_id,
         metadata={
-            "success": result.success,
-            "waiting": result.waiting,
+            "success": action_result.success,
             "username": username,
             "instance_index": instance_index,
             "wan_vlan": wan_vlan,
+            "sync_status": result_obj.sync_status,
+            "failure_reason": (
+                result_obj.failure.reason if result_obj.failure else None
+            ),
         },
     )
-    return result
+    return action_result
 
 
 def set_wan_dhcp(
