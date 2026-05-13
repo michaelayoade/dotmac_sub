@@ -7,6 +7,11 @@ from app.services.network.olt_ssh_session import OltSession, olt_session
 from app.services.network.olt_validators import validate_fsp
 from app.services.network.parsers.loader import AutofindEntry, parse_autofind
 
+_NO_AUTOFIND_ONTS_MARKERS = (
+    "automatically found onts do not exist",
+    "automatically found ont does not exist",
+)
+
 
 def build_autofind_command(port: str | None = None) -> str:
     """Build a Huawei autofind display command."""
@@ -21,6 +26,11 @@ def parse_autofind_output(output: str) -> list[AutofindEntry]:
     return list(result.data)
 
 
+def _is_no_autofind_entries_output(output: str) -> bool:
+    normalized = " ".join((output or "").lower().split())
+    return any(marker in normalized for marker in _NO_AUTOFIND_ONTS_MARKERS)
+
+
 def query_ont_autofind_session(
     session: OltSession,
     port: str | None = None,
@@ -32,6 +42,8 @@ def query_ont_autofind_session(
         slow_send=False,
     )
     if not result.success:
+        if _is_no_autofind_entries_output(result.output):
+            return []
         raise RuntimeError(
             result.message or result.output or "OLT autofind query failed"
         )
