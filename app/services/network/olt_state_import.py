@@ -485,28 +485,32 @@ def _import_inventory_profile_mappings(
         if not equipment_id:
             continue
 
-        registration: OltOntRegistration | None = None
+        # Renamed from ``registration`` to avoid shadowing the loop variable
+        # bound at line 474; mypy treats the original name as
+        # ``OltOntRegistration`` (non-optional) and rejects the ``None``
+        # assignment in this scope.
+        matched: OltOntRegistration | None = None
         for serial_value in (ont.serial_number, ont.vendor_serial_number):
             for candidate in serial_search_candidates(serial_value):
-                registration = registrations_by_serial.get(normalize_serial(candidate))
-                if registration is not None:
+                matched = registrations_by_serial.get(normalize_serial(candidate))
+                if matched is not None:
                     break
-            if registration is not None:
+            if matched is not None:
                 break
 
-        if registration is None and ont.board and ont.port:
+        if matched is None and ont.board and ont.port:
             ont_id = parse_ont_id_on_olt(ont.external_id)
             if ont_id is not None:
-                registration = registrations_by_location.get(
+                matched = registrations_by_location.get(
                     (f"{ont.board}/{ont.port}", ont_id)
                 )
 
-        if registration is None:
+        if matched is None:
             continue
 
         pair = (
-            int(registration.line_profile_id),  # type: ignore[arg-type]
-            int(registration.service_profile_id),  # type: ignore[arg-type]
+            int(matched.line_profile_id),  # type: ignore[arg-type]
+            int(matched.service_profile_id),  # type: ignore[arg-type]
         )
         counts.setdefault(equipment_id, Counter())[pair] += 1
 

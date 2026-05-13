@@ -39,7 +39,7 @@ class OltShelves(CRUDManager[OltShelf]):
     not_found_detail = "OLT shelf not found"
 
     @staticmethod
-    def create(db: Session, payload: OltShelfCreate) -> OltShelf:
+    def create(db: Session, payload: OltShelfCreate) -> OltShelf:  # type: ignore[override]
         olt = db.get(OLTDevice, payload.olt_id)
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
@@ -73,7 +73,7 @@ class OltShelves(CRUDManager[OltShelf]):
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, shelf_id: str, payload: OltShelfUpdate) -> OltShelf:
+    def update(db: Session, shelf_id: str, payload: OltShelfUpdate) -> OltShelf:  # type: ignore[override]
         shelf = OltShelves.get(db, shelf_id)
         data = payload.model_dump(exclude_unset=True)
         if "olt_id" in data:
@@ -87,7 +87,7 @@ class OltShelves(CRUDManager[OltShelf]):
         return shelf
 
     @classmethod
-    def delete(cls, db: Session, shelf_id: str) -> None:
+    def delete(cls, db: Session, shelf_id: str) -> None:  # type: ignore[override]
         return super().delete(db, shelf_id)
 
 
@@ -96,7 +96,7 @@ class OltCards(CRUDManager[OltCard]):
     not_found_detail = "OLT card not found"
 
     @staticmethod
-    def create(db: Session, payload: OltCardCreate) -> OltCard:
+    def create(db: Session, payload: OltCardCreate) -> OltCard:  # type: ignore[override]
         shelf = db.get(OltShelf, payload.shelf_id)
         if not shelf:
             raise HTTPException(status_code=404, detail="OLT shelf not found")
@@ -130,7 +130,7 @@ class OltCards(CRUDManager[OltCard]):
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, card_id: str, payload: OltCardUpdate) -> OltCard:
+    def update(db: Session, card_id: str, payload: OltCardUpdate) -> OltCard:  # type: ignore[override]
         card = OltCards.get(db, card_id)
         data = payload.model_dump(exclude_unset=True)
         if "shelf_id" in data:
@@ -144,7 +144,7 @@ class OltCards(CRUDManager[OltCard]):
         return card
 
     @classmethod
-    def delete(cls, db: Session, card_id: str) -> None:
+    def delete(cls, db: Session, card_id: str) -> None:  # type: ignore[override]
         return super().delete(db, card_id)
 
 
@@ -153,7 +153,7 @@ class OltCardPorts(CRUDManager[OltCardPort]):
     not_found_detail = "OLT card port not found"
 
     @staticmethod
-    def create(db: Session, payload: OltCardPortCreate) -> OltCardPort:
+    def create(db: Session, payload: OltCardPortCreate) -> OltCardPort:  # type: ignore[override]
         card = db.get(OltCard, payload.card_id)
         if not card:
             raise HTTPException(status_code=404, detail="OLT card not found")
@@ -196,7 +196,7 @@ class OltCardPorts(CRUDManager[OltCardPort]):
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, port_id: str, payload: OltCardPortUpdate) -> OltCardPort:
+    def update(db: Session, port_id: str, payload: OltCardPortUpdate) -> OltCardPort:  # type: ignore[override]
         port = OltCardPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
         if "card_id" in data:
@@ -210,7 +210,7 @@ class OltCardPorts(CRUDManager[OltCardPort]):
         return port
 
     @classmethod
-    def delete(cls, db: Session, port_id: str) -> None:
+    def delete(cls, db: Session, port_id: str) -> None:  # type: ignore[override]
         return super().delete(db, port_id)
 
 
@@ -246,13 +246,13 @@ class OltPowerUnits(CRUDManager[OltPowerUnit]):
         return super().get(db, unit_id)
 
     @classmethod
-    def update(
+    def update(  # type: ignore[override]
         cls, db: Session, unit_id: str, payload: OltPowerUnitUpdate
     ) -> OltPowerUnit:
         return super().update(db, unit_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, unit_id: str) -> None:
+    def delete(cls, db: Session, unit_id: str) -> None:  # type: ignore[override]
         return super().delete(db, unit_id)
 
 
@@ -294,11 +294,11 @@ class OltSfpModules(CRUDManager[OltSfpModule]):
         return super().get(db, module_id)
 
     @classmethod
-    def update(
+    def update(  # type: ignore[override]
         cls, db: Session, module_id: str, payload: OltSfpModuleUpdate
     ) -> OltSfpModule:
         return super().update(db, module_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, module_id: str) -> None:
+    def delete(cls, db: Session, module_id: str) -> None:  # type: ignore[override]
         return super().delete(db, module_id)

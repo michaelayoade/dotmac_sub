@@ -838,7 +838,7 @@ def ensure_wan_srvprofile(
         _send_slow(channel, command)
         out = core._read_until_prompt(
             channel,
-            rf"{config_prompt}|<cr>|{core._HUAWEI_OPTIONAL_ARG_PROMPT}",
+            rf"{config_prompt}|<cr>|{core.HUAWEI_OPTIONAL_ARG_PROMPT}",
             timeout_sec=12,
         )
         if core._needs_huawei_command_confirm(out):

@@ -8,7 +8,13 @@ from typing import Any
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, joinedload
 
-from app.models.network import OLTDevice, OntAssignment, OntUnit, OnuOnlineStatus, PonPort
+from app.models.network import (
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+    OnuOnlineStatus,
+    PonPort,
+)
 from app.schemas.network import OntUnitUpdate
 from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
@@ -286,9 +292,9 @@ class OntUnits(CRUDManager[OntUnit]):
         return super().get(db, unit_id)
 
     @classmethod
-    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate) -> OntUnit:
+    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate) -> OntUnit:  # type: ignore[override]
         return super().update(db, unit_id, payload)
 
     @classmethod
-    def delete(cls, db: Session, unit_id: str) -> None:
+    def delete(cls, db: Session, unit_id: str) -> None:  # type: ignore[override]
         return super().delete(db, unit_id)

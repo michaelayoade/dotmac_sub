@@ -33,7 +33,7 @@ class PonPorts(CRUDManager[PonPort]):
     soft_delete_value = False
 
     @staticmethod
-    def create(db: Session, payload: PonPortCreate) -> PonPort:
+    def create(db: Session, payload: PonPortCreate) -> PonPort:  # type: ignore[override]
         olt = db.get(OLTDevice, payload.olt_id)
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
@@ -178,7 +178,7 @@ class PonPorts(CRUDManager[PonPort]):
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def update(db: Session, port_id: str, payload: PonPortUpdate) -> PonPort:
+    def update(db: Session, port_id: str, payload: PonPortUpdate) -> PonPort:  # type: ignore[override]
         port = PonPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
         target_olt_id = data.get("olt_id", port.olt_id)
@@ -260,7 +260,7 @@ class PonPorts(CRUDManager[PonPort]):
         return port
 
     @classmethod
-    def delete(cls, db: Session, port_id: str) -> None:
+    def delete(cls, db: Session, port_id: str) -> None:  # type: ignore[override]
         return super().delete(db, port_id)
 
     @staticmethod

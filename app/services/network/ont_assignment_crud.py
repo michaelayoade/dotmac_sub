@@ -161,7 +161,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
     def __init__(self, subscriber_validator: SubscriberValidator | None = None) -> None:
         self._subscriber_validator = subscriber_validator
 
-    def create(self, db: Session, payload: OntAssignmentCreate) -> OntAssignment:
+    def create(self, db: Session, payload: OntAssignmentCreate) -> OntAssignment:  # type: ignore[override]
         ont, _pon_port = _validate_assignment_target(
             db,
             ont_unit_id=payload.ont_unit_id,
@@ -233,7 +233,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
     def get(cls, db: Session, assignment_id: str) -> OntAssignment:
         return super().get(db, assignment_id)
 
-    def update(
+    def update(  # type: ignore[override]
         self, db: Session, assignment_id: str, payload: OntAssignmentUpdate
     ) -> OntAssignment:
         assignment = self.get(db, assignment_id)
@@ -313,7 +313,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
         return assignment
 
     @classmethod
-    def delete(cls, db: Session, assignment_id: str) -> None:
+    def delete(cls, db: Session, assignment_id: str) -> None:  # type: ignore[override]
         assignment = cls.get(db, assignment_id)
         ont = db.get(OntUnit, assignment.ont_unit_id)
         try:

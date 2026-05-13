@@ -112,7 +112,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
     @classmethod
-    def create(cls, db: Session, payload) -> OLTDevice:
+    def create(cls, db: Session, payload) -> OLTDevice:  # type: ignore[override]
         data = _payload_data(payload, exclude_unset=False)
         _infer_olt_capabilities(data, _payload_fields_set(payload))
         device = super().create(db, data, commit=False)
@@ -139,7 +139,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
         return device
 
     @classmethod
-    def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate) -> OLTDevice:
+    def update(cls, db: Session, device_id: str, payload: OLTDeviceUpdate) -> OLTDevice:  # type: ignore[override]
         existing = cls.get(db, device_id)
         before_ssh_identity = (
             existing.mgmt_ip,
@@ -232,7 +232,7 @@ class OLTDevices(CRUDManager[OLTDevice]):
         return device
 
     @classmethod
-    def delete(cls, db: Session, device_id: str) -> None:
+    def delete(cls, db: Session, device_id: str) -> None:  # type: ignore[override]
         device = db.get(OLTDevice, device_id)
         if not device or cls._is_retired(device):
             raise HTTPException(status_code=404, detail=cls.not_found_detail)
