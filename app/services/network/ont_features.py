@@ -95,7 +95,20 @@ class OntFeatureService:
         enabled: bool | None = None,
         band: str | None = None,
     ) -> ActionResult:
-        """Set WiFi configuration via TR-069."""
+        """Set WiFi configuration through reconcile_ont.
+
+        Routes both SSID and PSK through the reconciler-wrapped setters
+        used by the admin UI. The legacy genieacs_service path is no
+        longer invoked here, so every write goes through the single
+        planner/applier pipeline and respects Hole 3 PSK push-gating.
+        """
+        from app.services.web_network_ont_actions.config_setters import (
+            set_wifi_password as _reconcile_set_wifi_password,
+        )
+        from app.services.web_network_ont_actions.config_setters import (
+            set_wifi_ssid as _reconcile_set_wifi_ssid,
+        )
+
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
@@ -106,14 +119,13 @@ class OntFeatureService:
         if cap_err:
             return cap_err
 
-        genieacs_service = _genieacs_service()
         if ssid is not None:
-            result = genieacs_service.set_wifi_ssid(db, ont_id, ssid)
+            result = _reconcile_set_wifi_ssid(db, ont_id, ssid)
             if not result.success:
                 return result
 
         if password is not None:
-            result = genieacs_service.set_wifi_password(db, ont_id, password)
+            result = _reconcile_set_wifi_password(db, ont_id, password)
             if not result.success:
                 return result
 

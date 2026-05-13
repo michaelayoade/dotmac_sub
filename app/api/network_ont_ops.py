@@ -108,7 +108,11 @@ def get_running_config(ont_id: str, db: Session = Depends(get_db)) -> OntActionR
 def set_wifi_ssid(
     ont_id: str, payload: OntWifiSsidRequest, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    result = ont_actions.set_wifi_ssid(db, ont_id, payload.ssid)
+    from app.services.web_network_ont_actions.config_setters import (
+        set_wifi_ssid as _reconcile_set_wifi_ssid,
+    )
+
+    result = _reconcile_set_wifi_ssid(db, ont_id, payload.ssid)
     return _action_response(result)
 
 
@@ -120,7 +124,11 @@ def set_wifi_ssid(
 def set_wifi_password(
     ont_id: str, payload: OntWifiPasswordRequest, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    result = ont_actions.set_wifi_password(db, ont_id, payload.password)
+    from app.services.web_network_ont_actions.config_setters import (
+        set_wifi_password as _reconcile_set_wifi_password,
+    )
+
+    result = _reconcile_set_wifi_password(db, ont_id, payload.password)
     return _action_response(result)
 
 
