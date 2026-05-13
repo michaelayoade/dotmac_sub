@@ -79,6 +79,13 @@ class OltProtocolAdapterContract(Protocol):
         service_profile_id: int | None = None,
     ) -> OltOperationResult: ...
 
+    def set_ont_description(
+        self,
+        fsp: str,
+        ont_id: int,
+        description: str,
+    ) -> OltOperationResult: ...
+
     def configure_iphost(
         self,
         fsp: str,
@@ -352,6 +359,31 @@ class OltProtocolAdapter:
             return OltOperationResult(
                 success=False,
                 message=f"SSH ONT profile update failed: {exc}",
+            )
+
+    def set_ont_description(
+        self,
+        fsp: str,
+        ont_id: int,
+        description: str,
+    ) -> OltOperationResult:
+        """Update an ONT's description via Huawei ``ont modify ... desc "..."``.
+
+        Used by the reconciler's ``OltModifyDescription`` action — for the
+        rare case where description drift is detected on an existing ONT
+        (out-of-band edit, restored backup, etc.). For fresh authorizations,
+        description is set via ``authorize_ont``'s ``desc`` parameter.
+        """
+        from app.services.network.olt_ssh import set_ont_description
+
+        try:
+            ok, message = set_ont_description(self._olt, fsp, ont_id, description)
+            return OltOperationResult(success=ok, message=message)
+        except Exception as exc:
+            logger.exception("SSH set_ont_description failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH ONT description update failed: {exc}",
             )
 
     # ========== ONT Configuration ==========

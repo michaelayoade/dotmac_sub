@@ -10,9 +10,7 @@ Action → adapter call mapping:
 
     OLT actions
       OltAuthorize              → adapter.authorize_ont
-      OltModifyDescription      → NotImplemented (no dedicated adapter method
-                                   yet; emit a TODO so the planner-side path
-                                   is exercised by tests)
+      OltModifyDescription      → adapter.set_ont_description
       OltModifyLineProfile      → adapter.update_ont_profiles (line only)
       OltModifyServiceProfile   → adapter.update_ont_profiles (srv only)
       OltClearIphost            → adapter.clear_iphost_config
@@ -228,14 +226,18 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             return _ok(action, "olt_authorize", None, action.serial_number, started)
 
         case OltModifyDescription():
-            # No dedicated adapter method yet — emit the TODO so a
-            # description-only change makes it visible. Reset-required path
-            # via re-authorize would be too disruptive for a cosmetic field.
-            raise ApplyError(
+            result = ctx.olt_adapter.set_ont_description(
+                action.fsp,
+                action.ont_id,
+                action.description,
+            )
+            _olt_check(action, result)
+            return _ok(
                 action,
-                ReconcileFailureReason.OLT_WRITE_REJECTED,
-                "OltModifyDescription not yet wired — add "
-                "adapter.set_ont_description and route here",
+                "olt_description",
+                None,
+                action.description,
+                started,
             )
 
         case OltModifyLineProfile():

@@ -66,6 +66,10 @@ class _StubOltAdapter:
         self.calls.append(("update_ont_profiles", args, kwargs))
         return self._result("update_ont_profiles")
 
+    def set_ont_description(self, *args, **kwargs):
+        self.calls.append(("set_ont_description", args, kwargs))
+        return self._result("set_ont_description")
+
     def clear_iphost_config(self, *args, **kwargs):
         self.calls.append(("clear_iphost_config", args, kwargs))
         return self._result("clear_iphost_config")
@@ -363,15 +367,17 @@ def test_olt_failure_halts_with_olt_write_rejected():
     assert all(call[0] != "reboot_ont" for call in olt.calls)
 
 
-def test_modify_description_is_not_yet_wired_and_halts_with_clear_message():
-    ctx = _ctx()
-    plan = _plan(OltModifyDescription(fsp="0/1/3", ont_id=11, description="x"))
-    result = apply_plan(plan, ctx)
-    assert result.success is False
-    assert (
-        result.halted_by.reason == ReconcileFailureReason.OLT_WRITE_REJECTED
+def test_olt_modify_description_dispatches_to_set_ont_description():
+    olt = _StubOltAdapter()
+    ctx = _ctx(olt_adapter=olt)
+    plan = _plan(
+        OltModifyDescription(fsp="0/1/3", ont_id=11, description="Kolawole_2")
     )
-    assert "not yet wired" in result.halted_by.message
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    method, args, _ = olt.calls[0]
+    assert method == "set_ont_description"
+    assert args == ("0/1/3", 11, "Kolawole_2")
 
 
 # ── ACS action dispatch (happy path) ────────────────────────────────────────

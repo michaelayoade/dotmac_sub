@@ -1068,6 +1068,95 @@ def update_ont_profiles(
         transport.close()
 
 
+def set_ont_description(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    description: str,
+) -> tuple[bool, str]:
+    """Set an ONT's description via Huawei ``ont modify ... desc "..."``.
+
+    The reconciler's ``OltModifyDescription`` action calls this. Description
+    drift is rare (operators don't usually mutate desc on existing ONTs) but
+    when it happens the reconciler should be able to correct it without
+    re-running the full authorize sequence.
+
+    The description is sanitised by the caller before reaching this
+    function — the reconciler resolves it through
+    ``OntDesiredState.description`` which the validator constrains. Pass
+    a non-empty string; the OLT will silently accept the write if it's
+    identical to the existing desc.
+    """
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err
+    if not description:
+        return False, "description is empty"
+
+    try:
+        transport, channel, policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+
+    try:
+        from app.services.network.olt_ssh_ont._common import _send_slow
+
+        channel.send("enable\n")
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        _run_huawei_cmd(channel, "config", prompt=config_prompt)
+
+        parts = fsp.split("/")
+        frame_slot = f"{parts[0]}/{parts[1]}"
+        port_num = parts[2]
+        _send_slow(channel, f"interface gpon {frame_slot}")
+        _read_until_prompt(channel, config_prompt, timeout_sec=5)
+
+        # Escape any embedded double-quotes; the wrapped-in-quotes form is
+        # how the rest of the codebase writes descriptions (matches
+        # lifecycle.py's `ont add ... desc "..."`).
+        safe = description.replace('"', '\\"')
+        cmd = f'ont modify {port_num} {ont_id} desc "{safe}"'
+        _send_slow(channel, cmd)
+        output = _read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
+        if "<cr>" in output:
+            channel.send("\n")
+            output += _read_until_prompt(channel, config_prompt, timeout_sec=10)
+
+        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
+        if is_error_output(output):
+            logger.warning(
+                "ONT description update failed on OLT %s %s ONT %d: %s",
+                olt.name,
+                fsp,
+                ont_id,
+                output.strip()[-200:],
+            )
+            return False, f"OLT rejected: {output.strip()[-200:]}"
+
+        logger.info(
+            "ONT %d description updated on OLT %s %s",
+            ont_id,
+            olt.name,
+            fsp,
+        )
+        _invalidate_olt_read_cache(olt, "ont_info", "running_config")
+        return True, f"Set ONT {ont_id} description on {fsp}"
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error setting ONT description on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
 def create_single_service_port(
     olt: OLTDevice,
     fsp: str,
