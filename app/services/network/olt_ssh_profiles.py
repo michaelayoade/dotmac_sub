@@ -672,10 +672,11 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
+        _run_huawei_paged_cmd,
     )
 
     try:
-        transport, channel, _policy = _open_shell(olt)
+        transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
@@ -685,7 +686,23 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
         channel.send("screen-length 0 temporary\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
-        output = _run_huawei_cmd(channel, "display traffic table ip all")
+        model = str(getattr(olt, "model", "") or "").lower()
+        command = (
+            "display traffic table ip from-index 0"
+            if "ma5800" in model
+            else "display traffic table ip all"
+        )
+        prompt = getattr(policy, "prompt_regex", r"#\s*$") or r"#\s*$"
+        if command == "display traffic table ip from-index 0":
+            output = _run_huawei_paged_cmd(channel, command, prompt=prompt)
+        else:
+            output = _run_huawei_cmd(channel, command, prompt=prompt)
+        if (
+            command == "display traffic table ip all"
+            and "unknown command" in output.lower()
+        ):
+            command = "display traffic table ip from-index 0"
+            output = _run_huawei_paged_cmd(channel, command, prompt=prompt)
         entries = parse_traffic_tables(output)
         return True, f"Found {len(entries)} traffic table(s)", entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
