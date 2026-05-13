@@ -30,6 +30,7 @@ from .adapters import (
     observed_from_ont_observation,
     upsert_ont_observation,
 )
+from .locking import LockConflict, LockError, OntNotFound, acquire_reconcile_lock
 from .state import (
     AcsObservedFields,
     AppliedAction,
@@ -53,9 +54,12 @@ __all__ = (
     "AcsObservedFields",
     "AppliedAction",
     "Drift",
+    "LockConflict",
+    "LockError",
     "ObserveSurface",
     "OltObservedFields",
     "OntDesiredState",
+    "OntNotFound",
     "OntObservedState",
     "PppoeProvisioningMethod",
     "ReconcileFailure",
@@ -66,6 +70,7 @@ __all__ = (
     "Validation",
     "WanMode",
     "WriteSurface",
+    "acquire_reconcile_lock",
     "apply_proposed_change",
     "desired_from_ont_unit",
     "observed_from_ont_observation",
