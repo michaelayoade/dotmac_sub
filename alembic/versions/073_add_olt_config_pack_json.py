@@ -41,39 +41,45 @@ def upgrade() -> None:
             ),
         )
 
-    # Populate config_pack from existing columns
-    # VLAN references are stored as UUID strings for later resolution
-    op.execute(
-        """
-        UPDATE olt_devices
-        SET config_pack = jsonb_build_object(
-            'line_profile_id', default_line_profile_id,
-            'service_profile_id', default_service_profile_id,
-            'tr069_olt_profile_id', default_tr069_olt_profile_id,
-            'internet_vlan_id', internet_vlan_id::text,
-            'management_vlan_id', management_vlan_id::text,
-            'tr069_vlan_id', tr069_vlan_id::text,
-            'voip_vlan_id', voip_vlan_id::text,
-            'iptv_vlan_id', iptv_vlan_id::text,
-            'internet_config_ip_index', COALESCE(default_internet_config_ip_index, 0),
-            'wan_config_profile_id', COALESCE(default_wan_config_profile_id, 0),
-            'cr_username', default_cr_username,
-            'cr_password', default_cr_password,
-            'internet_gem_index', COALESCE(default_internet_gem_index, 1),
-            'mgmt_gem_index', COALESCE(default_mgmt_gem_index, 2),
-            'voip_gem_index', COALESCE(default_voip_gem_index, 3),
-            'iptv_gem_index', COALESCE(default_iptv_gem_index, 4),
-            'mgmt_traffic_table_inbound', mgmt_traffic_table_inbound,
-            'mgmt_traffic_table_outbound', mgmt_traffic_table_outbound,
-            'internet_traffic_table_inbound', internet_traffic_table_inbound,
-            'internet_traffic_table_outbound', internet_traffic_table_outbound,
-            'pppoe_wcd_index', COALESCE(pppoe_wcd_index, 2),
-            'mgmt_wcd_index', COALESCE(mgmt_wcd_index, 1),
-            'voip_wcd_index', voip_wcd_index
+    # Populate config_pack from existing columns. The squashed initial
+    # schema builds ``olt_devices`` from current models, where the
+    # ``default_*`` source columns were already dropped (via migration
+    # 074). On a fresh squash-built DB the backfill has nothing to read,
+    # so skip it and leave ``config_pack`` at its empty default. Existing
+    # production DBs (with the source columns intact) hit the same code
+    # path as before.
+    if _column_exists(inspector, "olt_devices", "default_line_profile_id"):
+        op.execute(
+            """
+            UPDATE olt_devices
+            SET config_pack = jsonb_build_object(
+                'line_profile_id', default_line_profile_id,
+                'service_profile_id', default_service_profile_id,
+                'tr069_olt_profile_id', default_tr069_olt_profile_id,
+                'internet_vlan_id', internet_vlan_id::text,
+                'management_vlan_id', management_vlan_id::text,
+                'tr069_vlan_id', tr069_vlan_id::text,
+                'voip_vlan_id', voip_vlan_id::text,
+                'iptv_vlan_id', iptv_vlan_id::text,
+                'internet_config_ip_index', COALESCE(default_internet_config_ip_index, 0),
+                'wan_config_profile_id', COALESCE(default_wan_config_profile_id, 0),
+                'cr_username', default_cr_username,
+                'cr_password', default_cr_password,
+                'internet_gem_index', COALESCE(default_internet_gem_index, 1),
+                'mgmt_gem_index', COALESCE(default_mgmt_gem_index, 2),
+                'voip_gem_index', COALESCE(default_voip_gem_index, 3),
+                'iptv_gem_index', COALESCE(default_iptv_gem_index, 4),
+                'mgmt_traffic_table_inbound', mgmt_traffic_table_inbound,
+                'mgmt_traffic_table_outbound', mgmt_traffic_table_outbound,
+                'internet_traffic_table_inbound', internet_traffic_table_inbound,
+                'internet_traffic_table_outbound', internet_traffic_table_outbound,
+                'pppoe_wcd_index', COALESCE(pppoe_wcd_index, 2),
+                'mgmt_wcd_index', COALESCE(mgmt_wcd_index, 1),
+                'voip_wcd_index', voip_wcd_index
+            )
+            WHERE config_pack IS NULL OR config_pack = '{}'::jsonb
+            """
         )
-        WHERE config_pack IS NULL OR config_pack = '{}'::jsonb
-        """
-    )
 
 
 def downgrade() -> None:
