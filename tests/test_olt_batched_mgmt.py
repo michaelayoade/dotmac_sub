@@ -508,12 +508,14 @@ class TestCreateBatchedMgmtSpecFromConfigPack:
             allocated_ip="10.0.0.100",
             subnet_mask="255.255.255.0",
             gateway="10.0.0.1",
+            ip_priority=2,
         )
 
         assert spec.ip_mode == "static"
         assert spec.ip_address == "10.0.0.100"
         assert spec.subnet_mask == "255.255.255.0"
         assert spec.gateway == "10.0.0.1"
+        assert spec.ip_priority == 2
 
     def test_partial_static_falls_back_to_dhcp(self):
         """Should use DHCP if not all static params provided."""

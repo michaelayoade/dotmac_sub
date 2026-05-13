@@ -348,6 +348,7 @@ def create_batched_mgmt_spec_from_config_pack(
     allocated_ip: str | None = None,
     subnet_mask: str | None = None,
     gateway: str | None = None,
+    ip_priority: int | None = None,
     internet_config_ip_index: int | None = None,
     wan_config_profile_id: int | None = None,
     tr069_profile_id: int | None = None,
@@ -362,6 +363,7 @@ def create_batched_mgmt_spec_from_config_pack(
         allocated_ip: Allocated management IP (for static mode)
         subnet_mask: Subnet mask (for static mode)
         gateway: Gateway IP (for static mode)
+        ip_priority: Huawei IPHOST priority matching the management GEM mapping
 
     Returns:
         BatchedMgmtSpec ready for execution
@@ -383,6 +385,7 @@ def create_batched_mgmt_spec_from_config_pack(
         ip_address=allocated_ip,
         subnet_mask=subnet_mask,
         gateway=gateway,
+        ip_priority=int(ip_priority) if ip_priority is not None else 0,
         ip_index=0,
         internet_config_ip_index=(
             internet_config_ip_index

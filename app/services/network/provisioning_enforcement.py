@@ -30,6 +30,7 @@ from app.models.tr069 import Tr069CpeDevice
 from app.services.genieacs_service import genieacs_service
 from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.iphost_priority import resolve_management_iphost_priority
 from app.services.network.imported_service_ports import (
     ImportedServicePortStateMissing,
     list_imported_service_ports,
@@ -458,6 +459,24 @@ class ProvisioningEnforcement:
                 ip_addr = str(mgmt_ip_address)
                 subnet_mask = str(effective_mgmt_subnet)
                 gateway = str(effective_mgmt_gateway)
+                mgmt_priority = resolve_management_iphost_priority(
+                    db,
+                    olt_id=olt.id,
+                    fsp=fsp,
+                    ont_id_on_olt=ont_id_on_olt,
+                    mgmt_vlan_tag=mgmt_vlan_tag,
+                    mgmt_gem_index=_effective_field(db, ont, "mgmt_gem_index"),
+                    line_profile_id=_effective_field(
+                        db, ont, "authorization_line_profile_id"
+                    ),
+                )
+                if mgmt_priority is None:
+                    logger.warning(
+                        "Management enforcement skipped ONT %s: could not resolve IPHOST priority",
+                        ont.serial_number,
+                    )
+                    skipped += 1
+                    continue
 
                 try:
                     # Configure IPHOST (management IP on ONT)
@@ -469,6 +488,7 @@ class ProvisioningEnforcement:
                         ont_id_on_olt,
                         vlan=mgmt_vlan_tag,
                         mode="static",
+                        priority=mgmt_priority,
                         ip_address=ip_addr,
                         subnet_mask=subnet_mask,
                         gateway=gateway,

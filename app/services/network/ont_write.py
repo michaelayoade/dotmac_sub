@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.equipment_identity import normalize_ont_equipment_id
+from app.services.network.iphost_priority import resolve_management_iphost_priority
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import (
     ActionResult,
@@ -226,6 +227,26 @@ class OntWriteService:
                 success=False,
                 message="Management VLAN is not configured in the OLT config pack.",
             )
+        resolved_priority = mgmt_priority
+        if resolved_priority is None:
+            resolved_priority = resolve_management_iphost_priority(
+                db,
+                olt_id=ctx.olt.id,
+                fsp=ctx.fsp,
+                ont_id_on_olt=ctx.ont_id_on_olt,
+                mgmt_vlan_tag=vlan_int,
+            )
+        if (
+            resolved_priority is None
+            and mgmt_ip_mode in {MgmtIpMode.static_ip.value, "static"}
+        ):
+            return ActionResult(
+                success=False,
+                message=(
+                    "Management IPHOST priority could not be resolved from imported "
+                    "OLT service-port and line-profile mappings."
+                ),
+            )
         if mgmt_ip_mode == MgmtIpMode.static_ip.value:
             from app.services.network.ont_management_ipam import (
                 allocate_ont_management_ip,
@@ -259,7 +280,7 @@ class OntWriteService:
                 ctx.ont_id_on_olt,
                 vlan=vlan_int,
                 mode=mgmt_ip_mode,
-                priority=mgmt_priority,
+                priority=resolved_priority,
                 ip_address=mgmt_ip_address,
                 subnet_mask=mgmt_subnet,
                 gateway=mgmt_gateway,
