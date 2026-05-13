@@ -336,3 +336,79 @@ def test_sweep_resets_unreachable_counter_via_reconcile(
 
     db_session.refresh(two_onts[0])
     assert two_onts[0].consecutive_sweep_unreachable == 0
+
+
+# ── Alert escalation ───────────────────────────────────────────────────────
+
+
+def test_sweep_fires_escalation_on_threshold_crossing(
+    db_session, two_onts, db_factory, monkeypatch
+):
+    """When an ONT's consecutive_sweep_unreachable crosses the configured
+    threshold, the sweeper calls escalate_sweep_unreachable with the
+    before/after counters."""
+    # Pre-seed first ONT so it crosses the threshold this sweep.
+    two_onts[0].consecutive_sweep_unreachable = 2  # +1 = 3 ≥ threshold
+    two_onts[1].consecutive_sweep_unreachable = 0  # +1 = 1, no crossing
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.desired_from_ont_unit",
+        lambda db, ont: _make_desired(ont),
+    )
+
+    escalations: list[dict] = []
+
+    def _fake_escalate(**kwargs):
+        escalations.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.escalate_sweep_unreachable",
+        _fake_escalate,
+    )
+
+    run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: False,  # unreachable
+        reconcile_fn=lambda *a, **k: _stub_result(True),
+        alert_threshold=3,
+        trapper=None,
+    )
+
+    assert len(escalations) == 2
+    # First ONT crossed: before=2, after=3, threshold=3
+    crossings = [e for e in escalations if e["before"] == 2]
+    assert len(crossings) == 1
+    assert crossings[0]["after"] == 3
+    assert crossings[0]["threshold"] == 3
+
+
+def test_sweep_skips_escalation_when_threshold_is_zero(
+    db_session, two_onts, db_factory, monkeypatch
+):
+    """alert_threshold=0 disables escalation entirely. The counter still
+    increments; only the alert path is muted."""
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.desired_from_ont_unit",
+        lambda db, ont: _make_desired(ont),
+    )
+
+    escalations: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.escalate_sweep_unreachable",
+        lambda **kwargs: escalations.append(kwargs),
+    )
+
+    run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: False,
+        reconcile_fn=lambda *a, **k: _stub_result(True),
+        alert_threshold=0,
+        trapper=None,
+    )
+
+    assert escalations == []
+    # Counter still incremented despite alert path being disabled.
+    for ont in two_onts:
+        db_session.refresh(ont)
+        assert ont.consecutive_sweep_unreachable == 1

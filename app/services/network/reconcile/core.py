@@ -25,10 +25,8 @@ The function is synchronous (request-scoped) per the "no queue, no silent
 failure" design. Long operations (e.g. a full bootstrap) take up to
 ``timeout_sec`` — operators expect this to be measured in tens of seconds.
 
-What this commit doesn't include yet (deliberate; follow-up):
-  * Mgmt-IP ping (set to False placeholder)
-  * Verification re-read after apply (relies on the next sweep)
-  * In-app secret resolver wiring (passthrough_secret is the default)
+Follow-up still open:
+  * In-app secret resolver wiring (``passthrough_secret`` is the default).
 """
 
 from __future__ import annotations
@@ -51,6 +49,7 @@ from .adapters import (
     desired_from_ont_unit,
     upsert_ont_observation,
 )
+from .alerts import ZabbixTrapper, resolve_sweep_unreachable
 from .applier import ApplyContext, SecretResolver, apply_plan, passthrough_secret
 from .locking import OntNotFound, acquire_reconcile_lock
 from .planner import compute_plan
@@ -275,7 +274,19 @@ def reconcile_ont(
                 apply_proposed_change(ont, target)
 
             # Reset the sweep-unreachable counter on any successful reconcile.
+            # Capture the prior value so we can fire a resolution alert when
+            # recovering from a previously-alerting unreachable streak.
+            prior_unreachable = ont.consecutive_sweep_unreachable or 0
             ont.consecutive_sweep_unreachable = 0
+            if prior_unreachable > 0:
+                resolve_sweep_unreachable(
+                    ont_id=str(ont.id),
+                    serial_number=str(ont.serial_number or ""),
+                    mgmt_ip=target.mgmt_ip,
+                    before=prior_unreachable,
+                    trapper=ZabbixTrapper.from_env(),
+                    zabbix_host=target.mgmt_ip,
+                )
 
             # ── Verification re-read ────────────────────────────────────────
             # No-drift-tolerance: refuse to acknowledge convergence unless we

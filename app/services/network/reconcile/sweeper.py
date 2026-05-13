@@ -48,6 +48,11 @@ from app.services.network.reconcile.readers.reachability import (
 
 from . import reconcile_ont
 from .adapters import desired_from_ont_unit
+from .alerts import (
+    ZabbixTrapper,
+    default_threshold_from_env,
+    escalate_sweep_unreachable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,8 @@ def _sweep_one(
     timeout_sec: int,
     ping_function: PingFunction | None,
     reconcile_fn: Callable = reconcile_ont,
+    alert_threshold: int = 0,
+    trapper: ZabbixTrapper | None = None,
 ) -> tuple[bool, bool]:
     """Reconcile one ONT in sweep mode. Returns ``(reachable, success)``.
 
@@ -95,6 +102,12 @@ def _sweep_one(
 
     On reachable ONTs, runs ``reconcile_ont(mode="sweep")`` and returns
     ``(True, result.success)``.
+
+    When ``alert_threshold`` is positive, calls
+    ``escalate_sweep_unreachable`` after incrementing the counter so the
+    operator's monitoring stack learns about the unreachable ONT on the
+    cycle the threshold is crossed. ``trapper`` is forwarded as the
+    Zabbix push target (None disables Zabbix; structured logs still fire).
     """
     ont = db.execute(
         select(OntUnit).where(OntUnit.id == ont_id)
@@ -107,10 +120,21 @@ def _sweep_one(
     desired = desired_from_ont_unit(db, ont)
     reachable = is_pingable(desired.mgmt_ip, ping_function=ping_function)
     if not reachable:
-        ont.consecutive_sweep_unreachable = (
-            (ont.consecutive_sweep_unreachable or 0) + 1
-        )
+        before = ont.consecutive_sweep_unreachable or 0
+        after = before + 1
+        ont.consecutive_sweep_unreachable = after
         ont.last_reconciled_at = datetime.now(UTC)
+        if alert_threshold > 0:
+            escalate_sweep_unreachable(
+                ont_id=str(ont.id),
+                serial_number=str(ont.serial_number or ""),
+                mgmt_ip=desired.mgmt_ip,
+                before=before,
+                after=after,
+                threshold=alert_threshold,
+                trapper=trapper,
+                zabbix_host=desired.mgmt_ip,
+            )
         return False, False
 
     result = reconcile_fn(
@@ -131,6 +155,8 @@ def run_sweep_once(
     ping_function: PingFunction | None = None,
     reconcile_fn: Callable = reconcile_ont,
     only_active: bool = True,
+    alert_threshold: int | None = None,
+    trapper: ZabbixTrapper | None = None,
 ) -> SweepStats:
     """Sweep every active ONT once and return aggregated stats.
 
@@ -140,6 +166,12 @@ def run_sweep_once(
     """
     started = datetime.now(UTC)
     stats = SweepStats(started_at=started)
+    effective_threshold = (
+        alert_threshold
+        if alert_threshold is not None
+        else default_threshold_from_env()
+    )
+    effective_trapper = trapper if trapper is not None else ZabbixTrapper.from_env()
 
     # First pass: collect target IDs (with a short-lived session).
     with db_factory() as catalog_db:
@@ -163,6 +195,8 @@ def run_sweep_once(
                     timeout_sec=timeout_sec,
                     ping_function=ping_function,
                     reconcile_fn=reconcile_fn,
+                    alert_threshold=effective_threshold,
+                    trapper=effective_trapper,
                 )
                 ont_db.commit()
         except Exception as exc:  # noqa: BLE001 — defensive per-ONT
