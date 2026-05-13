@@ -31,6 +31,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 STALE_WAITING_OPERATION_AGE = timedelta(hours=6)
+DEFAULT_STALE_ACTIVE_OPERATION_AGE = timedelta(hours=4)
+STALE_ACTIVE_OPERATION_AGE_BY_TYPE: dict[NetworkOperationType, timedelta] = {
+    NetworkOperationType.ont_authorize: timedelta(minutes=15),
+    NetworkOperationType.ont_provision: timedelta(minutes=30),
+    NetworkOperationType.tr069_bootstrap: timedelta(minutes=15),
+}
 
 # Statuses that count as "active" for dedup purposes
 _ACTIVE_STATUSES = (
@@ -97,6 +103,44 @@ def _get_active_operation_by_correlation(
     return db.scalars(stmt).first()
 
 
+def _operation_started_reference(op: NetworkOperation) -> datetime:
+    return _as_aware_utc(op.started_at or op.created_at)
+
+
+def _stale_active_age_for_operation(op: NetworkOperation) -> timedelta:
+    operation_type = op.operation_type
+    if isinstance(operation_type, NetworkOperationType):
+        return STALE_ACTIVE_OPERATION_AGE_BY_TYPE.get(
+            operation_type, DEFAULT_STALE_ACTIVE_OPERATION_AGE
+        )
+    return DEFAULT_STALE_ACTIVE_OPERATION_AGE
+
+
+def _operation_is_stale_active(
+    op: NetworkOperation, *, now: datetime | None = None
+) -> bool:
+    if op.status not in _ACTIVE_STATUSES:
+        return False
+    current = now or datetime.now(UTC)
+    return current - _operation_started_reference(op) > _stale_active_age_for_operation(op)
+
+
+def _mark_operation_stale_failed(
+    op: NetworkOperation,
+    *,
+    now: datetime | None = None,
+    reason: str | None = None,
+) -> None:
+    current = now or datetime.now(UTC)
+    op.status = NetworkOperationStatus.failed
+    op.completed_at = current
+    op.waiting_reason = None
+    op.error = reason or (
+        "Operation timed out with no active worker task "
+        f"after {_stale_active_age_for_operation(op)}."
+    )
+
+
 def _check_not_terminal(op: NetworkOperation) -> None:
     """Reject transitions from terminal statuses."""
     if op.status in _TERMINAL_STATUSES:
@@ -142,18 +186,26 @@ class NetworkOperations(ListResponseMixin):
         """
         existing = _get_active_operation_by_correlation(db, correlation_key)
         if existing:
-            if (
+            if _operation_is_stale_active(existing):
+                _mark_operation_stale_failed(
+                    existing,
+                    reason=(
+                        "Expired stale active operation before starting a new request."
+                    ),
+                )
+                db.flush()
+            elif (
                 existing.status == NetworkOperationStatus.waiting
                 and existing.created_at
                 and datetime.now(UTC) - _as_aware_utc(existing.created_at)
                 > STALE_WAITING_OPERATION_AGE
             ):
-                existing.status = NetworkOperationStatus.failed
-                existing.completed_at = datetime.now(UTC)
-                existing.error = (
-                    "Expired stale waiting operation before starting a new request."
+                _mark_operation_stale_failed(
+                    existing,
+                    reason=(
+                        "Expired stale waiting operation before starting a new request."
+                    ),
                 )
-                existing.waiting_reason = None
                 db.flush()
             else:
                 logger.warning(
@@ -395,6 +447,7 @@ class NetworkOperations(ListResponseMixin):
         Returns:
             List of NetworkOperation records ordered by created_at DESC.
         """
+        NetworkOperations.mark_stale_for_device(db, target_type, target_id)
         stmt = (
             select(NetworkOperation)
             .where(
@@ -407,6 +460,34 @@ class NetworkOperations(ListResponseMixin):
             .offset(offset)
         )
         return list(db.scalars(stmt).all())
+
+    @staticmethod
+    def mark_stale_for_device(
+        db: Session,
+        target_type: NetworkOperationTargetType,
+        target_id: str,
+    ) -> int:
+        """Mark timed-out active operations for a device as failed.
+
+        This is intentionally cheap and DB-only. It lets status pages stop
+        showing dead Celery work as running without pinging workers on every
+        page render.
+        """
+        stmt = select(NetworkOperation).where(
+            NetworkOperation.target_type == target_type,
+            NetworkOperation.target_id == target_id,
+            NetworkOperation.status.in_(_ACTIVE_STATUSES),
+        )
+        now = datetime.now(UTC)
+        marked = 0
+        for op in db.scalars(stmt).all():
+            if not _operation_is_stale_active(op, now=now):
+                continue
+            _mark_operation_stale_failed(op, now=now)
+            marked += 1
+        if marked:
+            db.flush()
+        return marked
 
     @staticmethod
     def update_parent_status(db: Session, parent_id: str) -> NetworkOperation:

@@ -10,13 +10,15 @@ from sqlalchemy import delete, select
 from app.celery_app import celery_app
 from app.models.network_operation import NetworkOperation, NetworkOperationStatus
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network_operations import (
+    _mark_operation_stale_failed,
+    _operation_is_stale_active,
+)
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
 
 _RETENTION_DAYS = 90
-_STALE_RUNNING_HOURS = 4
-
 
 @celery_app.task(name="app.tasks.network_operations.cleanup_old_operations")
 def cleanup_old_operations() -> dict[str, int]:
@@ -32,7 +34,7 @@ def cleanup_old_operations() -> dict[str, int]:
     db = SessionLocal()
     try:
         cutoff = datetime.now(UTC) - timedelta(days=_RETENTION_DAYS)
-        stale_cutoff = datetime.now(UTC) - timedelta(hours=_STALE_RUNNING_HOURS)
+        now = datetime.now(UTC)
 
         # Purge old completed operations, excluding parents with active children
         # (CASCADE on parent_id would delete in-progress children otherwise).
@@ -78,15 +80,14 @@ def cleanup_old_operations() -> dict[str, int]:
                     NetworkOperationStatus.pending,
                     NetworkOperationStatus.waiting,
                 ]
-            ),
-            NetworkOperation.created_at < stale_cutoff,
+            )
         )
         stale_ops = list(db.scalars(stale_stmt).all())
         stale_marked = 0
         for op in stale_ops:
-            op.status = NetworkOperationStatus.failed
-            op.error = f"Operation timed out (stale after {_STALE_RUNNING_HOURS}h)"
-            op.completed_at = datetime.now(UTC)
+            if not _operation_is_stale_active(op, now=now):
+                continue
+            _mark_operation_stale_failed(op, now=now)
             stale_marked += 1
             logger.warning(
                 "Marked stale operation %s (%s) as failed",

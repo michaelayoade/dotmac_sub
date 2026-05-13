@@ -109,6 +109,16 @@ def build_operation_history(
     except ValueError:
         logger.warning("Unknown target_type %r for operation history", target_type)
         return []
+    try:
+        if network_operations.mark_stale_for_device(db, target_enum, target_id):
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to mark stale network operations for %s %s",
+            target_type,
+            target_id,
+        )
     ops = network_operations.list_for_device(db, target_enum, target_id, limit=limit)
 
     result: list[dict[str, Any]] = []
