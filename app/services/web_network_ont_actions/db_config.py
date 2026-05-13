@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -17,6 +19,8 @@ from app.services.network.subscriber_wan_ipam import ensure_wan_static_ip_availa
 from app.services.web_network_ont_actions._common import (
     _is_input_error,
     _log_action_audit,
+    action_result_audit_metadata,
+    cache_current_user_context,
 )
 from app.services.web_network_ont_actions.config_setters import (
     set_lan_config,
@@ -24,6 +28,8 @@ from app.services.web_network_ont_actions.config_setters import (
     set_wan_config,
     set_wifi_config,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _delivery_pending_result(result: ActionResult) -> ActionResult:
@@ -85,6 +91,8 @@ def update_ont_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Update ONT configuration fields in the database, optionally push to device."""
+
+    cache_current_user_context(request)
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     if not ont:
@@ -190,6 +198,7 @@ def update_ont_config(
     db.flush()
 
     push_messages: list[str] = []
+    push_details: list[dict[str, object]] = []
     push_success = True
     push_waiting = False
 
@@ -232,10 +241,25 @@ def update_ont_config(
                 dns_servers=wan_static_dns.strip() if wan_static_dns else None,
                 request=request,
             )
-            result = _delivery_pending_result(result)
+            raw_result = result
+            delivered_result = _delivery_pending_result(result)
+            push_details.append(
+                {
+                    "step": "wan",
+                    "raw": action_result_audit_metadata(raw_result),
+                    "reported": action_result_audit_metadata(delivered_result),
+                }
+            )
+            result = delivered_result
             push_messages.append(f"WAN: {result.message}")
             push_waiting = push_waiting or result.waiting
-            if not result.success:
+            if not raw_result.success:
+                logger.warning(
+                    "Apply-all WAN step failed for ONT %s: %s data=%s",
+                    ont_id,
+                    raw_result.message,
+                    action_result_audit_metadata(raw_result).get("data"),
+                )
                 push_success = False
 
         if push_lan and any(
@@ -257,10 +281,25 @@ def update_ont_config(
                 dhcp_end=lan_dhcp_end.strip() if lan_dhcp_end else None,
                 request=request,
             )
-            result = _delivery_pending_result(result)
+            raw_result = result
+            delivered_result = _delivery_pending_result(result)
+            push_details.append(
+                {
+                    "step": "lan",
+                    "raw": action_result_audit_metadata(raw_result),
+                    "reported": action_result_audit_metadata(delivered_result),
+                }
+            )
+            result = delivered_result
             push_messages.append(f"LAN: {result.message}")
             push_waiting = push_waiting or result.waiting
-            if not result.success:
+            if not raw_result.success:
+                logger.warning(
+                    "Apply-all LAN step failed for ONT %s: %s data=%s",
+                    ont_id,
+                    raw_result.message,
+                    action_result_audit_metadata(raw_result).get("data"),
+                )
                 push_success = False
 
         if push_mgmt and mgmt_ip_mode is not None:
@@ -270,9 +309,22 @@ def update_ont_config(
                 enabled=bool(mgmt_access_enabled),
                 request=request,
             )
+            push_details.append(
+                {
+                    "step": "management",
+                    "raw": action_result_audit_metadata(result),
+                    "reported": action_result_audit_metadata(result),
+                }
+            )
             push_messages.append(f"Management: {result.message}")
             push_waiting = push_waiting or result.waiting
             if not result.success:
+                logger.warning(
+                    "Apply-all management step failed for ONT %s: %s data=%s",
+                    ont_id,
+                    result.message,
+                    action_result_audit_metadata(result).get("data"),
+                )
                 push_success = False
 
         if push_wifi and any(
@@ -302,10 +354,25 @@ def update_ont_config(
                 else None,
                 request=request,
             )
-            result = _delivery_pending_result(result)
+            raw_result = result
+            delivered_result = _delivery_pending_result(result)
+            push_details.append(
+                {
+                    "step": "wifi",
+                    "raw": action_result_audit_metadata(raw_result),
+                    "reported": action_result_audit_metadata(delivered_result),
+                }
+            )
+            result = delivered_result
             push_messages.append(f"WiFi: {result.message}")
             push_waiting = push_waiting or result.waiting
-            if not result.success:
+            if not raw_result.success:
+                logger.warning(
+                    "Apply-all WiFi step failed for ONT %s: %s data=%s",
+                    ont_id,
+                    raw_result.message,
+                    action_result_audit_metadata(raw_result).get("data"),
+                )
                 push_success = False
 
     _log_action_audit(
@@ -319,6 +386,9 @@ def update_ont_config(
             "wifi_ssid": wifi_ssid,
             "push_to_device": push_to_device,
             "push_success": push_success if push_to_device else None,
+            "push_waiting": push_waiting if push_to_device else None,
+            "push_messages": push_messages if push_to_device else [],
+            "push_details": push_details if push_to_device else [],
         },
     )
 

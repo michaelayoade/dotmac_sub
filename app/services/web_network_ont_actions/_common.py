@@ -16,13 +16,91 @@ from app.services.network.ont_actions import ActionResult
 
 logger = logging.getLogger(__name__)
 
+_SENSITIVE_KEY_PARTS = (
+    "password",
+    "secret",
+    "token",
+    "credential",
+    "key",
+)
+
+
+def _sanitize_audit_value(value: object, *, depth: int = 0) -> object:
+    """Return a JSON-safe, password-safe value for action audit metadata."""
+    if depth > 5:
+        return str(value)
+    if isinstance(value, dict):
+        clean: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if any(part in key_text.lower() for part in _SENSITIVE_KEY_PARTS):
+                clean[key_text] = "***"
+            else:
+                clean[key_text] = _sanitize_audit_value(item, depth=depth + 1)
+        return clean
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_audit_value(item, depth=depth + 1) for item in value[:50]]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def action_result_audit_metadata(result: object) -> dict[str, object]:
+    """Build reusable audit metadata for an ActionResult-like object."""
+    data = getattr(result, "data", None)
+    return {
+        "success": bool(getattr(result, "success", False)),
+        "waiting": bool(getattr(result, "waiting", False)),
+        "message": str(getattr(result, "message", "") or ""),
+        "data": _sanitize_audit_value(data or {}),
+    }
+
+
+_CACHED_USER_CONTEXT_ATTR = "_dotmac_cached_user_context"
+
+
+def cache_current_user_context(request: Request | None) -> dict[str, Any] | None:
+    """Capture request actor data before long-running device operations.
+
+    The authenticated user object on request.state can be a SQLAlchemy model.
+    After a commit and a long TR-069 wait, reading its attributes can trigger a
+    database reload on an expired/closed transaction. Store only plain values.
+    """
+    if request is None:
+        return None
+    state = getattr(request, "state", None)
+    cached = (
+        getattr(state, _CACHED_USER_CONTEXT_ATTR, None)
+        if state is not None
+        else None
+    )
+    if cached is not None:
+        return cached
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    cached = dict(current_user) if current_user else None
+    if state is not None:
+        setattr(state, _CACHED_USER_CONTEXT_ATTR, cached)
+    return cached
+
 
 def _current_user(request: Request | None) -> dict[str, Any] | None:
     if request is None:
         return None
-    from app.web.admin import get_current_user
-
-    return get_current_user(request)
+    state = getattr(request, "state", None)
+    cached = (
+        getattr(state, _CACHED_USER_CONTEXT_ATTR, None)
+        if state is not None
+        else None
+    )
+    if cached is not None:
+        return cached
+    try:
+        return cache_current_user_context(request)
+    except Exception:
+        logger.exception("Failed to resolve current user context")
+        return None
 
 
 def actor_name_from_request(request: Request | None) -> str:
@@ -50,17 +128,30 @@ def _log_action_audit(
 ) -> None:
     if request is None:
         return
-    log_audit_event(
-        db=db,
-        request=request,
-        action=action,
-        entity_type="ont",
-        entity_id=str(ont_id),
-        actor_id=_actor_id_from_request(request),
-        metadata=metadata,
-        status_code=status_code or 200,
-        is_success=is_success,
-    )
+    try:
+        actor_id = _actor_id_from_request(request)
+        cached_user = _current_user(request)
+        audit_metadata = dict(metadata or {})
+        if cached_user:
+            audit_metadata.setdefault("actor_name", cached_user.get("name"))
+            audit_metadata.setdefault("actor_email", cached_user.get("email"))
+        log_audit_event(
+            db=db,
+            request=None,
+            action=action,
+            entity_type="ont",
+            entity_id=str(ont_id),
+            actor_id=actor_id,
+            metadata=audit_metadata,
+            status_code=status_code or 200,
+            is_success=is_success,
+        )
+    except Exception:
+        logger.exception("Failed to log ONT action audit event for %s", ont_id)
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception("Failed to rollback after ONT action audit failure")
 
 
 def _persist_ont_plan_step(

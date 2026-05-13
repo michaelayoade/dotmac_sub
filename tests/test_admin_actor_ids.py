@@ -63,6 +63,66 @@ def test_admin_audit_actor_helpers_prefer_stable_principal_id(monkeypatch):
     assert ont_web_forms._actor_id_from_request(request) == "system-user-1"
 
 
+def test_ont_action_actor_context_uses_cached_plain_values(monkeypatch):
+    calls = {"count": 0}
+    request = SimpleNamespace(state=SimpleNamespace())
+
+    def fake_get_current_user(_request):
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise AssertionError("request user should not be reloaded")
+        return {
+            "id": "system-user-1",
+            "actor_id": "system-user-1",
+            "subscriber_id": "",
+            "name": "Admin User",
+            "email": "admin@example.com",
+        }
+
+    monkeypatch.setattr(admin_root, "get_current_user", fake_get_current_user)
+
+    assert web_network_ont_actions.cache_current_user_context(request) == {
+        "id": "system-user-1",
+        "actor_id": "system-user-1",
+        "subscriber_id": "",
+        "name": "Admin User",
+        "email": "admin@example.com",
+    }
+    assert web_network_ont_actions._actor_id_from_request(request) == "system-user-1"
+    assert web_network_ont_actions.actor_name_from_request(request) == "Admin User"
+    assert calls["count"] == 1
+
+
+def test_ont_action_audit_failure_does_not_raise(monkeypatch):
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            _dotmac_cached_user_context={
+                "actor_id": "system-user-1",
+                "subscriber_id": "",
+                "name": "Admin User",
+                "email": "admin@example.com",
+            }
+        )
+    )
+    db = SimpleNamespace(rollback=lambda: None)
+
+    def fail_audit(**_kwargs):
+        raise RuntimeError("audit backend down")
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions._common.log_audit_event",
+        fail_audit,
+    )
+
+    web_network_ont_actions._log_action_audit(
+        db,
+        request=request,
+        action="set_wifi_config",
+        ont_id="ont-1",
+        metadata={"success": True},
+    )
+
+
 def test_get_uploaded_by_subscriber_id_returns_none_for_system_user_without_subscriber(
     db_session,
 ):
