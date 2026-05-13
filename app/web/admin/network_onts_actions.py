@@ -318,7 +318,7 @@ def ont_reboot(
     """Send reboot command to ONT via the selected transport."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     if (source or "").strip().lower() in {"olt", "omci"}:
         ok, msg = web_network_ont_actions_service.execute_omci_reboot(
             db,
@@ -354,7 +354,7 @@ def ont_reauthorize(
     """Quick re-authorize ONT on OLT (force mode)."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
 
     result = web_network_ont_actions_service.execute_reauthorize(
         db, ont_id, request=request
@@ -378,7 +378,7 @@ def ont_refresh(
     """Force status refresh for ONT via GenieACS."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.execute_refresh(
         db, ont_id, request=request
     )
@@ -402,7 +402,7 @@ def ont_config_refresh(
     """Refresh the stored last-known TR-069 config snapshot."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.execute_config_snapshot_refresh(
         db, ont_id, request=request
     )
@@ -480,7 +480,7 @@ def ont_return_to_inventory(
     """Reset an ONT to reusable inventory state."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.return_to_inventory_for_web(
         db,
         ont_id,
@@ -521,7 +521,7 @@ def ont_factory_reset(
     """Send factory reset command to ONT via GenieACS."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.execute_factory_reset(
         db, ont_id, request=request
     )
@@ -546,7 +546,7 @@ def ont_firmware_upgrade(
     """Trigger firmware upgrade on ONT via TR-069 Download RPC."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     if not firmware_image_id:
         return _action_json_response(
             success=False,
@@ -580,7 +580,7 @@ def ont_set_wifi_ssid(
     """Set WiFi SSID on ONT via GenieACS TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     # Also accept ssid from query params (used by TR-069 tab Alpine.js modal)
     if not ssid:
         ssid = request.query_params.get("ssid", "")
@@ -613,7 +613,7 @@ def ont_set_wifi_password(
     """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.set_wifi_password(
         db, ont_id, password, request=request
     )
@@ -644,7 +644,7 @@ def ont_force_push_wifi_password(
     """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.force_push_wifi_password(
         db, ont_id, password, request=request
     )
@@ -674,7 +674,7 @@ def ont_force_resync(
     """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.force_resync_ont(
         db, ont_id, request=request
     )
@@ -698,7 +698,7 @@ def ont_set_wifi_config(
     """Set WiFi radio, SSID, security, channel, and password via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     enabled_raw = _form_str(form, "enabled").strip().lower()
     enabled = None
@@ -734,7 +734,7 @@ def ont_toggle_lan_port(
     """Toggle LAN port on ONT via GenieACS TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     port_str = request.query_params.get("port") or _form_str(form, "port", "1")
     enabled_str = request.query_params.get("enabled") or _form_str(
@@ -793,7 +793,7 @@ def ont_set_lan_config(
     """Set LAN gateway and DHCP server settings on ONT via GenieACS TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     lan_ip = _form_str(form, "lan_ip").strip() or None
     lan_subnet = _form_str(form, "lan_subnet").strip() or None
@@ -831,7 +831,7 @@ def ont_set_wan_remote_access(
     """Enable or disable WAN remote access via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     enabled = _form_str(form, "enabled").strip().lower() in {
         "true",
@@ -861,7 +861,7 @@ def ont_set_mgmt_remote_access(
     """Enable or disable management-side remote access via OLT IPHOST + TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     enabled = _form_str(form, "enabled").strip().lower() in {
         "true",
@@ -891,7 +891,7 @@ def ont_set_voip_config(
     """Set VoIP enabled status on ONT."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     voip_enabled_raw = _form_str(form, "voip_enabled").strip()
     voip_enabled = voip_enabled_raw in {"true", "1", "yes", "on"}
@@ -917,7 +917,7 @@ def ont_set_web_credentials(
     """Set ONT web login credentials via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     username = _form_str(form, "username").strip()
     password = _form_str(form, "password").strip()
@@ -950,7 +950,7 @@ def ont_set_connection_request_credentials(
     """Set ONT ACS connection-request credentials via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     username = _form_str(form, "username").strip()
     password = _form_str(form, "password").strip()
@@ -995,7 +995,7 @@ def ont_reveal_pppoe_password(
     """Decrypt and return the stored PPPoE password for verification."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     password, found = web_network_ont_actions_service.reveal_stored_pppoe_password(
         db, ont_id, request=request
     )
@@ -1047,7 +1047,7 @@ def ont_ping_diagnostic(
     """Run ping diagnostic from ONT via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.run_ping_diagnostic(
         db, ont_id, host, count, request=request
     )
@@ -1073,7 +1073,7 @@ def ont_traceroute_diagnostic(
     """Run traceroute diagnostic from ONT via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.run_traceroute_diagnostic(
         db, ont_id, host, request=request
     )
@@ -1098,7 +1098,7 @@ def ont_connection_request(
     """Send a TR-069 connection request to an ONT for on-demand management."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.execute_connection_request(
         db, ont_id, request=request
     )
@@ -1206,7 +1206,7 @@ def ont_charts_refresh(
     """Refresh ONT runtime and return the charts partial."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     refresh_ok, refresh_msg = _refresh_runtime_for_partial(
         db,
         ont_id,
@@ -1243,7 +1243,7 @@ def ont_lan_ports_status_refresh(
     """Refresh ONT runtime and return the LAN port status partial."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     refresh_ok, refresh_msg = _refresh_runtime_for_partial(
         db,
         ont_id,
@@ -1310,7 +1310,7 @@ def ont_reconcile(
     """Run OLT/ACS reconciliation and return refreshed operational panel."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     result = web_network_ont_actions_service.reconcile_operational_state(
         db,
         ont_id,
@@ -1351,7 +1351,7 @@ def ont_omci_reboot(
     """Reboot ONT via OMCI through the OLT."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     ok, msg = web_network_ont_actions_service.execute_omci_reboot(db, ont_id)
     return _action_json_response(
         success=ok,
@@ -1379,7 +1379,7 @@ def ont_configure_mgmt_ip(
     """Configure ONT management IP via OLT IPHOST command."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     ok, msg = web_network_ont_actions_service.configure_management_ip(
         db,
         ont_id,
@@ -1410,7 +1410,7 @@ def ont_bind_tr069_profile(
     """Bind TR-069 server profile to ONT via OLT."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     ok, msg = web_network_ont_actions_service.bind_tr069_profile(db, ont_id)
     return _action_json_response(
         success=ok,
@@ -1465,7 +1465,7 @@ def ont_capture_config_snapshot(
     """Capture a new config snapshot from TR-069 and return updated list."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     label = _form_str(form, "label").strip() or None
     snapshot_context, error_msg = (
@@ -1530,7 +1530,7 @@ def ont_delete_config_snapshot(
     """Delete a config snapshot and return updated list."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     context = _base_context(request, db, active_page="onts")
     context.update(
         web_network_ont_actions_service.delete_config_snapshot_list_context(
@@ -1561,7 +1561,7 @@ def ont_set_pppoe_credentials(
     """Push PPPoE credentials to ONT via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     username = _form_str(form, "pppoe_username").strip()
     password = _form_str(form, "pppoe_password").strip()
@@ -1609,7 +1609,7 @@ def ont_set_wan_dhcp(
     """Configure WAN for DHCP mode via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     instance_index_raw = _form_str(form, "instance_index").strip()
     wan_vlan_raw = _form_str(form, "wan_vlan").strip()
@@ -1644,7 +1644,7 @@ def ont_set_wan_static(
     """Configure WAN for static IP mode via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     ip_address = _form_str(form, "ip_address").strip()
     subnet_mask = _form_str(form, "subnet_mask").strip()
@@ -1662,8 +1662,10 @@ def ont_set_wan_static(
         )
 
     instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    # ``set_wan_static`` takes a comma-joined string; collapse the list back
+    # for the API call (we still split into a list above for validation).
     dns_servers = (
-        [s.strip() for s in dns_servers_raw.split(",") if s.strip()]
+        ",".join(s.strip() for s in dns_servers_raw.split(",") if s.strip())
         if dns_servers_raw
         else None
     )
@@ -1698,7 +1700,7 @@ def ont_set_wan_config(
     """Configure WAN mode and settings via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     wan_mode = _form_str(form, "wan_mode").strip().lower()
     pppoe_username = _form_str(form, "pppoe_username").strip() or None
@@ -1721,6 +1723,8 @@ def ont_set_wan_config(
 
     instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
     wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
+    # ``set_wan_config`` takes a list[str] | None (unlike ``set_wan_static``
+    # used in the other endpoint, which takes a comma-joined string).
     dns_servers = (
         [s.strip() for s in dns_servers_raw.split(",") if s.strip()]
         if dns_servers_raw
@@ -1761,7 +1765,7 @@ def ont_set_http_management(
     """Enable or disable HTTP management interface via TR-069."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     form = parse_form_data_sync(request)
     enabled_raw = _form_str(form, "enabled").strip().lower()
     port_raw = _form_str(form, "port").strip()
@@ -1842,7 +1846,7 @@ def ont_decommission_execute(
 
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
 
     result = decommission_ont_audited(
         db,
@@ -1891,7 +1895,7 @@ def ont_hosts_refresh(
     """Refresh ONT runtime and return the connected hosts partial."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
-        return denied
+        return denied  # type: ignore[return-value]
     refresh_ok, refresh_msg = _refresh_runtime_for_partial(
         db,
         ont_id,

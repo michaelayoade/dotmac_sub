@@ -509,7 +509,7 @@ def olts_list_page_data(
         if item.get("runtime_ping_state") == "unknown"
         and item.get("runtime_snmp_state") == "unknown"
     )
-    total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)
+    total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 
     stats = {
         "total": len(filtered_olts),

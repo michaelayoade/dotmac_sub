@@ -298,7 +298,6 @@ def build_onu_mode_payload(form: FormData) -> OntUnitUpdate:
         pppoe_password=encrypt_credential(pw)
         if (pw := form_str(form, "pppoe_password").strip())
         else None,
-        wan_remote_access=form_str(form, "wan_remote_access") == "true",
     )
 
 
@@ -313,7 +312,10 @@ def update_onu_mode_from_form(
     previous_wan_remote_access = get_access_flag(ont, "wan_remote")
     onu_mode = form_str(form, "onu_mode").strip() or None
     wan_mode = form_str(form, "wan_mode").strip() or None
-    desired_updates = {
+    # ``access.wan_remote`` carries a bool flag; other entries are strings.
+    # Widen the value type so the bool assignment a few lines below
+    # type-checks.
+    desired_updates: dict[str, str | bool | None] = {
         "wan.onu_mode": onu_mode,
         "wan.mode": wan_mode,
         "wan.pppoe_username": (
@@ -672,10 +674,11 @@ def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
 
 
 def build_mgmt_ip_payload(form: FormData) -> OntUnitUpdate:
+    # ``mgmt_remote_access`` is captured separately and stored under
+    # ``desired_config["access.mgmt_remote"]`` rather than on OntUnitUpdate.
     return OntUnitUpdate(
         mgmt_ip_mode=form_str(form, "mgmt_ip_mode").strip() or None,
         mgmt_ip_address=form_str(form, "mgmt_ip_address").strip() or None,
-        mgmt_remote_access=form_str(form, "mgmt_remote_access") == "true",
         voip_enabled=form_str(form, "voip_enabled") == "true",
     )
 

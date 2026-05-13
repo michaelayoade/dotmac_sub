@@ -241,7 +241,7 @@ def build_offer_profile_sync_plan(
         "gem_id": gem_id,
         "tcont_id": tcont_id,
     }
-    bundle = OfferProfileBundle(checksum=_checksum(bundle_payload), **bundle_payload)
+    bundle = OfferProfileBundle(checksum=_checksum(bundle_payload), **bundle_payload)  # type: ignore[arg-type]
 
     command_groups = (
         ProfileCommandGroup(

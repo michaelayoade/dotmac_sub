@@ -11,8 +11,7 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntUnit
-from app.models.network import OntAuthorizationStatus
+from app.models.network import OntAuthorizationStatus, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services.credential_crypto import decrypt_credential
 from app.services.network.effective_ont_config import resolve_effective_ont_config
@@ -47,6 +46,7 @@ def get_device_credentials(
     ont_unit = _find_authorized_ont(db, candidates)
     server = _resolve_bound_acs_server(db, ont_unit)
 
+    username: str | None
     if credential_type == "connection_request":
         username = str(getattr(server, "connection_request_username", "") or "").strip()
         encrypted_password = (

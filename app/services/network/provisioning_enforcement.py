@@ -30,12 +30,12 @@ from app.models.tr069 import Tr069CpeDevice
 from app.services.genieacs_service import genieacs_service
 from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.iphost_priority import resolve_management_iphost_priority
 from app.services.network.imported_service_ports import (
     ImportedServicePortStateMissing,
     list_imported_service_ports,
     require_imported_service_port_state,
 )
+from app.services.network.iphost_priority import resolve_management_iphost_priority
 from app.services.network.provisioning_settings import get_stale_runtime_hours
 from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
 
@@ -316,7 +316,7 @@ class ProvisioningEnforcement:
                     enabled=True if wifi_enabled is None else bool(wifi_enabled),
                     ssid=str(wifi_ssid),
                     password=password,
-                    channel=str(wifi_channel) if wifi_channel not in (None, "") else None,
+                    channel=int(wifi_channel) if wifi_channel not in (None, "") else None,  # type: ignore[call-overload]
                     security_mode=(
                         str(wifi_security_mode)
                         if wifi_security_mode not in (None, "")

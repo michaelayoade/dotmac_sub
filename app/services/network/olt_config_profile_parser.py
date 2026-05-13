@@ -231,7 +231,7 @@ def check_bundle_drift_from_backup(
     for category, items in expected_profiles.items():
         live_items = inventory.get(category, {})
         for label, profile in items.items():
-            profile_id = int(profile["id"])
+            profile_id = int(profile["id"])  # type: ignore[call-overload]
             expected_name = str(profile.get("name") or "").strip()
             live_name = live_items.get(profile_id)
 

@@ -204,7 +204,7 @@ def get_olt_ont_snapshot_from_zabbix(
 
     try:
         zbx = client or ZabbixClient.from_env()
-        items = zbx.get_items(host_ids=[olt.zabbix_host_id], metric="walk", limit=100)
+        items = zbx.get_items(host_ids=[olt.zabbix_host_id], metric="walk", limit=100)  # type: ignore[list-item]
     except ZabbixClientError as exc:
         logger.warning("zabbix_ont_snapshot_failed", extra={"error": str(exc)})
         return {ont_id: _offline(str(exc)) for ont_id in result}
@@ -245,7 +245,7 @@ def get_olt_ont_snapshot_from_zabbix(
             current = values[ont_id]
             if timestamp is not None:
                 previous = current.get("updated_at")
-                if previous is None or timestamp > previous:
+                if previous is None or timestamp > previous:  # type: ignore[operator]
                     current["updated_at"] = timestamp
             if is_status:
                 current["online"] = _parse_status_code(raw_value)
@@ -327,7 +327,7 @@ def get_olt_ont_summary_from_zabbix(
 
     try:
         client = ZabbixClient.from_env()
-        items = client.get_items(host_ids=[olt.zabbix_host_id], metric="ont.count", limit=10)
+        items = client.get_items(host_ids=[olt.zabbix_host_id], metric="ont.count", limit=10)  # type: ignore[list-item]
     except ZabbixClientError as exc:
         if onts is not None:
             snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
@@ -387,4 +387,4 @@ def get_olt_ont_summary_from_zabbix(
         result["low_signal_count"] = low_signal
     elif result["total_count"] <= 0:
         result["total_count"] = result["online_count"] + result["offline_count"]
-    return result
+    return result  # type: ignore[return-value]

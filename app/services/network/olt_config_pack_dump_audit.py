@@ -360,7 +360,7 @@ def audit_olt_config_pack_dump(
         return audit
 
     parsed = parse_olt_dump_profiles(dump_path.read_text(errors="replace"))
-    tr069_profile_id = int(pack.tr069_olt_profile_id)
+    tr069_profile_id = int(pack.tr069_olt_profile_id)  # type: ignore[arg-type]
     audit.success = True
     audit.observed = {
         "tr069_profile_id": tr069_profile_id,

@@ -492,7 +492,7 @@ def _release_management_ip_for_inventory_return(
         if getattr(assignment, "mgmt_ip_address", None)
     }
 
-    records = []
+    records: list[IPv4Address] = []
     if assignment_ips:
         records.extend(
             db.scalars(

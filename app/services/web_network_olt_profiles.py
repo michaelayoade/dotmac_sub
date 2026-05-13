@@ -505,9 +505,9 @@ def execute_due_profile_sync_tasks_from_form(
         request=request,
         limit=limit,
     )
-    total = int(summary.get("total") or 0)
-    completed = int(summary.get("completed") or 0)
-    failed = int(summary.get("failed") or 0)
+    total = int(summary.get("total") or 0)  # type: ignore[call-overload]
+    completed = int(summary.get("completed") or 0)  # type: ignore[call-overload]
+    failed = int(summary.get("failed") or 0)  # type: ignore[call-overload]
     if total == 0:
         return True, "No approved or due scheduled profile sync tasks are ready"
     return failed == 0, (
@@ -631,7 +631,7 @@ def _log_profile_sync_task_audit(
         "offer_id": str(task.offer_id),
         "trigger": task.trigger,
     }
-    payload.update({key: value for key, value in (metadata or {}).items() if value})
+    payload.update({key: value for key, value in (metadata or {}).items() if value})  # type: ignore[misc]
     log_audit_event(
         db=db,
         request=request,
@@ -660,7 +660,7 @@ def _log_profile_bundle_audit(
         "offer_id": str(bundle.offer_id),
         "bundle_name": bundle.name,
     }
-    payload.update({key: value for key, value in (metadata or {}).items() if value})
+    payload.update({key: value for key, value in (metadata or {}).items() if value})  # type: ignore[misc]
     log_audit_event(
         db=db,
         request=request,
@@ -738,7 +738,7 @@ def _check_one_profile_bundle_drift(
         kwargs: dict[str, object] = {}
         if backup_runner is not None:
             kwargs["backup_runner"] = backup_runner
-        reader, message = OltConfigSnapshotReader.capture(db, olt, **kwargs)
+        reader, message = OltConfigSnapshotReader.capture(db, olt, **kwargs)  # type: ignore[arg-type]
         if reader is None:
             error = f"Snapshot capture failed before validation: {message}"
             backup_failures[olt_key] = error
@@ -820,7 +820,7 @@ def _expected_bundle_names(bundle: OltProfileBundle) -> dict[str, str]:
 
 def _profile_entry_map(entries: object, *, id_attr: str) -> dict[int, str]:
     mapped: dict[int, str] = {}
-    for entry in list(entries or []):
+    for entry in list(entries or []):  # type: ignore[call-overload]
         raw_id = getattr(entry, id_attr, None)
         if raw_id is None:
             continue

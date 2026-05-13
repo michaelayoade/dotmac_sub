@@ -1125,7 +1125,7 @@ def update_offer_with_audit(
         )
         if staged_profile_sync_tasks:
             metadata = metadata or {}
-            metadata["profile_sync_tasks_staged"] = len(staged_profile_sync_tasks)
+            metadata["profile_sync_tasks_staged"] = len(staged_profile_sync_tasks)  # type: ignore[assignment]
 
     log_audit_event(
         db=db,

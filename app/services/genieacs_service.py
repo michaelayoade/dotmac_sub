@@ -892,8 +892,8 @@ class GenieAcsService:
 
         OntTR069._persist_observed_runtime(
             db,
-            ont,
-            summary,
+            ont,  # type: ignore[arg-type]
+            summary,  # type: ignore[arg-type]
             commit=commit,
         )
 

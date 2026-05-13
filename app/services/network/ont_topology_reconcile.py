@@ -167,10 +167,15 @@ def reconcile_ont_pon_ports_from_registrations(
             continue
         key = (str(registration.olt_id), serial)
         registration_keys.add(key)
-        ont = ont_by_olt_serial.get(key)
-        if ont is None:
+        # ``matched_ont`` holds the optional lookup result; ``ont`` rebinds
+        # to the non-None value after the early continue so the rest of the
+        # loop body keeps the original variable name without confusing the
+        # earlier ``for ont in onts:`` loop type.
+        matched_ont = ont_by_olt_serial.get(key)
+        if matched_ont is None:
             missing_from_db += 1
             continue
+        ont = matched_ont
 
         registration_fsp = str(registration.fsp or "").strip()
         board, port = _location_from_fsp(registration_fsp)

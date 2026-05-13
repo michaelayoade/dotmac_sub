@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from scripts.setup_genieacs import GenieACSSetup
+from scripts.network.setup_genieacs import GenieACSSetup
 
 
 def test_setup_genieacs_deploy_config_reports_404_as_error(monkeypatch) -> None:

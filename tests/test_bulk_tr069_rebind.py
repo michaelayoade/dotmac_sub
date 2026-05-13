@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from scripts.bulk_tr069_rebind import (
+from scripts.network.bulk_tr069_rebind import (
     _build_fsp,
     _parse_ont_id_from_external,
     _resolve_linked_acs_profile,

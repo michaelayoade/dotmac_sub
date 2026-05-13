@@ -123,7 +123,6 @@ def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
     When ont is provided, auto-resolves PON port from discovered board/port.
     Subscriber accounts are fetched via HTMX typeahead search.
     """
-    from app.models.network import Vlan, VlanPurpose
 
     result: dict[str, object] = {
         # Accounts fetched via HTMX typeahead, not static dropdown
@@ -156,7 +155,7 @@ def get_available_mgmt_ips_for_vlan(
     - IpPool contains IPv4Address records
     - Available = ont_unit_id IS NULL and is_reserved = False
     """
-    from app.models.network import IpPool, IPv4Address, Vlan
+    from app.models.network import IpPool, IPv4Address
 
     if not vlan_id:
         return []
@@ -343,6 +342,7 @@ def claim_existing_assignment(
 
     subscriber_id_str = str(values["account_id"]) if values.get("account_id") else None
 
+    service_address_id_str: str | None
     if values.get("service_address_id"):
         service_address_id_str = str(values["service_address_id"])
     elif subscriber_id_str is not None:

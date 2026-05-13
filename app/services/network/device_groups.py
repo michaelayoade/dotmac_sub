@@ -94,7 +94,7 @@ def list_device_groups(db: Session, *, include_inactive: bool = False) -> list[d
     if not groups:
         return []
     counts = {
-        (row.group_id, row.device_type): int(row.count)
+        (row.group_id, row.device_type): int(row.count)  # type: ignore[call-overload]
         for row in db.execute(
             select(
                 DeviceGroupMember.group_id,
@@ -231,7 +231,7 @@ def list_device_group_member_candidates(
             for ont in db.scalars(query)
         ]
 
-    query = select(CPEDevice).order_by(CPEDevice.created_at.desc()).limit(query_limit)
+    query = select(CPEDevice).order_by(CPEDevice.created_at.desc()).limit(query_limit)  # type: ignore[assignment]
     if existing_ids:
         query = query.where(CPEDevice.id.not_in(existing_ids))
     if search_text:
@@ -557,7 +557,7 @@ def _resolve_device_identifier(
         ).first()
         return device.id if device else None
 
-    device = db.scalars(
+    device = db.scalars(  # type: ignore[assignment]
         select(CPEDevice)
         .where(or_(CPEDevice.serial_number == text, CPEDevice.mac_address == text))
         .limit(1)

@@ -135,7 +135,7 @@ class OltConfigSnapshotReader:
         for category, items in expected_profiles.items():
             snapshot_items = inventory.get(category, {})
             for label, profile in items.items():
-                profile_id = int(profile["id"])
+                profile_id = int(profile["id"])  # type: ignore[call-overload]
                 expected_name = str(profile.get("name") or "").strip()
                 observed_name = snapshot_items.get(profile_id)
                 if observed_name is None:
