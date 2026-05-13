@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -220,6 +221,135 @@ def _resolve_device_id_from_server(client: GenieACSClient, serial_number: str) -
         if device_id:
             return device_id
     return None
+
+
+def _parse_genieacs_timestamp(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def reconcile_ont_tr069_device(
+    db: Session,
+    ont: OntUnit,
+) -> tuple[Tr069CpeDevice | None, str]:
+    """Targeted post-authorization TR-069 reconciliation for one ONT.
+
+    Full GenieACS sync can be slow and is scheduled independently. Authorization
+    needs a narrow, deterministic pass that links the just-authorized ONT to an
+    already-known or newly-observed ACS row by serial variants.
+    """
+    if not getattr(ont, "serial_number", None):
+        return None, "ONT serial number is missing."
+
+    from app.services.network.acs_resolution import resolve_acs_for_ont
+    from app.services.tr069 import CpeDevices, link_tr069_device_to_ont
+
+    acs_resolution = resolve_acs_for_ont(db, ont)
+    server = acs_resolution.server
+    if server is None:
+        return None, "No ACS server configured for ONT."
+
+    matched = _resolve_unlinked_tr069_match(
+        db,
+        ont,
+        server,
+        require_unlinked=False,
+    )
+    if matched is not None:
+        return matched, "linked_existing_local_tr069_device"
+
+    client = create_genieacs_client(server.base_url)
+    serial = str(getattr(ont, "serial_number", "") or "").strip()
+    try:
+        device_id = _resolve_device_id_from_server(client, serial)
+        if not device_id:
+            return None, f"No TR-069 device found in GenieACS for ONT serial '{serial}'."
+        device_data = client.get_device(device_id)
+    except GenieACSError as exc:
+        return None, f"GenieACS lookup failed: {exc}"
+
+    genieacs_device_id = str(device_data.get("_id") or device_id or "").strip()
+    if not genieacs_device_id:
+        return None, "GenieACS returned a device without an ID."
+
+    oui, product_class, serial_number = CpeDevices._extract_identity(
+        client, device_data
+    )
+    serial_number = serial_number or serial
+    connection_url = client.extract_parameter_value(
+        device_data, "Device.ManagementServer.ConnectionRequestURL"
+    ) or client.extract_parameter_value(
+        device_data,
+        "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
+    )
+    connection_url = CpeDevices._clip_text(connection_url, 255)
+    last_inform_at = _parse_genieacs_timestamp(device_data.get("_lastInform"))
+
+    normalized_serial = normalize_tr069_serial(serial_number)
+    existing = (
+        db.query(Tr069CpeDevice)
+        .filter(Tr069CpeDevice.acs_server_id == server.id)
+        .filter(Tr069CpeDevice.genieacs_device_id == genieacs_device_id)
+        .first()
+    )
+    if existing is None and serial_number:
+        existing = (
+            db.query(Tr069CpeDevice)
+            .filter(Tr069CpeDevice.acs_server_id == server.id)
+            .filter(Tr069CpeDevice.serial_number == serial_number)
+            .first()
+        )
+    if existing is None and normalized_serial:
+        existing = (
+            db.query(Tr069CpeDevice)
+            .filter(Tr069CpeDevice.acs_server_id == server.id)
+            .filter(_normalized_serial_expr(Tr069CpeDevice.serial_number) == normalized_serial)
+            .first()
+        )
+    if existing is None and connection_url:
+        existing = (
+            db.query(Tr069CpeDevice)
+            .filter(Tr069CpeDevice.acs_server_id == server.id)
+            .filter(Tr069CpeDevice.connection_request_url == connection_url)
+            .first()
+        )
+
+    if existing is None:
+        existing = Tr069CpeDevice(
+            acs_server_id=server.id,
+            genieacs_device_id=genieacs_device_id,
+            serial_number=serial_number[:120] if serial_number else None,
+            oui=oui[:8] if oui else None,
+            product_class=product_class[:120] if product_class else None,
+            connection_request_url=connection_url,
+            last_inform_at=last_inform_at,
+            is_active=True,
+        )
+        db.add(existing)
+        reason = "created_and_linked_tr069_device"
+    else:
+        existing.genieacs_device_id = genieacs_device_id
+        if serial_number:
+            existing.serial_number = serial_number[:120]
+        existing.oui = oui[:8] if oui else existing.oui
+        existing.product_class = product_class[:120] if product_class else existing.product_class
+        existing.connection_request_url = connection_url
+        existing.last_inform_at = last_inform_at
+        existing.is_active = True
+        reason = "updated_and_linked_tr069_device"
+
+    link_tr069_device_to_ont(db, existing, ont, acs_server_id=server.id)
+    logger.info(
+        "Post-authorization ACS reconciliation linked ONT %s to TR-069 device %s (%s)",
+        ont.id,
+        existing.id,
+        reason,
+    )
+    return existing, reason
 
 
 def _resolve_server_by_id(
