@@ -23,7 +23,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from app.services.network.olt_ssh_ont.status import get_ont_status
+from app.services.network.olt_ssh_ont.status import (
+    get_ont_info_detail,
+    get_ont_status,
+)
 
 from ..state import OltObservedFields, OntDesiredState
 from ._types import ReadResult
@@ -129,6 +132,22 @@ def read_olt_state(
             error=None,
         )
 
+    # 3. Fetch richer ONT info — description, profile ids, mgmt IP, mgmt VLAN,
+    # distance. This is a second SSH session (a follow-up could batch with the
+    # status query). If it fails, fall back to status-only observation rather
+    # than the whole read failing — partial data is still useful to the planner.
+    detail_ok, detail_msg, detail = get_ont_info_detail(
+        olt, desired.fsp, desired.olt_ont_id
+    )
+    if not detail_ok and _looks_unreachable(detail_msg):
+        return ReadResult(
+            success=False,
+            unreachable=True,
+            observed=None,
+            error=detail_msg,
+        )
+    detail = detail or {}
+
     return ReadResult(
         success=True,
         unreachable=False,
@@ -142,18 +161,22 @@ def read_olt_state(
                 status_entry.run_state if status_entry else None,
                 allowed={"online", "offline", "los"},
             ),
-            # Richer parsing comes in a follow-up commit; for now these fields
-            # are None and the planner treats them as "drift if desired has
-            # a value, ignore otherwise".
-            olt_distance_m=None,
+            olt_distance_m=_int_or_none(detail.get("distance_m")),
+            # Optical levels (rx_dbm/tx_dbm/temp) come from
+            # ``display ont optical-info`` — separate SSH function, deferred.
             olt_rx_dbm=None,
             olt_tx_dbm=None,
             olt_temperature_c=None,
-            olt_description=None,
-            olt_mgmt_ip=None,
-            olt_mgmt_vlan=None,
-            olt_line_profile_id=None,
-            olt_service_profile_id=None,
+            olt_description=_str_or_none(detail.get("description")),
+            olt_mgmt_ip=_str_or_none(detail.get("mgmt_ip")),
+            olt_mgmt_vlan=_int_or_none(detail.get("mgmt_vlan")),
+            olt_line_profile_id=_int_or_none(detail.get("line_profile_id")),
+            olt_service_profile_id=_int_or_none(
+                detail.get("service_profile_id")
+            ),
+            # Service-port enumeration is a third SSH function
+            # (``display service-port port <fsp>`` + per-row filtering on
+            # ONT-ID), deferred.
             olt_service_ports=(),
         ),
         error=None,
@@ -204,6 +227,26 @@ def _present_with_unknown_state() -> OltObservedFields:
         olt_service_profile_id=None,
         olt_service_ports=(),
     )
+
+
+def _int_or_none(value: Any) -> int | None:
+    """Coerce a parser dict value to ``int``, tolerating None / empty / strings."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _str_or_none(value: Any) -> str | None:
+    """Filter out empty/dash placeholders Huawei emits for "no value"."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text == "-":
+        return None
+    return text
 
 
 def _normalise_state(raw: str | None, *, allowed: set[str]) -> str | None:

@@ -17,6 +17,130 @@ from app.services.network.olt_ssh_ont._common import (
 logger = logging.getLogger(__name__)
 
 
+def parse_ont_info_detail(output: str) -> dict[str, str | int | None]:
+    """Extract richer fields from a ``display ont info <fsp> <id>`` block.
+
+    Returns a dict with keys: ``description``, ``line_profile_id``,
+    ``service_profile_id``, ``mgmt_ip``, ``mgmt_vlan``, ``distance_m``.
+    Missing values are ``None``. Designed to be fed plain-text output —
+    callers that want to use it from already-collected SSH output can call
+    this directly without re-running the command.
+
+    Multi-line ``Description`` values (Huawei wraps long descs) are joined
+    with stripped whitespace on continuations.
+    """
+    result: dict[str, str | int | None] = {
+        "description": None,
+        "line_profile_id": None,
+        "service_profile_id": None,
+        "mgmt_ip": None,
+        "mgmt_vlan": None,
+        "distance_m": None,
+    }
+
+    lines = output.splitlines()
+    desc_parts: list[str] = []
+    in_description = False
+    for line in lines:
+        # A continuation line for a multi-line value starts with significant
+        # whitespace AND has no ``:`` before column 26 (Huawei's column-aligned
+        # field names always carry the colon there).
+        if in_description and line.startswith(" ") and (":" not in line[:26]):
+            desc_parts.append(line.strip())
+            continue
+        in_description = False
+
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key_norm = key.strip().lower()
+        value = value.strip()
+
+        if key_norm == "description":
+            desc_parts = [value]
+            in_description = True
+        elif key_norm == "line profile id":
+            try:
+                result["line_profile_id"] = int(value)
+            except ValueError:
+                pass
+        elif key_norm == "service profile id":
+            try:
+                result["service_profile_id"] = int(value)
+            except ValueError:
+                pass
+        elif key_norm == "ont ip 0 address/mask":
+            # Format: "172.16.210.20/24"
+            ip = value.split("/")[0].strip()
+            if ip and ip != "-":
+                result["mgmt_ip"] = ip
+        elif key_norm == "ont manage vlan":
+            try:
+                result["mgmt_vlan"] = int(value)
+            except ValueError:
+                pass
+        elif key_norm == "ont distance(m)":
+            try:
+                result["distance_m"] = int(value)
+            except ValueError:
+                pass
+
+    if desc_parts:
+        joined = "".join(desc_parts)
+        result["description"] = joined.strip() or None
+
+    return result
+
+
+def get_ont_info_detail(
+    olt: OLTDevice, fsp: str, ont_id: int
+) -> tuple[bool, str, dict[str, str | int | None] | None]:
+    """Like ``get_ont_status`` but returns the richer field set parsed from
+    the same ``display ont info`` output.
+
+    Used by the reconciler's OLT reader to populate ``OltObservedFields``
+    description / profile ids / mgmt ip / mgmt vlan / distance.
+    """
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err, None
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        from app.services.network.huawei_command_profiles import (
+            get_huawei_command_profile,
+        )
+
+        cmd = get_huawei_command_profile(olt).display_ont_info(fsp, ont_id)
+        output = core._run_huawei_cmd(channel, cmd)
+
+        if core.is_error_output(output):
+            return False, f"OLT error: {output.strip()[-200:]}", None
+
+        return True, "ONT info retrieved", parse_ont_info_detail(output)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error getting detailed ONT info from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()
+
+
 def get_ont_status(
     olt: OLTDevice, fsp: str, ont_id: int
 ) -> tuple[bool, str, OntStatusEntry | None]:

@@ -145,12 +145,148 @@ def test_olt_reader_returns_failure_when_olt_command_errored(monkeypatch):
     assert "insufficient privilege" in (result.error or "")
 
 
+def test_olt_reader_populates_detail_fields_from_get_ont_info_detail(monkeypatch):
+    """When ``get_ont_info_detail`` returns rich fields, the reader fills
+    description / line+srv profile id / mgmt IP+VLAN / distance from them."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="HWTC8535819A",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (
+            True,
+            "ok",
+            {
+                "description": "Kolawole_Idiaro_2_authd_20260512",
+                "line_profile_id": 40,
+                "service_profile_id": 42,
+                "mgmt_ip": "172.16.210.20",
+                "mgmt_vlan": 201,
+                "distance_m": 4374,
+            },
+        ),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    obs = result.observed
+    assert obs.olt_description == "Kolawole_Idiaro_2_authd_20260512"
+    assert obs.olt_line_profile_id == 40
+    assert obs.olt_service_profile_id == 42
+    assert obs.olt_mgmt_ip == "172.16.210.20"
+    assert obs.olt_mgmt_vlan == 201
+    assert obs.olt_distance_m == 4374
+
+
+def test_olt_reader_filters_dash_placeholders_from_detail(monkeypatch):
+    """Huawei emits ``-`` for missing values; reader normalises to None."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *a, **k: (True, "ok", SimpleNamespace(
+            serial_number="x", run_state="online", match_state="match",
+            config_state="normal",
+        )),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *a, **k: (True, "ok", {"description": "-", "mgmt_ip": "-"}),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.observed.olt_description is None
+    assert result.observed.olt_mgmt_ip is None
+
+
+def test_olt_reader_detail_unreachable_propagates_as_unreachable(monkeypatch):
+    """If the detail SSH call gets a connection-failed error, the whole read
+    is treated as unreachable — partial data isn't worth the risk."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *a, **k: (True, "ok", SimpleNamespace(
+            serial_number="x", run_state="online", match_state="match",
+            config_state="normal",
+        )),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *a, **k: (False, "Connection failed: timed out", None),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is False
+    assert result.unreachable is True
+
+
+def test_parse_ont_info_detail_extracts_huawei_keyvalue_lines():
+    """Pure parser test against a representative Huawei display-ont-info
+    output. No SSH involved."""
+    from app.services.network.olt_ssh_ont.status import parse_ont_info_detail
+
+    sample = """\
+  F/S/P                   : 0/1/3
+  ONT-ID                  : 11
+  Control flag            : active
+  Run state               : online
+  Config state            : normal
+  Match state             : match
+  ONT distance(m)         : 4374
+  Authentic type          : SN-auth
+  SN                      : 485754438535819A (HWTC-8535819A)
+  Management mode         : OMCI
+  ONT IP 0 address/mask   : 172.16.210.20/24
+  ONT manage VLAN         : 201
+  Description             : Kolawole_Idiaro_2_zone_Zone_1_au
+                            thd_20260512
+  Line profile ID      : 40
+  Line profile name    : SMARTOLT_FLEXIBLE_GPON
+  Service profile ID   : 42
+  Service profile name : HG8546M
+"""
+    parsed = parse_ont_info_detail(sample)
+    assert parsed["description"] == "Kolawole_Idiaro_2_zone_Zone_1_authd_20260512"
+    assert parsed["line_profile_id"] == 40
+    assert parsed["service_profile_id"] == 42
+    assert parsed["mgmt_ip"] == "172.16.210.20"
+    assert parsed["mgmt_vlan"] == 201
+    assert parsed["distance_m"] == 4374
+
+
+def test_parse_ont_info_detail_returns_none_for_missing_fields():
+    from app.services.network.olt_ssh_ont.status import parse_ont_info_detail
+
+    parsed = parse_ont_info_detail("F/S/P : 0/1/3\nONT-ID : 11\n")
+    assert all(v is None for v in parsed.values())
+
+
 def test_olt_reader_populates_present_match_and_run_state(monkeypatch):
     """When find returns a registration AND get_ont_status succeeds, the reader
     reports present=True with normalized state strings."""
     adapter = _StubAdapter(
         find_success=True,
         registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (True, "ok", {}),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
@@ -182,6 +318,10 @@ def test_olt_reader_treats_present_but_status_dark_as_unknown_state(monkeypatch)
         registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
     )
     monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (True, "ok", {}),
+    )
+    monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
         lambda olt, fsp, ont_id: (False, "Failure: ONT busy", None),
     )
@@ -197,6 +337,10 @@ def test_olt_reader_normalises_legacy_normal_run_state(monkeypatch):
     adapter = _StubAdapter(
         find_success=True,
         registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (True, "ok", {}),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
@@ -219,6 +363,10 @@ def test_olt_reader_unknown_state_strings_normalise_to_none(monkeypatch):
     adapter = _StubAdapter(
         find_success=True,
         registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda olt, fsp, ont_id: (True, "ok", {}),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
