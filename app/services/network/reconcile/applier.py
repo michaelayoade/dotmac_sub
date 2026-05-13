@@ -349,7 +349,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             )
 
         case OltOmciPppoe():
-            password = ctx.resolve_secret(action.password_ref)
+            password = _resolve_or_fail(ctx, action, action.password_ref)
             result = ctx.olt_adapter.configure_pppoe(
                 action.fsp,
                 action.ont_id,
@@ -424,7 +424,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             )
 
         case AcsSetPppoe():
-            password = ctx.resolve_secret(action.password_ref)
+            password = _resolve_or_fail(ctx, action, action.password_ref)
             params = {
                 f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.Username": action.username,
                 f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.Password": password,
@@ -446,7 +446,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             return _ok(action, "acs_ssid", None, action.ssid, started)
 
         case AcsSetWifiPassword():
-            password = ctx.resolve_secret(action.password_ref)
+            password = _resolve_or_fail(ctx, action, action.password_ref)
             params = {
                 "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase": password
             }
@@ -474,7 +474,9 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             return _ok(action, "acs_dhcp_server", None, action.enabled, started)
 
         case AcsSetManagementServer():
-            cr_password = ctx.resolve_secret(action.cr_password_ref)
+            cr_password = _resolve_or_fail(
+                ctx, action, action.cr_password_ref
+            )
             params = {
                 "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername": action.cr_username,
                 "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword": cr_password,
@@ -498,6 +500,36 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _resolve_or_fail(ctx: ApplyContext, action: Action, ref: str) -> str:
+    """Resolve a secret ref to plaintext via the context resolver.
+
+    Any exception from the resolver (OpenBao 5xx, network timeout, missing
+    field on the KV path, etc.) is translated to an ApplyError with
+    ACS_WRITE_FAULTED so the operator sees the failing action and a clear
+    message instead of an unhandled 500.
+
+    Empty/None refs return an empty string — the action sites that handle
+    optional secrets (rare) can still see the resolver completed cleanly.
+    """
+    if not ref:
+        return ""
+    try:
+        value = ctx.resolve_secret(ref)
+    except Exception as exc:  # noqa: BLE001 — translate to typed apply failure
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            f"secret resolution failed: {exc}",
+        ) from exc
+    if value is None:
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            "secret resolver returned None",
+        )
+    return value
 
 
 def _olt_check(action: Action, result: Any) -> None:

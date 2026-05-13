@@ -531,6 +531,105 @@ def test_acs_set_management_server_pushes_cr_creds_and_inform_interval():
     assert params[ms_root + "PeriodicInformInterval"] == 300
 
 
+# ── Secret resolver fail-paths ──────────────────────────────────────────────
+
+
+def test_resolver_exception_during_acs_psk_push_maps_to_acs_write_faulted():
+    """If the OpenBao resolver explodes (5xx, network timeout) on a
+    WiFi-password push, the applier halts with ACS_WRITE_FAULTED so the
+    operator sees the failing action + a clear message rather than an
+    unhandled 500."""
+    acs = _StubAcsClient()
+
+    def _exploding_resolver(ref):
+        raise RuntimeError("OpenBao 503")
+
+    ctx = _ctx(acs_client=acs, resolve_secret=_exploding_resolver)
+    plan = _plan(
+        AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi")
+    )
+    result = apply_plan(plan, ctx)
+
+    assert result.success is False
+    assert (
+        result.halted_by.reason == "acs_write_faulted"
+    )
+    assert "secret resolution failed" in result.halted_by.message.lower()
+    assert "OpenBao 503" in result.halted_by.message
+    # The ACS NBI client was never called — the failure preceded the push.
+    assert acs.calls == []
+
+
+def test_resolver_none_return_during_pppoe_push_maps_to_acs_write_faulted():
+    """resolve_secret returning None indicates the secret slot exists but
+    is empty — distinct failure mode from resolver crashes, still maps
+    to ACS_WRITE_FAULTED."""
+    acs = _StubAcsClient()
+    ctx = _ctx(acs_client=acs, resolve_secret=lambda ref: None)
+    plan = _plan(
+        AcsSetPppoe(
+            device_id="dev",
+            wcd_index=1,
+            instance_index=1,
+            username="100024456",
+            password_ref="bao://pppoe",
+            vlan=203,
+        )
+    )
+    result = apply_plan(plan, ctx)
+
+    assert result.success is False
+    assert result.halted_by.reason == "acs_write_faulted"
+    assert "none" in result.halted_by.message.lower()
+    assert acs.calls == []
+
+
+def test_resolver_failure_during_cr_password_push_halts_acs_management_server():
+    """ACS management-server push also pulls a CR password from the
+    resolver. Same fail-path."""
+    acs = _StubAcsClient()
+    ctx = _ctx(
+        acs_client=acs,
+        resolve_secret=lambda ref: (_ for _ in ()).throw(
+            RuntimeError("KV path missing")
+        ),
+    )
+    plan = _plan(
+        AcsSetManagementServer(
+            device_id="dev",
+            cr_username="admin",
+            cr_password_ref="bao://cr",
+            inform_interval_sec=300,
+        )
+    )
+    result = apply_plan(plan, ctx)
+
+    assert result.success is False
+    assert result.halted_by.reason == "acs_write_faulted"
+    assert "KV path missing" in result.halted_by.message
+
+
+def test_resolver_empty_ref_does_not_call_resolver():
+    """An empty password_ref shouldn't crash the resolver — it just
+    resolves to empty plaintext and the action proceeds."""
+    acs = _StubAcsClient()
+    calls: list[str] = []
+
+    def _tracking_resolver(ref):
+        calls.append(ref)
+        return ref
+
+    ctx = _ctx(acs_client=acs, resolve_secret=_tracking_resolver)
+    plan = _plan(
+        AcsSetWifiPassword(device_id="dev", password_ref="")
+    )
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    # _resolve_or_fail short-circuits empty refs without invoking the
+    # resolver at all.
+    assert calls == []
+
+
 # ── ACS action dispatch (failure paths) ─────────────────────────────────────
 
 

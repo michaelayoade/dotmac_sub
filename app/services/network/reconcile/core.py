@@ -25,8 +25,6 @@ The function is synchronous (request-scoped) per the "no queue, no silent
 failure" design. Long operations (e.g. a full bootstrap) take up to
 ``timeout_sec`` — operators expect this to be measured in tens of seconds.
 
-Follow-up still open:
-  * In-app secret resolver wiring (``passthrough_secret`` is the default).
 """
 
 from __future__ import annotations
@@ -50,11 +48,12 @@ from .adapters import (
     upsert_ont_observation,
 )
 from .alerts import ZabbixTrapper, resolve_sweep_unreachable
-from .applier import ApplyContext, SecretResolver, apply_plan, passthrough_secret
+from .applier import ApplyContext, SecretResolver, apply_plan
 from .locking import OntNotFound, acquire_reconcile_lock
 from .planner import compute_plan
 from .readers import read_acs_state, read_olt_state
 from .readers.reachability import PingFunction, is_pingable
+from .secrets import default_secret_resolver_from_env
 from .state import (
     AcsObservedFields,
     OltObservedFields,
@@ -80,7 +79,7 @@ def reconcile_ont(
     mode: ReconcileMode = "sync",
     olt_adapter: Any = None,
     acs_client: Any = None,
-    secret_resolver: SecretResolver = passthrough_secret,
+    secret_resolver: SecretResolver | None = None,
     ping_function: PingFunction | None = None,
 ) -> ReconcileResult:
     """Reconcile one ONT — bring live state into agreement with desired state.
@@ -105,8 +104,10 @@ def reconcile_ont(
             production it's built from the ``OLTDevice`` row.
         acs_client: Pre-built GenieACS NBI client. Same pattern.
         secret_resolver: Maps secret refs to plaintext at apply time.
-            Defaults to passthrough so callers without OpenBao wired pass
-            plaintext directly through the ref fields.
+            Default is selected per-call via
+            ``default_secret_resolver_from_env``: OpenBao-backed when
+            ``OPENBAO_ADDR`` is set and reachable, otherwise passthrough.
+            Tests inject their own resolver for deterministic behaviour.
 
     Returns:
         A ``ReconcileResult``. The function never raises under normal
@@ -116,6 +117,8 @@ def reconcile_ont(
     started_monotonic = time.monotonic()
     started_at = datetime.now(UTC)
     deadline = started_at + timedelta(seconds=timeout_sec)
+    if secret_resolver is None:
+        secret_resolver = default_secret_resolver_from_env()
 
     try:
         with acquire_reconcile_lock(db, ont_unit_id) as ont:
