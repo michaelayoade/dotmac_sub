@@ -126,6 +126,16 @@ def _record_step(db: Session, ont: OntUnit, step_name: str, result: StepResult) 
     )
 
 
+def _commit_without_expiring(db: Session) -> None:
+    """Commit before slow device I/O without forcing ORM reloads afterwards."""
+    previous = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    finally:
+        db.expire_on_commit = previous
+
+
 # ---------------------------------------------------------------------------
 # NOTE: Individual step functions for manual wizard provisioning have been
 # removed. The following functions were deprecated:
@@ -1192,6 +1202,61 @@ def _ensure_static_management_ip_from_profile(
     return True, f"Reserved static management IP {allocation.address}."
 
 
+def _ensure_authorization_management_ip(
+    db: Session,
+    ctx: OltContext,
+    values: dict[str, Any],
+) -> tuple[bool, str, bool]:
+    """Reserve OLT-pool management IP before building authorization IPHOST.
+
+    Authorization baseline needs deterministic ACS reachability. If the ONT
+    already has static management values, keep them. If the operator explicitly
+    selected DHCP/inactive, respect that. Otherwise, use the OLT's management
+    pool when one is configured.
+    """
+    if not values.get("mgmt_vlan"):
+        return True, "No management VLAN configured.", False
+
+    if all(
+        values.get(key)
+        for key in ("mgmt_ip_address", "mgmt_subnet", "mgmt_gateway")
+    ):
+        return True, "Static management IP already assigned.", False
+
+    mgmt_ip_mode = str(values.get("mgmt_ip_mode") or "").strip().lower()
+    if mgmt_ip_mode in {"dhcp", "inactive"}:
+        return True, "Management IP mode explicitly uses DHCP/inactive.", False
+
+    pool_id = getattr(ctx.olt, "mgmt_ip_pool_id", None)
+    if not pool_id:
+        if mgmt_ip_mode in {"static", "static_ip"}:
+            return (
+                False,
+                "Static management IP mode requires an OLT management IP pool.",
+                False,
+            )
+        return True, "No OLT management IP pool configured; using DHCP IPHOST.", False
+
+    from app.services.network.ont_management_ipam import allocate_ont_management_ip
+
+    try:
+        allocation = allocate_ont_management_ip(
+            db,
+            ont=ctx.ont,
+            olt=ctx.olt,
+            pool_id=pool_id,
+        )
+    except ValueError as exc:
+        return False, str(exc), False
+
+    message = (
+        f"Reused management IP {allocation.address}."
+        if allocation.reused
+        else f"Reserved management IP {allocation.address}."
+    )
+    return True, message, True
+
+
 # ---------------------------------------------------------------------------
 # AUTHORIZATION BASELINE / DIRECT CONFIG APPLICATION
 # ---------------------------------------------------------------------------
@@ -1260,6 +1325,7 @@ def apply_authorization_baseline(
 
         set_provisioning_status(ont, OntProvisioningStatus.partial, strict=False)
         db.flush()
+        _commit_without_expiring(db)
 
     result = provision_with_reconciliation(
         db,
@@ -1278,6 +1344,61 @@ def apply_authorization_baseline(
         waiting=result.waiting,
         data=result.data,
     )
+
+    if not dry_run and baseline_result.success:
+        try:
+            from app.services.network._resolve import reconcile_ont_tr069_device
+
+            linked_device, link_reason = reconcile_ont_tr069_device(db, ont)
+            link_result = StepResult(
+                "post_authorization_acs_link",
+                linked_device is not None,
+                (
+                    f"Linked ACS device: {link_reason}"
+                    if linked_device is not None
+                    else f"ACS device not linked yet: {link_reason}"
+                ),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                critical=False,
+                data={
+                    "tr069_device_id": (
+                        str(getattr(linked_device, "id", ""))
+                        if linked_device is not None
+                        else None
+                    ),
+                    "genieacs_device_id": (
+                        getattr(linked_device, "genieacs_device_id", None)
+                        if linked_device is not None
+                        else None
+                    ),
+                    "reason": link_reason,
+                },
+            )
+            _record_step(db, ont, "post_authorization_acs_link", link_result)
+            if result.data:
+                baseline_result.data = {
+                    **result.data,
+                    "post_authorization_acs_link": link_result.data,
+                }
+            else:
+                baseline_result.data = {
+                    "post_authorization_acs_link": link_result.data
+                }
+        except Exception as exc:
+            logger.warning(
+                "Post-authorization ACS reconciliation failed for ONT %s: %s",
+                ont.id,
+                exc,
+                exc_info=True,
+            )
+            link_result = StepResult(
+                "post_authorization_acs_link",
+                False,
+                f"ACS reconciliation failed: {exc}",
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                critical=False,
+            )
+            _record_step(db, ont, "post_authorization_acs_link", link_result)
 
     if not dry_run:
         set_provisioning_status(
@@ -1323,6 +1444,7 @@ def provision_with_reconciliation(
     Returns:
         StepResult with provisioning outcome.
     """
+    from app.services.network.iphost_priority import resolve_management_iphost_priority
     from app.services.network.olt_batched_mgmt import (
         create_batched_mgmt_spec_from_config_pack,
     )
@@ -1413,6 +1535,7 @@ def provision_with_reconciliation(
     created_port_indices: list[int] = []
 
     # 1. Create internet service port (adapter returns success on "already exists")
+    _commit_without_expiring(db)
     if wan_vlan:
         result = adapter.create_service_port(
             ctx.fsp,
@@ -1467,6 +1590,7 @@ def provision_with_reconciliation(
     # IPHOST is also cleared here so reuse-registration paths self-heal stale entries
     # at ip_index slots the new baseline won't itself rewrite.
     stale_cleared = []
+    _commit_without_expiring(db)
     for ip_index in (0, 1):
         result = adapter.clear_iphost_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
         if result.success:
@@ -1502,7 +1626,74 @@ def provision_with_reconciliation(
         _send_failure_notification(ctx, ont_id, step_result)
         return step_result
     if mgmt_vlan:
+        ok, mgmt_message, allocated_mgmt_ip = _ensure_authorization_management_ip(
+            db,
+            ctx,
+            values,
+        )
+        if not ok:
+            ms = int((time.monotonic() - t0) * 1000)
+            step_result = StepResult("provision", False, mgmt_message, ms)
+            _record_step(db, ctx.ont, "provision", step_result)
+            _send_failure_notification(ctx, ont_id, step_result)
+            return step_result
+        if allocated_mgmt_ip:
+            db.flush()
+            _commit_without_expiring(db)
+            effective = resolve_effective_ont_config(db, ctx.ont)
+            values = (
+                effective.get("values", {}) if isinstance(effective, dict) else {}
+            )
+            config_pack = effective.get("config_pack")
+            steps_completed.append("reserved_management_ip")
+            logger.info(
+                "Reserved ONT management IP during authorization baseline for %s: %s",
+                ctx.ont.serial_number,
+                mgmt_message,
+            )
+            if not config_pack:
+                ms = int((time.monotonic() - t0) * 1000)
+                step_result = StepResult(
+                    "provision",
+                    False,
+                    "OLT config pack not found after management IP allocation",
+                    ms,
+                )
+                _record_step(db, ctx.ont, "provision", step_result)
+                _send_failure_notification(ctx, ont_id, step_result)
+                return step_result
+
         raw_mgmt_gem_index = values.get("mgmt_gem_index")
+        mgmt_priority = resolve_management_iphost_priority(
+            db,
+            olt_id=ctx.olt.id,
+            fsp=ctx.fsp,
+            ont_id_on_olt=ctx.olt_ont_id,
+            mgmt_vlan_tag=mgmt_vlan,
+            mgmt_gem_index=raw_mgmt_gem_index,
+            line_profile_id=values.get("authorization_line_profile_id"),
+        )
+        mgmt_ip_mode = str(values.get("mgmt_ip_mode") or "").strip().lower()
+        has_static_mgmt_ip = all(
+            values.get(key)
+            for key in ("mgmt_ip_address", "mgmt_subnet", "mgmt_gateway")
+        )
+        if mgmt_priority is None and (
+            mgmt_ip_mode in {"static", "static_ip"} or has_static_mgmt_ip
+        ):
+            ms = int((time.monotonic() - t0) * 1000)
+            step_result = StepResult(
+                "provision",
+                False,
+                (
+                    "Management IPHOST priority could not be resolved from "
+                    "imported OLT state"
+                ),
+                ms,
+            )
+            _record_step(db, ctx.ont, "provision", step_result)
+            _send_failure_notification(ctx, ont_id, step_result)
+            return step_result
         mgmt_spec = create_batched_mgmt_spec_from_config_pack(
             config_pack,
             ctx.fsp,
@@ -1513,10 +1704,12 @@ def provision_with_reconciliation(
             allocated_ip=values.get("mgmt_ip_address"),
             subnet_mask=values.get("mgmt_subnet"),
             gateway=values.get("mgmt_gateway"),
+            ip_priority=mgmt_priority,
             internet_config_ip_index=values.get("internet_config_ip_index"),
             wan_config_profile_id=values.get("wan_config_profile_id"),
             tr069_profile_id=values.get("tr069_olt_profile_id"),
         )
+        _commit_without_expiring(db)
         result = adapter.configure_management_batch(mgmt_spec)
         if not result.success:
             # Rollback created ports on failure
@@ -1538,6 +1731,46 @@ def provision_with_reconciliation(
             return step_result
         steps_completed.extend(result.data.get("steps_completed", []))
 
+    readback_port_indices: list[int] = []
+    try:
+        _commit_without_expiring(db)
+        service_ports_result = adapter.get_service_ports_for_ont(
+            ctx.fsp, ctx.olt_ont_id
+        )
+        if service_ports_result.success:
+            from app.services.network.imported_service_ports import (
+                upsert_imported_service_port_from_readback,
+            )
+
+            for port in service_ports_result.data.get("service_ports", []):
+                upsert_imported_service_port_from_readback(
+                    db,
+                    olt=ctx.olt,
+                    ont=ctx.ont,
+                    port=port,
+                    source="provisioning_readback",
+                )
+                readback_port_indices.append(port.index)
+            if readback_port_indices:
+                db.flush()
+                logger.info(
+                    "Imported %d service-port readback row(s) for ONT %s: %s",
+                    len(readback_port_indices),
+                    ctx.ont.serial_number,
+                    readback_port_indices,
+                )
+        else:
+            logger.warning(
+                "Service-port readback after provisioning failed for ONT %s: %s",
+                ctx.ont.serial_number,
+                service_ports_result.message,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to import service-port readback after provisioning for ONT %s",
+            ctx.ont.serial_number,
+        )
+
     ms = int((time.monotonic() - t0) * 1000)
     step_result = StepResult(
         "provision",
@@ -1547,6 +1780,7 @@ def provision_with_reconciliation(
         data={
             "steps_completed": steps_completed,
             "created_service_port_indices": created_port_indices,
+            "readback_service_port_indices": readback_port_indices,
         },
     )
     _record_step(db, ctx.ont, "provision", step_result)
