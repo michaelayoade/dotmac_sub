@@ -14,12 +14,23 @@ import dataclasses
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.genieacs_client import GenieACSError
 from app.services.network.reconcile import (
     OntDesiredState,
     read_acs_state,
     read_olt_state,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_optical(monkeypatch):
+    """Default to a no-op optical read so existing tests stay deterministic."""
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_optical_info",
+        lambda *_a, **_k: (False, "not stubbed", None),
+    )
 
 # ── Shared in-memory OntDesiredState ────────────────────────────────────────
 
@@ -392,6 +403,126 @@ def test_olt_reader_rejects_adapter_without_olt_attribute():
     assert result.success is False
     assert result.unreachable is False
     assert "no .olt" in (result.error or "")
+
+
+def test_olt_reader_populates_optical_fields_from_optical_info(monkeypatch):
+    from app.services.network.olt_ssh_diagnostics import OpticalInfo
+
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_optical_info",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            OpticalInfo(
+                fsp="0/1/3",
+                ont_id=11,
+                rx_power_dbm=-22.4,
+                tx_power_dbm=2.1,
+                olt_rx_power_dbm=-21.8,
+                temperature_c=44.6,
+            ),
+        ),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    obs = result.observed
+    assert obs.olt_rx_dbm == -21.8  # OLT-side Rx (drop-fiber alert metric)
+    assert obs.olt_tx_dbm == 2.1  # ONT-reported upstream Tx
+    assert obs.olt_temperature_c == 45  # rounded to int
+
+
+def test_olt_reader_tolerates_optical_failure(monkeypatch):
+    """An out-of-range / unsupported optical reply leaves the fields None
+    but does NOT fail the whole read."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_optical_info",
+        lambda *_a, **_k: (False, "Out of range", None),
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    obs = result.observed
+    assert obs.olt_rx_dbm is None
+    assert obs.olt_tx_dbm is None
+    assert obs.olt_temperature_c is None
+
+
+def test_olt_reader_catches_optical_exception(monkeypatch):
+    """If get_ont_optical_info raises (e.g. SSH closed unexpectedly), the
+    optical fields collapse to None instead of crashing the read."""
+    adapter = _StubAdapter(
+        find_success=True,
+        registration=SimpleNamespace(fsp="0/1/3", onu_id=11),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_status",
+        lambda *_a, **_k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
+        lambda *_a, **_k: (True, "ok", {}),
+    )
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("ssh session torn down")
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.readers.olt_reader.get_ont_optical_info",
+        _boom,
+    )
+    result = read_olt_state(adapter, _desired())
+    assert result.success is True
+    assert result.observed.olt_rx_dbm is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

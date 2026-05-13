@@ -10,12 +10,13 @@ Current scope:
 * Presence + run/match state via ``adapter.find_ont_by_serial`` and
   ``status.get_ont_status``. These are enough for the planner to decide
   whether the ONT exists in the OLT's table and is alive on the PON.
-* Other observed fields (description, profile bindings, optical levels,
-  mgmt IP, service-ports) are stubbed ``None`` for now — they need richer
-  parsing of ``display ont info`` / ``display ont optical-info`` /
-  ``display service-port port`` output. The planner can still produce a
-  useful plan with the partial observation: missing fields generate drift,
-  which the applier writes.
+* Description, profile bindings, mgmt IP, mgmt VLAN, distance via
+  ``display ont info``.
+* Optical Rx/Tx/temperature via ``display ont optical-info`` —
+  best-effort; an unsupported / out-of-range reply leaves the optical
+  fields as ``None`` without failing the whole read.
+* Service-port enumeration (``display service-port port <fsp>`` filtered
+  by ONT-ID) is still a follow-up.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from app.services.network.olt_ssh_diagnostics import get_ont_optical_info
 from app.services.network.olt_ssh_ont.status import (
     get_ont_info_detail,
     get_ont_status,
@@ -148,6 +150,13 @@ def read_olt_state(
         )
     detail = detail or {}
 
+    # 4. Optical levels (Rx/Tx dBm, temperature). Best-effort: optical-info
+    # can return an Out-of-range or "Not supported" line on some firmwares
+    # and that should not fail the whole read.
+    olt_rx_dbm, olt_tx_dbm, olt_temperature_c = _read_optical(
+        olt, desired.fsp, desired.olt_ont_id
+    )
+
     return ReadResult(
         success=True,
         unreachable=False,
@@ -162,11 +171,9 @@ def read_olt_state(
                 allowed={"online", "offline", "los"},
             ),
             olt_distance_m=_int_or_none(detail.get("distance_m")),
-            # Optical levels (rx_dbm/tx_dbm/temp) come from
-            # ``display ont optical-info`` — separate SSH function, deferred.
-            olt_rx_dbm=None,
-            olt_tx_dbm=None,
-            olt_temperature_c=None,
+            olt_rx_dbm=olt_rx_dbm,
+            olt_tx_dbm=olt_tx_dbm,
+            olt_temperature_c=olt_temperature_c,
             olt_description=_str_or_none(detail.get("description")),
             olt_mgmt_ip=_str_or_none(detail.get("mgmt_ip")),
             olt_mgmt_vlan=_int_or_none(detail.get("mgmt_vlan")),
@@ -272,3 +279,31 @@ def _looks_unreachable(message: str | None) -> bool:
         return False
     lowered = message.lower()
     return any(frag in lowered for frag in _UNREACHABLE_FRAGMENTS)
+
+
+def _read_optical(
+    olt: Any, fsp: str, ont_id: int
+) -> tuple[float | None, float | None, int | None]:
+    """Best-effort optical read.
+
+    Returns ``(olt_rx_dbm, olt_tx_dbm, olt_temperature_c)``.
+
+    - ``olt_rx_dbm`` is the OLT-side received power from this ONT's upstream
+      signal (the "drop fiber" alert metric).
+    - ``olt_tx_dbm`` is the ONT-reported upstream Tx — the value of the
+      laser leaving the ONT, before fiber loss.
+    - ``olt_temperature_c`` is the ONT laser temperature (rounded to int).
+    """
+    try:
+        ok, _msg, info = get_ont_optical_info(olt, fsp, ont_id)
+    except Exception:
+        logger.debug("olt_reader_optical_unavailable", exc_info=True)
+        return None, None, None
+    if not ok or info is None:
+        return None, None, None
+
+    rx = info.olt_rx_power_dbm
+    tx = info.tx_power_dbm
+    temp_raw = info.temperature_c
+    temperature = int(round(temp_raw)) if temp_raw is not None else None
+    return rx, tx, temperature
