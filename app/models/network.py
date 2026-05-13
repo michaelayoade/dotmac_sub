@@ -217,6 +217,21 @@ class OntStatusSource(enum.Enum):
     derived = "derived"
 
 
+class OntSyncStatus(enum.Enum):
+    """Per-ONT reconciler status (see app/services/network/reconcile).
+
+    ``synced``      — last reconcile produced zero residual drift.
+    ``reconciling`` — a reconcile is in flight, held under SELECT FOR UPDATE
+                       on the OntUnit row so concurrent reconciles serialize.
+    ``out_of_sync`` — last reconcile failed to converge. Blocks ``mode=sync``
+                       writes; the sweeper keeps retrying.
+    """
+
+    synced = "synced"
+    reconciling = "reconciling"
+    out_of_sync = "out_of_sync"
+
+
 class OntProvisioningEventStatus(enum.Enum):
     succeeded = "succeeded"
     failed = "failed"
@@ -1713,6 +1728,30 @@ class OntUnit(Base):
     last_sync_source: Mapped[str | None] = mapped_column(String(40))
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Reconciler bookkeeping (see app/services/network/reconcile/). These columns
+    # are set exclusively by reconcile_ont; UI write paths must never mutate them
+    # directly. last_reconcile_started_at lets a fresh reconcile detect a crashed
+    # prior pass: if it acquires the SELECT FOR UPDATE lock and finds
+    # sync_status='reconciling', the previous reconcile died and the row is
+    # cleared to out_of_sync with a crash error.
+    sync_status: Mapped[OntSyncStatus] = mapped_column(
+        Enum(OntSyncStatus, name="ontsyncstatus", create_constraint=False),
+        default=OntSyncStatus.synced,
+        server_default="synced",
+        nullable=False,
+        index=True,
+    )
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    last_reconcile_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    consecutive_sweep_unreachable: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1737,6 +1776,15 @@ class OntUnit(Base):
         "SpeedProfile", foreign_keys=[upload_speed_profile_id]
     )
     tr069_acs_server = relationship("Tr069AcsServer")
+    # 1:1 observation row holding OLT + ACS-side observed fields. Sweeper and
+    # sync reconciles both upsert this; the planner reads it. Cascade-deleted
+    # so removing an ONT cleans up its observation.
+    observation = relationship(
+        "OntObservation",
+        back_populates="ont_unit",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     wan_service_instances = relationship(
         "OntWanServiceInstance",
         back_populates="ont",

@@ -219,15 +219,15 @@ from app.models.network import (  # noqa: F401
     OltCardPort,
     OltConfigBackup,
     OltConfigBackupType,
-    OltLineProfileGemMapping,
+    OLTDevice,
     OltLineProfile,
+    OltLineProfileGemMapping,
     OltOntRegistration,
     OltOnuTypeProfileMapping,
-    OLTDevice,
     OltPortType,
     OltPowerUnit,
-    OltServiceProfile,
     OltServicePort,
+    OltServiceProfile,
     OltSfpModule,
     OltShelf,
     OntAssignment,
@@ -238,6 +238,7 @@ from app.models.network import (  # noqa: F401
     OntProvisioningProfile,
     OntProvisioningStatus,
     OntStatusSource,
+    OntSyncStatus,
     OntUnit,
     OnuCapability,
     OnuMode,
@@ -330,6 +331,7 @@ from app.models.offer_availability import (  # noqa: F401
     OfferResellerAvailability,
 )
 from app.models.ont_autofind import OltAutofindCandidate  # noqa: F401
+from app.models.ont_observation import OntObservation  # noqa: F401
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,
