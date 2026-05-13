@@ -1,0 +1,327 @@
+"""Reconciler state types.
+
+The reconciler is the only subsystem in the codebase that writes to the OLT (SSH)
+and the ACS (GenieACS NBI). Its truth lives across four surfaces:
+
+  - ``OntDesiredState``  — operator/system intent, persisted on ``OntUnit``
+                           (structural columns + the ``desired_config`` JSON blob).
+  - ``OntObservedState`` — last-seen live values from OLT + ACS, persisted on a
+                           1:1 ``OntObservation`` row (added by a follow-up
+                           migration; this module declares only the in-memory
+                           shape).
+  - OLT                  — Huawei MA5608T / MA5800-X2, accessed via SSH.
+  - ACS                  — GenieACS NBI, accessed via HTTP.
+
+Reconciliation flows: desired vs observed → ordered Plan of OLT and ACS Actions
+→ Apply → re-read → commit. Failure modes are enumerated in
+``ReconcileFailureReason`` and surfaced via ``ReconcileResult.failure`` so the
+sync HTTP path can translate them into specific 4xx/5xx responses.
+
+This module holds dataclasses and string constants only. No I/O, no SQLAlchemy
+bindings, no protocol code.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal
+
+# ── Public string-literal types ─────────────────────────────────────────────
+
+SyncStatus = Literal["synced", "reconciling", "out_of_sync"]
+"""Per-ONT reconciler status, persisted on ``OntUnit.sync_status``.
+
+* ``synced``         — last reconcile produced an empty drift list.
+* ``reconciling``    — a reconcile is in flight. Held under SELECT FOR UPDATE
+                       on the OntUnit row so concurrent reconciles serialize.
+* ``out_of_sync``    — last reconcile failed to converge. Blocks ``mode=sync``
+                       writes; sweep mode keeps retrying.
+"""
+
+WanMode = Literal["pppoe", "bridge"]
+PppoeProvisioningMethod = Literal["omci", "tr069", "auto"]
+WriteSurface = Literal["olt", "acs"]
+ObserveSurface = Literal["olt", "acs"]
+ReconcileMode = Literal["sync", "sweep", "bootstrap"]
+
+
+# ── Desired state ───────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class OntDesiredState:
+    """What this ONT should be.
+
+    Every field here is operator-mutable through ``reconcile_ont`` with a
+    ``proposed_change`` dict. Mutation is durable only when the corresponding
+    OLT/ACS write succeeds end-to-end. Fields marked "immutable" reject any
+    proposed change after first creation (see ``validator.validate_desired``).
+
+    Persistence: structural fields (``olt_id``, ``fsp``, ``olt_ont_id``, etc.)
+    map to typed columns on ``OntUnit``; configuration knobs map to the
+    ``OntUnit.desired_config`` JSON blob under the sections the existing model
+    already uses (``management``, ``wan``, ``wifi``, ``dhcp``, ``acs``).
+    """
+
+    # Identity (immutable post-creation)
+    ont_unit_id: str
+    serial_number: str
+
+    # OLT binding
+    olt_id: str
+    fsp: str
+    olt_ont_id: int
+    line_profile_id: int
+    service_profile_id: int
+    description: str
+
+    # Management plane
+    mgmt_vlan: int | None
+    mgmt_ip: str | None
+    mgmt_subnet_mask: str | None
+    mgmt_gateway: str | None
+    mgmt_dns_primary: str | None
+    mgmt_dns_secondary: str | None
+    mgmt_iphost_priority: int
+
+    # TR-069 / ACS
+    tr069_profile_id: int
+    acs_server_id: str | None
+    cr_username: str | None
+    cr_password_ref: str | None
+    periodic_inform_interval_sec: int
+
+    # WAN
+    wan_mode: WanMode
+    wan_vlan: int | None
+    wan_gem_index: int | None
+    wan_pppoe_username: str | None
+    wan_pppoe_password_ref: str | None
+    wan_pppoe_provisioning_method: PppoeProvisioningMethod
+    wan_pppoe_wcd_index: int
+    wan_pppoe_instance_index: int
+    wan_config_profile_id: int | None
+    wan_internet_config_ip_index: int | None
+    nat_enabled: bool
+    ipv6_enabled: bool
+
+    # LAN / DHCP
+    dhcp_enabled: bool
+    dhcp_pool_min: str
+    dhcp_pool_max: str
+    dhcp_subnet_mask: str
+
+    # WiFi
+    wifi_ssid: str
+    wifi_password_ref: str
+    wifi_password_pushed_at: datetime | None
+
+    # Service-port indices — allocator outputs, immutable after first allocation.
+    mgmt_service_port_index: int | None
+    wan_service_port_index: int | None
+
+    # Forward-compat fields for the in-app Subscriber/Service migration.
+    # All nullable today; populated once in-app RADIUS lands.
+    subscriber_external_id: str | None
+    wan_uprate_kbps: int | None
+    wan_downrate_kbps: int | None
+
+
+# ── Observed state ──────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class OltObservedFields:
+    """OLT-side observations from ``display ont info / ipconfig / optical-info``.
+
+    Sourced exclusively from SSH reads. Never authoritative for desired state.
+    """
+
+    olt_present: bool
+    olt_match_state: Literal["match", "mismatch", "initial"] | None
+    olt_run_state: Literal["online", "offline", "los"] | None
+    olt_distance_m: int | None
+    olt_rx_dbm: float | None
+    olt_tx_dbm: float | None
+    olt_temperature_c: int | None
+    olt_description: str | None
+    olt_mgmt_ip: str | None
+    olt_mgmt_vlan: int | None
+    olt_line_profile_id: int | None
+    olt_service_profile_id: int | None
+    # Each service-port entry: {index, vlan, gem, state}. Tuple to keep frozen.
+    olt_service_ports: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class AcsObservedFields:
+    """ACS-side observations from the GenieACS CWMP cache.
+
+    Captured at the device's last Inform — staleness is bounded by
+    ``periodic_inform_interval_sec``. The reconciler trusts cache values without
+    forcing a ``refreshObject``; ``VERIFICATION_MISMATCH`` catches the rare
+    stale case post-write.
+
+    ``acs_observed_cr_username_set`` / ``acs_observed_cr_password_set`` track
+    presence only — the values themselves are never read back.
+    """
+
+    acs_present: bool
+    acs_last_inform_at: datetime | None
+    acs_last_boot_at: datetime | None
+    acs_last_bootstrap_at: datetime | None
+    acs_observed_software_version: str | None
+    acs_observed_pppoe_username: str | None
+    acs_observed_pppoe_enable: bool | None
+    acs_observed_wan_vlan: int | None
+    acs_observed_wan_external_ip: str | None
+    acs_observed_wan_connection_status: str | None
+    acs_observed_nat_enabled: bool | None
+    acs_observed_dhcp_enabled: bool | None
+    acs_observed_ssid: str | None
+    acs_observed_periodic_inform_interval_sec: int | None
+    acs_observed_cr_username_set: bool | None
+    acs_observed_cr_password_set: bool | None
+    acs_observed_wan_wcd_index: int | None
+    acs_observed_wan_instance_index: int | None
+
+
+@dataclass(frozen=True)
+class OntObservedState:
+    """Last-seen reality as of ``last_reconciled_at``.
+
+    Sweeper and sync reconciles both write this. Never authoritative for further
+    writes — the planner compares ``OntDesiredState`` to ``OntObservedState`` to
+    decide what to push.
+
+    ``consecutive_sweep_unreachable`` is incremented by the sweeper when the
+    reachability fast-check fails; it drives alert escalation (no exponential
+    backoff — sweep keeps trying, the alert is what surfaces persistence).
+    """
+
+    last_reconciled_at: datetime
+    last_reconcile_duration_ms: int
+    mgmt_ip_pingable: bool
+    consecutive_sweep_unreachable: int
+    olt: OltObservedFields
+    acs: AcsObservedFields
+
+
+# ── Diff and action records ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Drift:
+    """A field whose desired value differs from what was observed.
+
+    ``repairable=False`` flags fields the planner *knows* cannot be verified by
+    a subsequent read (notably ``wifi_password`` on HG8546M, which is write-only
+    in the firmware data model). Drift on unrepairable fields is recorded for
+    visibility but does not by itself trigger an action.
+    """
+
+    field: str
+    surface: ObserveSurface
+    desired: Any
+    observed: Any
+    repairable: bool
+
+
+@dataclass(frozen=True)
+class AppliedAction:
+    """One write the reconciler performed during an apply pass.
+
+    ``old_value`` reflects the observed value at the start of the reconcile;
+    ``new_value`` reflects the desired value at apply time. Captured for the
+    audit log and for surfacing in the per-ONT reconcile history view.
+    """
+
+    field: str
+    surface: WriteSurface
+    old_value: Any
+    new_value: Any
+    duration_ms: int
+
+
+# ── Failure reasons ─────────────────────────────────────────────────────────
+
+
+class ReconcileFailureReason:
+    """String constants enumerating why a reconcile failed.
+
+    Stored verbatim on ``OntUnit.last_error`` and emitted in
+    ``ReconcileResult.failure.reason``. The sync HTTP handler maps these to
+    specific 4xx/5xx responses so operators see the actual failure mode rather
+    than a generic ``500``.
+
+    Reachability failures (``*_UNREACHABLE``, ``ONT_OFFLINE``) are detected
+    before any write is attempted — they imply the DB is unchanged.
+
+    Apply-time failures (``OLT_WRITE_REJECTED``, ``ACS_WRITE_FAULTED``,
+    ``ACS_CR_FAILED``, ``VERIFICATION_MISMATCH``) imply zero or more actions
+    were applied before the failure; the ``ReconcileResult.actions_applied``
+    list describes which ones.
+    """
+
+    # Preflight / reachability — no writes attempted
+    OLT_UNREACHABLE = "olt_unreachable"
+    ACS_UNREACHABLE = "acs_unreachable"
+    ONT_OFFLINE = "ont_offline"
+    ONT_NOT_INFORMING = "ont_not_informing"
+    BLOCKED_OUT_OF_SYNC = "blocked_out_of_sync"
+    INVALID_CHANGE = "invalid_change"
+
+    # Apply time — writes may have partially completed
+    OLT_WRITE_REJECTED = "olt_write_rejected"
+    ACS_WRITE_FAULTED = "acs_write_faulted"
+    ACS_CR_FAILED = "acs_cr_failed"
+    VERIFICATION_MISMATCH = "verification_mismatch"
+    TIMEOUT = "timeout"
+
+
+@dataclass(frozen=True)
+class ReconcileFailure:
+    """Why a reconcile failed.
+
+    ``reason`` is one of the ``ReconcileFailureReason`` constants. ``message``
+    is human-readable detail safe to surface in operator UI / API responses
+    (does not contain secrets).
+    """
+
+    reason: str
+    message: str
+
+
+# ── Final reconcile result ──────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    """Outcome of a single reconcile pass.
+
+    On success: ``actions_applied`` describes what was written, ``observed_after``
+    is the fresh ``OntObservedState`` the caller persists, ``sync_status`` is
+    ``synced``, ``failure`` is None.
+
+    On failure: ``actions_applied`` may be non-empty (partial — the reconciler
+    completed some writes before the failing one). ``observed_after`` may be
+    ``None`` if the post-apply re-read failed. ``sync_status`` is
+    ``out_of_sync``. ``failure`` describes what went wrong and is surfaced to
+    the operator.
+
+    ``drift_before`` is computed from observed vs desired at the start; useful
+    for the per-ONT reconcile history. ``drift_after`` is empty on success;
+    on ``VERIFICATION_MISMATCH`` it lists the fields that still diverged after
+    apply.
+    """
+
+    success: bool
+    sync_status: SyncStatus
+    actions_applied: tuple[AppliedAction, ...]
+    drift_before: tuple[Drift, ...]
+    drift_after: tuple[Drift, ...]
+    observed_after: OntObservedState | None
+    failure: ReconcileFailure | None
+    duration_ms: int
+    reconciled_at: datetime
