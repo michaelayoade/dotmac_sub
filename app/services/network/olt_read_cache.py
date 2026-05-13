@@ -109,7 +109,9 @@ class OltReadCache:
         if params:
             # Hash long params to keep keys short
             if len(params) > 50:
-                params = hashlib.md5(params.encode(), usedforsecurity=False).hexdigest()[:12]
+                params = hashlib.md5(
+                    params.encode(), usedforsecurity=False
+                ).hexdigest()[:12]
             return f"olt:{olt_id}:{operation}:{params}"
         return f"olt:{olt_id}:{operation}"
 

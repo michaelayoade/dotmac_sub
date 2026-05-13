@@ -10,8 +10,24 @@ from starlette.requests import Request
 
 from app.services import network as network_service
 from app.services.network.ont_actions import ActionResult
+
+# Re-exports for backward compatibility with callers that still import
+# these names through ``app.services.web_network_ont_actions.inventory``.
+from app.services.network.ont_inventory import (
+    cleanup_olt_state_for_return as _cleanup_olt_state_for_return,
+)
+from app.services.network.ont_inventory import (
+    return_ont_to_inventory as return_to_inventory,
+)
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
+)
+
+__all__ = (
+    "_cleanup_olt_state_for_return",
+    "firmware_upgrade",
+    "return_to_inventory",
+    "return_to_inventory_for_web",
 )
 
 logger = logging.getLogger(__name__)

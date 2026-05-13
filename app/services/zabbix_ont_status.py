@@ -328,8 +328,8 @@ def get_olt_ont_summary_from_zabbix(
     try:
         client = ZabbixClient.from_env()
         items = client.get_items(
-            host_ids=[olt.zabbix_host_id], metric="ont.count", limit=10
-        )  # type: ignore[list-item]
+            host_ids=[olt.zabbix_host_id], metric="ont.count", limit=10  # type: ignore[list-item]
+        )
     except ZabbixClientError as exc:
         if onts is not None:
             snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
