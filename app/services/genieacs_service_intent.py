@@ -141,12 +141,8 @@ class GenieAcsServiceIntent:
         wan = self._map_wan(wan_group)
         lan = self._map_lan(lan_group)
         wifi = self._map_wifi(wireless_group)
-        ethernet_ports = self._map_ethernet_ports(
-            raw_ethernet_ports
-        )
-        lan_hosts = self._map_lan_hosts(
-            raw_lan_hosts
-        )
+        ethernet_ports = self._map_ethernet_ports(raw_ethernet_ports)
+        lan_hosts = self._map_lan_hosts(raw_lan_hosts)
         sections = self._tracked_sections(
             system=system,
             wan=wan,
@@ -186,7 +182,9 @@ class GenieAcsServiceIntent:
             or fetched_at
         )
         sections_payload = sections if (available or has_observed_data) else []
-        tracked_points_payload = tracked_points if (available or has_observed_data) else []
+        tracked_points_payload = (
+            tracked_points if (available or has_observed_data) else []
+        )
         tracked_point_index_payload = (
             tracked_point_index if (available or has_observed_data) else {}
         )
@@ -255,34 +253,86 @@ class GenieAcsServiceIntent:
                 "key": "system",
                 "title": "ACS System",
                 "rows": [
-                    tracked_row("system", "system.manufacturer", "Manufacturer", system["manufacturer"]),
+                    tracked_row(
+                        "system",
+                        "system.manufacturer",
+                        "Manufacturer",
+                        system["manufacturer"],
+                    ),
                     tracked_row("system", "system.model", "Model", system["model"]),
-                    tracked_row("system", "system.firmware", "Firmware", system["firmware"]),
-                    tracked_row("system", "system.hardware", "Hardware", system["hardware"]),
+                    tracked_row(
+                        "system", "system.firmware", "Firmware", system["firmware"]
+                    ),
+                    tracked_row(
+                        "system", "system.hardware", "Hardware", system["hardware"]
+                    ),
                     tracked_row("system", "system.serial", "Serial", system["serial"]),
                     tracked_row("system", "system.uptime", "Uptime", system["uptime"]),
-                    tracked_row("system", "system.cpu_usage", "CPU Usage", system["cpu_usage"]),
-                    tracked_row("system", "system.memory_total", "Memory Total", system["memory_total"]),
-                    tracked_row("system", "system.memory_free", "Memory Free", system["memory_free"]),
-                    tracked_row("system", "system.memory_usage", "Memory Usage", system["memory_usage"]),
-                    tracked_row("system", "system.mac_address", "MAC Address", system["mac_address"]),
+                    tracked_row(
+                        "system", "system.cpu_usage", "CPU Usage", system["cpu_usage"]
+                    ),
+                    tracked_row(
+                        "system",
+                        "system.memory_total",
+                        "Memory Total",
+                        system["memory_total"],
+                    ),
+                    tracked_row(
+                        "system",
+                        "system.memory_free",
+                        "Memory Free",
+                        system["memory_free"],
+                    ),
+                    tracked_row(
+                        "system",
+                        "system.memory_usage",
+                        "Memory Usage",
+                        system["memory_usage"],
+                    ),
+                    tracked_row(
+                        "system",
+                        "system.mac_address",
+                        "MAC Address",
+                        system["mac_address"],
+                    ),
                 ],
             },
             {
                 "key": "wan",
                 "title": "ACS WAN",
                 "rows": [
-                    tracked_row("wan", "wan.connection_type", "Connection", wan["connection_type"]),
+                    tracked_row(
+                        "wan",
+                        "wan.connection_type",
+                        "Connection",
+                        wan["connection_type"],
+                    ),
                     tracked_row("wan", "wan.status", "Status", wan["status"]),
                     tracked_row("wan", "wan.wan_ip", "WAN IP", wan["wan_ip"]),
-                    tracked_row("wan", "wan.pppoe_username", "PPPoE User", wan["pppoe_username"]),
+                    tracked_row(
+                        "wan", "wan.pppoe_username", "PPPoE User", wan["pppoe_username"]
+                    ),
                     tracked_row("wan", "wan.gateway", "Gateway", wan["gateway"]),
                     tracked_row("wan", "wan.dns_servers", "DNS", wan["dns_servers"]),
                     tracked_row("wan", "wan.uptime", "Uptime", wan["uptime"]),
-                    tracked_row("wan", "wan.wan_instance", "WAN Instance", wan["wan_instance"]),
-                    tracked_row("wan", "wan.wan_service", "WAN Service", wan["wan_service"]),
-                    tracked_row("wan", "wan.management_wan_ip", "Management WAN IP", wan["management_wan_ip"]),
-                    tracked_row("wan", "wan.management_wan_status", "Management WAN Status", wan["management_wan_status"]),
+                    tracked_row(
+                        "wan", "wan.wan_instance", "WAN Instance", wan["wan_instance"]
+                    ),
+                    tracked_row(
+                        "wan", "wan.wan_service", "WAN Service", wan["wan_service"]
+                    ),
+                    tracked_row(
+                        "wan",
+                        "wan.management_wan_ip",
+                        "Management WAN IP",
+                        wan["management_wan_ip"],
+                    ),
+                    tracked_row(
+                        "wan",
+                        "wan.management_wan_status",
+                        "Management WAN Status",
+                        wan["management_wan_status"],
+                    ),
                 ],
             },
             {
@@ -292,9 +342,13 @@ class GenieAcsServiceIntent:
                     tracked_row("lan", "lan.lan_ip", "LAN IP", lan["lan_ip"]),
                     tracked_row("lan", "lan.subnet_mask", "Subnet", lan["subnet_mask"]),
                     tracked_row("lan", "lan.dhcp_enabled", "DHCP", lan["dhcp_enabled"]),
-                    tracked_row("lan", "lan.dhcp_start", "DHCP Start", lan["dhcp_start"]),
+                    tracked_row(
+                        "lan", "lan.dhcp_start", "DHCP Start", lan["dhcp_start"]
+                    ),
                     tracked_row("lan", "lan.dhcp_end", "DHCP End", lan["dhcp_end"]),
-                    tracked_row("lan", "lan.connected_hosts", "Hosts", lan["connected_hosts"]),
+                    tracked_row(
+                        "lan", "lan.connected_hosts", "Hosts", lan["connected_hosts"]
+                    ),
                 ],
             },
             {
@@ -305,19 +359,51 @@ class GenieAcsServiceIntent:
                     tracked_row("wifi", "wifi.ssid", "SSID", wifi["ssid"]),
                     tracked_row("wifi", "wifi.channel", "Channel", wifi["channel"]),
                     tracked_row("wifi", "wifi.standard", "Standard", wifi["standard"]),
-                    tracked_row("wifi", "wifi.security_mode", "Security", wifi["security_mode"]),
-                    tracked_row("wifi", "wifi.connected_clients", "Clients", wifi["connected_clients"]),
-                    tracked_row("wifi", "wifi.password_present", "Password", "Set" if wifi["password_present"] else None),
+                    tracked_row(
+                        "wifi", "wifi.security_mode", "Security", wifi["security_mode"]
+                    ),
+                    tracked_row(
+                        "wifi",
+                        "wifi.connected_clients",
+                        "Clients",
+                        wifi["connected_clients"],
+                    ),
+                    tracked_row(
+                        "wifi",
+                        "wifi.password_present",
+                        "Password",
+                        "Set" if wifi["password_present"] else None,
+                    ),
                 ],
             },
             {
                 "key": "clients",
                 "title": "ACS Clients",
                 "rows": [
-                    tracked_row("clients", "clients.ethernet_ports_total", "Ethernet Ports", len(ethernet_ports)),
-                    tracked_row("clients", "clients.ethernet_ports_active", "Active Ethernet Ports", _count_link_up_ports(ethernet_ports)),
-                    tracked_row("clients", "clients.lan_hosts_total", "LAN Hosts", len(lan_hosts)),
-                    tracked_row("clients", "clients.lan_hosts_active", "Active LAN Hosts", _count_active(lan_hosts)),
+                    tracked_row(
+                        "clients",
+                        "clients.ethernet_ports_total",
+                        "Ethernet Ports",
+                        len(ethernet_ports),
+                    ),
+                    tracked_row(
+                        "clients",
+                        "clients.ethernet_ports_active",
+                        "Active Ethernet Ports",
+                        _count_link_up_ports(ethernet_ports),
+                    ),
+                    tracked_row(
+                        "clients",
+                        "clients.lan_hosts_total",
+                        "LAN Hosts",
+                        len(lan_hosts),
+                    ),
+                    tracked_row(
+                        "clients",
+                        "clients.lan_hosts_active",
+                        "Active LAN Hosts",
+                        _count_active(lan_hosts),
+                    ),
                 ],
             },
         ]
@@ -439,7 +525,7 @@ class GenieAcsServiceIntent:
 
     def refresh_observed_summary_for_ont(
         self, db: Session, *, ont_id: str
-    ) -> "TR069Summary":
+    ) -> TR069Summary:
         """Refresh/persist ACS observed runtime through the adapter boundary."""
         from app.services.genieacs_service import genieacs_service
 

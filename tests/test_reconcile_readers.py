@@ -43,6 +43,7 @@ def _stub_service_ports(monkeypatch):
         lambda *_a, **_k: (False, "not stubbed", []),
     )
 
+
 # ── Shared in-memory OntDesiredState ────────────────────────────────────────
 
 
@@ -221,10 +222,16 @@ def test_olt_reader_filters_dash_placeholders_from_detail(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
-        lambda *a, **k: (True, "ok", SimpleNamespace(
-            serial_number="x", run_state="online", match_state="match",
-            config_state="normal",
-        )),
+        lambda *a, **k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
@@ -244,10 +251,16 @@ def test_olt_reader_detail_unreachable_propagates_as_unreachable(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_status",
-        lambda *a, **k: (True, "ok", SimpleNamespace(
-            serial_number="x", run_state="online", match_state="match",
-            config_state="normal",
-        )),
+        lambda *a, **k: (
+            True,
+            "ok",
+            SimpleNamespace(
+                serial_number="x",
+                run_state="online",
+                match_state="match",
+                config_state="normal",
+            ),
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.readers.olt_reader.get_ont_info_detail",
@@ -741,12 +754,8 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
             },
             "LANDevice": {
                 "1": {
-                    "LANHostConfigManagement": {
-                        "DHCPServerEnable": _leaf("true")
-                    },
-                    "WLANConfiguration": {
-                        "1": {"SSID": _leaf("KURSI")}
-                    },
+                    "LANHostConfigManagement": {"DHCPServerEnable": _leaf("true")},
+                    "WLANConfiguration": {"1": {"SSID": _leaf("KURSI")}},
                 }
             },
         },
@@ -852,9 +861,9 @@ def test_acs_reader_handles_empty_cr_credentials_as_set_false():
     for the precondition layer's purposes. acs_observed_cr_username_set is
     False, not None."""
     doc = _device_doc()
-    doc["InternetGatewayDevice"]["ManagementServer"][
-        "ConnectionRequestUsername"
-    ] = _leaf("")
+    doc["InternetGatewayDevice"]["ManagementServer"]["ConnectionRequestUsername"] = (
+        _leaf("")
+    )
     client = _StubGenieAcsClient(devices=[doc])
     result = read_acs_state(client, _desired())
     # Empty value → present check returns False

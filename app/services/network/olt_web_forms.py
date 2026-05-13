@@ -171,17 +171,13 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         "status": form.get("status", "").strip() or "active",
         "notes": form.get("notes", "").strip() or None,
         "is_active": form.get("is_active") == "true",
-        "manual_capability_override": form.get("manual_capability_override")
-        == "true",
+        "manual_capability_override": form.get("manual_capability_override") == "true",
         "supports_ont_internet_config": form.get("supports_ont_internet_config")
         == "true",
         "supports_ont_wan_config": form.get("supports_ont_wan_config") == "true",
-        "supports_ont_home_gateway_config": form.get(
-            "supports_ont_home_gateway_config"
-        )
+        "supports_ont_home_gateway_config": form.get("supports_ont_home_gateway_config")
         == "true",
-        "wan_provisioning_mode": form.get("wan_provisioning_mode")
-        or "omci_wan_config",
+        "wan_provisioning_mode": form.get("wan_provisioning_mode") or "omci_wan_config",
         # -------------------------------------------------------------------------
         # Config Pack fields (ONT Provisioning Defaults)
         # -------------------------------------------------------------------------

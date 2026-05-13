@@ -140,7 +140,9 @@ def _resolve_ont_scoped_vlan(
 
     vlan = db.get(Vlan, vlan_id)
     if vlan is None:
-        return None, ActionResult(success=False, message=f"{field_label} VLAN not found.")
+        return None, ActionResult(
+            success=False, message=f"{field_label} VLAN not found."
+        )
     if olt_id is None:
         return None, ActionResult(
             success=False,
@@ -236,10 +238,10 @@ class OntWriteService:
                 ont_id_on_olt=ctx.ont_id_on_olt,
                 mgmt_vlan_tag=vlan_int,
             )
-        if (
-            resolved_priority is None
-            and mgmt_ip_mode in {MgmtIpMode.static_ip.value, "static"}
-        ):
+        if resolved_priority is None and mgmt_ip_mode in {
+            MgmtIpMode.static_ip.value,
+            "static",
+        }:
             return ActionResult(
                 success=False,
                 message=(
@@ -401,8 +403,7 @@ class OntWriteService:
                             and port.gem_index == gem_index
                             and (
                                 not getattr(port, "tag_transform", None)
-                                or getattr(port, "tag_transform", None)
-                                == tag_transform
+                                or getattr(port, "tag_transform", None) == tag_transform
                             )
                         ),
                         None,
@@ -619,10 +620,12 @@ class OntWriteService:
                 equipment_id = normalize_ont_equipment_id(
                     getattr(onu_type, "name", None)
                 )
-            profiles_ok, profiles_msg, resolved = resolve_authorization_profiles_from_import(
-                db,
-                ctx.olt,
-                equipment_id=equipment_id,
+            profiles_ok, profiles_msg, resolved = (
+                resolve_authorization_profiles_from_import(
+                    db,
+                    ctx.olt,
+                    equipment_id=equipment_id,
+                )
             )
             if not profiles_ok or resolved is None:
                 return ActionResult(success=False, message=profiles_msg)

@@ -618,6 +618,7 @@ class OntUnitUpdate(BaseModel):
     mgmt_ip_address: str | None = Field(default=None, max_length=64)
     voip_enabled: bool | None = None
 
+
 class OntUnitRead(OntUnitBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -661,8 +662,12 @@ class OntAssignmentBase(BaseModel):
     notes: str | None = None
 
     # Service configuration (subscriber settings for this ONT)
-    wan_mode: str | None = Field(default="routing", description="WAN mode: routing or bridging")
-    ip_mode: str | None = Field(default="dhcp", description="IP mode: dhcp or static_ip")
+    wan_mode: str | None = Field(
+        default="routing", description="WAN mode: routing or bridging"
+    )
+    ip_mode: str | None = Field(
+        default="dhcp", description="IP mode: dhcp or static_ip"
+    )
     static_ip: str | None = Field(default=None, max_length=64)
     static_gateway: str | None = Field(default=None, max_length=64)
     static_subnet: str | None = Field(default=None, max_length=64)
@@ -677,7 +682,8 @@ class OntAssignmentBase(BaseModel):
 
     # Management IP configuration (ONT-side management IP)
     mgmt_ip_mode: str | None = Field(
-        default="inactive", description="Management IP mode: inactive, dhcp, or static_ip"
+        default="inactive",
+        description="Management IP mode: inactive, dhcp, or static_ip",
     )
     mgmt_ip_address: str | None = Field(default=None, max_length=64)
     mgmt_subnet: str | None = Field(default=None, max_length=64)

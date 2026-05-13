@@ -303,7 +303,9 @@ def test_verified_write_retries_connection_request_and_keeps_spv_on_success(
         def delete_task(self, task_id):
             calls["deleted"].append(task_id)
 
-    monkeypatch.setattr("app.services.network.ont_action_common.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "app.services.network.ont_action_common.time.sleep", lambda _: None
+    )
 
     result = set_and_verify(
         FakeClient(),
@@ -340,9 +342,13 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
         def delete_task(self, task_id):
             deleted.append(task_id)
 
-    monkeypatch.setattr("app.services.network.ont_action_common.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "app.services.network.ont_action_common.time.sleep", lambda _: None
+    )
 
-    with pytest.raises(GenieACSError, match="Connection request failed after 2 attempts"):
+    with pytest.raises(
+        GenieACSError, match="Connection request failed after 2 attempts"
+    ):
         set_and_verify(
             FakeClient(),
             "device-1",
@@ -489,6 +495,7 @@ def test_genieacs_service_firmware_upgrade_uses_firmware_image(
     assert result.data["firmware_image_id"] == str(firmware.id)
     assert result.data["firmware_version"] == "V1R2"
     assert result.data["task"] == {"_id": "firmware-task"}
+
 
 def test_genieacs_service_queues_wifi_config(monkeypatch) -> None:
     from app.services.genieacs_service import genieacs_service

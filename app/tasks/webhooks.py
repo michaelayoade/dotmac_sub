@@ -81,7 +81,9 @@ def deliver_webhook(self, delivery_id: str):
             }
 
             if endpoint.secret:
-                plaintext_secret = decrypt_credential(endpoint.secret) or endpoint.secret
+                plaintext_secret = (
+                    decrypt_credential(endpoint.secret) or endpoint.secret
+                )
                 signature = _compute_signature(payload_json, plaintext_secret)
                 headers["X-Webhook-Signature-256"] = f"sha256={signature}"
 
@@ -118,7 +120,9 @@ def deliver_webhook(self, delivery_id: str):
                 delivery.attempt_count += 1
                 error_msg = f"HTTP {response.status_code}: {response.text[:500]}"
                 delivery.error = error_msg
-                logger.warning("Webhook delivery failed to %s: %s", endpoint_url, error_msg)
+                logger.warning(
+                    "Webhook delivery failed to %s: %s", endpoint_url, error_msg
+                )
 
                 if delivery.attempt_count < MAX_RETRIES:
                     retry_delay = RETRY_DELAYS[
@@ -163,7 +167,6 @@ def deliver_webhook(self, delivery_id: str):
         except Exception:
             logger.exception("Failed to update unexpected webhook failure state")
         raise
-
 
 
 @celery_app.task(name="app.tasks.webhooks.retry_failed_deliveries")

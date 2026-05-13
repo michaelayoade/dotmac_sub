@@ -11,6 +11,7 @@ Adds:
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "add_onu_type_tr069_paths"

@@ -138,7 +138,7 @@ def test_dotmac_profile_apply_plan_rejects_destructive_command() -> None:
         [
             ProfileCommandGroup(
                 step="Create DBA profile",
-                commands=('undo dba-profile profile-id 100',),
+                commands=("undo dba-profile profile-id 100",),
             ),
         ],
     )

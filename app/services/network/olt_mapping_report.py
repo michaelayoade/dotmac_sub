@@ -100,7 +100,9 @@ def build_olt_mapping_coverage_report(
         ):
             equipment_id = _equipment_id_from_ont(ont)
             if equipment_id:
-                inventory_counts[equipment_id] = inventory_counts.get(equipment_id, 0) + 1
+                inventory_counts[equipment_id] = (
+                    inventory_counts.get(equipment_id, 0) + 1
+                )
 
         registration_counts: dict[str, int] = {}
         for registration in db.scalars(

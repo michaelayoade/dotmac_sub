@@ -18,11 +18,16 @@ from collections.abc import Sequence
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session, aliased
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import Select
 
-from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus, UserType
+from app.models.subscriber import (
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)

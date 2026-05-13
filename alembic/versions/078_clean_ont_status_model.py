@@ -8,6 +8,7 @@ Create Date: 2026-04-29
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "078_clean_ont_status_model"

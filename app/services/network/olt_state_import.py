@@ -422,7 +422,9 @@ def _import_named_service_profile_mappings(
             continue
         equipment_id = str(service_profile.name or "").strip()
         service_ids[equipment_id] = int(service_profile.profile_id)
-        counts.setdefault(equipment_id, Counter())[int(registration.line_profile_id)] += 1  # type: ignore[arg-type]
+        counts.setdefault(equipment_id, Counter())[
+            int(registration.line_profile_id)
+        ] += 1  # type: ignore[arg-type]
 
     imported = 0
     for equipment_id, line_counts in counts.items():
@@ -577,9 +579,9 @@ def _parse_tr069_bindings(config_text: str) -> dict[tuple[str, int, int], int]:
     bindings: dict[tuple[str, int, int], int] = {}
     for board, body in _iter_gpon_config_blocks(config_text):
         for match in _TR069_BIND_RE.finditer(body):
-            bindings[
-                (board, int(match.group("port")), int(match.group("ont_id")))
-            ] = int(match.group("profile_id"))
+            bindings[(board, int(match.group("port")), int(match.group("ont_id")))] = (
+                int(match.group("profile_id"))
+            )
     return bindings
 
 
@@ -786,8 +788,7 @@ def import_olt_state_from_dump(
         return OltStateImportResult(
             success=True,
             message=(
-                "OLT state imported from dump "
-                f"({gem_mapping_count} GEM mapping rows)."
+                f"OLT state imported from dump ({gem_mapping_count} GEM mapping rows)."
             ),
             olt_id=str(olt.id),
             line_profiles=len(line_profiles),
@@ -864,7 +865,9 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                 {
                     "name": profile.name,
                     "binding_count": profile.binding_count,
-                    "tr069_management_enabled": parse_line_profile_tr069_enabled(detail),
+                    "tr069_management_enabled": parse_line_profile_tr069_enabled(
+                        detail
+                    ),
                     "raw_config": detail,
                     "last_imported_at": imported_at,
                 },
@@ -922,7 +925,9 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
             .order_by(PonPort.name)
         ).all()
         if not pon_ports:
-            warnings.append("No active PON ports in DB; ONT registrations not imported.")
+            warnings.append(
+                "No active PON ports in DB; ONT registrations not imported."
+            )
 
         seen_registration_keys: set[tuple[str, int]] = set()
         for pon_port in pon_ports:
@@ -947,7 +952,9 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                     )
                     detail_output = core._run_huawei_cmd(channel, detail_cmd)
                 except ValueError as exc:
-                    warnings.append(f"Skipped ONT detail {detail_fsp} {entry.ont_id}: {exc}")
+                    warnings.append(
+                        f"Skipped ONT detail {detail_fsp} {entry.ont_id}: {exc}"
+                    )
                     continue
                 # Renamed to keep ``detail`` (the raw command output, ``str``)
                 # distinct from the parsed dataclass — earlier loops in this
@@ -985,7 +992,8 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                     },
                     {
                         "serial_number": serial_number,
-                        "equipment_id": parsed_detail.equipment_id or parsed_detail.model,
+                        "equipment_id": parsed_detail.equipment_id
+                        or parsed_detail.model,
                         "line_profile_id": parsed_detail.line_profile_id,
                         "service_profile_id": parsed_detail.service_profile_id,
                         "tr069_profile_id": parsed_detail.tr069_profile_id,

@@ -58,7 +58,9 @@ def test_query_ont_autofind_session_raises_on_olt_error() -> None:
 
     class FakeSession:
         def run_command(self, *_args, **_kwargs):
-            return CommandResult(success=False, output="% Parameter error", message="bad")
+            return CommandResult(
+                success=False, output="% Parameter error", message="bad"
+            )
 
     with pytest.raises(RuntimeError, match="bad"):
         query_ont_autofind_session(FakeSession())

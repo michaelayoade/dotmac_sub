@@ -77,7 +77,9 @@ import app.tasks.nin_tasks  # noqa: E402, F401
 
 def _release_metadata() -> dict[str, str | None]:
     return {
-        "release": os.getenv("APP_RELEASE") or os.getenv("IMAGE_TAG") or os.getenv("GIT_SHA"),
+        "release": os.getenv("APP_RELEASE")
+        or os.getenv("IMAGE_TAG")
+        or os.getenv("GIT_SHA"),
         "git_sha": os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA"),
         "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "unknown",
     }

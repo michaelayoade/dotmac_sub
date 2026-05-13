@@ -17,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
@@ -182,7 +181,6 @@ def step_2_create_task(db, *, dry_run: bool = False) -> bool:
         return True
 
     # Create the task
-    from app.services import web_network_olt_profiles as profile_service
 
     # First, we need to create a profile bundle for this OLT+offer
     # The bundle defines what profiles should exist
@@ -216,7 +214,9 @@ def step_2_create_task(db, *, dry_run: bool = False) -> bool:
     logger.info(f"Scheduled for: {scheduled_for.isoformat()}")
     logger.info("\nNext steps:")
     logger.info("  1. Watch celery-beat logs: docker logs -f dotmac_sub_celery_beat")
-    logger.info("  2. Watch tr069 worker: docker logs -f dotmac_sub_celery_worker_tr069")
+    logger.info(
+        "  2. Watch tr069 worker: docker logs -f dotmac_sub_celery_worker_tr069"
+    )
     logger.info("  3. Check audit events: --step verify-audit")
     logger.info("  4. Or view in UI: /admin/network/profile-sync-tasks")
 
@@ -318,15 +318,15 @@ def show_status(db) -> None:
     # OLTs
     olt_count = db.scalar(select(func.count(OLTDevice.id)))
     olt_ssh_count = db.scalar(
-        select(func.count(OLTDevice.id))
-        .where(OLTDevice.ssh_username.isnot(None))
+        select(func.count(OLTDevice.id)).where(OLTDevice.ssh_username.isnot(None))
     )
     logger.info(f"\nOLTs: {olt_count} total, {olt_ssh_count} with SSH")
 
     # Bundles
     bundle_count = db.scalar(
-        select(func.count(OltProfileBundle.id))
-        .where(OltProfileBundle.is_active.is_(True))
+        select(func.count(OltProfileBundle.id)).where(
+            OltProfileBundle.is_active.is_(True)
+        )
     )
     logger.info(f"Active Profile Bundles: {bundle_count}")
 

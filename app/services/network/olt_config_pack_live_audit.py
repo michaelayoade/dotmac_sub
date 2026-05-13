@@ -135,7 +135,11 @@ def parse_tr069_profile_detail(
 ) -> LiveTr069ProfileDetail:
     """Parse Huawei TR-069 server profile detail enough to confirm existence."""
     lowered = output.lower()
-    if "does not exist" in lowered or "failure" in lowered or "unknown command" in lowered:
+    if (
+        "does not exist" in lowered
+        or "failure" in lowered
+        or "unknown command" in lowered
+    ):
         return LiveTr069ProfileDetail(profile_id=profile_id, exists=False)
 
     values = _parse_tr069_profile_detail(output)
@@ -216,7 +220,9 @@ def _collect_imported_profile_dependencies(
         select(OltServiceProfile).where(OltServiceProfile.olt_id == olt_id)
     ).all()
     mappings = db.scalars(
-        select(OltOnuTypeProfileMapping).where(OltOnuTypeProfileMapping.olt_id == olt_id)
+        select(OltOnuTypeProfileMapping).where(
+            OltOnuTypeProfileMapping.olt_id == olt_id
+        )
     ).all()
 
     line_profile_ids = {profile.profile_id for profile in line_profiles}
@@ -333,7 +339,11 @@ def audit_olt_config_pack_live(db: Session, olt_id: str) -> OltConfigPackLiveAud
     tr069_profile_ids = {profile.profile_id for profile in tr069_profiles}
     required_tr069_id = int(pack.tr069_olt_profile_id)  # type: ignore[arg-type]
     tr069_detail = next(
-        (profile for profile in tr069_profiles if profile.profile_id == required_tr069_id),
+        (
+            profile
+            for profile in tr069_profiles
+            if profile.profile_id == required_tr069_id
+        ),
         None,
     )
     audit.observed.update(

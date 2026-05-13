@@ -316,7 +316,9 @@ class ProvisioningEnforcement:
                     enabled=True if wifi_enabled is None else bool(wifi_enabled),
                     ssid=str(wifi_ssid),
                     password=password,
-                    channel=int(wifi_channel) if wifi_channel not in (None, "") else None,  # type: ignore[call-overload]
+                    channel=int(wifi_channel)
+                    if wifi_channel not in (None, "")
+                    else None,  # type: ignore[call-overload]
                     security_mode=(
                         str(wifi_security_mode)
                         if wifi_security_mode not in (None, "")

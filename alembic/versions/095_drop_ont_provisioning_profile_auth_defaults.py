@@ -8,6 +8,7 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "095_drop_ont_provisioning_profile_auth_defaults"
@@ -35,7 +36,9 @@ def downgrade() -> None:
             "ont_provisioning_profiles",
             sa.Column("authorization_line_profile_id", sa.Integer(), nullable=True),
         )
-    if not _column_exists("ont_provisioning_profiles", "authorization_service_profile_id"):
+    if not _column_exists(
+        "ont_provisioning_profiles", "authorization_service_profile_id"
+    ):
         op.add_column(
             "ont_provisioning_profiles",
             sa.Column("authorization_service_profile_id", sa.Integer(), nullable=True),

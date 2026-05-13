@@ -20,14 +20,16 @@ logger = logging.getLogger(__name__)
 
 # TR-069 CWMP Download File Types (per TR-069 Amendment 6)
 # Format: "N Description" where N is the numeric code
-CWMP_FILE_TYPES = frozenset({
-    "1 Firmware Upgrade Image",
-    "2 Web Content",
-    "3 Vendor Configuration File",
-    "4 Tone File",
-    "5 Ringer File",
-    "6 Stored Firmware Image",
-})
+CWMP_FILE_TYPES = frozenset(
+    {
+        "1 Firmware Upgrade Image",
+        "2 Web Content",
+        "3 Vendor Configuration File",
+        "4 Tone File",
+        "5 Ringer File",
+        "6 Stored Firmware Image",
+    }
+)
 
 # Aliases for convenience - maps common names to official file types
 CWMP_FILE_TYPE_ALIASES: dict[str, str] = {
@@ -393,7 +395,11 @@ class GenieACSClient:
         max_pending_tasks: int | None,
         allow_when_pending: bool,
     ) -> None | dict[str, Any]:
-        if enforce_safety and self._is_broad_refresh_task(task) and not allow_broad_refresh:
+        if (
+            enforce_safety
+            and self._is_broad_refresh_task(task)
+            and not allow_broad_refresh
+        ):
             raise GenieACSTaskRejectedError(
                 "Broad root refreshObject tasks are blocked because they can slow or "
                 "fail the next inform. Refresh a targeted object instead."
@@ -522,9 +528,7 @@ class GenieACSClient:
             response = self._request(
                 "POST",
                 f"/devices/{encoded_id}/tasks",
-                params={
-                    "connection_request": str(connection_request).lower()
-                }
+                params={"connection_request": str(connection_request).lower()}
                 if connection_request is not None
                 else None,
                 json_data=task,
@@ -622,7 +626,9 @@ class GenieACSClient:
         task_name = str(task.get("name") or "task")
         immediate_error = self._task_error_message(task_result)
         if immediate_error:
-            raise GenieACSError(f"{task_name} connection request failed: {immediate_error}")
+            raise GenieACSError(
+                f"{task_name} connection request failed: {immediate_error}"
+            )
 
         task_id = str(task_result.get("_id") or "").strip()
         if not task_id:

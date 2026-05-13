@@ -85,9 +85,7 @@ def acquire_reconcile_lock(
     """
     coerced_id = _coerce_uuid(ont_unit_id)
     stmt = (
-        select(OntUnit)
-        .where(OntUnit.id == coerced_id)
-        .with_for_update(nowait=nowait)
+        select(OntUnit).where(OntUnit.id == coerced_id).with_for_update(nowait=nowait)
     )
 
     try:

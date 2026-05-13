@@ -150,8 +150,7 @@ def _build_ont_operations_runbook(
         or _intent_step_present(ont_plan, "configure_management_ip")
     )
     has_wan_intent = bool(
-        effective_values.get("wan_vlan")
-        or effective_values.get("wan_mode")
+        effective_values.get("wan_vlan") or effective_values.get("wan_mode")
     )
     raw_wan_mode = effective_values.get("wan_mode") or ""
     wan_mode = str(raw_wan_mode).strip().lower()
@@ -159,9 +158,7 @@ def _build_ont_operations_runbook(
         wan_mode = "static"
     elif wan_mode == "setup_via_onu":
         wan_mode = "bridge"
-    has_pppoe_credentials_intent = bool(
-        effective_values.get("pppoe_username")
-    )
+    has_pppoe_credentials_intent = bool(effective_values.get("pppoe_username"))
     has_static_addressing_intent = bool(
         effective_values.get("wan_ip")
         and effective_values.get("gateway")
@@ -464,9 +461,7 @@ def operational_health_context(
         wan_mode = "static"
     elif wan_mode == "setup_via_onu":
         wan_mode = "bridge"
-    has_pppoe_credentials_intent = bool(
-        effective_values.get("pppoe_username")
-    )
+    has_pppoe_credentials_intent = bool(effective_values.get("pppoe_username"))
     has_static_addressing_intent = bool(
         effective_values.get("wan_ip")
         and effective_values.get("gateway")
@@ -661,7 +656,10 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
             ]
             status_lines.append(f"Monitoring Status: {adapter_status.status.value}")
             status_lines.append(f"Status Source: {adapter_status.status_source.value}")
-            if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
+            if (
+                adapter_status.optical_metrics
+                and adapter_status.optical_metrics.has_signal_data
+            ):
                 metrics = adapter_status.optical_metrics
                 if metrics.olt_rx_dbm is not None:
                     status_lines.append(f"OLT RX Power: {metrics.olt_rx_dbm} dBm")
@@ -762,23 +760,30 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
 
     # Add SSH-based GPON layer details if available
     if ssh_ok and ssh_status:
-        entry.update({
-            "run_state": ssh_status.run_state,
-            "config_state": ssh_status.config_state,
-            "match_state": ssh_status.match_state,
-            "serial_number": ssh_status.serial_number,
-        })
+        entry.update(
+            {
+                "run_state": ssh_status.run_state,
+                "config_state": ssh_status.config_state,
+                "match_state": ssh_status.match_state,
+                "serial_number": ssh_status.serial_number,
+            }
+        )
     else:
-        entry.update({
-            "run_state": "unknown",
-            "config_state": "unknown",
-            "match_state": "unknown",
-            "serial_number": getattr(ont, "serial_number", None),
-            "ssh_error": ssh_msg,
-        })
+        entry.update(
+            {
+                "run_state": "unknown",
+                "config_state": "unknown",
+                "match_state": "unknown",
+                "serial_number": getattr(ont, "serial_number", None),
+                "ssh_error": ssh_msg,
+            }
+        )
 
     # Add optical metrics from adapter
-    if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
+    if (
+        adapter_status.optical_metrics
+        and adapter_status.optical_metrics.has_signal_data
+    ):
         metrics = adapter_status.optical_metrics
         entry["onu_rx_signal_dbm"] = metrics.onu_rx_dbm
         entry["olt_rx_signal_dbm"] = metrics.olt_rx_dbm

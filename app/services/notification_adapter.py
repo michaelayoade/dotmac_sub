@@ -152,7 +152,9 @@ class NotificationResult:
             "status": self.status.value,
             "notification_id": self.notification_id,
             "external_id": self.external_id,
-            "delivered_at": self.delivered_at.isoformat() if self.delivered_at else None,
+            "delivered_at": self.delivered_at.isoformat()
+            if self.delivered_at
+            else None,
             "error": self.error,
         }
 
@@ -195,14 +197,11 @@ class ChannelProvider(Protocol):
     """Protocol for channel-specific delivery."""
 
     @property
-    def channel(self) -> NotificationChannel:
-        ...
+    def channel(self) -> NotificationChannel: ...
 
-    def send(self, request: NotificationRequest) -> NotificationResult:
-        ...
+    def send(self, request: NotificationRequest) -> NotificationResult: ...
 
-    def is_available(self) -> bool:
-        ...
+    def is_available(self) -> bool: ...
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +219,10 @@ class EmailProvider:
     def is_available(self) -> bool:
         from app.config import settings
 
-        return bool(getattr(settings, "SMTP_HOST", None) or getattr(settings, "SENDGRID_API_KEY", None))
+        return bool(
+            getattr(settings, "SMTP_HOST", None)
+            or getattr(settings, "SENDGRID_API_KEY", None)
+        )
 
     def send(self, request: NotificationRequest) -> NotificationResult:
         try:
@@ -306,7 +308,9 @@ class SmsProvider:
             from app.services.sms import send_sms
 
             # Truncate message for SMS
-            message = request.message[:160] if len(request.message) > 160 else request.message
+            message = (
+                request.message[:160] if len(request.message) > 160 else request.message
+            )
 
             send_sms(
                 to_phone=request.recipient,
@@ -399,7 +403,9 @@ class WebhookProvider:
             )
 
         except httpx.HTTPStatusError as exc:
-            logger.error("Webhook failed to %s: HTTP %s", webhook_url, exc.response.status_code)
+            logger.error(
+                "Webhook failed to %s: HTTP %s", webhook_url, exc.response.status_code
+            )
             return NotificationResult(
                 success=False,
                 message=f"Webhook failed: HTTP {exc.response.status_code}",
@@ -533,7 +539,9 @@ class NotificationAdapter:
         for provider in providers:
             self._providers[provider.channel] = provider
 
-    def get_provider(self, channel: NotificationChannel | str) -> ChannelProvider | None:
+    def get_provider(
+        self, channel: NotificationChannel | str
+    ) -> ChannelProvider | None:
         """Get the provider for a channel."""
         if isinstance(channel, str):
             try:
@@ -669,7 +677,9 @@ class NotificationAdapter:
 
             # Resolve recipient for this channel
             if isinstance(recipient, dict):
-                ch_recipient = recipient.get(channel.value) or recipient.get("default", "")
+                ch_recipient = recipient.get(channel.value) or recipient.get(
+                    "default", ""
+                )
             else:
                 ch_recipient = recipient
 

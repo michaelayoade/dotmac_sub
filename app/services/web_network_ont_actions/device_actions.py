@@ -14,10 +14,10 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
-from app.services.genieacs_service import genieacs_service
-from app.services.genieacs_service_intent import genieacs_service_intent
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.genieacs_service import genieacs_service
+from app.services.genieacs_service_intent import genieacs_service_intent
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (

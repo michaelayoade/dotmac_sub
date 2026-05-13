@@ -20,7 +20,9 @@ class IpamAdapter:
         olt_id = getattr(olt, "id", None)
         olt_vlans = list(
             db.scalars(
-                select(Vlan).where(Vlan.olt_device_id == olt_id).order_by(Vlan.tag.asc())
+                select(Vlan)
+                .where(Vlan.olt_device_id == olt_id)
+                .order_by(Vlan.tag.asc())
             ).all()
         )
         olt_ip_pools = list(

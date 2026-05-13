@@ -315,7 +315,9 @@ def wait_tr069_bootstrap(
                 # Emit success via callback
                 if progress_callback:
                     try:
-                        progress_callback(attempt, max_attempts, "Device registered in ACS")
+                        progress_callback(
+                            attempt, max_attempts, "Device registered in ACS"
+                        )
                     except Exception:
                         pass
                 ms = int((time.monotonic() - t0) * 1000)
@@ -384,7 +386,9 @@ def _decrypt_optional_secret(value: object) -> str | None:
         return str(value)
 
 
-def _igd_wan_instance_for_vlan_from_snapshot(ont: OntUnit, wan_vlan: int | None) -> int | None:
+def _igd_wan_instance_for_vlan_from_snapshot(
+    ont: OntUnit, wan_vlan: int | None
+) -> int | None:
     capabilities = getattr(ont, "tr069_last_snapshot", None)
     if not isinstance(capabilities, dict):
         return None
@@ -473,7 +477,9 @@ def _provision_wan_service_instances(
 
     if effective_values is None:
         effective = resolve_effective_ont_config(db, ont)
-        effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+        effective_values = (
+            effective.get("values", {}) if isinstance(effective, dict) else {}
+        )
     wan_mode = str(effective_values.get("wan_mode") or "").strip().lower()
     wan_vlan = effective_values.get("wan_vlan")
     wan_vlan_int = int(wan_vlan) if wan_vlan not in (None, "") else None
@@ -525,9 +531,13 @@ def _provision_wan_service_instances(
     ):
         omci_vlan = effective_values.get("pppoe_omci_vlan") or wan_vlan_int
         pppoe_username = effective_values.get("pppoe_username")
-        pppoe_password = _decrypt_optional_secret(effective_values.get("pppoe_password"))
+        pppoe_password = _decrypt_optional_secret(
+            effective_values.get("pppoe_password")
+        )
         if not pppoe_username or not pppoe_password:
-            needs_input.append("PPPoE credentials are not configured in desired_config.")
+            needs_input.append(
+                "PPPoE credentials are not configured in desired_config."
+            )
             return steps, needs_input, hard_failures
         if omci_vlan is not None and get_olt_write_mode_enabled(db):
             ctx, err = resolve_olt_context(db, ont_id)
@@ -626,8 +636,14 @@ def _provision_wan_service_instances(
         )
 
     detected_index = instance_index
-    if wan_mode == "pppoe" and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice":
-        detected_index = _igd_wan_instance_for_vlan_from_snapshot(ont, wan_vlan_int) or instance_index
+    if (
+        wan_mode == "pppoe"
+        and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice"
+    ):
+        detected_index = (
+            _igd_wan_instance_for_vlan_from_snapshot(ont, wan_vlan_int)
+            or instance_index
+        )
         if detected_index is None:
             message = (
                 f"No safe WANConnectionDevice exists for PPPoE VLAN {wan_vlan_int}. "
@@ -646,9 +662,13 @@ def _provision_wan_service_instances(
 
     if wan_mode == "pppoe":
         pppoe_username = effective_values.get("pppoe_username")
-        pppoe_password = _decrypt_optional_secret(effective_values.get("pppoe_password"))
+        pppoe_password = _decrypt_optional_secret(
+            effective_values.get("pppoe_password")
+        )
         if not pppoe_username or not pppoe_password:
-            needs_input.append("PPPoE credentials are not configured in desired_config.")
+            needs_input.append(
+                "PPPoE credentials are not configured in desired_config."
+            )
             return steps, needs_input, hard_failures
         result = set_pppoe_credentials(
             db,
@@ -670,7 +690,9 @@ def _provision_wan_service_instances(
         subnet = effective_values.get("wan_static_subnet")
         gateway = effective_values.get("wan_static_gateway")
         if not (ip_address and subnet and gateway):
-            needs_input.append("Static WAN IP, subnet, and gateway are required in desired_config.")
+            needs_input.append(
+                "Static WAN IP, subnet, and gateway are required in desired_config."
+            )
             return steps, needs_input, hard_failures
         result = set_wan_static(
             db,
@@ -760,7 +782,9 @@ def apply_saved_service_config(
             ),
         )
     elif effective_values.get("tr069_acs_server_id"):
-        needs_input.append("Connection request credentials are incomplete in desired_config/OLT defaults.")
+        needs_input.append(
+            "Connection request credentials are incomplete in desired_config/OLT defaults."
+        )
 
     if effective_values.get("wan_mode"):
         probe_result = probe_wan_capabilities(db, ont_id)
@@ -1183,7 +1207,9 @@ def _ensure_static_management_ip_from_profile(
     if mode_value != "static_ip":
         return True, "Management IP mode is not static."
     effective = resolve_effective_ont_config(db, ont)
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
     # Source of truth is the effective config (OntAssignment + OltConfigPack)
     effective_mgmt_ip = effective_values.get("mgmt_ip_address")
     if effective_mgmt_ip:
@@ -1218,8 +1244,7 @@ def _ensure_authorization_management_ip(
         return True, "No management VLAN configured.", False
 
     if all(
-        values.get(key)
-        for key in ("mgmt_ip_address", "mgmt_subnet", "mgmt_gateway")
+        values.get(key) for key in ("mgmt_ip_address", "mgmt_subnet", "mgmt_gateway")
     ):
         return True, "Static management IP already assigned.", False
 
@@ -1381,9 +1406,7 @@ def apply_authorization_baseline(
                     "post_authorization_acs_link": link_result.data,
                 }
             else:
-                baseline_result.data = {
-                    "post_authorization_acs_link": link_result.data
-                }
+                baseline_result.data = {"post_authorization_acs_link": link_result.data}
         except Exception as exc:
             logger.warning(
                 "Post-authorization ACS reconciliation failed for ONT %s: %s",
@@ -1481,7 +1504,11 @@ def provision_with_reconciliation(
     wan_vlan = values.get("wan_vlan")
     raw_wan_gem = values.get("wan_gem_index")
     raw_wan_mode = str(values.get("wan_mode") or "").strip().lower()
-    wan_mode = "bridge" if raw_wan_mode in {"bridge", "bridged", "setup_via_onu"} else raw_wan_mode
+    wan_mode = (
+        "bridge"
+        if raw_wan_mode in {"bridge", "bridged", "setup_via_onu"}
+        else raw_wan_mode
+    )
     mgmt_vlan = values.get("mgmt_vlan")
     tr069_profile = values.get("tr069_olt_profile_id")
 
@@ -1507,7 +1534,9 @@ def provision_with_reconciliation(
                 "wan_vlan": wan_vlan,
                 "wan_gem_index": wan_gem,
                 "wan_mode": wan_mode,
-                "bridge_native_vlan": int(wan_vlan) if wan_vlan and wan_mode == "bridge" else None,
+                "bridge_native_vlan": int(wan_vlan)
+                if wan_vlan and wan_mode == "bridge"
+                else None,
                 "mgmt_vlan": mgmt_vlan,
                 "tr069_profile_id": tr069_profile,
                 "mgmt_ip_mode": values.get("mgmt_ip_mode"),
@@ -1519,7 +1548,9 @@ def provision_with_reconciliation(
         olt_id = getattr(ctx.olt, "id", None)
         if olt_id is None:
             ms = int((time.monotonic() - t0) * 1000)
-            return StepResult("provision", False, "OLT ID not available for dependency audit", ms)
+            return StepResult(
+                "provision", False, "OLT ID not available for dependency audit", ms
+            )
         dependency_failure = _validate_olt_profile_dependencies(
             db,
             olt_id=str(olt_id),
@@ -1595,7 +1626,9 @@ def provision_with_reconciliation(
         result = adapter.clear_iphost_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
         if result.success:
             stale_cleared.append(f"iphost:{ip_index}")
-        result = adapter.clear_internet_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
+        result = adapter.clear_internet_config(
+            ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+        )
         if result.success:
             stale_cleared.append(f"internet-config:{ip_index}")
         result = adapter.clear_wan_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
@@ -1641,9 +1674,7 @@ def provision_with_reconciliation(
             db.flush()
             _commit_without_expiring(db)
             effective = resolve_effective_ont_config(db, ctx.ont)
-            values = (
-                effective.get("values", {}) if isinstance(effective, dict) else {}
-            )
+            values = effective.get("values", {}) if isinstance(effective, dict) else {}
             config_pack = effective.get("config_pack")
             steps_completed.append("reserved_management_ip")
             logger.info(
@@ -1811,7 +1842,9 @@ def provision_with_reconciliation(
     return step_result
 
 
-def _send_failure_notification(ctx: OltContext, ont_id: str, result: StepResult) -> None:
+def _send_failure_notification(
+    ctx: OltContext, ont_id: str, result: StepResult
+) -> None:
     """Send failure notification to operators."""
     try:
         olt_name = getattr(ctx.olt, "name", None) or "OLT"
@@ -1860,11 +1893,19 @@ def preview_reconciliation(
     config_pack = effective.get("config_pack")
 
     if not config_pack:
-        return {"error": "OLT config pack not found", "has_changes": False, "is_valid": False}
+        return {
+            "error": "OLT config pack not found",
+            "has_changes": False,
+            "is_valid": False,
+        }
 
     wan_vlan = values.get("wan_vlan")
     raw_wan_mode = str(values.get("wan_mode") or "").strip().lower()
-    wan_mode = "bridge" if raw_wan_mode in {"bridge", "bridged", "setup_via_onu"} else raw_wan_mode
+    wan_mode = (
+        "bridge"
+        if raw_wan_mode in {"bridge", "bridged", "setup_via_onu"}
+        else raw_wan_mode
+    )
     mgmt_vlan = values.get("mgmt_vlan")
 
     # Build service port list
@@ -1877,11 +1918,13 @@ def preview_reconciliation(
                 "has_changes": False,
                 "is_valid": False,
             }
-        service_ports.append({
-            "purpose": "internet",
-            "vlan_id": int(wan_vlan),
-            "gem_index": int(wan_gem_index),
-        })
+        service_ports.append(
+            {
+                "purpose": "internet",
+                "vlan_id": int(wan_vlan),
+                "gem_index": int(wan_gem_index),
+            }
+        )
     if mgmt_vlan:
         mgmt_gem_index = values.get("mgmt_gem_index")
         if mgmt_gem_index is None:
@@ -1890,11 +1933,13 @@ def preview_reconciliation(
                 "has_changes": False,
                 "is_valid": False,
             }
-        service_ports.append({
-            "purpose": "management",
-            "vlan_id": int(mgmt_vlan),
-            "gem_index": int(mgmt_gem_index),
-        })
+        service_ports.append(
+            {
+                "purpose": "management",
+                "vlan_id": int(mgmt_vlan),
+                "gem_index": int(mgmt_gem_index),
+            }
+        )
 
     return {
         "error": None,
@@ -1904,16 +1949,22 @@ def preview_reconciliation(
         "bridge_native_vlan": {
             "eth_port": 1,
             "vlan_id": int(wan_vlan),
-        } if wan_vlan and wan_mode == "bridge" else None,
+        }
+        if wan_vlan and wan_mode == "bridge"
+        else None,
         "management": {
             "vlan": mgmt_vlan,
             "ip_mode": values.get("mgmt_ip_mode"),
             "ip_address": values.get("mgmt_ip_address"),
-        } if mgmt_vlan else None,
+        }
+        if mgmt_vlan
+        else None,
         "tr069": {
             "profile_id": values.get("tr069_olt_profile_id"),
             "acs_server_id": values.get("tr069_acs_server_id"),
-        } if values.get("tr069_olt_profile_id") else None,
+        }
+        if values.get("tr069_olt_profile_id")
+        else None,
         "internet_config_ip_index": values.get("internet_config_ip_index"),
         "wan_config_profile_id": values.get("wan_config_profile_id"),
     }

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-
 _OLT_CHASSIS_MODEL_RE = re.compile(
     r"^(?:HUAWEI\s+)?(?:"
     r"MA56(?:00|08T|83T)"

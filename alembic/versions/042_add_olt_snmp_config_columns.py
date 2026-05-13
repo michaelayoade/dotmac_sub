@@ -11,9 +11,9 @@ Adds configurable SNMP settings per OLT:
 - poll_cycle_number: Current tiered polling cycle (for persistent state)
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "042_add_olt_snmp_config"

@@ -30,10 +30,10 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.network import (
     OLTDevice,
+    OltServicePort,
     OntAssignment,
     OntUnit,
     PonPort,
-    OltServicePort,
 )
 from app.services.network.olt_ssh_ont._common import normalize_fsp
 

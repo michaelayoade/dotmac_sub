@@ -143,7 +143,8 @@ def _rotate_model_fields(
     updated_values = 0
     columns = model.__table__.columns
     column_lengths = {
-        field: getattr(columns[field].type, "length", None) for field in fields
+        field: getattr(columns[field].type, "length", None)
+        for field in fields
         if field in columns
     }
     logger.debug("Rotating credential fields for model %s", model.__name__)
@@ -189,6 +190,7 @@ def _rotate_ont_desired_config_credentials(
     updated_records = 0
     updated_values = 0
     for ont in db.scalars(select(OntUnit)).all():
+
         def rotate_nested_value(
             path: tuple[str, ...], current: Any
         ) -> tuple[Any, bool]:
@@ -197,7 +199,7 @@ def _rotate_ont_desired_config_credentials(
             except ValueError as exc:
                 dotted_path = ".".join(("desired_config", *path))
                 raise ValueError(
-                    f"Failed to rotate OntUnit.{dotted_path} id={_record_identity(ont)}"
+                    f"Failed to rotate OntUnit.{dotted_path} id={_record_identity(ont)}"  # noqa: B023
                 ) from exc
 
         changed_values = rotate_desired_config_credentials(

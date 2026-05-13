@@ -223,7 +223,9 @@ def queue_bulk_provisioning(
 
             pending_items = list_pending_bulk_items(session, bulk_run_id)
             bulk_items_by_ont_id = {
-                str(item.ont_unit_id): item for item in pending_items if item.ont_unit_id
+                str(item.ont_unit_id): item
+                for item in pending_items
+                if item.ont_unit_id
             }
 
     unique_ont_ids = list(dict.fromkeys(str(ont_id) for ont_id in ont_ids if ont_id))
@@ -279,7 +281,9 @@ def queue_bulk_provisioning(
                     "ont_id": ont_id,
                     "duration_ms": result.duration_ms,
                     "bulk_run_id": bulk_run_id,
-                    "bulk_item_id": str(bulk_item.id) if bulk_item is not None else None,
+                    "bulk_item_id": str(bulk_item.id)
+                    if bulk_item is not None
+                    else None,
                     "correlation_key": item_correlation_key,
                 }
                 if bulk_item is not None:

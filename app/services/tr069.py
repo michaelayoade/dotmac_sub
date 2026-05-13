@@ -1917,12 +1917,16 @@ def _build_acs_provision_script(
 
     if cwmp_username:
         script_lines.append(
-            safe_declare('root + ".ManagementServer.Username"', js_string(cwmp_username))
+            safe_declare(
+                'root + ".ManagementServer.Username"', js_string(cwmp_username)
+            )
         )
 
     if cwmp_password:
         script_lines.append(
-            safe_declare('root + ".ManagementServer.Password"', js_string(cwmp_password))
+            safe_declare(
+                'root + ".ManagementServer.Password"', js_string(cwmp_password)
+            )
         )
 
     if connection_request_username:
@@ -2049,7 +2053,8 @@ def push_acs_enforcement_preset(
         cwmp_password=cwmp_password,
         connection_request_username=server.connection_request_username,
         connection_request_password=connection_request_password,
-        periodic_inform_interval=server.periodic_inform_interval or settings.tr069_periodic_inform_interval,
+        periodic_inform_interval=server.periodic_inform_interval
+        or settings.tr069_periodic_inform_interval,
     )
 
     # Build preset

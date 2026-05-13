@@ -783,10 +783,14 @@ class OLTDevice(Base):
 
     # Zabbix monitoring integration
     zabbix_host_id: Mapped[str | None] = mapped_column(String(20))
-    zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     # Autofind sync deduplication (prevents redundant SSH queries during concurrent auths)
-    autofind_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    autofind_last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     # REST API configuration
     api_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -865,7 +869,9 @@ class OLTDevice(Base):
     shelves = relationship("OltShelf", back_populates="olt")
     config_backups = relationship("OltConfigBackup", back_populates="olt")
     tr069_acs_server = relationship("Tr069AcsServer")
-    vlans = relationship("Vlan", back_populates="olt_device", foreign_keys="[Vlan.olt_device_id]")
+    vlans = relationship(
+        "Vlan", back_populates="olt_device", foreign_keys="[Vlan.olt_device_id]"
+    )
     ip_pools = relationship(
         "IpPool", back_populates="olt_device", foreign_keys="[IpPool.olt_device_id]"
     )
@@ -1130,7 +1136,9 @@ class OltProfileSyncTask(Base):
     __tablename__ = "olt_profile_sync_tasks"
     __table_args__ = (
         Index("ix_olt_profile_sync_tasks_status", "status"),
-        Index("ix_olt_profile_sync_tasks_olt_offer_status", "olt_id", "offer_id", "status"),
+        Index(
+            "ix_olt_profile_sync_tasks_olt_offer_status", "olt_id", "offer_id", "status"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -2096,6 +2104,7 @@ class OntAssignment(Base):
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
     service_address = relationship("Address")
 
+
 class NetworkZone(Base):
     """Geographic zone for organizing network infrastructure."""
 
@@ -2737,6 +2746,8 @@ class OnuType(Base):
         "VendorModelCapability",
         foreign_keys=[vendor_model_capability_id],
     )
+
+
 class SpeedProfile(Base):
     """OLT-level speed profile catalog entry (download or upload)."""
 
@@ -3668,9 +3679,7 @@ class AuthorizationPreset(Base):
     """
 
     __tablename__ = "authorization_presets"
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_authorization_presets_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_authorization_presets_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -3686,12 +3695,13 @@ class AuthorizationPreset(Base):
 
     # Auto-authorization settings
     auto_authorize: Mapped[bool] = mapped_column(
-        Boolean, default=False,
-        doc="Automatically authorize matching ONTs without manual intervention"
+        Boolean,
+        default=False,
+        doc="Automatically authorize matching ONTs without manual intervention",
     )
     serial_pattern: Mapped[str | None] = mapped_column(
         String(120),
-        doc="Regex pattern for auto-matching serial numbers (e.g., 'HWTC.*', 'ZTEG.*')"
+        doc="Regex pattern for auto-matching serial numbers (e.g., 'HWTC.*', 'ZTEG.*')",
     )
 
     # OLT scope (null = all OLTs)
@@ -3699,7 +3709,7 @@ class AuthorizationPreset(Base):
         UUID(as_uuid=True),
         ForeignKey("olt_devices.id", ondelete="CASCADE"),
         index=True,
-        doc="Scope to specific OLT; null means global preset"
+        doc="Scope to specific OLT; null means global preset",
     )
 
     # Priority for auto-matching (higher = checked first)
@@ -3708,8 +3718,7 @@ class AuthorizationPreset(Base):
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(
-        Boolean, default=False,
-        doc="Default preset shown first in selection dropdown"
+        Boolean, default=False, doc="Default preset shown first in selection dropdown"
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -53,7 +53,9 @@ def upgrade() -> None:
         ("wifi_channel", sa.String(length=10)),
     ):
         if name not in assignment_columns:
-            op.add_column("ont_assignments", sa.Column(name, column_type, nullable=True))
+            op.add_column(
+                "ont_assignments", sa.Column(name, column_type, nullable=True)
+            )
 
     for column, index_name in (
         ("internet_vlan_id", "ix_ont_assignments_internet_vlan_id"),

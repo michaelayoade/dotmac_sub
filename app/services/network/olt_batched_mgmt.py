@@ -201,9 +201,7 @@ def build_management_command_batch(
 
     # Wrap interface commands with enter/exit
     if interface_commands:
-        commands.append(
-            (f"interface gpon {frame}/{slot}", "enter_interface_mode")
-        )
+        commands.append((f"interface gpon {frame}/{slot}", "enter_interface_mode"))
         commands.extend(interface_commands)
         commands.append(("quit", "exit_interface_mode"))
 
@@ -256,7 +254,10 @@ def execute_batched_management_setup(
         with olt_session(olt) as session:
             for cmd, description in commands:
                 # Skip navigation commands in step tracking
-                is_navigation = description in ("enter_interface_mode", "exit_interface_mode")
+                is_navigation = description in (
+                    "enter_interface_mode",
+                    "exit_interface_mode",
+                )
 
                 cmd_result = session.run_command(cmd, require_mode=CliMode.CONFIG)
                 result.raw_output[description] = cmd_result.output

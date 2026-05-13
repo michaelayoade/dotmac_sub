@@ -197,7 +197,9 @@ def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
     return None
 
 
-def _resolve_device_id_from_server(client: GenieACSClient, serial_number: str) -> str | None:
+def _resolve_device_id_from_server(
+    client: GenieACSClient, serial_number: str
+) -> str | None:
     for candidate in _serial_search_candidates(serial_number):
         escaped_candidate = re.escape(candidate)
         devices = client.list_devices(
@@ -267,7 +269,10 @@ def reconcile_ont_tr069_device(
     try:
         device_id = _resolve_device_id_from_server(client, serial)
         if not device_id:
-            return None, f"No TR-069 device found in GenieACS for ONT serial '{serial}'."
+            return (
+                None,
+                f"No TR-069 device found in GenieACS for ONT serial '{serial}'.",
+            )
         device_data = client.get_device(device_id)
     except GenieACSError as exc:
         return None, f"GenieACS lookup failed: {exc}"
@@ -307,7 +312,10 @@ def reconcile_ont_tr069_device(
         existing = (
             db.query(Tr069CpeDevice)
             .filter(Tr069CpeDevice.acs_server_id == server.id)
-            .filter(_normalized_serial_expr(Tr069CpeDevice.serial_number) == normalized_serial)
+            .filter(
+                _normalized_serial_expr(Tr069CpeDevice.serial_number)
+                == normalized_serial
+            )
             .first()
         )
     if existing is None and connection_url:
@@ -336,7 +344,9 @@ def reconcile_ont_tr069_device(
         if serial_number:
             existing.serial_number = serial_number[:120]
         existing.oui = oui[:8] if oui else existing.oui
-        existing.product_class = product_class[:120] if product_class else existing.product_class
+        existing.product_class = (
+            product_class[:120] if product_class else existing.product_class
+        )
         existing.connection_request_url = connection_url
         existing.last_inform_at = last_inform_at
         existing.is_active = True
@@ -503,10 +513,7 @@ def resolve_genieacs_with_reason(
                         client,
                         live_device_id,
                     ), "resolved_via_linked_tr069_device"
-            if (
-                desired_server is not None
-                and linked.acs_server_id != desired_server.id
-            ):
+            if desired_server is not None and linked.acs_server_id != desired_server.id:
                 logger.info(
                     "Ignoring stale linked TR-069 device for ONT %s: linked ACS %s, desired ACS %s",
                     ont.id,

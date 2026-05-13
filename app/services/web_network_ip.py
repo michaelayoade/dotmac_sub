@@ -499,7 +499,8 @@ def _build_pool_and_block_utilization(
         reserved = sum(
             1
             for record in records
-            if getattr(record, "is_reserved", False) and not _active_assignment(record)
+            if getattr(record, "is_reserved", False)
+            and not _active_assignment(record)
             and not _is_ont_management_allocation(record)
         )
         available = max(total - used - reserved, 0)

@@ -10,10 +10,6 @@ from starlette.requests import Request
 
 from app.services import network as network_service
 from app.services.network.ont_actions import ActionResult
-from app.services.network.ont_inventory import (
-    cleanup_olt_state_for_return as _cleanup_olt_state_for_return,
-    return_ont_to_inventory as return_to_inventory,
-)
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
 )

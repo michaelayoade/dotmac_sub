@@ -387,7 +387,9 @@ def test_genieacs_service_intent_hides_metadata_only_wan_nodes() -> None:
     assert "{'_object'" not in repr(intent)
 
 
-def test_genieacs_service_intent_preserves_tracked_points_for_partial_unavailable_data() -> None:
+def test_genieacs_service_intent_preserves_tracked_points_for_partial_unavailable_data() -> (
+    None
+):
     from app.services.service_intent_ui_adapter import service_intent_ui_adapter
 
     intent = service_intent_ui_adapter.build_acs_observed_service_intent(
@@ -432,8 +434,12 @@ def test_genieacs_service_intent_counts_active_ethernet_ports_by_link_status() -
         )
     )
 
-    assert intent["tracked_point_index"]["clients.ethernet_ports_total"]["raw_value"] == 2
-    assert intent["tracked_point_index"]["clients.ethernet_ports_active"]["raw_value"] == 1
+    assert (
+        intent["tracked_point_index"]["clients.ethernet_ports_total"]["raw_value"] == 2
+    )
+    assert (
+        intent["tracked_point_index"]["clients.ethernet_ports_active"]["raw_value"] == 1
+    )
 
 
 def test_cached_tr069_snapshot_hides_metadata_only_parameter_nodes() -> None:

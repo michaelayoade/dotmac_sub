@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
-from collections import defaultdict
 
 # Add the app directory to the path (works both locally and in container)
 import os
+import sys
+from collections import defaultdict
+
 app_dir = os.environ.get("APP_DIR", "/opt/dotmac_sub")
 if not os.path.exists(app_dir):
     app_dir = "/app"  # Docker container path
@@ -35,9 +36,7 @@ from app.db import SessionLocal
 from app.models.network import (
     MgmtIpMode,
     OLTDevice,
-    OntAssignment,
     OntUnit,
-    OnuOnlineStatus,
 )
 from app.services.network.ont_authorization import (
     _get_or_create_active_assignment,

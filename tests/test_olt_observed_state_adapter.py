@@ -81,5 +81,3 @@ def test_get_tr069_profiles_for_olt_falls_back_to_db_snapshot(db_session, monkey
     assert result.stale is True
     assert result.data[0].profile_id == 7
     assert "SSH timeout" in result.message
-
-

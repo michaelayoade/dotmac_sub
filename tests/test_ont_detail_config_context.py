@@ -88,7 +88,9 @@ def test_desired_config_context_prefers_durable_ont_fields(monkeypatch) -> None:
     assert context["desired_wifi_config"]["ssid"] == "CustomerWiFi"
 
 
-def test_operator_summary_does_not_flag_missing_vlans_when_service_ports_deferred() -> None:
+def test_operator_summary_does_not_flag_missing_vlans_when_service_ports_deferred() -> (
+    None
+):
     context = _operator_summary_context(
         desired_mgmt={"vlan_id": "201"},
         desired_wan={"wan_vlan": "212"},
@@ -103,7 +105,7 @@ def test_operator_summary_does_not_flag_missing_vlans_when_service_ports_deferre
                 "fsp": "0/0/6",
                 "ont_id": "6",
                 "description": "Customer",
-            }
+            },
         },
         has_tr069_device=True,
         current_tr069_profile="DotMac-ACS",
@@ -394,7 +396,9 @@ def test_configure_form_context_does_not_use_lan_mode_as_wan_mode(
     assert context["wan_mode"] == "pppoe"
 
 
-def test_tr069_profiles_resolve_olt_from_active_assignment(db_session, monkeypatch) -> None:
+def test_tr069_profiles_resolve_olt_from_active_assignment(
+    db_session, monkeypatch
+) -> None:
     from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
     from app.services import web_network_onts as web_network_onts_service
     from app.services.olt_observed_state_adapter import ObservedReadResult

@@ -215,9 +215,7 @@ def restore_candidate_by_serial(
     candidate.resolution_reason = None
     candidate.resolved_at = None
     candidate.last_seen_at = now
-    candidate.notes = (
-        "Restored from return-to-inventory by serial lookup."
-    )
+    candidate.notes = "Restored from return-to-inventory by serial lookup."
 
     db.flush()
     return True, "Restored candidate by serial lookup"
@@ -423,7 +421,9 @@ def refresh_autofind_from_olt(
             db.flush()
             created += 1
         else:
-            candidate.ont_unit_id = matched_ont.id if matched_ont else candidate.ont_unit_id
+            candidate.ont_unit_id = (
+                matched_ont.id if matched_ont else candidate.ont_unit_id
+            )
             candidate.serial_hex = entry.serial_hex or candidate.serial_hex
             candidate.vendor_id = entry.vendor_id or candidate.vendor_id
             candidate.model = entry.model or candidate.model

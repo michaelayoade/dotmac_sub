@@ -86,9 +86,7 @@ def _stub_result(success: bool, **overrides) -> ReconcileResult:
 # ── set_wifi_ssid ──────────────────────────────────────────────────────────
 
 
-def test_set_wifi_ssid_passes_ssid_in_proposed_change(
-    db_session, ont, monkeypatch
-):
+def test_set_wifi_ssid_passes_ssid_in_proposed_change(db_session, ont, monkeypatch):
     captured: dict = {}
 
     def _fake_reconcile(db, ont_unit_id, *, proposed_change, mode, **_):
@@ -107,9 +105,7 @@ def test_set_wifi_ssid_passes_ssid_in_proposed_change(
             ),
         )
 
-    monkeypatch.setattr(
-        "app.services.network.reconcile.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.services.network.reconcile.reconcile_ont", _fake_reconcile)
 
     result = set_wifi_ssid(db_session, str(ont.id), "NEW_SSID")
 
@@ -133,10 +129,7 @@ def test_set_wifi_ssid_failure_surfaces_reason(db_session, ont, monkeypatch):
 
     result = set_wifi_ssid(db_session, str(ont.id), "X")
     assert result.success is False
-    assert (
-        result.data["failure_reason"]
-        == ReconcileFailureReason.ACS_WRITE_FAULTED
-    )
+    assert result.data["failure_reason"] == ReconcileFailureReason.ACS_WRITE_FAULTED
 
 
 # ── set_pppoe_credentials ──────────────────────────────────────────────────
@@ -152,9 +145,7 @@ def test_set_pppoe_passes_credentials_and_vlan_in_proposed_change(
         captured["mode"] = mode
         return _stub_result(True)
 
-    monkeypatch.setattr(
-        "app.services.network.reconcile.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.services.network.reconcile.reconcile_ont", _fake_reconcile)
 
     result = set_pppoe_credentials(
         db_session,
@@ -184,15 +175,11 @@ def test_set_pppoe_omits_vlan_when_not_specified(db_session, ont, monkeypatch):
         ),
     )
 
-    set_pppoe_credentials(
-        db_session, str(ont.id), username="u", password="p"
-    )
+    set_pppoe_credentials(db_session, str(ont.id), username="u", password="p")
     assert "wan_vlan" not in captured["pc"]
 
 
-def test_set_pppoe_uses_non_default_instance_index(
-    db_session, ont, monkeypatch
-):
+def test_set_pppoe_uses_non_default_instance_index(db_session, ont, monkeypatch):
     """Some ONTs put the PPP on WANConnectionDevice.2 (UnitedAbuja case);
     the caller passes instance_index=2 and it flows through."""
     captured: dict = {}
@@ -227,8 +214,6 @@ def test_set_pppoe_failure_surfaces_actionable_on_cr_failed(
         ),
     )
 
-    result = set_pppoe_credentials(
-        db_session, str(ont.id), username="u", password="p"
-    )
+    result = set_pppoe_credentials(db_session, str(ont.id), username="u", password="p")
     assert result.success is False
     assert result.data["actionable"] is True

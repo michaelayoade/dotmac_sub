@@ -189,10 +189,7 @@ def get_available_mgmt_ips_for_vlan(
         .limit(limit)
     ).all()
 
-    return [
-        {"address": ip.address, "id": str(ip.id)}
-        for ip in available_ips
-    ]
+    return [{"address": ip.address, "id": str(ip.id)} for ip in available_ips]
 
 
 def parse_form_values(form) -> dict[str, object]:

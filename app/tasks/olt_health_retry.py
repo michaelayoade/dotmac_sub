@@ -40,9 +40,7 @@ def retry_failed_olt_connections() -> dict[str, int]:
         with db_session_adapter.session() as db:
             # Get all active OLTs
             olts = list(
-                db.scalars(
-                    select(OLTDevice).where(OLTDevice.is_active.is_(True))
-                ).all()
+                db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
             )
 
             # Build lookup indexes for linked monitoring devices
@@ -77,9 +75,7 @@ def retry_failed_olt_connections() -> dict[str, int]:
                         recovered = _retry_ping_check(db, linked)
                         if recovered:
                             stats["ping_recovered"] += 1
-                            logger.info(
-                                "OLT %s ping recovered after retry", olt.name
-                            )
+                            logger.info("OLT %s ping recovered after retry", olt.name)
                     except Exception as exc:
                         stats["errors"] += 1
                         logger.warning(
@@ -199,7 +195,9 @@ def retry_single_olt(self, olt_id: str) -> dict[str, object]:
                 try:
                     if _retry_ping_check(db, linked):
                         result["ping_recovered"] = True
-                        logger.info("OLT %s ping recovered via immediate retry", olt.name)
+                        logger.info(
+                            "OLT %s ping recovered via immediate retry", olt.name
+                        )
                 except Exception as exc:
                     logger.warning(
                         "Immediate ping retry failed for OLT %s: %s", olt.name, exc
@@ -221,7 +219,9 @@ def retry_single_olt(self, olt_id: str) -> dict[str, object]:
 
     except Exception as e:
         result["error"] = str(e)
-        logger.error("Single OLT retry task failed for %s: %s", olt_id, e, exc_info=True)
+        logger.error(
+            "Single OLT retry task failed for %s: %s", olt_id, e, exc_info=True
+        )
         return result
 
 

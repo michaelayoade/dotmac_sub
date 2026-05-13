@@ -8,6 +8,7 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "092_remove_legacy_olt_config_pack_profile_defaults"

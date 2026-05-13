@@ -12,9 +12,10 @@ Create Date: 2026-04-17
 
 """
 
+from typing import Any, cast
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-from typing import Any, cast
 
 from alembic import op
 

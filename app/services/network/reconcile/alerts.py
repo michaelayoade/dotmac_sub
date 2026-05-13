@@ -64,9 +64,7 @@ class ZabbixTrapper:
         try:
             port = int(port_str)
         except ValueError:
-            logger.warning(
-                "zabbix_trapper_port_invalid", extra={"value": port_str}
-            )
+            logger.warning("zabbix_trapper_port_invalid", extra={"value": port_str})
             return None
         return cls(host=trapper_host, port=port)
 
@@ -181,8 +179,7 @@ def default_threshold_from_env() -> int:
 
 def trapper_key_from_env() -> str:
     return (
-        os.getenv("ZABBIX_TRAPPER_SWEEP_KEY", "").strip()
-        or SWEEP_TRAPPER_KEY_DEFAULT
+        os.getenv("ZABBIX_TRAPPER_SWEEP_KEY", "").strip() or SWEEP_TRAPPER_KEY_DEFAULT
     )
 
 

@@ -225,8 +225,7 @@ def submitted_authorization_ont_matches_scope(
     direct_serial = normalize_serial(getattr(direct_ont, "serial_number", None))
     direct_olt_id = getattr(direct_ont, "olt_device_id", None)
     direct_match = (
-        str(direct_olt_id) == str(olt_id)
-        and direct_serial == submitted_serial
+        str(direct_olt_id) == str(olt_id) and direct_serial == submitted_serial
     )
     if direct_match:
         return True

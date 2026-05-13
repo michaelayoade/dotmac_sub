@@ -43,7 +43,9 @@ def test_create_olt_sp_fails_without_gem_index() -> None:
 
 
 @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-@patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+@patch(
+    "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies"
+)
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
 def test_create_olt_sp_success(
     mock_resolve: MagicMock,
@@ -76,7 +78,9 @@ def test_create_olt_sp_success(
 
 
 @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-@patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+@patch(
+    "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies"
+)
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
 def test_create_olt_sp_ssh_failure(
     mock_resolve: MagicMock,
@@ -108,7 +112,9 @@ def test_create_olt_sp_ssh_failure(
 
 
 @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-@patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+@patch(
+    "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies"
+)
 @patch("app.services.web_network_service_ports._resolve_ont_olt_context")
 def test_create_olt_sp_fails_before_adapter_when_dependency_audit_fails(
     mock_resolve: MagicMock,

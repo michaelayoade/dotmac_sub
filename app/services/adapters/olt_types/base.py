@@ -103,7 +103,11 @@ class OltTypeAdapter:
         only that one needs to match.
         """
         model_ok = not model or not self.model_patterns or self.matches_model(model)
-        firmware_ok = not firmware or not self.firmware_patterns or self.matches_firmware(firmware)
+        firmware_ok = (
+            not firmware
+            or not self.firmware_patterns
+            or self.matches_firmware(firmware)
+        )
 
         # If adapter has both patterns, both must match
         if self.model_patterns and self.firmware_patterns:

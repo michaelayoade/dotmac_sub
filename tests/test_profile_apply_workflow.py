@@ -24,7 +24,9 @@ def _plan():
             ),
             ProfileCommandGroup(
                 step="Create traffic table",
-                commands=("traffic table ip index 100 name TT_50M cir 50000 pir 50000",),
+                commands=(
+                    "traffic table ip index 100 name TT_50M cir 50000 pir 50000",
+                ),
             ),
         ],
     )

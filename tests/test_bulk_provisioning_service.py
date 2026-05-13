@@ -67,8 +67,14 @@ def test_bulk_provision_onts_records_run_items_and_executes_synchronously(
         .order_by(BulkProvisioningItem.requested_ont_id)
     )
     assert len(items) == 3
-    assert sum(1 for item in items if item.status == BulkProvisioningItemStatus.succeeded) == 2
-    assert sum(1 for item in items if item.status == BulkProvisioningItemStatus.skipped) == 1
+    assert (
+        sum(1 for item in items if item.status == BulkProvisioningItemStatus.succeeded)
+        == 2
+    )
+    assert (
+        sum(1 for item in items if item.status == BulkProvisioningItemStatus.skipped)
+        == 1
+    )
     assert {item.correlation_key for item in items} == {
         f"bulk-test:ont:{item.requested_ont_id}" for item in items
     }

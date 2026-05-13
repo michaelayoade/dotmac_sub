@@ -20,7 +20,9 @@ depends_on = None
 
 
 def _index_exists(inspector, table_name: str, index_name: str) -> bool:
-    return any(index["name"] == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index["name"] == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def _validate_single_active_bundle_assignment(bind) -> None:
@@ -37,7 +39,9 @@ def _validate_single_active_bundle_assignment(bind) -> None:
         )
     ).fetchall()
     if violations:
-        sample = ", ".join(f"{row.ont_unit_id}={row.active_count}" for row in violations)
+        sample = ", ".join(
+            f"{row.ont_unit_id}={row.active_count}" for row in violations
+        )
         raise RuntimeError(
             "Cannot create uq_ont_bundle_assignments_active_ont: "
             f"duplicate active ONT bundle assignments exist ({sample})."
@@ -100,7 +104,9 @@ def upgrade() -> None:
     if "default_bundle_id" not in onu_type_columns:
         op.add_column(
             "onu_types",
-            sa.Column("default_bundle_id", postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "default_bundle_id", postgresql.UUID(as_uuid=True), nullable=True
+            ),
         )
         op.create_foreign_key(
             "fk_onu_types_default_bundle_id",
@@ -145,7 +151,9 @@ def upgrade() -> None:
     if "cloned_from_bundle_id" not in profile_columns:
         op.add_column(
             "ont_provisioning_profiles",
-            sa.Column("cloned_from_bundle_id", postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "cloned_from_bundle_id", postgresql.UUID(as_uuid=True), nullable=True
+            ),
         )
         op.create_foreign_key(
             "fk_ont_provisioning_profiles_cloned_from_bundle_id",
@@ -158,7 +166,11 @@ def upgrade() -> None:
     if "execution_policy" not in profile_columns:
         op.add_column(
             "ont_provisioning_profiles",
-            sa.Column("execution_policy", postgresql.JSON(astext_type=sa.Text()), nullable=True),
+            sa.Column(
+                "execution_policy",
+                postgresql.JSON(astext_type=sa.Text()),
+                nullable=True,
+            ),
         )
     if "required_capabilities" not in profile_columns:
         op.add_column(
@@ -389,7 +401,10 @@ def downgrade() -> None:
 
     onu_type_columns = {column["name"] for column in inspector.get_columns("onu_types")}
     foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("onu_types")}
-    if "fk_onu_types_default_bundle_id" in foreign_keys and "default_bundle_id" in onu_type_columns:
+    if (
+        "fk_onu_types_default_bundle_id" in foreign_keys
+        and "default_bundle_id" in onu_type_columns
+    ):
         op.drop_constraint(
             "fk_onu_types_default_bundle_id",
             "onu_types",

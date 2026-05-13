@@ -23,9 +23,12 @@ from app.schemas.tr069 import (
 )
 from app.services import network as network_service
 from app.services import tr069 as tr069_service
-from app.services.genieacs_client import create_genieacs_client
 from app.services.common import coerce_uuid
-from app.services.genieacs_client import GenieACSError, normalize_tr069_serial
+from app.services.genieacs_client import (
+    GenieACSError,
+    create_genieacs_client,
+    normalize_tr069_serial,
+)
 from app.services.network import cpe as cpe_service
 from app.services.network._common import decode_huawei_hex_serial
 from app.services.tr069_web_audit import log_tr069_audit_event
@@ -155,7 +158,9 @@ _CONFIG_ACTIONS: dict[str, ConfigAction] = {
 def parse_acs_form(form) -> dict[str, object]:
     # Parse periodic inform interval with validation
     default_interval = settings.tr069_periodic_inform_interval
-    interval_str = str(form.get("periodic_inform_interval") or str(default_interval)).strip()
+    interval_str = str(
+        form.get("periodic_inform_interval") or str(default_interval)
+    ).strip()
     try:
         periodic_inform_interval = max(60, min(86400, int(interval_str)))
     except ValueError:
@@ -432,7 +437,9 @@ def acs_task_console_data(
             if parsed_timestamp
             else None
         )
-        is_stale = bool(age_seconds is not None and age_seconds >= stale_after.total_seconds())
+        is_stale = bool(
+            age_seconds is not None and age_seconds >= stale_after.total_seconds()
+        )
         is_broad_refresh = _is_broad_refresh_task(task)
         device_task_count = device_task_counts.get(device_id, 0) if device_id else 0
         rows.append(
@@ -888,9 +895,8 @@ def create_ont_from_tr069_device(
         .first()
     )
     if existing:
-        if (
-            not getattr(existing, "olt_device_id", None)
-            and not getattr(existing, "tr069_acs_server_id", None)
+        if not getattr(existing, "olt_device_id", None) and not getattr(
+            existing, "tr069_acs_server_id", None
         ):
             existing.tr069_acs_server_id = device.acs_server_id
         tr069_service.link_tr069_device_to_ont(

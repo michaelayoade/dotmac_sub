@@ -8,8 +8,9 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "089_add_imported_olt_profile_state"
 down_revision = "088_add_olt_wan_provisioning_mode"
@@ -30,7 +31,9 @@ def upgrade() -> None:
             sa.Column("olt_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("profile_id", sa.Integer(), nullable=False),
             sa.Column("name", sa.String(length=160), nullable=True),
-            sa.Column("binding_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column(
+                "binding_count", sa.Integer(), nullable=False, server_default="0"
+            ),
             sa.Column("tr069_management_enabled", sa.Boolean(), nullable=True),
             sa.Column("raw_config", sa.Text(), nullable=True),
             sa.Column("last_imported_at", sa.DateTime(timezone=True), nullable=False),
@@ -54,7 +57,9 @@ def upgrade() -> None:
             sa.Column("olt_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("profile_id", sa.Integer(), nullable=False),
             sa.Column("name", sa.String(length=160), nullable=True),
-            sa.Column("binding_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column(
+                "binding_count", sa.Integer(), nullable=False, server_default="0"
+            ),
             sa.Column("ethernet_ports", sa.Integer(), nullable=True),
             sa.Column("voip_ports", sa.Integer(), nullable=True),
             sa.Column("catv_ports", sa.Integer(), nullable=True),

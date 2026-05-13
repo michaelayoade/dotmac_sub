@@ -77,7 +77,9 @@ def build_profile_apply_plan(
     groups: list[ProfileCommandGroup] = []
     for raw_group in command_groups:
         step = str(getattr(raw_group, "step", "") or "").strip()
-        commands = tuple(str(command).strip() for command in getattr(raw_group, "commands", ()))
+        commands = tuple(
+            str(command).strip() for command in getattr(raw_group, "commands", ())
+        )
         requires_config_mode = bool(getattr(raw_group, "requires_config_mode", True))
         groups.append(
             ProfileCommandGroup(
@@ -86,7 +88,9 @@ def build_profile_apply_plan(
                 requires_config_mode=requires_config_mode,
             )
         )
-    plan = ProfileApplyPlan(name=str(name or "").strip() or "OLT profile bundle", groups=tuple(groups))
+    plan = ProfileApplyPlan(
+        name=str(name or "").strip() or "OLT profile bundle", groups=tuple(groups)
+    )
     validate_profile_apply_plan(plan)
     return plan
 
@@ -102,7 +106,9 @@ def validate_profile_apply_plan(plan: ProfileApplyPlan) -> None:
             raise ProfileApplyError(f"Command group '{group.step}' has no commands")
         for command in group.commands:
             if not command:
-                raise ProfileApplyError(f"Command group '{group.step}' contains an empty command")
+                raise ProfileApplyError(
+                    f"Command group '{group.step}' contains an empty command"
+                )
             if any(char in command for char in ("\r", "\n", "\x00")):
                 raise ProfileApplyError(
                     f"Command group '{group.step}' contains a multi-line command"

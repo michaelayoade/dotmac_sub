@@ -117,7 +117,9 @@ _DEFERRED_API_ROUTER_SPECS = [
 
 def _get_release_metadata() -> dict[str, str | None]:
     return {
-        "release": os.getenv("APP_RELEASE") or os.getenv("IMAGE_TAG") or os.getenv("GIT_SHA"),
+        "release": os.getenv("APP_RELEASE")
+        or os.getenv("IMAGE_TAG")
+        or os.getenv("GIT_SHA"),
         "git_sha": os.getenv("GIT_SHA") or os.getenv("COMMIT_SHA"),
         "environment": os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "unknown",
     }
@@ -158,9 +160,7 @@ def _apply_router_spec(app: FastAPI, spec: tuple[str, str, str, str]) -> None:
     _mount_router(app, router, mount_kind, dependency_mode)
 
 
-def _mount_router(
-    app: FastAPI, router, mount_kind: str, dependency_mode: str
-) -> None:
+def _mount_router(app: FastAPI, router, mount_kind: str, dependency_mode: str) -> None:
     dependencies = _router_dependencies(dependency_mode)
 
     if mount_kind == "api":
@@ -188,7 +188,9 @@ async def _load_deferred_api_routers(app: FastAPI) -> None:
     for spec in _DEFERRED_API_ROUTER_SPECS:
         module_name, attr_name, _mount_kind, _dependency_mode = spec
         try:
-            router = await asyncio.to_thread(_load_router_object, module_name, attr_name)
+            router = await asyncio.to_thread(
+                _load_router_object, module_name, attr_name
+            )
             _mount_router(app, router, spec[2], spec[3])
             logger.info(
                 "deferred_api_router_loaded",
@@ -1003,6 +1005,7 @@ def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
 
 def _include_api_router(router, dependencies=None):
     app.include_router(router, prefix="/api/v1", dependencies=dependencies)
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

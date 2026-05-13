@@ -49,9 +49,7 @@ def main() -> int:
         if args.apply_line_profile_suggestions:
             updated = apply_dump_audit_suggestions(db, reports)
             if updated:
-                reports = [
-                    audit_olt_config_pack_dump(db, olt_id) for olt_id in olt_ids
-                ]
+                reports = [audit_olt_config_pack_dump(db, olt_id) for olt_id in olt_ids]
 
     if args.json:
         payload = {

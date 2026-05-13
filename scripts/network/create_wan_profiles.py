@@ -23,19 +23,17 @@ from pathlib import Path
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import time
+
 from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.network import OLTDevice
-import time
-
 from app.services.network.olt_ssh import (
+    _SSH_CONNECTION_ERRORS,
     _open_shell,
     _read_until_prompt,
-    _run_huawei_cmd,
-    _SSH_CONNECTION_ERRORS,
 )
-from app.services.network.olt_ssh_ont._common import _send_slow
 
 
 def _send_char_by_char(channel, command: str, char_delay: float = 0.02) -> None:
@@ -49,6 +47,7 @@ def _send_char_by_char(channel, command: str, char_delay: float = 0.02) -> None:
         time.sleep(char_delay)
     time.sleep(0.1)
     channel.send("\n")
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,7 +89,9 @@ def check_wan_profile_supported(channel) -> tuple[bool, str]:
     return True, output
 
 
-def check_wan_profile_exists(channel, profile_id: int, display_output: str = "") -> tuple[bool, str | None]:
+def check_wan_profile_exists(
+    channel, profile_id: int, display_output: str = ""
+) -> tuple[bool, str | None]:
     """Check if a WAN profile already exists on the OLT.
 
     Args:
@@ -110,8 +111,8 @@ def check_wan_profile_exists(channel, profile_id: int, display_output: str = "")
     # Look for the profile ID in the table format:
     # Profile-ID  Profile-name                                Binding times
     # 10          wan-profile_10                              0
-    pattern = rf'^\s*{profile_id}\s+(\S+)\s+\d+'
-    for line in display_output.split('\n'):
+    pattern = rf"^\s*{profile_id}\s+(\S+)\s+\d+"
+    for line in display_output.split("\n"):
         match = re.match(pattern, line.strip())
         if match:
             return True, match.group(1)
@@ -160,9 +161,14 @@ def create_wan_profile(
             return False, "Firmware does not support ont wan-profile (MA5608T)"
 
         # Check if profile already exists (use cached display output)
-        exists, existing_name = check_wan_profile_exists(channel, profile_id, display_output)
+        exists, existing_name = check_wan_profile_exists(
+            channel, profile_id, display_output
+        )
         if exists:
-            return True, f"WAN profile {profile_id} already exists (name: {existing_name})"
+            return (
+                True,
+                f"WAN profile {profile_id} already exists (name: {existing_name})",
+            )
 
         # Create WAN profile using char-by-char send to avoid MA5608T terminal corruption
         # ont wan-profile profile-id 10 profile-name "dotmac-wan"
@@ -309,7 +315,10 @@ def main():
         if not args.dry_run and results["success"]:
             logger.info("")
             logger.info("NEXT STEP: Update DotMac UI")
-            logger.info("Set 'WAN Profile' = %d for each OLT in the admin interface", args.profile_id)
+            logger.info(
+                "Set 'WAN Profile' = %d for each OLT in the admin interface",
+                args.profile_id,
+            )
 
         return 1 if results["failed"] else 0
 

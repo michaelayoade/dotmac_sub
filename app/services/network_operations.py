@@ -122,7 +122,9 @@ def _operation_is_stale_active(
     if op.status not in _ACTIVE_STATUSES:
         return False
     current = now or datetime.now(UTC)
-    return current - _operation_started_reference(op) > _stale_active_age_for_operation(op)
+    return current - _operation_started_reference(op) > _stale_active_age_for_operation(
+        op
+    )
 
 
 def _mark_operation_stale_failed(

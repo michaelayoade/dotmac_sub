@@ -242,9 +242,7 @@ def test_get_onu_olt_status_summary_has_no_unknown_bucket(db_session, monkeypatc
     assert "unknown" not in summary
 
 
-def test_get_pon_outage_summary_only_flags_fully_offline_ports(
-    db_session, monkeypatch
-):
+def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monkeypatch):
     olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
     db_session.add(olt)
     db_session.commit()
@@ -337,9 +335,7 @@ def test_get_onu_status_trend_uses_current_zabbix_summary(db_session, monkeypatc
     assert trend["source"] == "zabbix"
 
 
-def test_push_signal_metrics_does_not_emit_ont_status_counts(
-    db_session, monkeypatch
-):
+def test_push_signal_metrics_does_not_emit_ont_status_counts(db_session, monkeypatch):
     captured: dict[str, str] = {}
 
     class _FakeResponse:
@@ -371,9 +367,7 @@ def test_push_signal_metrics_does_not_emit_ont_status_counts(
                 is_active=True,
                 tr069_last_snapshot_at=datetime.now(UTC),
                 tr069_last_snapshot={
-                    "ethernet_ports": [
-                        {"bytes_sent": "1000", "bytes_received": "2000"}
-                    ]
+                    "ethernet_ports": [{"bytes_sent": "1000", "bytes_received": "2000"}]
                 },
                 olt_status=OnuOnlineStatus.offline,
             ),
@@ -382,9 +376,7 @@ def test_push_signal_metrics_does_not_emit_ont_status_counts(
                 is_active=True,
                 tr069_last_snapshot_at=datetime.now(UTC),
                 tr069_last_snapshot={
-                    "ethernet_ports": [
-                        {"bytes_sent": "3000", "bytes_received": "4000"}
-                    ]
+                    "ethernet_ports": [{"bytes_sent": "3000", "bytes_received": "4000"}]
                 },
                 olt_status=OnuOnlineStatus.online,
             ),

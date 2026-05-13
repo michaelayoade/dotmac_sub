@@ -38,7 +38,9 @@ def upgrade() -> None:
     if not _has_table(conn):
         return
 
-    _add_column_if_missing(conn, "cos_priority", sa.Column("cos_priority", sa.Integer()))
+    _add_column_if_missing(
+        conn, "cos_priority", sa.Column("cos_priority", sa.Integer())
+    )
     _add_column_if_missing(
         conn,
         "mtu",
@@ -60,7 +62,9 @@ def upgrade() -> None:
     _add_column_if_missing(
         conn, "static_ip_source", sa.Column("static_ip_source", sa.String(200))
     )
-    _add_column_if_missing(conn, "bind_lan_ports", sa.Column("bind_lan_ports", sa.JSON()))
+    _add_column_if_missing(
+        conn, "bind_lan_ports", sa.Column("bind_lan_ports", sa.JSON())
+    )
     _add_column_if_missing(
         conn, "bind_ssid_index", sa.Column("bind_ssid_index", sa.Integer())
     )

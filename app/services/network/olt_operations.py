@@ -231,7 +231,9 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
             result.message,
         )
     except Exception as exc:
-        logger.warning("Adapter running-config fetch errored for OLT %s: %s", olt.name, exc)
+        logger.warning(
+            "Adapter running-config fetch errored for OLT %s: %s", olt.name, exc
+        )
     return None
 
 
@@ -610,7 +612,10 @@ def get_ont_status_by_serial(
         adapter_status = get_adapter_status(db, ont_record, include_optical=True)
         payload["status"] = adapter_status.status.value
         payload["status_source"] = adapter_status.status_source.value
-        if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
+        if (
+            adapter_status.optical_metrics
+            and adapter_status.optical_metrics.has_signal_data
+        ):
             metrics = adapter_status.optical_metrics
             payload["olt_rx_signal_dbm"] = metrics.olt_rx_dbm
             payload["onu_rx_signal_dbm"] = metrics.onu_rx_dbm
@@ -654,7 +659,11 @@ def _find_ont_by_serial_in_db(
 
     for ont in onts:
         ont_serial = normalize_serial(getattr(ont, "serial_number", None))
-        if ont_serial and (ont_serial == normalized or normalized in ont_serial or ont_serial in normalized):
+        if ont_serial and (
+            ont_serial == normalized
+            or normalized in ont_serial
+            or ont_serial in normalized
+        ):
             return ont
 
     return None

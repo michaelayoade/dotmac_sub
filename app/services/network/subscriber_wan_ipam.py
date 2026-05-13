@@ -61,9 +61,7 @@ def _any_assignment_for_address(
     address: IPv4Address,
 ) -> IPAssignment | None:
     return db.scalars(
-        select(IPAssignment)
-        .where(IPAssignment.ipv4_address_id == address.id)
-        .limit(1)
+        select(IPAssignment).where(IPAssignment.ipv4_address_id == address.id).limit(1)
     ).first()
 
 
@@ -139,7 +137,9 @@ def ensure_wan_static_ip_available(
     if assignment is None:
         assignment = IPAssignment(
             subscriber_id=subscriber_id,
-            service_address_id=getattr(active_ont_assignment, "service_address_id", None),
+            service_address_id=getattr(
+                active_ont_assignment, "service_address_id", None
+            ),
             ip_version=IPVersion.ipv4,
             ipv4_address_id=address.id,
             is_active=True,

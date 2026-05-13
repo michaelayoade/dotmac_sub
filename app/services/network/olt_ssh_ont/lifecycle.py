@@ -310,9 +310,10 @@ def authorize_ont(
         if not desc_clean:
             # Default placeholder so the OLT row never shows ONT_NO_DESCRIPTION.
             from datetime import UTC, datetime
-            desc_clean = (
-                f"{sn_clean}_authd_{datetime.now(UTC).strftime('%Y%m%d')}"
-            )[:64]
+
+            desc_clean = (f"{sn_clean}_authd_{datetime.now(UTC).strftime('%Y%m%d')}")[
+                :64
+            ]
         auth_cmd = (
             f"ont add {port_num} sn-auth {sn_clean} omci "
             f"ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid} "

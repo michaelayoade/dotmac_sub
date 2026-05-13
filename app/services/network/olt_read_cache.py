@@ -22,8 +22,9 @@ import functools
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -85,6 +86,7 @@ class OltReadCache:
 
                 if self._redis_url is None:
                     from app.config import settings
+
                     self._redis_url = settings.REDIS_URL
 
                 self._redis = redis.from_url(
@@ -107,13 +109,13 @@ class OltReadCache:
         if params:
             # Hash long params to keep keys short
             if len(params) > 50:
-                params = hashlib.md5(params.encode()).hexdigest()[:12]
+                params = hashlib.md5(params.encode(), usedforsecurity=False).hexdigest()[:12]
             return f"olt:{olt_id}:{operation}:{params}"
         return f"olt:{olt_id}:{operation}"
 
     def get(
         self,
-        olt_id: str | "UUID",
+        olt_id: str | UUID,
         operation: str,
         params: str = "",
     ) -> Any | None:
@@ -154,7 +156,7 @@ class OltReadCache:
 
     def set(
         self,
-        olt_id: str | "UUID",
+        olt_id: str | UUID,
         operation: str,
         value: Any,
         params: str = "",
@@ -183,11 +185,13 @@ class OltReadCache:
             key = self._cache_key(str(olt_id), operation, params)
             ttl = ttl or DEFAULT_TTLS.get(operation, 60)
 
-            data = json.dumps({
-                "value": value,
-                "cached_at": datetime.now(UTC).isoformat(),
-                "operation": operation,
-            })
+            data = json.dumps(
+                {
+                    "value": value,
+                    "cached_at": datetime.now(UTC).isoformat(),
+                    "operation": operation,
+                }
+            )
 
             redis.setex(key, ttl, data)
             self._stats["sets"] += 1
@@ -201,7 +205,7 @@ class OltReadCache:
 
     def invalidate(
         self,
-        olt_id: str | "UUID",
+        olt_id: str | UUID,
         operation: str | None = None,
     ) -> int:
         """Invalidate cached data for an OLT.
@@ -289,6 +293,7 @@ class OltReadCache:
             def get_service_ports(olt: OLTDevice, fsp: str) -> list[dict]:
                 # ... expensive operation ...
         """
+
         def decorator(func: F) -> F:
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
@@ -327,6 +332,7 @@ class OltReadCache:
                 return result
 
             return wrapper  # type: ignore
+
         return decorator
 
     def get_stats(self) -> dict:

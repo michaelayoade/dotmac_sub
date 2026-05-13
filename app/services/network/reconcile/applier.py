@@ -166,10 +166,7 @@ def apply_plan(
                 actions_applied=tuple(applied),
                 halted_by=ReconcileFailure(
                     reason=ReconcileFailureReason.TIMEOUT,
-                    message=(
-                        f"apply deadline exceeded before "
-                        f"{type(action).__name__}"
-                    ),
+                    message=(f"apply deadline exceeded before {type(action).__name__}"),
                 ),
             )
         try:
@@ -187,9 +184,7 @@ def apply_plan(
             return ApplyResult(
                 success=False,
                 actions_applied=tuple(applied),
-                halted_by=ReconcileFailure(
-                    reason=exc.reason, message=exc.message
-                ),
+                halted_by=ReconcileFailure(reason=exc.reason, message=exc.message),
             )
 
     return ApplyResult(
@@ -299,9 +294,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 gateway=action.gateway,
             )
             _olt_check(action, result)
-            return _ok(
-                action, "olt_mgmt_ip", None, action.ip_address, started
-            )
+            return _ok(action, "olt_mgmt_ip", None, action.ip_address, started)
 
         case OltTr069ServerConfig():
             result = ctx.olt_adapter.bind_tr069_profile(
@@ -337,9 +330,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             )
 
         case OltDeleteServicePort():
-            result = ctx.olt_adapter.delete_service_port(
-                action.service_port_index
-            )
+            result = ctx.olt_adapter.delete_service_port(action.service_port_index)
             _olt_check(action, result)
             return _ok(
                 action,
@@ -400,9 +391,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             )
 
         case OltReset():
-            result = ctx.olt_adapter.reboot_ont(
-                action.fsp, action.ont_id
-            )
+            result = ctx.olt_adapter.reboot_ont(action.fsp, action.ont_id)
             _olt_check(action, result)
             return _ok(action, "ont_reset", None, None, started)
 
@@ -460,9 +449,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.NATEnabled": action.enabled
             }
             _acs_set(action, ctx, params)
-            return _ok(
-                action, "acs_nat_enabled", None, action.enabled, started
-            )
+            return _ok(action, "acs_nat_enabled", None, action.enabled, started)
 
         case AcsSetDhcpServer():
             params = {
@@ -475,9 +462,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             return _ok(action, "acs_dhcp_server", None, action.enabled, started)
 
         case AcsSetManagementServer():
-            cr_password = _resolve_or_fail(
-                ctx, action, action.cr_password_ref
-            )
+            cr_password = _resolve_or_fail(ctx, action, action.cr_password_ref)
             params = {
                 "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername": action.cr_username,
                 "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword": cr_password,

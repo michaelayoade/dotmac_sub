@@ -134,7 +134,10 @@ class ParameterInfo:
         if self.enum_values:
             str_value = str(value).strip()
             if str_value not in self.enum_values:
-                return False, f"Value '{str_value}' not in allowed values: {self.enum_values}"
+                return (
+                    False,
+                    f"Value '{str_value}' not in allowed values: {self.enum_values}",
+                )
 
         return True, None
 
@@ -431,9 +434,16 @@ _PARAMETER_REGISTRY: dict[str, ParameterInfo] = {
         category=ParameterCategory.wifi,
         description="WiFi security mode",
         enum_values=(
-            "None", "WEP-64", "WEP-128", "WPA-Personal", "WPA2-Personal",
-            "WPA-WPA2-Personal", "WPA3-Personal", "WPA-Enterprise",
-            "WPA2-Enterprise", "WPA3-Enterprise",
+            "None",
+            "WEP-64",
+            "WEP-128",
+            "WPA-Personal",
+            "WPA2-Personal",
+            "WPA-WPA2-Personal",
+            "WPA3-Personal",
+            "WPA-Enterprise",
+            "WPA2-Enterprise",
+            "WPA3-Enterprise",
         ),
         indexed=True,
     ),
@@ -469,7 +479,14 @@ _PARAMETER_REGISTRY: dict[str, ParameterInfo] = {
         access=ParameterAccess.read_only,
         category=ParameterCategory.ethernet,
         description="Ethernet port status",
-        enum_values=("Up", "Down", "Unknown", "Dormant", "NotPresent", "LowerLayerDown"),
+        enum_values=(
+            "Up",
+            "Down",
+            "Unknown",
+            "Dormant",
+            "NotPresent",
+            "LowerLayerDown",
+        ),
         indexed=True,
     ),
     "ethernet.port_max_bitrate": ParameterInfo(
@@ -554,7 +571,13 @@ _PARAMETER_REGISTRY: dict[str, ParameterInfo] = {
         access=ParameterAccess.read_write,
         category=ParameterCategory.diagnostics,
         description="Ping diagnostic state",
-        enum_values=("None", "Requested", "Canceled", "Complete", "Error_CannotResolveHostName"),
+        enum_values=(
+            "None",
+            "Requested",
+            "Canceled",
+            "Complete",
+            "Error_CannotResolveHostName",
+        ),
     ),
     "diag.traceroute.host": ParameterInfo(
         canonical_name="diag.traceroute.host",
@@ -615,10 +638,19 @@ _PARAMETER_REGISTRY: dict[str, ParameterInfo] = {
 # ---------------------------------------------------------------------------
 
 # Path suffixes that indicate boolean parameters
-_BOOLEAN_SUFFIXES = frozenset({
-    "enable", "enabled", "active", "dhcpenable", "dhcpenabled",
-    "ipv4enable", "ipv6enable", "igmpenable", "beaconsecurityenable",
-})
+_BOOLEAN_SUFFIXES = frozenset(
+    {
+        "enable",
+        "enabled",
+        "active",
+        "dhcpenable",
+        "dhcpenabled",
+        "ipv4enable",
+        "ipv6enable",
+        "igmpenable",
+        "beaconsecurityenable",
+    }
+)
 
 # Boolean value strings
 _BOOLEAN_TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
@@ -832,7 +864,8 @@ def list_canonical_names(
     """
     if category:
         return sorted(
-            name for name, info in _PARAMETER_REGISTRY.items()
+            name
+            for name, info in _PARAMETER_REGISTRY.items()
             if info.category == category
         )
     return sorted(_PARAMETER_REGISTRY.keys())
@@ -917,13 +950,15 @@ def prepare_parameter_values(
         # Coerce value
         coerced = _coerce_by_type(value, cwmp_type)
 
-        results.append(TypedParameterValue(
-            canonical_name=canonical_name,
-            path=path,
-            value=coerced,
-            cwmp_type=cwmp_type,
-            info=info,
-        ))
+        results.append(
+            TypedParameterValue(
+                canonical_name=canonical_name,
+                path=path,
+                value=coerced,
+                cwmp_type=cwmp_type,
+                info=info,
+            )
+        )
 
     return results
 
@@ -937,10 +972,7 @@ def to_genieacs_params(typed_values: list[TypedParameterValue]) -> list[list]:
     Returns:
         List of [path, value, xsd_type] for GenieACS
     """
-    return [
-        [tv.path, tv.value, tv.xsd_type]
-        for tv in typed_values
-    ]
+    return [[tv.path, tv.value, tv.xsd_type] for tv in typed_values]
 
 
 # ---------------------------------------------------------------------------

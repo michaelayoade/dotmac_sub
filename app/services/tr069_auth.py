@@ -72,10 +72,10 @@ def get_device_credentials(
 
 def _find_authorized_ont(db: Session, candidates: list[str]) -> OntUnit | None:
     for candidate in candidates:
-        cpe_stmt = select(Tr069CpeDevice).where(
-            Tr069CpeDevice.serial_number.ilike(candidate)
-        ).where(
-            Tr069CpeDevice.is_active.is_(True)
+        cpe_stmt = (
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.serial_number.ilike(candidate))
+            .where(Tr069CpeDevice.is_active.is_(True))
         )
         cpe_device = db.scalars(cpe_stmt).first()
         if cpe_device and cpe_device.ont_unit_id:

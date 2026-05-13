@@ -334,7 +334,9 @@ def get_celery_config() -> dict:
         "soft_time_limit": max(60, long_soft_time_limit),
         "time_limit": max(long_soft_time_limit + 1, long_time_limit),
     }
-    annotations: dict[str, dict[str, int]] = dict.fromkeys(TR069_TASK_QUEUE_NAMES, acs_limits)
+    annotations: dict[str, dict[str, int]] = dict.fromkeys(
+        TR069_TASK_QUEUE_NAMES, acs_limits
+    )
     annotations.update(
         {
             "app.tasks.ont_provisioning.provision_ont": long_limits,

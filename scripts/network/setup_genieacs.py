@@ -131,7 +131,9 @@ class GenieACSSetup:
 
             logger.info("Deploying provision: %s", provision_name)
             try:
-                self._request("PUT", f"/provisions/{provision_name}", content=script_content)
+                self._request(
+                    "PUT", f"/provisions/{provision_name}", content=script_content
+                )
                 results[provision_name] = "deployed"
                 logger.info("  ✓ Deployed %s", provision_name)
             except Exception as e:
@@ -146,7 +148,9 @@ class GenieACSSetup:
         results = {}
 
         if not VIRTUAL_PARAMS_DIR.exists():
-            logger.warning("Virtual parameters directory not found: %s", VIRTUAL_PARAMS_DIR)
+            logger.warning(
+                "Virtual parameters directory not found: %s", VIRTUAL_PARAMS_DIR
+            )
             return results
 
         for script_path in VIRTUAL_PARAMS_DIR.glob("*.js"):
@@ -186,7 +190,9 @@ class GenieACSSetup:
                 ],
             }
 
-            logger.info("Deploying preset: %s (triggers: %s)", preset_name, config["provision"])
+            logger.info(
+                "Deploying preset: %s (triggers: %s)", preset_name, config["provision"]
+            )
             try:
                 self._request("PUT", f"/presets/{preset_name}", json_data=preset_data)
                 results[preset_name] = "deployed"
@@ -367,7 +373,9 @@ def main():
             state = setup.list_current_state()
             print("\nCurrent GenieACS State:")
             print(f"  Provisions: {', '.join(state['provisions']) or 'none'}")
-            print(f"  Virtual Parameters: {', '.join(state['virtualParameters']) or 'none'}")
+            print(
+                f"  Virtual Parameters: {', '.join(state['virtualParameters']) or 'none'}"
+            )
             print(f"  Presets: {', '.join(state['presets']) or 'none'}")
             print(f"  Config: {', '.join(state['config']) or 'none'}")
             return

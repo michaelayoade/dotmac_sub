@@ -98,9 +98,13 @@ def test_build_offer_profile_sync_plan_generates_bundle_and_commands() -> None:
 
 
 def test_build_offer_profile_sync_plan_uses_offer_name_when_code_missing() -> None:
-    plan = build_offer_profile_sync_plan(_offer(code=None, name="Biz Gold 100"), vlan_id=300)
+    plan = build_offer_profile_sync_plan(
+        _offer(code=None, name="Biz Gold 100"), vlan_id=300
+    )
 
-    assert 'profile-name "DOTMAC_DBA_BIZ_GOLD_100_50D_20U"' in plan.apply_plan.commands[0]
+    assert (
+        'profile-name "DOTMAC_DBA_BIZ_GOLD_100_50D_20U"' in plan.apply_plan.commands[0]
+    )
 
 
 def test_build_offer_profile_sync_plan_hashes_truncated_profile_names() -> None:
@@ -155,7 +159,9 @@ def test_build_offer_profile_sync_plan_rejects_bad_vlan() -> None:
         build_offer_profile_sync_plan(_offer(), vlan_id=0)
 
 
-def test_list_syncable_catalog_offers_filters_active_fiber_internet_offers(db_session) -> None:
+def test_list_syncable_catalog_offers_filters_active_fiber_internet_offers(
+    db_session,
+) -> None:
     syncable = CatalogOffer(
         name="Fiber 50",
         code="F50",
@@ -409,7 +415,9 @@ def test_enqueue_offer_profile_sync_tasks_requires_offer_flag(db_session) -> Non
     assert db_session.query(OltProfileSyncTask).count() == 0
 
 
-def test_enqueue_offer_profile_sync_tasks_creates_pending_review_task(db_session) -> None:
+def test_enqueue_offer_profile_sync_tasks_creates_pending_review_task(
+    db_session,
+) -> None:
     olt = OLTDevice(name="Auto Sync OLT", vendor="Huawei")
     offer = CatalogOffer(
         name="Fiber Auto 100",
@@ -551,7 +559,9 @@ def test_cancel_profile_sync_task_closes_task_and_allows_restaging(db_session) -
     assert restaged[0].id != cancelled.id
 
 
-def test_list_due_profile_sync_tasks_returns_approved_and_due_scheduled(db_session) -> None:
+def test_list_due_profile_sync_tasks_returns_approved_and_due_scheduled(
+    db_session,
+) -> None:
     olt = OLTDevice(name="Due Sync OLT", vendor="Huawei")
     offer = CatalogOffer(
         name="Fiber Due 100",

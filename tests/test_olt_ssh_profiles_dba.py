@@ -44,7 +44,11 @@ def test_get_dba_profiles_runs_display_command(monkeypatch) -> None:
 
     assert ok is True
     assert message == "Found 1 DBA profile(s)"
-    assert sent[:3] == ["enable\n", "screen-length 0 temporary\n", "display dba-profile all"]
+    assert sent[:3] == [
+        "enable\n",
+        "screen-length 0 temporary\n",
+        "display dba-profile all",
+    ]
     assert sent[-1] == "close"
     assert entries[0].profile_id == 50
     assert entries[0].name == "DOTMAC_100M"
@@ -249,7 +253,9 @@ def test_get_wan_profiles_runs_display_command(monkeypatch) -> None:
         fake_run,
     )
 
-    ok, message, entries = olt_ssh_profiles.get_wan_profiles(SimpleNamespace(name="OLT 1"))
+    ok, message, entries = olt_ssh_profiles.get_wan_profiles(
+        SimpleNamespace(name="OLT 1")
+    )
 
     assert ok is True
     assert message == "Found 1 WAN profile(s)"

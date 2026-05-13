@@ -25,7 +25,6 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-
     from app.models.catalog import NasDevice
 
 logger = logging.getLogger(__name__)
@@ -291,13 +290,13 @@ class MikroTikAdapter(BaseNasVendorAdapter):
     ) -> VendorCommand:
         # Build PPP secret command
         parts = [f'/ppp secret add name="{username}" password="{password}"']
-        parts.append('service=pppoe')
+        parts.append("service=pppoe")
 
         if speed_profile:
             parts.append(f'profile="{speed_profile}"')
 
         if ip_address:
-            parts.append(f'remote-address={ip_address}')
+            parts.append(f"remote-address={ip_address}")
 
         return VendorCommand(
             command=" ".join(parts),
@@ -364,7 +363,9 @@ class MikroTikAdapter(BaseNasVendorAdapter):
 
         if command_type == CommandType.backup:
             # Count lines in exported config
-            lines = [l for l in response.splitlines() if l.strip() and not l.startswith("#")]
+            lines = [
+                l for l in response.splitlines() if l.strip() and not l.startswith("#")
+            ]
             result["config_lines"] = len(lines)
 
         elif command_type in (CommandType.authorize, CommandType.deauthorize):
@@ -433,7 +434,9 @@ class CiscoAdapter(BaseNasVendorAdapter):
         result: dict[str, Any] = {"raw_response": response}
 
         if command_type == CommandType.backup:
-            lines = [l for l in response.splitlines() if l.strip() and not l.startswith("!")]
+            lines = [
+                l for l in response.splitlines() if l.strip() and not l.startswith("!")
+            ]
             result["config_lines"] = len(lines)
 
         elif command_type == CommandType.restore:
@@ -501,7 +504,9 @@ class HuaweiAdapter(BaseNasVendorAdapter):
         result: dict[str, Any] = {"raw_response": response}
 
         if command_type == CommandType.backup:
-            lines = [l for l in response.splitlines() if l.strip() and not l.startswith("#")]
+            lines = [
+                l for l in response.splitlines() if l.strip() and not l.startswith("#")
+            ]
             result["config_lines"] = len(lines)
 
         return result

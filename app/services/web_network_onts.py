@@ -471,7 +471,9 @@ def management_ip_choices_for_ont(
     choices: list[dict[str, Any]] = []
     per_pool_limit = max(1, min(limit, max(10, limit // max(len(pools), 1))))
     effective = resolve_effective_ont_config(db, ont)
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
     selected_ip = effective_values.get("mgmt_ip_address") or getattr(
         ont, "mgmt_ip_address", None
     )
@@ -1012,7 +1014,9 @@ def resolve_effective_tr069_profile_for_ont(
         return None, error or "No TR-069 profile found for this ONT"
 
     effective = resolve_effective_ont_config(db, ont)
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
     planned_profile_id: Any = effective_values.get("tr069_olt_profile_id")
 
     if planned_profile_id is not None:

@@ -25,7 +25,9 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
-def _maybe_trigger_olt_retry(db: Session, device: NetworkDevice, check_type: str) -> None:
+def _maybe_trigger_olt_retry(
+    db: Session, device: NetworkDevice, check_type: str
+) -> None:
     """Trigger immediate OLT retry if this device is linked to an OLT.
 
     Only triggers on first failure (when down_since was just set).

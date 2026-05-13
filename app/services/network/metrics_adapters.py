@@ -202,9 +202,7 @@ class VictoriaMetricsAdapter(ABC, MetricsReader):
                 values.append(None)
         return ChartSeries(label=label, timestamps=timestamps, values=values)
 
-    def _build_label_selector(
-        self, ont_serial: str, ont_id: str | None = None
-    ) -> str:
+    def _build_label_selector(self, ont_serial: str, ont_id: str | None = None) -> str:
         """Build a PromQL label selector."""
         selectors: list[str] = []
         if ont_id:
@@ -214,9 +212,7 @@ class VictoriaMetricsAdapter(ABC, MetricsReader):
             if len(serial_candidates) == 1:
                 selectors.append(f'ont_serial="{serial_candidates[0]}"')
             else:
-                escaped = "|".join(
-                    re.escape(c) for c in sorted(serial_candidates)
-                )
+                escaped = "|".join(re.escape(c) for c in sorted(serial_candidates))
                 selectors.append(f'ont_serial=~"{escaped}"')
         return ",".join(selectors)
 
@@ -557,9 +553,7 @@ class CompositeMetricsAdapter(MetricsReader):
         ont_id: str | None = None,
     ) -> ChartData:
         for adapter in self.adapters:
-            result = adapter.get_signal_history(
-                ont_serial, time_range, ont_id=ont_id
-            )
+            result = adapter.get_signal_history(ont_serial, time_range, ont_id=ont_id)
             if result.available:
                 return result
         # Return last result (with error message)
@@ -573,9 +567,7 @@ class CompositeMetricsAdapter(MetricsReader):
         ont_id: str | None = None,
     ) -> ChartData:
         for adapter in self.adapters:
-            result = adapter.get_traffic_history(
-                ont_serial, time_range, ont_id=ont_id
-            )
+            result = adapter.get_traffic_history(ont_serial, time_range, ont_id=ont_id)
             if result.available:
                 return result
         return result
@@ -610,10 +602,12 @@ def get_metrics_adapter() -> MetricsReader:
     if adapter_type == "victoriametrics":
         _adapter_instance = VictoriaMetricsAdapter()
     elif adapter_type == "composite":
-        _adapter_instance = CompositeMetricsAdapter([
-            VictoriaMetricsAdapter(),
-            ZabbixMetricsAdapter(),
-        ])
+        _adapter_instance = CompositeMetricsAdapter(
+            [
+                VictoriaMetricsAdapter(),
+                ZabbixMetricsAdapter(),
+            ]
+        )
     else:
         _adapter_instance = ZabbixMetricsAdapter()
 

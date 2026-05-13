@@ -66,7 +66,9 @@ def _relevant_alarms(
     fsp: str,
     ont_id: int,
 ) -> list[AlarmEntry]:
-    matched = [alarm for alarm in alarms if _alarm_matches_ont(alarm, fsp=fsp, ont_id=ont_id)]
+    matched = [
+        alarm for alarm in alarms if _alarm_matches_ont(alarm, fsp=fsp, ont_id=ont_id)
+    ]
     return matched or alarms
 
 
@@ -89,7 +91,10 @@ def _derive_diagnosis(
         (
             alarm
             for alarm in active_alarms
-            if any(token in f"{alarm.name} {alarm.source}".lower() for token in ["offline", "los", "dying", "power"])
+            if any(
+                token in f"{alarm.name} {alarm.source}".lower()
+                for token in ["offline", "los", "dying", "power"]
+            )
         ),
         None,
     )
@@ -98,7 +103,10 @@ def _derive_diagnosis(
 
     if optical_info is not None and optical_info.rx_power_dbm is not None:
         if optical_info.rx_power_dbm <= -28:
-            return "low_optical_power", f"Low ONT RX optical power: {optical_info.rx_power_dbm:.2f} dBm."
+            return (
+                "low_optical_power",
+                f"Low ONT RX optical power: {optical_info.rx_power_dbm:.2f} dBm.",
+            )
 
     if not service_ports:
         return "missing_service_ports", "No service ports were found for this ONT."
@@ -114,7 +122,10 @@ def _derive_diagnosis(
             ]
         )
         if not has_traffic:
-            return "no_traffic_counters", "Service ports exist, but traffic counters are empty."
+            return (
+                "no_traffic_counters",
+                "Service ports exist, but traffic counters are empty.",
+            )
 
     if warnings and ont_info is None:
         return "partial_snapshot", "Snapshot is incomplete; ONT info could not be read."
@@ -140,11 +151,15 @@ def get_ont_diagnostic_snapshot(
     if not ok:
         warnings.append(f"ONT info: {message}")
 
-    ok, message, optical_info = olt_ssh_diagnostics.get_ont_optical_info(olt, fsp, ont_id)
+    ok, message, optical_info = olt_ssh_diagnostics.get_ont_optical_info(
+        olt, fsp, ont_id
+    )
     if not ok:
         warnings.append(f"Optical info: {message}")
 
-    ok, message, traffic_stats = olt_ssh_diagnostics.get_ont_traffic_stats(olt, fsp, ont_id)
+    ok, message, traffic_stats = olt_ssh_diagnostics.get_ont_traffic_stats(
+        olt, fsp, ont_id
+    )
     if not ok:
         warnings.append(f"Traffic stats: {message}")
 

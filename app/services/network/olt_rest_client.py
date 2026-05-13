@@ -87,7 +87,9 @@ class OltRestClient:
             return self._olt.api_url.rstrip("/")
 
         if not self._olt.mgmt_ip:
-            raise ValueError(f"OLT {self._olt.name} has no api_url or mgmt_ip configured")
+            raise ValueError(
+                f"OLT {self._olt.name} has no api_url or mgmt_ip configured"
+            )
 
         # Construct URL from mgmt_ip and api_port
         port = self._olt.api_port or 443

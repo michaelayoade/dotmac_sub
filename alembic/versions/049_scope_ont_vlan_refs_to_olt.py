@@ -58,7 +58,9 @@ def upgrade() -> None:
 
     foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("ont_units")}
     if "ont_units_wan_vlan_id_fkey" in foreign_keys:
-        op.drop_constraint("ont_units_wan_vlan_id_fkey", "ont_units", type_="foreignkey")
+        op.drop_constraint(
+            "ont_units_wan_vlan_id_fkey", "ont_units", type_="foreignkey"
+        )
     if "ont_units_mgmt_vlan_id_fkey" in foreign_keys:
         op.drop_constraint(
             "ont_units_mgmt_vlan_id_fkey", "ont_units", type_="foreignkey"

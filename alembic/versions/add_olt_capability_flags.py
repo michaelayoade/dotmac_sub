@@ -10,6 +10,7 @@ Adds:
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "add_olt_capability_flags"

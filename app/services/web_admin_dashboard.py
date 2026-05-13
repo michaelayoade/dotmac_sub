@@ -150,14 +150,16 @@ def _build_pon_outages(db: Session, limit: int = 10) -> list[dict]:
 
     outages = []
     for row in rows:
-        outages.append({
-            "id": str(row.id),
-            "name": row.name,
-            "description": row.description or "",
-            "olt_id": str(row.device_id),
-            "olt_name": row.device_name or "Unknown OLT",
-            "down_since": row.updated_at,
-        })
+        outages.append(
+            {
+                "id": str(row.id),
+                "name": row.name,
+                "description": row.description or "",
+                "olt_id": str(row.device_id),
+                "olt_name": row.device_name or "Unknown OLT",
+                "down_since": row.updated_at,
+            }
+        )
     return outages
 
 
@@ -614,7 +616,9 @@ def dashboard(request: Request, db: Session):
             or 0
         )
     except Exception:
-        logger.debug("Failed to load unconfigured ONT count for dashboard", exc_info=True)
+        logger.debug(
+            "Failed to load unconfigured ONT count for dashboard", exc_info=True
+        )
         _rollback_after_failed_query(db)
 
     # --- PON interface status summary ---
@@ -640,24 +644,21 @@ def dashboard(request: Request, db: Session):
     try:
         from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 
-        order_counts = (
-            db.query(
-                func.count(ServiceOrder.id)
-                .filter(
-                    ServiceOrder.status.in_(
-                        (ServiceOrderStatus.submitted, ServiceOrderStatus.scheduled)
-                    )
+        order_counts = db.query(
+            func.count(ServiceOrder.id)
+            .filter(
+                ServiceOrder.status.in_(
+                    (ServiceOrderStatus.submitted, ServiceOrderStatus.scheduled)
                 )
-                .label("pending"),
-                func.count(ServiceOrder.id)
-                .filter(ServiceOrder.status == ServiceOrderStatus.provisioning)
-                .label("in_progress"),
-                func.count(ServiceOrder.id)
-                .filter(ServiceOrder.status == ServiceOrderStatus.active)
-                .label("completed"),
             )
-            .one()
-        )
+            .label("pending"),
+            func.count(ServiceOrder.id)
+            .filter(ServiceOrder.status == ServiceOrderStatus.provisioning)
+            .label("in_progress"),
+            func.count(ServiceOrder.id)
+            .filter(ServiceOrder.status == ServiceOrderStatus.active)
+            .label("completed"),
+        ).one()
         pending = order_counts.pending or 0
         in_progress = order_counts.in_progress or 0
         pending_orders = pending + in_progress

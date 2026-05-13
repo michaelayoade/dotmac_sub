@@ -74,7 +74,9 @@ def upgrade() -> None:
             sa.Column(
                 "mgmt_ip_mode",
                 postgresql.ENUM(
-                    "inactive", "dhcp", "static_ip",
+                    "inactive",
+                    "dhcp",
+                    "static_ip",
                     name="mgmtipmode",
                     create_type=False,
                 ),

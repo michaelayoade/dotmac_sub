@@ -85,7 +85,9 @@ def archive_device_group(
     return group
 
 
-def list_device_groups(db: Session, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+def list_device_groups(
+    db: Session, *, include_inactive: bool = False
+) -> list[dict[str, Any]]:
     """Return device groups with member counts for the admin UI."""
     query = select(DeviceGroup).order_by(DeviceGroup.name.asc())
     if not include_inactive:

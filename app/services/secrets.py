@@ -95,7 +95,9 @@ def _fetch_secret_data(
         status_code = exc.response.status_code if exc.response is not None else None
         if status_code == 404:
             logger.debug("OpenBao secret missing at %s", url)
-            raise HTTPException(status_code=404, detail="OpenBao secret not found") from exc
+            raise HTTPException(
+                status_code=404, detail="OpenBao secret not found"
+            ) from exc
         logger.error("OpenBao request failed for %s: %s", url, exc)
         raise HTTPException(status_code=500, detail="OpenBao request failed") from exc
     except httpx.HTTPError as exc:

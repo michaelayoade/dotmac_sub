@@ -301,9 +301,7 @@ class HuaweiCommandGenerator:
         if spec.wan_config_profile_id is None:
             return []
         if spec.internet_config_ip_index is None:
-            raise ValueError(
-                "WAN config requires explicit internet_config_ip_index"
-            )
+            raise ValueError("WAN config requires explicit internet_config_ip_index")
 
         enter_cmd = f"interface gpon {context.frame_slot}"
         wc_cmd = (
@@ -770,9 +768,7 @@ def generate_dba_profile_commands(
         field for field in required_by_type[normalized_type] if values[field] is None
     ]
     if missing:
-        raise ValueError(
-            f"{normalized_type} DBA profile requires {', '.join(missing)}"
-        )
+        raise ValueError(f"{normalized_type} DBA profile requires {', '.join(missing)}")
     if max_bw is not None and assured_bw is not None and max_bw < assured_bw:
         raise ValueError("max_bw must be greater than or equal to assured_bw")
     if assured_bw is not None and fixed_bw is not None and assured_bw < fixed_bw:

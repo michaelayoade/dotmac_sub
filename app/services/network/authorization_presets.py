@@ -276,7 +276,9 @@ class AuthorizationPresets:
         for preset in db.scalars(stmt).all():
             if preset.serial_pattern:
                 try:
-                    if re.match(preset.serial_pattern, normalized_serial, re.IGNORECASE):
+                    if re.match(
+                        preset.serial_pattern, normalized_serial, re.IGNORECASE
+                    ):
                         logger.debug(
                             "Serial %s matched preset %s (pattern: %s)",
                             serial_number,

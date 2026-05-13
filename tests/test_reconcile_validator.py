@@ -347,9 +347,9 @@ def test_immutable_identity_rule_runs_before_mode_rules():
     current = _base()
     target = dataclasses.replace(
         current,
-        olt_id="olt-other",        # immutable violation
+        olt_id="olt-other",  # immutable violation
         nat_enabled=True,
-        wan_mode="bridge",          # mode contradiction
+        wan_mode="bridge",  # mode contradiction
     )
     v = validate_desired(target, current)
     assert v.ok is False

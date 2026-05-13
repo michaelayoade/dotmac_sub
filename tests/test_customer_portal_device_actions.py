@@ -94,11 +94,15 @@ def test_customer_reboot_delegates_to_tracked_ont_action(db_session, monkeypatch
     assert calls == [(str(ont.id), "customer:customer-user-1", None)]
 
 
-def test_customer_wifi_update_delegates_to_existing_wifi_action(db_session, monkeypatch):
+def test_customer_wifi_update_delegates_to_existing_wifi_action(
+    db_session, monkeypatch
+):
     subscriber, subscription, ont = _active_subscription_with_ont(db_session)
     calls = []
 
-    def fake_set_wifi_config(db, ont_id, *, ssid=None, password=None, request=None, **_):
+    def fake_set_wifi_config(
+        db, ont_id, *, ssid=None, password=None, request=None, **_
+    ):
         calls.append((ont_id, ssid, password, request))
         return SimpleNamespace(success=True, message="WiFi updated")
 

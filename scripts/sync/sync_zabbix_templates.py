@@ -129,19 +129,24 @@ def create_host_group(api: ZabbixAPI, name: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Sync Zabbix templates")
     parser.add_argument("--dry-run", action="store_true", help="Don't make changes")
-    parser.add_argument("--templates", nargs="*", help="Specific template names to sync")
-    parser.add_argument("--list-templates", action="store_true", help="List available templates")
-    parser.add_argument("--sync-groups", action="store_true", help="Sync host groups only")
+    parser.add_argument(
+        "--templates", nargs="*", help="Specific template names to sync"
+    )
+    parser.add_argument(
+        "--list-templates", action="store_true", help="List available templates"
+    )
+    parser.add_argument(
+        "--sync-groups", action="store_true", help="Sync host groups only"
+    )
     args = parser.parse_args()
 
     # Source (external) Zabbix
     source_url = os.getenv(
-        "ZABBIX_EXTERNAL_URL",
-        "http://160.119.127.193/zabbix/api_jsonrpc.php"
+        "ZABBIX_EXTERNAL_URL", "http://160.119.127.193/zabbix/api_jsonrpc.php"
     )
     source_token = os.getenv(
         "ZABBIX_EXTERNAL_TOKEN",
-        "622dbc396ffe31415b0c10dc59466edc069bbb6819fa1e574c49ff79b651b1a4"
+        "622dbc396ffe31415b0c10dc59466edc069bbb6819fa1e574c49ff79b651b1a4",
     )
 
     # Target (Docker) Zabbix
@@ -206,7 +211,11 @@ def main():
 
     if args.templates:
         # Filter to specific templates
-        templates = [t for t in templates if t["name"] in args.templates or t["host"] in args.templates]
+        templates = [
+            t
+            for t in templates
+            if t["name"] in args.templates or t["host"] in args.templates
+        ]
         if not templates:
             logger.error(f"No matching templates found for: {args.templates}")
             sys.exit(1)

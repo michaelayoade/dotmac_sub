@@ -229,9 +229,7 @@ def _values_from_assignment(
 
     if asn_wan_mode is None and asn_ip_mode:
         asn_wan_mode = (
-            "bridging"
-            if str(asn_ip_mode) in {"bridge", "setup_via_onu"}
-            else "routing"
+            "bridging" if str(asn_ip_mode) in {"bridge", "setup_via_onu"} else "routing"
         )
 
     asn_mgmt_ip_mode = cfg("management", "ip_mode")
@@ -282,7 +280,9 @@ def _values_from_assignment(
     mgmt_vlan = config_pack.management_vlan if config_pack else None
     olt_id = config_pack.olt_id if config_pack else getattr(ont, "olt_device_id", None)
     active_assignment = (
-        assignment if assignment is not None else (_get_active_assignment(ont) if ont else None)
+        assignment
+        if assignment is not None
+        else (_get_active_assignment(ont) if ont else None)
     )
     profile_bundle = (
         resolve_profile_bundle_for_active_subscription(
@@ -377,7 +377,9 @@ def _values_from_assignment(
             else False
         ),
         "tr069_acs_server_id": config_pack.tr069_acs_server_id if config_pack else None,
-        "tr069_olt_profile_id": config_pack.tr069_olt_profile_id if config_pack else None,
+        "tr069_olt_profile_id": config_pack.tr069_olt_profile_id
+        if config_pack
+        else None,
         "cr_username": config_pack.cr_username if config_pack else None,
         "cr_password": config_pack.cr_password if config_pack else None,
         "internet_config_ip_index": _coalesce_mapping_config(

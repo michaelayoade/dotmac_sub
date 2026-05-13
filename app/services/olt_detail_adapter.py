@@ -56,7 +56,9 @@ class OltDetailAdapter:
         try:
             activities = audit_helpers.build_audit_activities(db, "olt", str(olt_id))
         except Exception:
-            logger.error("Failed to load audit activity for OLT %s", olt_id, exc_info=True)
+            logger.error(
+                "Failed to load audit activity for OLT %s", olt_id, exc_info=True
+            )
             activities = []
         available_firmware = olt_action_adapter.get_olt_firmware_images(db, olt_id)
 
@@ -143,7 +145,9 @@ class OltDetailAdapter:
         monitoring_device = page_data.get("monitoring_device")
         return {
             "linked": monitoring_device is not None,
-            "source": "network_device" if monitoring_device is not None else "olt_device",
+            "source": "network_device"
+            if monitoring_device is not None
+            else "olt_device",
             "match_strategy": resolution.get("match_strategy", "unknown"),
             "authoritative": bool(resolution.get("authoritative", False)),
             "warning": resolution.get("warning"),
@@ -237,7 +241,9 @@ class OltDetailAdapter:
         olt_id = getattr(olt, "id", None)
         assignment_by_ont_id = page_data.get("assignment_by_ont_id", {}) or {}
         signal_data = page_data.get("signal_data", {}) or {}
-        pon_port_display_by_ont_id = page_data.get("pon_port_display_by_ont_id", {}) or {}
+        pon_port_display_by_ont_id = (
+            page_data.get("pon_port_display_by_ont_id", {}) or {}
+        )
         ont_mac_by_ont_id = page_data.get("ont_mac_by_ont_id", {}) or {}
 
         rows: list[dict[str, object]] = []
@@ -256,8 +262,12 @@ class OltDetailAdapter:
             assigned_olt_id = getattr(pon_port, "olt_id", None) if pon_port else None
             direct_olt_id = getattr(ont, "olt_device_id", None)
             direct_match = bool(olt_id and direct_olt_id and direct_olt_id == olt_id)
-            assignment_match = bool(olt_id and assigned_olt_id and assigned_olt_id == olt_id)
-            mismatch = bool(direct_olt_id and assigned_olt_id and direct_olt_id != assigned_olt_id)
+            assignment_match = bool(
+                olt_id and assigned_olt_id and assigned_olt_id == olt_id
+            )
+            mismatch = bool(
+                direct_olt_id and assigned_olt_id and direct_olt_id != assigned_olt_id
+            )
 
             if mismatch:
                 mismatches += 1
@@ -287,8 +297,10 @@ class OltDetailAdapter:
                 port_display = getattr(pon_port, "notes", None) or getattr(
                     pon_port, "name", None
                 )
-            if not port_display and getattr(ont, "board", None) and getattr(
-                ont, "port", None
+            if (
+                not port_display
+                and getattr(ont, "board", None)
+                and getattr(ont, "port", None)
             ):
                 port_display = f"{ont.board}/{ont.port}"
 

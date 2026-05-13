@@ -16,7 +16,9 @@ def test_zabbix_token_resolves_secret_reference(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.secrets.resolve_secret",
-        lambda value: "resolved-token" if value == "bao://secret/zabbix#api_token" else value,
+        lambda value: (
+            "resolved-token" if value == "bao://secret/zabbix#api_token" else value
+        ),
     )
 
     assert zabbix.get_zabbix_api_token() == "resolved-token"
@@ -50,9 +52,9 @@ def test_zabbix_token_uses_openbao_fallback(monkeypatch):
     monkeypatch.delenv("ZABBIX_API_TOKEN_FILE", raising=False)
     monkeypatch.setattr(
         "app.services.secrets.get_secret",
-        lambda path, field, default="": "bao-token"
-        if (path, field) == ("zabbix", "api_token")
-        else default,
+        lambda path, field, default="": (
+            "bao-token" if (path, field) == ("zabbix", "api_token") else default
+        ),
     )
 
     assert zabbix.get_zabbix_api_token() == "bao-token"
@@ -102,7 +104,9 @@ def test_zabbix_auth_error_emits_alert_and_opens_circuit(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.events.emit_event",
-        lambda db, event_type, payload, actor=None: emitted.append((event_type, payload)),
+        lambda db, event_type, payload, actor=None: emitted.append(
+            (event_type, payload)
+        ),
     )
 
     response = Mock(status_code=401)

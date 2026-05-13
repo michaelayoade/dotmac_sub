@@ -154,13 +154,17 @@ def _restore_config_commands(config_text: str) -> list[str]:
         lower = stripped.lower()
         if lower in {"return", "end"}:
             continue
-        if lower.startswith(("display ", "show ", "ping ", "traceroute ", "screen-length ")):
+        if lower.startswith(
+            ("display ", "show ", "ping ", "traceroute ", "screen-length ")
+        ):
             continue
         commands.append(stripped)
     return commands
 
 
-def _save_running_config(channel, prompt_regex: str, is_error_output) -> tuple[bool, str]:
+def _save_running_config(
+    channel, prompt_regex: str, is_error_output
+) -> tuple[bool, str]:
     """Persist the running config, handling Huawei confirmation prompts."""
     from app.services.network.olt_ssh import _read_until_prompt, _run_huawei_cmd
 

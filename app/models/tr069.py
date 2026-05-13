@@ -56,7 +56,11 @@ class Tr069AcsServer(Base):
     base_url: Mapped[str] = mapped_column(String(255), nullable=False)
     periodic_inform_interval: Mapped[int] = mapped_column(
         Integer,
-        default=lambda: __import__("app.config", fromlist=["settings"]).settings.tr069_periodic_inform_interval,
+        default=lambda: (
+            __import__(
+                "app.config", fromlist=["settings"]
+            ).settings.tr069_periodic_inform_interval
+        ),
         nullable=False,
     )  # seconds, default from settings.tr069_periodic_inform_interval
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

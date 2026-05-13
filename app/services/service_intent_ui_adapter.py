@@ -128,5 +128,6 @@ class ServiceIntentUiAdapter:
             "extra_vlans": extra_vlans,
         }
 
+
 service_intent_ui_adapter = ServiceIntentUiAdapter()
 adapter_registry.register(service_intent_ui_adapter)

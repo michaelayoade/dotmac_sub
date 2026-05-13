@@ -61,16 +61,28 @@ class TestConnectionRequestCredentials:
 
         assert "Device.ManagementServer.ConnectionRequestUsername" in batch.parameters
         assert "Device.ManagementServer.ConnectionRequestPassword" in batch.parameters
-        assert batch.parameters["Device.ManagementServer.ConnectionRequestUsername"] == "user"
-        assert batch.parameters["Device.ManagementServer.ConnectionRequestPassword"] == "pass"
+        assert (
+            batch.parameters["Device.ManagementServer.ConnectionRequestUsername"]
+            == "user"
+        )
+        assert (
+            batch.parameters["Device.ManagementServer.ConnectionRequestPassword"]
+            == "pass"
+        )
 
     def test_tr098_paths(self):
         """Should use correct TR-098 paths."""
         batch = Tr069ConfigBatch(data_model="InternetGatewayDevice")
         batch.add_connection_request_credentials("user", "pass")
 
-        assert "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername" in batch.parameters
-        assert "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword" in batch.parameters
+        assert (
+            "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername"
+            in batch.parameters
+        )
+        assert (
+            "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword"
+            in batch.parameters
+        )
 
     def test_periodic_inform_defaults(self):
         """Should set default periodic inform settings."""
@@ -193,7 +205,10 @@ class TestWiFiConfig:
         batch.add_wifi_config(ssid="TestSSID")
 
         # TR-098 uses InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID
-        assert "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID" in batch.parameters
+        assert (
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"
+            in batch.parameters
+        )
 
     def test_custom_wifi_path(self):
         """Should allow custom WiFi path."""

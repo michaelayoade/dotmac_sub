@@ -1260,9 +1260,7 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
     )
 
     inventory_total = (
-        db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.is_active.is_(True))
-        .scalar()
+        db.query(sa_func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
         or 0
     )
     online = 0

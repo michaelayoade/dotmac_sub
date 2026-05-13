@@ -191,7 +191,11 @@ def find_local_olt_dump(
         return max(direct_candidates, key=lambda path: path.stat().st_mtime)
 
     upload_root = next(
-        (root for root in dump_roots if root.name == "olt_config_backups" and root.exists()),
+        (
+            root
+            for root in dump_roots
+            if root.name == "olt_config_backups" and root.exists()
+        ),
         None,
     )
     if upload_root is None:
@@ -224,7 +228,12 @@ def parse_olt_dump_profiles(config_text: str) -> ParsedOltDumpProfiles:
     current_tr069_ip_index: int | None = None
 
     def flush_current() -> None:
-        nonlocal current_id, current_name, current_gems, current_tr069, current_tr069_ip_index
+        nonlocal \
+            current_id, \
+            current_name, \
+            current_gems, \
+            current_tr069, \
+            current_tr069_ip_index
         if current_id is None:
             return
         line_profiles[current_id] = DumpLineProfile(
@@ -397,7 +406,9 @@ def audit_olt_config_pack_dump(
     return audit
 
 
-def apply_dump_audit_suggestions(db: Session, audits: list[OltConfigPackDumpAudit]) -> int:
+def apply_dump_audit_suggestions(
+    db: Session, audits: list[OltConfigPackDumpAudit]
+) -> int:
     """Deprecated no-op: profile defaults are no longer written to config_pack."""
     del db, audits
     return 0

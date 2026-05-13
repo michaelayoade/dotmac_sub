@@ -41,8 +41,7 @@ class TestOltTypeRegistry:
         assert caps.supports_ont_wan_config is False
         assert caps.supports_ont_home_gateway_config is True
         assert (
-            caps.wan_provisioning_mode
-            == WanProvisioningMode.HOME_GATEWAY_CONFIG.value
+            caps.wan_provisioning_mode == WanProvisioningMode.HOME_GATEWAY_CONFIG.value
         )
 
     def test_ma5608t_v800r018_full_capabilities(self):

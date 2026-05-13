@@ -22,9 +22,7 @@ def _ont(ont_id: str, external_id: str, **kwargs):
 
 def test_snapshot_marks_status_code_one_online(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
-    walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: 1"
-    )
+    walk_output = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: 1"
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
         _olt(),
@@ -46,9 +44,7 @@ def test_snapshot_marks_status_code_one_online(monkeypatch) -> None:
 
 def test_snapshot_marks_missing_or_non_one_status_offline(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
-    walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: 2"
-    )
+    walk_output = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: 2"
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
         _olt(),
@@ -73,9 +69,7 @@ def test_snapshot_marks_missing_or_non_one_status_offline(monkeypatch) -> None:
 
 def test_snapshot_keeps_rx_signal_separate_from_status(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
-    walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: -2318"
-    )
+    walk_output = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312192.5 = INTEGER: -2318"
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
         _olt(),
@@ -98,9 +92,7 @@ def test_snapshot_keeps_rx_signal_separate_from_status(monkeypatch) -> None:
 
 def test_snapshot_matches_huawei_encoded_external_id(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
-    walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312448.0 = INTEGER: -2113"
-    )
+    walk_output = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194312448.0 = INTEGER: -2113"
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
         _olt(),
@@ -123,9 +115,7 @@ def test_snapshot_matches_huawei_encoded_external_id(monkeypatch) -> None:
 
 def test_snapshot_matches_numeric_external_id_with_board_and_port(monkeypatch) -> None:
     monkeypatch.setattr(zabbix_ont_status, "zabbix_configured", lambda: True)
-    walk_output = (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194320640.7 = INTEGER: -2060"
-    )
+    walk_output = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194320640.7 = INTEGER: -2060"
 
     snapshot = zabbix_ont_status.get_olt_ont_snapshot_from_zabbix(
         _olt(),

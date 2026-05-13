@@ -41,7 +41,9 @@ class InMemoryRateLimiterAdapter:
         self._hits: dict[str, deque[datetime]] = defaultdict(deque)
         self._lock = Lock()
 
-    def check(self, rule: RateLimitRule, *, now: datetime | None = None) -> RateLimitDecision:
+    def check(
+        self, rule: RateLimitRule, *, now: datetime | None = None
+    ) -> RateLimitDecision:
         now = now or datetime.now(UTC)
         if now.tzinfo is None:
             now = now.replace(tzinfo=UTC)

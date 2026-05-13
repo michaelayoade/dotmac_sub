@@ -98,7 +98,9 @@ def main() -> int:
                 if not suggestions:
                     logger.info(
                         "  SUGGEST: %s",
-                        suggestion_result.get("message", "No compatible profile found."),
+                        suggestion_result.get(
+                            "message", "No compatible profile found."
+                        ),
                     )
                 for suggestion in suggestions:
                     logger.info(

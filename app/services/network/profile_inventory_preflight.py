@@ -16,7 +16,9 @@ DOTMAC_PROFILE_NAME_PREFIX = "DOTMAC_"
 
 _PROFILE_NAME_RE = re.compile(r'\bprofile-name\s+"(?P<name>[^"]+)"', re.IGNORECASE)
 _TRAFFIC_TABLE_NAME_RE = re.compile(r'\bname\s+"(?P<name>[^"]+)"', re.IGNORECASE)
-_LINE_TCONT_DBA_RE = re.compile(r"\btcont\s+\d+\s+dba-profile-id\s+(?P<id>\d+)\b", re.IGNORECASE)
+_LINE_TCONT_DBA_RE = re.compile(
+    r"\btcont\s+\d+\s+dba-profile-id\s+(?P<id>\d+)\b", re.IGNORECASE
+)
 _GEM_MAPPING_VLAN_RE = re.compile(
     r"\bgem\s+mapping\s+\d+\s+\d+\s+vlan\s+(?P<vlan>\d+)\b",
     re.IGNORECASE,
@@ -104,7 +106,9 @@ def build_profile_inventory(
     return ProfileInventory(
         dba_profile_ids=frozenset(_entry_ids(dba_profiles, "profile_id", "DBA")),
         dba_profile_names=frozenset(_entry_names(dba_profiles)),
-        traffic_table_ids=frozenset(_entry_ids(traffic_tables, "index", "traffic table")),
+        traffic_table_ids=frozenset(
+            _entry_ids(traffic_tables, "index", "traffic table")
+        ),
         traffic_table_names=frozenset(_entry_names(traffic_tables)),
         line_profile_ids=frozenset(_entry_ids(line_profiles, "profile_id", "line")),
         line_profile_names=frozenset(_entry_names(line_profiles)),
@@ -141,7 +145,9 @@ def validate_offer_profile_sync_plan_inventory(
     if bundle.download_traffic_table_id == bundle.upload_traffic_table_id:
         errors.append("download and upload traffic table IDs must be distinct")
 
-    _fail_if_existing_id(errors, "DBA profile", bundle.dba_profile_id, inventory.dba_profile_ids)
+    _fail_if_existing_id(
+        errors, "DBA profile", bundle.dba_profile_id, inventory.dba_profile_ids
+    )
     _fail_if_existing_id(
         errors,
         "download traffic table",
@@ -154,7 +160,9 @@ def validate_offer_profile_sync_plan_inventory(
         bundle.upload_traffic_table_id,
         inventory.traffic_table_ids,
     )
-    _fail_if_existing_id(errors, "line profile", bundle.line_profile_id, inventory.line_profile_ids)
+    _fail_if_existing_id(
+        errors, "line profile", bundle.line_profile_id, inventory.line_profile_ids
+    )
     _fail_if_existing_id(
         errors,
         "service profile",
@@ -222,13 +230,19 @@ def validate_dotmac_profile_apply_plan(
 
     for group in groups:
         step = str(getattr(group, "step", "") or "").casefold()
-        commands = tuple(str(command).strip() for command in getattr(group, "commands", ()) or ())
+        commands = tuple(
+            str(command).strip() for command in getattr(group, "commands", ()) or ()
+        )
         if not commands:
-            errors.append(f"command group {getattr(group, 'step', '')!r} has no commands")
+            errors.append(
+                f"command group {getattr(group, 'step', '')!r} has no commands"
+            )
             continue
 
         if "dba" in step:
-            _validate_named_create_group(errors, "DBA profile", commands, _DBA_CREATE_RE)
+            _validate_named_create_group(
+                errors, "DBA profile", commands, _DBA_CREATE_RE
+            )
         elif "traffic" in step:
             _validate_named_create_group(
                 errors,
@@ -323,7 +337,9 @@ def _fail_if_bad_name(
         errors.append(f"{label} command is missing a profile name")
         return
     if not name.startswith(DOTMAC_PROFILE_NAME_PREFIX):
-        errors.append(f"{label} name {name!r} must start with {DOTMAC_PROFILE_NAME_PREFIX}")
+        errors.append(
+            f"{label} name {name!r} must start with {DOTMAC_PROFILE_NAME_PREFIX}"
+        )
     if name.casefold() in existing_names:
         errors.append(f"{label} name {name!r} already exists on OLT")
 
@@ -340,7 +356,9 @@ def _validate_named_create_group(
             continue
         match = create_regex.match(command)
         if match is None:
-            errors.append(f"{label} command is not an allowed Dotmac create command: {command}")
+            errors.append(
+                f"{label} command is not an allowed Dotmac create command: {command}"
+            )
             continue
         _validate_dotmac_name(errors, label, match.group("name"))
 
@@ -357,7 +375,9 @@ def _validate_profile_body_group(
         errors.append(f"{label} command is not create-only: {create_command}")
     create_match = create_regex.match(create_command)
     if create_match is None:
-        errors.append(f"{label} first command is not an allowed Dotmac create command: {create_command}")
+        errors.append(
+            f"{label} first command is not an allowed Dotmac create command: {create_command}"
+        )
     else:
         _validate_dotmac_name(errors, label, create_match.group("name"))
 
@@ -371,7 +391,9 @@ def _validate_profile_body_group(
 
 def _validate_dotmac_name(errors: list[str], label: str, name: str) -> None:
     if not name.startswith(DOTMAC_PROFILE_NAME_PREFIX):
-        errors.append(f"{label} name {name!r} must start with {DOTMAC_PROFILE_NAME_PREFIX}")
+        errors.append(
+            f"{label} name {name!r} must start with {DOTMAC_PROFILE_NAME_PREFIX}"
+        )
 
 
 def _validate_command_dependencies(

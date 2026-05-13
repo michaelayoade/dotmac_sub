@@ -66,11 +66,14 @@ def is_retry_due(
     if failure.status != CompensationStatus.pending:
         return False
     current_time = now or datetime.now(UTC)
-    return next_retry_at(
-        failure,
-        base_seconds=base_seconds,
-        max_seconds=max_seconds,
-    ) <= current_time
+    return (
+        next_retry_at(
+            failure,
+            base_seconds=base_seconds,
+            max_seconds=max_seconds,
+        )
+        <= current_time
+    )
 
 
 def list_pending_compensations(
@@ -260,7 +263,9 @@ def _retry_service_layer_compensation(
             str(failure.ont_unit_id),
             port_indices=port_indices,
             expected_olt_id=(
-                str(failure.olt_device_id) if failure.olt_device_id is not None else None
+                str(failure.olt_device_id)
+                if failure.olt_device_id is not None
+                else None
             ),
         )
         if result.success:

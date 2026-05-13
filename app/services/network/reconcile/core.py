@@ -153,9 +153,7 @@ def reconcile_ont(
                 # Filter the proposed_change to OntDesiredState fields only —
                 # callers may have copy-pasted extras.
                 allowed = {f for f in vars(desired_current)}
-                filtered = {
-                    k: v for k, v in proposed_change.items() if k in allowed
-                }
+                filtered = {k: v for k, v in proposed_change.items() if k in allowed}
                 target = replace(desired_current, **filtered)
                 # Validation runs only on actual mutations — the principle is
                 # "validate at the write boundary." When proposed_change is
@@ -168,8 +166,7 @@ def reconcile_ont(
                         success=False,
                         failure=ReconcileFailure(
                             reason=ReconcileFailureReason.INVALID_CHANGE,
-                            message=validation.reason
-                            or "invalid proposed change",
+                            message=validation.reason or "invalid proposed change",
                         ),
                         started_monotonic=started_monotonic,
                         observed_after=None,
@@ -208,9 +205,7 @@ def reconcile_ont(
                     (time.monotonic() - started_monotonic) * 1000
                 ),
                 mgmt_ip_pingable=mgmt_ip_pingable,
-                consecutive_sweep_unreachable=(
-                    ont.consecutive_sweep_unreachable
-                ),
+                consecutive_sweep_unreachable=(ont.consecutive_sweep_unreachable),
                 olt=olt_result.observed or _absent_olt(),
                 acs=acs_result.observed or _absent_acs(),
             )
@@ -236,9 +231,7 @@ def reconcile_ont(
                     )
                 else:
                     reason = ReconcileFailureReason.ACS_UNREACHABLE
-                    message = (
-                        f"ACS unreachable: {acs_result.error or 'no detail'}"
-                    )
+                    message = f"ACS unreachable: {acs_result.error or 'no detail'}"
                 return _finalise(
                     db,
                     ont,
@@ -459,9 +452,7 @@ def _resolve_acs_client(db: Session, ont: OntUnit) -> Any:
 
     if ont.tr069_acs_server_id:
         server = db.execute(
-            select(Tr069AcsServer).where(
-                Tr069AcsServer.id == ont.tr069_acs_server_id
-            )
+            select(Tr069AcsServer).where(Tr069AcsServer.id == ont.tr069_acs_server_id)
         ).scalar_one_or_none()
         if server is not None:
             return GenieACSClient(base_url=server.base_url)
@@ -484,9 +475,7 @@ def _read_observed_parallel(
         olt_future = pool.submit(
             read_olt_state, olt_adapter, desired, deadline=deadline
         )
-        acs_future = pool.submit(
-            read_acs_state, acs_client, desired, deadline=deadline
-        )
+        acs_future = pool.submit(read_acs_state, acs_client, desired, deadline=deadline)
         olt_result = olt_future.result()
         acs_result = acs_future.result()
     return olt_result, acs_result

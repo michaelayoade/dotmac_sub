@@ -322,9 +322,7 @@ def test_sweep_resets_unreachable_counter_via_reconcile(
         # Simulate what real reconcile_ont does on success
         from sqlalchemy import select
 
-        ont = db.execute(
-            select(OntUnit).where(OntUnit.id == ont_unit_id)
-        ).scalar_one()
+        ont = db.execute(select(OntUnit).where(OntUnit.id == ont_unit_id)).scalar_one()
         ont.consecutive_sweep_unreachable = 0
         return _stub_result(True)
 

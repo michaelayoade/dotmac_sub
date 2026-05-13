@@ -43,6 +43,7 @@ OPTIONAL_OPENBAO_PATHS = [
     "migration",
 ]
 
+
 @dataclass
 class CheckResult:
     name: str
@@ -81,7 +82,11 @@ def check_migrations() -> CheckResult:
         current_heads = sorted(context.get_current_heads())
 
     ok = current_heads == expected_heads
-    summary = "database schema is at expected head" if ok else "database schema drift detected"
+    summary = (
+        "database schema is at expected head"
+        if ok
+        else "database schema drift detected"
+    )
     return CheckResult(
         "migrations",
         ok,
@@ -152,9 +157,7 @@ def check_openbao() -> CheckResult:
     missing_required_paths = [
         path for path in REQUIRED_OPENBAO_PATHS if path not in paths
     ]
-    missing_optional_paths = [
-        path for path in optional_paths if path not in paths
-    ]
+    missing_optional_paths = [path for path in optional_paths if path not in paths]
     field_presence: dict[str, list[str]] = {}
     for path in sorted(paths.intersection(expected_paths)):
         field_presence[path] = sorted(read_secret_fields(path).keys())
@@ -280,7 +283,11 @@ def main() -> int:
         for key, value in result.details.items():
             if value in (None, "", [], {}):
                 continue
-            rendered = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+            rendered = (
+                json.dumps(value, sort_keys=True)
+                if isinstance(value, (dict, list))
+                else str(value)
+            )
             print(f"  {key}: {rendered}")
 
     return 0 if ok else 1

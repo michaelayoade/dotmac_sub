@@ -215,9 +215,10 @@ def database_health(db: Session = Depends(get_db)) -> dict[str, Any]:
                 else None,
             }
 
-        activity = db.execute(
-            text(
-                """
+        activity = (
+            db.execute(
+                text(
+                    """
                 SELECT
                     count(*) FILTER (WHERE state = 'idle in transaction')::int AS idle_in_transaction,
                     count(*) FILTER (
@@ -232,8 +233,11 @@ def database_health(db: Session = Depends(get_db)) -> dict[str, Any]:
                     count(*) FILTER (WHERE wait_event_type = 'Lock')::int AS waiting_on_lock
                 FROM pg_stat_activity
                 """
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         degraded = False
         if activity:
             result["stale_sessions"] = {

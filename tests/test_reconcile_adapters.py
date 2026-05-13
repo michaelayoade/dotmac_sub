@@ -94,9 +94,7 @@ def test_desired_fsp_is_empty_when_board_or_port_missing(db_session, olt):
     assert desired.fsp == ""
 
 
-def test_desired_pppoe_credentials_round_trip_through_desired_config(
-    db_session, ont
-):
+def test_desired_pppoe_credentials_round_trip_through_desired_config(db_session, ont):
     ont.pppoe_username = "100024456"
     ont.pppoe_password = "PVgWc3Ch"
     db_session.commit()

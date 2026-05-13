@@ -172,7 +172,11 @@ def build_olt_config_evidence(db: Session, olt_id: str | UUID) -> dict[str, Any]
         "status": status,
         "summary": _summary_message(
             status,
-            {"in_sync": len(sources) - missing - drift, "drift": drift, "unknown": missing},
+            {
+                "in_sync": len(sources) - missing - drift,
+                "drift": drift,
+                "unknown": missing,
+            },
         ),
         "sources": [source.to_dict() for source in sources],
         "counts": {
@@ -353,12 +357,18 @@ def _compare_membership(
     normalized_expected = _normalize_value(expected)
     normalized_observed = [_normalize_value(item) for item in observed]
     if normalized_expected is None:
-        return DriftCheck(label, "unknown", expected, observed, source, "No intent value")
+        return DriftCheck(
+            label, "unknown", expected, observed, source, "No intent value"
+        )
     if not normalized_observed:
-        return DriftCheck(label, "unknown", expected, observed, source, "No observed value")
+        return DriftCheck(
+            label, "unknown", expected, observed, source, "No observed value"
+        )
     if normalized_expected in normalized_observed:
         return DriftCheck(label, "in_sync", expected, observed, source, "Matches")
-    return DriftCheck(label, "drift", expected, observed, source, "Observed value differs")
+    return DriftCheck(
+        label, "drift", expected, observed, source, "Observed value differs"
+    )
 
 
 def _compare_scalar(
@@ -371,12 +381,18 @@ def _compare_scalar(
     normalized_expected = _normalize_value(expected)
     normalized_observed = _normalize_value(observed)
     if normalized_expected is None:
-        return DriftCheck(label, "unknown", expected, observed, source, "No intent value")
+        return DriftCheck(
+            label, "unknown", expected, observed, source, "No intent value"
+        )
     if normalized_observed is None:
-        return DriftCheck(label, "unknown", expected, observed, source, "No observed value")
+        return DriftCheck(
+            label, "unknown", expected, observed, source, "No observed value"
+        )
     if normalized_expected == normalized_observed:
         return DriftCheck(label, "in_sync", expected, observed, source, "Matches")
-    return DriftCheck(label, "drift", expected, observed, source, "Observed value differs")
+    return DriftCheck(
+        label, "drift", expected, observed, source, "Observed value differs"
+    )
 
 
 def _compare_snapshot_value(

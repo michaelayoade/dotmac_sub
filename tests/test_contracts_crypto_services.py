@@ -75,7 +75,9 @@ class TestCredentialCrypto:
         monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", key)
         monkeypatch.setattr(
             "app.services.secrets.get_secret",
-            lambda *_args, **_kwargs: pytest.fail("OpenBao fallback should not be probed"),
+            lambda *_args, **_kwargs: pytest.fail(
+                "OpenBao fallback should not be probed"
+            ),
         )
 
         assert get_encryption_key() == key.encode("ascii")

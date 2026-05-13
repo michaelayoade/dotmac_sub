@@ -51,9 +51,7 @@ def discover_all_olt_hardware() -> dict[str, int]:
             from app.services.zabbix_host_sync import sync_olt_to_zabbix
 
             olts = list(
-                db.scalars(
-                    select(OLTDevice).where(OLTDevice.is_active.is_(True))
-                ).all()
+                db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
             )
             logger.info(
                 "OLT hardware discovery: found %d active OLTs",

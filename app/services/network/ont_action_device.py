@@ -162,7 +162,9 @@ def _unwrap_parameter_value(value: object) -> object:
     return value
 
 
-def _extract_first(client: object, device: dict[str, object], paths: list[str]) -> object:
+def _extract_first(
+    client: object, device: dict[str, object], paths: list[str]
+) -> object:
     for path in paths:
         value = _unwrap_parameter_value(client.extract_parameter_value(device, path))  # type: ignore[attr-defined]
         if value is not None:

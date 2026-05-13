@@ -904,7 +904,9 @@ class NasDevice(Base):
 
     # Zabbix monitoring integration
     zabbix_host_id: Mapped[str | None] = mapped_column(String(20))
-    zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

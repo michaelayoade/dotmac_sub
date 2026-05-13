@@ -28,9 +28,9 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.network import (
     OLTDevice,
+    OltServicePort,
     OntAssignment,
     OntUnit,
-    OltServicePort,
 )
 
 logging.basicConfig(
@@ -83,9 +83,7 @@ class ParsedOntRegistration:
 
 # Regex to parse ont add commands
 # ont add <port> <ont_id> sn-auth "<hex_serial>" ...
-ONT_ADD_RE = re.compile(
-    r"ont\s+add\s+(\d+)\s+(\d+)\s+sn-auth\s+\"([0-9A-Fa-f]+)\""
-)
+ONT_ADD_RE = re.compile(r"ont\s+add\s+(\d+)\s+(\d+)\s+sn-auth\s+\"([0-9A-Fa-f]+)\"")
 
 
 def _hex_to_serial(hex_sn: str) -> str:

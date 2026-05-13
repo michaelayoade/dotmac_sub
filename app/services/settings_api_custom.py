@@ -100,6 +100,7 @@ _GEOCODING_SETTING_KEYS = {
 _GEOCODING_SETTING_INT_KEYS = {"timeout_sec"}
 _GEOCODING_SETTING_BOOL_KEYS = {"enabled"}
 
+
 def _domain_allowed_keys(domain: SettingDomain) -> str:
     specs = settings_spec.list_specs(domain)
     return ", ".join(sorted(spec.key for spec in specs))

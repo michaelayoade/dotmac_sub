@@ -188,7 +188,9 @@ def reconcile_ont_pon_ports_from_registrations(
                     registration_fsp=registration_fsp,
                     current_fsp=_current_fsp(db, ont),
                     target_pon_port_id=None,
-                    current_pon_port_id=str(ont.pon_port_id) if ont.pon_port_id else None,
+                    current_pon_port_id=str(ont.pon_port_id)
+                    if ont.pon_port_id
+                    else None,
                     ont_unit_id=str(ont.id),
                     skipped_reason="registration FSP is invalid",
                 )
@@ -248,11 +250,7 @@ def reconcile_ont_pon_ports_from_registrations(
         )
 
     missing_from_registration = len(
-        {
-            key
-            for key in ont_by_olt_serial
-            if key not in registration_keys
-        }
+        {key for key in ont_by_olt_serial if key not in registration_keys}
     )
 
     if apply:

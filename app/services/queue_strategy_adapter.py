@@ -221,9 +221,7 @@ class QueueStrategyAdapter:
                 return queue
         return None
 
-    def _should_shed(
-        self, priority: TaskPriority, health: QueueHealth
-    ) -> bool:
+    def _should_shed(self, priority: TaskPriority, health: QueueHealth) -> bool:
         """Determine if a task should be shed based on priority and health."""
         if priority == TaskPriority.critical:
             return False
@@ -243,9 +241,7 @@ class QueueStrategyAdapter:
 
         return False
 
-    def _should_defer(
-        self, priority: TaskPriority, health: QueueHealth
-    ) -> int | None:
+    def _should_defer(self, priority: TaskPriority, health: QueueHealth) -> int | None:
         """Determine if task should be deferred and by how much."""
         if priority == TaskPriority.critical:
             return None

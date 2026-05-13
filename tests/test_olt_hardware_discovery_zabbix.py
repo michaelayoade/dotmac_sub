@@ -38,9 +38,7 @@ def test_olt_hardware_discovery_requires_zabbix_host(db_session, monkeypatch):
     assert stats == {}
 
 
-def test_olt_hardware_discovery_reads_entity_mib_from_zabbix(
-    db_session, monkeypatch
-):
+def test_olt_hardware_discovery_reads_entity_mib_from_zabbix(db_session, monkeypatch):
     monkeypatch.setattr(discovery, "zabbix_configured", lambda: True)
 
     values = {

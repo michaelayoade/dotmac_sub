@@ -7,8 +7,9 @@ defaults remain in ``OltConfigPack`` and are merged at read time by
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable
+from typing import Any
 
 from app.models.network import OntUnit
 
@@ -66,7 +67,7 @@ def desired_config(ont: OntUnit) -> dict[str, Any]:
 
 def desired_config_column(model: type[OntUnit] = OntUnit) -> Any:
     """Return the desired_config ORM column for query builders."""
-    return getattr(model, "desired_config")
+    return model.desired_config
 
 
 def clear_desired_config(ont: OntUnit) -> None:
@@ -187,7 +188,9 @@ def _nested_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
     return cursor
 
 
-def _set_nested_value(config: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+def _set_nested_value(
+    config: dict[str, Any], path: tuple[str, ...], value: Any
+) -> None:
     cursor = config
     for key in path[:-1]:
         next_value = cursor.get(key)

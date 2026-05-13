@@ -123,9 +123,10 @@ def _postgres_activity_snapshot(db: Session) -> dict[str, object]:
     """Return connection and transaction age indicators for stale-session alerts."""
     from sqlalchemy import text
 
-    row = db.execute(
-        text(
-            """
+    row = (
+        db.execute(
+            text(
+                """
             SELECT
                 count(*)::int AS total_connections,
                 count(*) FILTER (WHERE state = 'active')::int AS active_connections,
@@ -144,8 +145,11 @@ def _postgres_activity_snapshot(db: Session) -> dict[str, object]:
                 (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max_connections
             FROM pg_stat_activity
             """
+            )
         )
-    ).mappings().first()
+        .mappings()
+        .first()
+    )
     if not row:
         return {}
     max_connections = int(row["max_connections"] or 0)
@@ -156,9 +160,7 @@ def _postgres_activity_snapshot(db: Session) -> dict[str, object]:
         "active_connections": int(row["active_connections"] or 0),
         "idle_connections": int(row["idle_connections"] or 0),
         "idle_in_transaction": int(row["idle_in_transaction"] or 0),
-        "idle_in_transaction_over_60s": int(
-            row["idle_in_transaction_over_60s"] or 0
-        ),
+        "idle_in_transaction_over_60s": int(row["idle_in_transaction_over_60s"] or 0),
         "max_idle_in_transaction_seconds": round(
             float(row["max_idle_in_transaction_seconds"] or 0), 1
         ),
@@ -449,7 +451,11 @@ def _check_celery(db: Session) -> ServiceStatus:
                 queue_lengths[queue_name] = int(redis_client.llen(queue_name))
 
         status = "up"
-        if long_running or reserved_count > 100 or any(v > 500 for v in queue_lengths.values()):
+        if (
+            long_running
+            or reserved_count > 100
+            or any(v > 500 for v in queue_lengths.values())
+        ):
             status = "degraded"
         return ServiceStatus(
             name="Celery",

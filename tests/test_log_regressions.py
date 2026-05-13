@@ -227,7 +227,7 @@ def test_olt_detail_template_uses_imported_state_sections() -> None:
 
     assert "Imported OLT Profiles" in template
     assert 'hx-get="/admin/network/olts/{{ olt.id }}/profiles/imported"' in template
-    assert "x-show=\"activeTab" not in template
+    assert 'x-show="activeTab' not in template
     assert "Subscriber Impact" not in template
     assert "Runtime and hardware state" not in template
 

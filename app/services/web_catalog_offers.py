@@ -1117,11 +1117,13 @@ def update_offer_with_audit(
     metadata = {"changes": changes} if changes else None
     staged_profile_sync_tasks = []
     if _should_stage_profile_sync_tasks(changes):
-        staged_profile_sync_tasks = enqueue_offer_profile_sync_tasks_for_existing_bundles(
-            db,
-            offer=updated_offer,
-            trigger="catalog_offer_update",
-            requested_by=actor_id,
+        staged_profile_sync_tasks = (
+            enqueue_offer_profile_sync_tasks_for_existing_bundles(
+                db,
+                offer=updated_offer,
+                trigger="catalog_offer_update",
+                requested_by=actor_id,
+            )
         )
         if staged_profile_sync_tasks:
             metadata = metadata or {}

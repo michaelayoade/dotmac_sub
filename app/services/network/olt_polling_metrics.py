@@ -26,7 +26,9 @@ _VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
 _TRAFFIC_SNAPSHOT_MAX_AGE_HOURS = 24
 
 
-def _extract_traffic_bytes(snapshot: dict[str, Any] | None) -> tuple[int | None, int | None]:
+def _extract_traffic_bytes(
+    snapshot: dict[str, Any] | None,
+) -> tuple[int | None, int | None]:
     """Extract total bytes sent/received from TR-069 ethernet port snapshot.
 
     Args:

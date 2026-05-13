@@ -20,6 +20,7 @@ SessionLocal = db_session_adapter.create_session
 
 _RETENTION_DAYS = 90
 
+
 @celery_app.task(name="app.tasks.network_operations.cleanup_old_operations")
 def cleanup_old_operations() -> dict[str, int]:
     """Purge completed operations older than the retention period.

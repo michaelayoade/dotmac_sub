@@ -147,12 +147,23 @@ def _offer_name(offer: Any) -> str:
 def _validate_offer_is_syncable(offer: Any) -> None:
     if getattr(offer, "is_active", True) is False:
         raise OfferProfileSyncError("Only active offers can be synced to OLT profiles")
-    if _enum_value(getattr(offer, "status", OfferStatus.active)) != OfferStatus.active.value:
+    if (
+        _enum_value(getattr(offer, "status", OfferStatus.active))
+        != OfferStatus.active.value
+    ):
         raise OfferProfileSyncError("Only active offers can be synced to OLT profiles")
-    if _enum_value(getattr(offer, "access_type", AccessType.fiber)) != AccessType.fiber.value:
+    if (
+        _enum_value(getattr(offer, "access_type", AccessType.fiber))
+        != AccessType.fiber.value
+    ):
         raise OfferProfileSyncError("Only fiber offers can be synced to OLT profiles")
-    if _enum_value(getattr(offer, "plan_category", PlanCategory.internet)) != PlanCategory.internet.value:
-        raise OfferProfileSyncError("Only internet offers can be synced to OLT profiles")
+    if (
+        _enum_value(getattr(offer, "plan_category", PlanCategory.internet))
+        != PlanCategory.internet.value
+    ):
+        raise OfferProfileSyncError(
+            "Only internet offers can be synced to OLT profiles"
+        )
 
 
 def _speed_kbps(offer: Any, field: str) -> int:
@@ -381,7 +392,8 @@ def enqueue_offer_profile_sync_tasks(
     db: Session,
     *,
     offer: CatalogOffer,
-    requests: list[OfferProfileSyncTaskRequest] | tuple[OfferProfileSyncTaskRequest, ...],
+    requests: list[OfferProfileSyncTaskRequest]
+    | tuple[OfferProfileSyncTaskRequest, ...],
     trigger: str = "offer_change",
     requested_by: str | None = None,
 ) -> list[OltProfileSyncTask]:

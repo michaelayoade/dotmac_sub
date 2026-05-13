@@ -8,9 +8,7 @@ from playwright.sync_api import Page, expect
 
 
 def _first_ont_detail_path(admin_page: Page, base_url: str) -> str:
-    admin_page.goto(
-        f"{base_url}/admin/network/onts", wait_until="domcontentloaded"
-    )
+    admin_page.goto(f"{base_url}/admin/network/onts", wait_until="domcontentloaded")
     detail_link = admin_page.locator("a[href*='/admin/network/onts/']").first
     if detail_link.count() == 0:
         pytest.skip("No ONT records available for device-config panel check")
@@ -33,9 +31,7 @@ def _route_success(admin_page: Page, pattern: str):
     admin_page.route(pattern, _handler)
 
 
-def test_ont_apply_device_config_save_push_and_actions(
-    admin_page: Page, settings
-):
+def test_ont_apply_device_config_save_push_and_actions(admin_page: Page, settings):
     """Device config exposes and submits the main ONT config workflows."""
     detail_path = _first_ont_detail_path(admin_page, settings.base_url)
     admin_page.goto(
@@ -74,9 +70,9 @@ def test_ont_apply_device_config_save_push_and_actions(
     configure_body = parse_qs(request_info.value.post_data or "")
     assert configure_body["push_to_device"] == ["true"]
 
-    panel.locator("form[hx-post$='/wan-remote-access'] select[name='enabled']").select_option(
-        "true"
-    )
+    panel.locator(
+        "form[hx-post$='/wan-remote-access'] select[name='enabled']"
+    ).select_option("true")
     with admin_page.expect_request(
         "**/admin/network/onts/*/wan-remote-access"
     ) as request_info:
@@ -100,9 +96,7 @@ def test_ont_apply_device_config_save_push_and_actions(
     assert web_password.get_attribute("type") == "password"
 
 
-def test_ont_return_to_inventory_ui_posts_and_redirects(
-    admin_page: Page, settings
-):
+def test_ont_return_to_inventory_ui_posts_and_redirects(admin_page: Page, settings):
     """Return-to-inventory UI posts through HTMX and follows the inventory redirect."""
     detail_path = _first_ont_detail_path(admin_page, settings.base_url)
     admin_page.goto(
@@ -136,4 +130,6 @@ def test_ont_return_to_inventory_ui_posts_and_redirects(
     request = request_info.value
     assert request.method == "POST"
     assert request.headers.get("hx-request") == "true"
-    admin_page.wait_for_url("**/admin/network/onts?view=unconfigured", wait_until="domcontentloaded")
+    admin_page.wait_for_url(
+        "**/admin/network/onts?view=unconfigured", wait_until="domcontentloaded"
+    )

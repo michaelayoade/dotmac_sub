@@ -41,6 +41,7 @@ APPROVED_PROVISION_WITH_RECONCILIATION_CALLERS = {
     Path("app/services/network/ont_provisioning/orchestrator.py"),
 }
 
+
 def _iter_app_python_files() -> list[Path]:
     return sorted(path for path in APP_DIR.rglob("*.py") if path.is_file())
 
@@ -105,7 +106,9 @@ def test_ont_desired_config_writes_stay_in_desired_config_owner_modules() -> Non
 
 
 def test_ont_desired_config_reads_stay_in_desired_config_owner_modules() -> None:
-    violations = _attribute_violations("desired_config", APPROVED_DESIRED_CONFIG_WRITERS)
+    violations = _attribute_violations(
+        "desired_config", APPROVED_DESIRED_CONFIG_WRITERS
+    )
 
     assert not violations, "\n".join(violations)
 

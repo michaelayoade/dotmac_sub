@@ -85,13 +85,13 @@ def upgrade() -> None:
         for row in rows:
             path = FIELD_PATHS.get(str(row["field_name"]))
             if not path:
-                path = tuple(
-                    part for part in str(row["field_name"]).split(".") if part
-                )
+                path = tuple(part for part in str(row["field_name"]).split(".") if part)
             if not path:
                 continue
             value_json = row["value_json"] or {}
-            value = value_json.get("value") if isinstance(value_json, dict) else value_json
+            value = (
+                value_json.get("value") if isinstance(value_json, dict) else value_json
+            )
             if value in (None, ""):
                 continue
             bind.execute(
@@ -117,7 +117,9 @@ def upgrade() -> None:
         # Drop constraints first (unique constraints create backing indexes)
         for constraint in inspector.get_unique_constraints("ont_config_overrides"):
             if constraint.get("name"):
-                op.drop_constraint(constraint["name"], "ont_config_overrides", type_="unique")
+                op.drop_constraint(
+                    constraint["name"], "ont_config_overrides", type_="unique"
+                )
         # Drop remaining indexes
         for index in inspector.get_indexes("ont_config_overrides"):
             if index.get("name"):
@@ -128,13 +130,19 @@ def upgrade() -> None:
         op.drop_table("ont_config_overrides")
 
     if "provisioning_step_executions" in inspector.get_table_names():
-        for constraint in inspector.get_unique_constraints("provisioning_step_executions"):
+        for constraint in inspector.get_unique_constraints(
+            "provisioning_step_executions"
+        ):
             if constraint.get("name"):
-                op.drop_constraint(constraint["name"], "provisioning_step_executions", type_="unique")
+                op.drop_constraint(
+                    constraint["name"], "provisioning_step_executions", type_="unique"
+                )
         for index in inspector.get_indexes("provisioning_step_executions"):
             if index.get("name"):
                 try:
-                    op.drop_index(index["name"], table_name="provisioning_step_executions")
+                    op.drop_index(
+                        index["name"], table_name="provisioning_step_executions"
+                    )
                 except Exception:
                     pass
         op.drop_table("provisioning_step_executions")
@@ -142,7 +150,9 @@ def upgrade() -> None:
     if "saga_executions" in inspector.get_table_names():
         for constraint in inspector.get_unique_constraints("saga_executions"):
             if constraint.get("name"):
-                op.drop_constraint(constraint["name"], "saga_executions", type_="unique")
+                op.drop_constraint(
+                    constraint["name"], "saga_executions", type_="unique"
+                )
         for index in inspector.get_indexes("saga_executions"):
             if index.get("name"):
                 try:

@@ -26,9 +26,7 @@ def _get_linked_tr069_device(db: Session, ont_id: str):
     ).first()
 
 
-def _determine_tr069_status(
-    linked_device, last_inform_at: datetime | None
-) -> str:
+def _determine_tr069_status(linked_device, last_inform_at: datetime | None) -> str:
     """Determine TR-069 online/offline status based on last inform time."""
     if not linked_device or not last_inform_at:
         return "offline"
@@ -76,17 +74,14 @@ def tr069_tab_data(db: Session, ont_id: str) -> dict[str, object]:
     acs_device_oui = system_info.get("OUI") or system_info.get("Manufacturer OUI")
     acs_product_class = system_info.get("Product Class") or system_info.get("Model")
     acs_serial_number = system_info.get("Serial Number")
-    acs_software_version = (
-        system_info.get("Software Version")
-        or system_info.get("Firmware Version")
+    acs_software_version = system_info.get("Software Version") or system_info.get(
+        "Firmware Version"
     )
 
     # Get connection request URL from linked device
     connection_request_url = None
     if linked_device:
-        connection_request_url = getattr(
-            linked_device, "connection_request_url", None
-        )
+        connection_request_url = getattr(linked_device, "connection_request_url", None)
 
     # Get ACS server info
     acs_server_name = None

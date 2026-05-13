@@ -489,7 +489,9 @@ def update_ont_acs_status_from_inform(
     return snapshot
 
 
-def reconcile_ont_state(ont: OntUnit, *, now: datetime | None = None) -> OntStateReconciliationResult:
+def reconcile_ont_state(
+    ont: OntUnit, *, now: datetime | None = None
+) -> OntStateReconciliationResult:
     snapshot = resolve_ont_status_for_model(ont, now=now)
     conflict = False
     return OntStateReconciliationResult(

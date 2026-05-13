@@ -137,7 +137,9 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
         calls["operational_acs"] = (db, olt)
         return "operational-acs"
 
-    monkeypatch.setattr(web_network_core_devices, "olt_detail_page_data", fake_page_data)
+    monkeypatch.setattr(
+        web_network_core_devices, "olt_detail_page_data", fake_page_data
+    )
     monkeypatch.setattr(
         web_network_operations, "build_operation_history", fake_operation_history
     )
@@ -300,7 +302,9 @@ def test_olt_action_adapter_delegates_find_ont_and_running_config(monkeypatch) -
         calls["find_ont"] = (db, olt_id, serial, kwargs)
         return True, "found", {"serial": serial}
 
-    monkeypatch.setattr(olt_operations, "fetch_running_config", fake_fetch_running_config)
+    monkeypatch.setattr(
+        olt_operations, "fetch_running_config", fake_fetch_running_config
+    )
     monkeypatch.setattr(
         olt_operations,
         "get_ont_status_by_serial",

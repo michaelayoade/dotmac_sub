@@ -93,7 +93,9 @@ def main() -> None:
 
     server = _active_server()
     cwmp_username = str(server.cwmp_username or "").strip()
-    cwmp_password = decrypt_credential(server.cwmp_password) if server.cwmp_password else ""
+    cwmp_password = (
+        decrypt_credential(server.cwmp_password) if server.cwmp_password else ""
+    )
     cr_username = str(server.connection_request_username or "").strip()
     cr_password = (
         decrypt_credential(server.connection_request_password)
@@ -131,7 +133,9 @@ def main() -> None:
         else:
             counts["cr_other"] += 1
 
-        needs_cwmp = cwmp != cwmp_username and (cwmp is not None or args.include_missing)
+        needs_cwmp = cwmp != cwmp_username and (
+            cwmp is not None or args.include_missing
+        )
         needs_cr = cr != cr_username and (cr is not None or args.include_missing)
         if not needs_cwmp and not needs_cr:
             continue

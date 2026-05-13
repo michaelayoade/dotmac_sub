@@ -152,7 +152,11 @@ def _ctx(**overrides) -> ApplyContext:
 def _plan(*actions) -> Plan:
     return Plan(
         actions=actions,
-        drifts=(Drift(field="x", surface="olt", desired=None, observed=None, repairable=True),),
+        drifts=(
+            Drift(
+                field="x", surface="olt", desired=None, observed=None, repairable=True
+            ),
+        ),
         required_surfaces=frozenset({a.surface for a in actions}),
     )
 
@@ -200,9 +204,7 @@ def test_olt_authorize_dispatches_to_authorize_ont():
 def test_olt_modify_line_profile_dispatches_to_update_ont_profiles():
     olt = _StubOltAdapter()
     ctx = _ctx(olt_adapter=olt)
-    plan = _plan(
-        OltModifyLineProfile(fsp="0/1/3", ont_id=11, line_profile_id=44)
-    )
+    plan = _plan(OltModifyLineProfile(fsp="0/1/3", ont_id=11, line_profile_id=44))
     apply_plan(plan, ctx)
     assert olt.calls[0][0] == "update_ont_profiles"
     assert olt.calls[0][2] == {"line_profile_id": 44}
@@ -211,9 +213,7 @@ def test_olt_modify_line_profile_dispatches_to_update_ont_profiles():
 def test_olt_modify_service_profile_dispatches_to_update_ont_profiles():
     olt = _StubOltAdapter()
     ctx = _ctx(olt_adapter=olt)
-    plan = _plan(
-        OltModifyServiceProfile(fsp="0/1/3", ont_id=11, service_profile_id=42)
-    )
+    plan = _plan(OltModifyServiceProfile(fsp="0/1/3", ont_id=11, service_profile_id=42))
     apply_plan(plan, ctx)
     assert olt.calls[0][2] == {"service_profile_id": 42}
 
@@ -325,9 +325,7 @@ def test_olt_omci_internet_config_dispatches():
 def test_olt_omci_wan_config_dispatches():
     olt = _StubOltAdapter()
     ctx = _ctx(olt_adapter=olt)
-    plan = _plan(
-        OltOmciWanConfig(fsp="0/1/3", ont_id=11, ip_index=1, profile_id=2)
-    )
+    plan = _plan(OltOmciWanConfig(fsp="0/1/3", ont_id=11, ip_index=1, profile_id=2))
     apply_plan(plan, ctx)
     assert olt.calls[0][0] == "configure_wan_config"
     assert olt.calls[0][2]["profile_id"] == 2
@@ -370,9 +368,7 @@ def test_olt_failure_halts_with_olt_write_rejected():
 def test_olt_modify_description_dispatches_to_set_ont_description():
     olt = _StubOltAdapter()
     ctx = _ctx(olt_adapter=olt)
-    plan = _plan(
-        OltModifyDescription(fsp="0/1/3", ont_id=11, description="Kolawole_2")
-    )
+    plan = _plan(OltModifyDescription(fsp="0/1/3", ont_id=11, description="Kolawole_2"))
     result = apply_plan(plan, ctx)
     assert result.success is True
     method, args, _ = olt.calls[0]
@@ -425,8 +421,7 @@ def test_acs_pppoe_pushes_six_params_including_resolved_password():
     params = args[1]
     assert len(params) == 6
     pppoe_root = (
-        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
-        "WANPPPConnection.1."
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1."
     )
     assert params[pppoe_root + "Username"] == "100024456"
     assert params[pppoe_root + "Password"] == "PW_RESOLVED"
@@ -452,16 +447,16 @@ def test_acs_set_wifi_password_pushes_resolved_psk_and_records_redacted():
         acs_client=acs,
         resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "bao://wifi" else ref,
     )
-    plan = _plan(
-        AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi")
-    )
+    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi"))
     result = apply_plan(plan, ctx)
 
     # The pushed value is the resolved plaintext...
     params = acs.calls[0][1][1]
     assert (
-        params["InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
-               "PreSharedKey.1.KeyPassphrase"]
+        params[
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+            "PreSharedKey.1.KeyPassphrase"
+        ]
         == "ACTUAL_PSK"
     )
     # ...but the AppliedAction record carries "[redacted]" so logs/audit
@@ -545,15 +540,11 @@ def test_resolver_exception_during_acs_psk_push_maps_to_acs_write_faulted():
         raise RuntimeError("OpenBao 503")
 
     ctx = _ctx(acs_client=acs, resolve_secret=_exploding_resolver)
-    plan = _plan(
-        AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi")
-    )
+    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref="bao://wifi"))
     result = apply_plan(plan, ctx)
 
     assert result.success is False
-    assert (
-        result.halted_by.reason == "acs_write_faulted"
-    )
+    assert result.halted_by.reason == "acs_write_faulted"
     assert "secret resolution failed" in result.halted_by.message.lower()
     assert "OpenBao 503" in result.halted_by.message
     # The ACS NBI client was never called — the failure preceded the push.
@@ -620,9 +611,7 @@ def test_resolver_empty_ref_does_not_call_resolver():
         return ref
 
     ctx = _ctx(acs_client=acs, resolve_secret=_tracking_resolver)
-    plan = _plan(
-        AcsSetWifiPassword(device_id="dev", password_ref="")
-    )
+    plan = _plan(AcsSetWifiPassword(device_id="dev", password_ref=""))
     result = apply_plan(plan, ctx)
     assert result.success is True
     # _resolve_or_fail short-circuits empty refs without invoking the
@@ -663,9 +652,7 @@ def test_acs_cwmp_fault_maps_to_acs_write_faulted():
     plan = _plan(AcsSetWifiSsid(device_id="dev", ssid="KURSI"))
     result = apply_plan(plan, ctx)
     assert result.success is False
-    assert (
-        result.halted_by.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
-    )
+    assert result.halted_by.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
     assert "9002" in result.halted_by.message
 
 
@@ -675,22 +662,16 @@ def test_acs_genieacs_exception_maps_to_acs_write_faulted():
     plan = _plan(AcsSetWifiSsid(device_id="dev", ssid="KURSI"))
     result = apply_plan(plan, ctx)
     assert result.success is False
-    assert (
-        result.halted_by.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
-    )
+    assert result.halted_by.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
 
 
 def test_acs_add_object_exception_maps_to_acs_write_faulted():
     acs = _StubAcsClient(raise_on="add_object")
     ctx = _ctx(acs_client=acs)
-    plan = _plan(
-        AcsAddObject(device_id="dev", object_path="X.Y.Z")
-    )
+    plan = _plan(AcsAddObject(device_id="dev", object_path="X.Y.Z"))
     result = apply_plan(plan, ctx)
     assert result.success is False
-    assert (
-        result.halted_by.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
-    )
+    assert result.halted_by.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
 
 
 # ── Timeout ─────────────────────────────────────────────────────────────────

@@ -118,9 +118,7 @@ def read_olt_state(
 
     # 2. Fetch run/match state for the registered ONT. Some details
     # (description, profiles, optical) require richer parsing not yet wired.
-    ok, msg, status_entry = get_ont_status(
-        olt, desired.fsp, desired.olt_ont_id
-    )
+    ok, msg, status_entry = get_ont_status(olt, desired.fsp, desired.olt_ont_id)
     if not ok:
         if _looks_unreachable(msg):
             return ReadResult(
@@ -166,9 +164,7 @@ def read_olt_state(
     # fails, leave the tuple empty so the planner falls back to the
     # imported state. Failing here would block all sync writes against an
     # otherwise-healthy ONT.
-    olt_service_ports = _read_service_ports(
-        olt, desired.fsp, desired.olt_ont_id
-    )
+    olt_service_ports = _read_service_ports(olt, desired.fsp, desired.olt_ont_id)
 
     return ReadResult(
         success=True,
@@ -199,9 +195,7 @@ def read_olt_state(
             olt_mgmt_ip=_str_or_none(detail.get("mgmt_ip")),
             olt_mgmt_vlan=_int_or_none(detail.get("mgmt_vlan")),
             olt_line_profile_id=_int_or_none(detail.get("line_profile_id")),
-            olt_service_profile_id=_int_or_none(
-                detail.get("service_profile_id")
-            ),
+            olt_service_profile_id=_int_or_none(detail.get("service_profile_id")),
             olt_service_ports=olt_service_ports,
         ),
         error=None,
@@ -327,9 +321,7 @@ def _read_optical(
     return rx, tx, temperature
 
 
-def _read_service_ports(
-    olt: Any, fsp: str, ont_id: int
-) -> tuple[dict[str, Any], ...]:
+def _read_service_ports(olt: Any, fsp: str, ont_id: int) -> tuple[dict[str, Any], ...]:
     """Best-effort service-port enumeration for one ONT.
 
     Each ``ServicePortEntry`` is converted to a plain dict so the planner

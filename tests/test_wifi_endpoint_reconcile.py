@@ -110,9 +110,7 @@ def test_set_wifi_password_success_returns_success_action_result(
             ),
         )
 
-    monkeypatch.setattr(
-        "app.services.network.reconcile.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.services.network.reconcile.reconcile_ont", _fake_reconcile)
 
     result = set_wifi_password(db_session, str(ont.id), "kursimining@98765")
 
@@ -153,9 +151,7 @@ def test_set_wifi_password_failure_surfaces_failure_reason(
     assert result.data["actionable"] is False
 
 
-def test_set_wifi_password_cr_failed_marks_actionable(
-    db_session, ont, monkeypatch
-):
+def test_set_wifi_password_cr_failed_marks_actionable(db_session, ont, monkeypatch):
     """ACS_CR_FAILED carries an operator-actionable hint ('drain via OLT
     ont reset'). The service surfaces ``actionable=True`` so the UI can
     render the recovery instructions verbatim."""
@@ -197,19 +193,14 @@ def test_set_wifi_password_blocked_out_of_sync_surfaces_explicitly(
     result = set_wifi_password(db_session, str(ont.id), "newpw")
 
     assert result.success is False
-    assert (
-        result.data["failure_reason"]
-        == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
-    )
+    assert result.data["failure_reason"] == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
     assert "out_of_sync" in result.message.lower()
 
 
 # ── Audit ───────────────────────────────────────────────────────────────────
 
 
-def test_set_wifi_password_logs_audit_for_both_outcomes(
-    db_session, ont, monkeypatch
-):
+def test_set_wifi_password_logs_audit_for_both_outcomes(db_session, ont, monkeypatch):
     """The audit log entry is created regardless of reconcile outcome — both
     success and failure are operator-visible events."""
     captured: dict = {}
@@ -262,9 +253,7 @@ def test_set_wifi_password_does_not_call_legacy_genieacs_service(
         reconcile_called.value = True
         return _stub_reconcile_result(success=True)
 
-    monkeypatch.setattr(
-        "app.services.network.reconcile.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.services.network.reconcile.reconcile_ont", _fake_reconcile)
 
     # Also patch the legacy service to RAISE — if anything calls it, the
     # test crashes loudly.

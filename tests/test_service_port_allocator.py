@@ -93,7 +93,9 @@ def test_with_allocated_service_port_releases_failed_write(db_session) -> None:
         db_session,
         olt.id,
         ont.id,
-        lambda allocation: SimpleNamespace(success=False, port_index=allocation.port_index),
+        lambda allocation: SimpleNamespace(
+            success=False, port_index=allocation.port_index
+        ),
         vlan_id=203,
         gem_index=1,
         provisioned=lambda write_result: bool(write_result.success),
@@ -228,7 +230,9 @@ def test_with_allocated_service_port_does_not_cache_failed_result(
     )
 
     allocations = db_session.query(ServicePortAllocation).all()
-    released = next(allocation for allocation in allocations if allocation.is_active is False)
+    released = next(
+        allocation for allocation in allocations if allocation.is_active is False
+    )
 
     assert first.success is False
     assert second.success is True

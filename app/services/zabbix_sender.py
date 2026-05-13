@@ -194,7 +194,10 @@ def send_batch(
     except TimeoutError as exc:
         logger.warning(
             "zabbix_sender_timeout",
-            extra={"server": f"{server_host}:{server_port}", "metrics_count": len(metrics)},
+            extra={
+                "server": f"{server_host}:{server_port}",
+                "metrics_count": len(metrics),
+            },
         )
         raise ZabbixSenderError("Connection timed out") from exc
     except OSError as exc:

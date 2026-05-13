@@ -175,10 +175,14 @@ def _subscriber_bridge():
 def _get_or_create_inventory_subscriber(db: Session) -> "Subscriber":
     bridge = _subscriber_bridge()
     if bridge is None:
-        SubscriberModel, SubscriberStatusEnum, UserTypeEnum = _inventory_subscriber_model()
+        SubscriberModel, SubscriberStatusEnum, UserTypeEnum = (
+            _inventory_subscriber_model()
+        )
         inventory_email = "network-inventory@dotmac.local"
         subscriber = db.scalars(
-            select(SubscriberModel).where(SubscriberModel.email == inventory_email).limit(1)
+            select(SubscriberModel)
+            .where(SubscriberModel.email == inventory_email)
+            .limit(1)
         ).first()
         if subscriber is not None:
             return cast("Subscriber", subscriber)
@@ -199,7 +203,9 @@ def _get_or_create_inventory_subscriber(db: Session) -> "Subscriber":
             return cast("Subscriber", subscriber)
         except IntegrityError:
             subscriber = db.scalars(
-                select(SubscriberModel).where(SubscriberModel.email == inventory_email).limit(1)
+                select(SubscriberModel)
+                .where(SubscriberModel.email == inventory_email)
+                .limit(1)
             ).first()
             if subscriber is not None:
                 return cast("Subscriber", subscriber)
@@ -219,7 +225,11 @@ def get_inventory_subscriber(db: Session) -> "Subscriber | None":
         SubscriberModel, _, _ = _inventory_subscriber_model()
         return cast(
             "Subscriber | None",
-            db.scalars(select(SubscriberModel).where(SubscriberModel.email == "network-inventory@dotmac.local").limit(1)).first(),
+            db.scalars(
+                select(SubscriberModel)
+                .where(SubscriberModel.email == "network-inventory@dotmac.local")
+                .limit(1)
+            ).first(),
         )
     return cast("Subscriber | None", bridge.get_inventory_subscriber(db))
 

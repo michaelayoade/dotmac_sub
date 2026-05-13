@@ -369,9 +369,7 @@ def allocate_ont_management_ip(
             pool_id=pool_id,
         )
         if pool is None:
-            raise ValueError(
-                "Selected management IP is not in an available IPAM pool."
-            )
+            raise ValueError("Selected management IP is not in an available IPAM pool.")
     else:
         effective_pool_id = pool_id or (
             getattr(olt, "mgmt_ip_pool_id", None) if olt else None
@@ -404,9 +402,7 @@ def allocate_ont_management_ip(
                 record=existing,
                 reused=True,
             )
-            _set_legacy_cache(
-                ont, assignment, allocation=allocation, mode="static_ip"
-            )
+            _set_legacy_cache(ont, assignment, allocation=allocation, mode="static_ip")
             db.flush()
             return allocation
 

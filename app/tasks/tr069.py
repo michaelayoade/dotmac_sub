@@ -200,7 +200,9 @@ def wait_for_ont_bootstrap(
 
                 # Exponential backoff: 30s -> 60s -> 120s -> 240s with ±10% jitter
                 retry_delays = [30, 60, 120, 240]
-                base_countdown = retry_delays[min(service_retry_count, len(retry_delays) - 1)]
+                base_countdown = retry_delays[
+                    min(service_retry_count, len(retry_delays) - 1)
+                ]
                 jitter = _retry_jitter_random.uniform(-0.1, 0.1) * base_countdown
                 countdown = int(base_countdown + jitter)
 
@@ -1220,7 +1222,9 @@ def setup_genieacs(
                 for script_path in provisions_dir.glob("*.js"):
                     name = script_path.stem
                     try:
-                        client.put(f"/provisions/{name}", content=script_path.read_text())
+                        client.put(
+                            f"/provisions/{name}", content=script_path.read_text()
+                        )
                         results["provisions"][name] = "deployed"
                         logger.info("Deployed provision: %s", name)
                     except Exception as e:
@@ -1234,13 +1238,16 @@ def setup_genieacs(
                     name = script_path.stem
                     try:
                         client.put(
-                            f"/virtualParameters/{name}", content=script_path.read_text()
+                            f"/virtualParameters/{name}",
+                            content=script_path.read_text(),
                         )
                         results["virtualParameters"][name] = "deployed"
                         logger.info("Deployed virtual parameter: %s", name)
                     except Exception as e:
                         results["virtualParameters"][name] = f"error: {e}"
-                        logger.error("Failed to deploy virtual parameter %s: %s", name, e)
+                        logger.error(
+                            "Failed to deploy virtual parameter %s: %s", name, e
+                        )
 
             # Deploy presets
             if presets:
@@ -1316,6 +1323,8 @@ def setup_genieacs(
         if isinstance(cat, dict)
     )
 
-    logger.info("GenieACS setup complete: %d deployed, %d errors", total_deployed, total_errors)
+    logger.info(
+        "GenieACS setup complete: %d deployed, %d errors", total_deployed, total_errors
+    )
     results["summary"] = {"deployed": total_deployed, "errors": total_errors}
     return results

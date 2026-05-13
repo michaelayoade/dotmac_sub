@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from uuid import uuid4
@@ -98,9 +98,7 @@ def test_tr069_rebind_uses_operation_result_json(monkeypatch) -> None:
     response = network_olts_profiles.olt_tr069_rebind(
         request,
         "olt-1",
-        db=SimpleNamespace(
-            get=lambda *args, **kwargs: SimpleNamespace(id=ont_ids[0])
-        ),
+        db=SimpleNamespace(get=lambda *args, **kwargs: SimpleNamespace(id=ont_ids[0])),
     )
 
     body = _json_body(response)
@@ -129,9 +127,7 @@ def test_tr069_rebind_invalid_profile_returns_adapter_error(monkeypatch) -> None
     response = network_olts_profiles.olt_tr069_rebind(
         request,
         "olt-1",
-        db=SimpleNamespace(
-            get=lambda *args, **kwargs: SimpleNamespace(id="ignored")
-        ),
+        db=SimpleNamespace(get=lambda *args, **kwargs: SimpleNamespace(id="ignored")),
     )
 
     assert response.status_code == 400

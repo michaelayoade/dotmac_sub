@@ -1447,8 +1447,7 @@ def test_network_map_context_uses_zabbix_ont_status(db_session, monkeypatch):
         network_map_service,
         "get_ont_snapshots_from_zabbix",
         lambda db, onts: {
-            str(item.id): zabbix_ont_status.OntSignalData(online=True)
-            for item in onts
+            str(item.id): zabbix_ont_status.OntSignalData(online=True) for item in onts
         },
     )
 
@@ -3383,7 +3382,10 @@ def test_restore_olt_backup_replays_saved_configuration(
         captured["olt_id"] = str(_olt.id)
         captured["config_text"] = config_text
         captured["persist"] = persist
-        return True, "Restored 3 configuration commands from backup and saved startup config"
+        return (
+            True,
+            "Restored 3 configuration commands from backup and saved startup config",
+        )
 
     monkeypatch.setattr(
         "app.services.network.olt_operations.olt_ssh_config_service.restore_config_from_backup",

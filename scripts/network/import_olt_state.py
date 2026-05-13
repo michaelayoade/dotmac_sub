@@ -39,9 +39,7 @@ def _selected_olts(db, args) -> list[OLTDevice]:
         return [olt] if olt else []
     if args.olt_name:
         return list(
-            db.scalars(
-                select(OLTDevice).where(OLTDevice.name == args.olt_name)
-            ).all()
+            db.scalars(select(OLTDevice).where(OLTDevice.name == args.olt_name)).all()
         )
     if args.all:
         return list(
@@ -111,8 +109,10 @@ def main() -> int:
         failures = 0
         for olt in olts:
             logger.info("Importing OLT state for %s (%s)", olt.name, olt.mgmt_ip)
-            dump_dir = Path(args.dump_dir) if args.dump_dir else _dump_dir_for_olt(
-                olt, args.dump_root
+            dump_dir = (
+                Path(args.dump_dir)
+                if args.dump_dir
+                else _dump_dir_for_olt(olt, args.dump_root)
             )
             if dump_dir:
                 logger.info("Using audit dump %s", dump_dir)

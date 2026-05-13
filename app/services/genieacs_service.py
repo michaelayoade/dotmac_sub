@@ -420,9 +420,7 @@ class GenieAcsService:
             )
         _ont, client, device_id = resolved
 
-        normalized_parameters = {
-            str(path): value for path, value in parameters.items()
-        }
+        normalized_parameters = {str(path): value for path, value in parameters.items()}
         normalized_expected = (
             {str(path): value for path, value in expected.items()}
             if expected is not None
@@ -488,7 +486,9 @@ class GenieAcsService:
         from app.services.network.ont_action_common import get_ont_client_or_error
 
         if not file_type.strip():
-            return ActionResult(success=False, message="Download file type is required.")
+            return ActionResult(
+                success=False, message="Download file type is required."
+            )
         if not file_url.strip():
             return ActionResult(success=False, message="Download file URL is required.")
 
@@ -853,7 +853,6 @@ class GenieAcsService:
         from app.services.network.ont_action_wan import set_http_management
 
         return set_http_management(db, ont_id, enabled=enabled, port=port)
-
 
     def get_device_summary(
         self,

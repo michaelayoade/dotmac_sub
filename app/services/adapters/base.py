@@ -161,7 +161,7 @@ class AdapterRegistry:
         dependencies come first, then those that depend on them, etc.
         """
         # Build adjacency and in-degree maps
-        in_degree: dict[str, int] = {name: 0 for name in self._adapters}
+        in_degree: dict[str, int] = dict.fromkeys(self._adapters, 0)
         dependents: dict[str, list[str]] = {name: [] for name in self._adapters}
 
         for name in self._adapters:

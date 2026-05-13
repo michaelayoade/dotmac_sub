@@ -373,12 +373,8 @@ def _synced_acs_device(ont) -> dict:
             },
             "LANDevice": {
                 "1": {
-                    "LANHostConfigManagement": {
-                        "DHCPServerEnable": leaf("true")
-                    },
-                    "WLANConfiguration": {
-                        "1": {"SSID": leaf("KURSI")}
-                    },
+                    "LANHostConfigManagement": {"DHCPServerEnable": leaf("true")},
+                    "WLANConfiguration": {"1": {"SSID": leaf("KURSI")}},
                 }
             },
         },
@@ -439,8 +435,7 @@ def test_wifi_password_change_on_synced_ont_skips_push_per_hole3(
     assert result.success is True
     assert result.sync_status == "synced"
     psk_writes = [
-        call for call in acs.spv_calls
-        if "PreSharedKey" in next(iter(call[1]))
+        call for call in acs.spv_calls if "PreSharedKey" in next(iter(call[1]))
     ]
     assert psk_writes == []
     # apply_proposed_change writes the new password into desired_config.
@@ -466,8 +461,7 @@ def test_bootstrap_mode_pushes_wifi_password_on_synced_ont(
     assert result.success is True
     # Bootstrap pushes WiFi PSK regardless.
     psk_pushes = [
-        call for call in acs.spv_calls
-        if "PreSharedKey" in next(iter(call[1]))
+        call for call in acs.spv_calls if "PreSharedKey" in next(iter(call[1]))
     ]
     assert len(psk_pushes) == 1
 
@@ -475,9 +469,7 @@ def test_bootstrap_mode_pushes_wifi_password_on_synced_ont(
 # ── Mode guard: out_of_sync blocks sync ─────────────────────────────────────
 
 
-def test_sync_mode_refuses_against_out_of_sync_ont(
-    db_session, ont, stub_desired
-):
+def test_sync_mode_refuses_against_out_of_sync_ont(db_session, ont, stub_desired):
     """An ONT in out_of_sync state blocks sync-mode reconciles. Operator must
     use the force-reconcile (sweep) endpoint to clear it."""
     ont.sync_status = OntSyncStatus.out_of_sync
@@ -493,9 +485,7 @@ def test_sync_mode_refuses_against_out_of_sync_ont(
     )
 
     assert result.success is False
-    assert (
-        result.failure.reason == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
-    )
+    assert result.failure.reason == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
     assert "previous bootstrap failed" in result.failure.message
 
 
@@ -641,9 +631,7 @@ def test_apply_failure_marks_ont_out_of_sync(
     )
 
     assert result.success is False
-    assert (
-        result.failure.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
-    )
+    assert result.failure.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
     db_session.flush()
     status = db_session.execute(
         text("SELECT sync_status, last_error FROM ont_units WHERE id = :id"),
@@ -684,9 +672,7 @@ def test_successful_sync_clears_last_error(
     assert row[1] is not None
 
 
-def test_observation_row_is_upserted(
-    db_session, ont, stub_desired, stub_ont_status
-):
+def test_observation_row_is_upserted(db_session, ont, stub_desired, stub_ont_status):
     """After a successful reconcile, the OntObservation row exists."""
     olt = _StubOltAdapter(present=True)
     acs = _StubAcsClient(device=_synced_acs_device(ont))
@@ -732,9 +718,7 @@ def test_consecutive_sweep_unreachable_resets_on_success(
     db_session.flush()
 
     row = db_session.execute(
-        text(
-            "SELECT consecutive_sweep_unreachable FROM ont_units WHERE id = :id"
-        ),
+        text("SELECT consecutive_sweep_unreachable FROM ont_units WHERE id = :id"),
         {"id": str(ont.id)},
     ).scalar_one()
     assert row == 0
@@ -743,9 +727,7 @@ def test_consecutive_sweep_unreachable_resets_on_success(
 # ── Crashed-prior recovery ──────────────────────────────────────────────────
 
 
-def test_sync_refuses_after_crashed_prior_is_detected(
-    db_session, ont, stub_desired
-):
+def test_sync_refuses_after_crashed_prior_is_detected(db_session, ont, stub_desired):
     """If a prior reconcile crashed (sync_status stuck at reconciling), the
     lock module flips it to out_of_sync. Sync-mode refuses thereafter."""
     ont.sync_status = OntSyncStatus.reconciling
@@ -762,9 +744,7 @@ def test_sync_refuses_after_crashed_prior_is_detected(
     )
 
     assert result.success is False
-    assert (
-        result.failure.reason == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
-    )
+    assert result.failure.reason == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
     # The crash detection message surfaces in last_error.
     assert "did not finalise" in result.failure.message
 
@@ -863,9 +843,7 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
     )
 
     assert result.success is False
-    assert (
-        result.failure.reason == ReconcileFailureReason.VERIFICATION_MISMATCH
-    )
+    assert result.failure.reason == ReconcileFailureReason.VERIFICATION_MISMATCH
     assert "description" in result.failure.message.lower()
     # The pre-apply read AND the verify re-read both happened
     assert call_count["n"] == 2
@@ -950,9 +928,7 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
     )
 
     assert result.success is False
-    assert (
-        result.failure.reason == ReconcileFailureReason.OLT_UNREACHABLE
-    )
+    assert result.failure.reason == ReconcileFailureReason.OLT_UNREACHABLE
     assert "verification" in result.failure.message.lower()
     assert call_count["n"] == 2
 
@@ -989,8 +965,6 @@ def test_verification_re_read_marks_out_of_sync_when_acs_unreachable_post_apply(
     )
 
     assert result.success is False
-    assert (
-        result.failure.reason == ReconcileFailureReason.ACS_UNREACHABLE
-    )
+    assert result.failure.reason == ReconcileFailureReason.ACS_UNREACHABLE
     assert "verification" in result.failure.message.lower()
     assert acs.list_calls == 2

@@ -4,7 +4,9 @@ from app.models.network import OnuType, VendorModelCapability
 from app.services import web_network_onu_types as service
 
 
-def test_onu_type_create_persists_capability_map_without_bundle_state(db_session) -> None:
+def test_onu_type_create_persists_capability_map_without_bundle_state(
+    db_session,
+) -> None:
     capability = VendorModelCapability(
         vendor="Huawei",
         model="HG8245H",

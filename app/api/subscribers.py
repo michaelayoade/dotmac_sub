@@ -26,11 +26,11 @@ from app.schemas.subscriber import (
 )
 from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
+from app.services.nin_matching import normalize_nin, validate_nin
 from app.services.nin_verifications import (
     get_or_create_pending_nin_verification,
     latest_nin_verification,
 )
-from app.services.nin_matching import normalize_nin, validate_nin
 from app.services.queue_adapter import enqueue_task
 from app.tasks.nin_tasks import verify_nin_task
 
@@ -248,7 +248,9 @@ async def verify_subscriber_nin(
         verification.status = NINVerificationStatus.failed
         verification.is_match = False
         verification.match_score = 0
-        verification.failure_reason = dispatch.error or "NIN verification could not be queued"
+        verification.failure_reason = (
+            dispatch.error or "NIN verification could not be queued"
+        )
         db.commit()
         raise HTTPException(
             status_code=503,

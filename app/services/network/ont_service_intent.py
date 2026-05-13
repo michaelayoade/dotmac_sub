@@ -178,7 +178,9 @@ def build_service_intent(
     subscriber_info = subscriber_info or {}
     _ = ont_plan
     effective = resolve_effective_ont_config(db, ont) if db is not None else {}
-    effective_values = effective.get("values", {}) if isinstance(effective, dict) else {}
+    effective_values = (
+        effective.get("values", {}) if isinstance(effective, dict) else {}
+    )
     wifi_plan = {
         "enabled": effective_values.get("wifi_enabled"),
         "ssid": effective_values.get("wifi_ssid"),
@@ -213,9 +215,7 @@ def build_service_intent(
     internet_rows = [
         {
             "label": "Internet VLAN",
-            "value": _value(
-                effective_values.get("wan_vlan")
-            ),
+            "value": _value(effective_values.get("wan_vlan")),
         },
         {"label": "ONU Mode", "value": _value(onu_mode).replace("_", " ").title()},
         {"label": "WAN Method", "value": internet_method.replace("_", " ").title()},
@@ -249,7 +249,10 @@ def build_service_intent(
                     "label": "Management IP",
                     "value": _value(effective_values.get("mgmt_ip_address")),
                 },
-                {"label": "Gateway", "value": _value(effective_values.get("mgmt_gateway"))},
+                {
+                    "label": "Gateway",
+                    "value": _value(effective_values.get("mgmt_gateway")),
+                },
             ],
         },
         {

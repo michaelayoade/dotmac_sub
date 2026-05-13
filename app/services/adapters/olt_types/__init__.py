@@ -19,6 +19,8 @@ Usage:
         pass
 """
 
+# Import vendor modules to register adapters
+from app.services.adapters.olt_types import huawei  # noqa: F401
 from app.services.adapters.olt_types.base import (
     OltCapabilities,
     OltTypeAdapter,
@@ -26,9 +28,6 @@ from app.services.adapters.olt_types.base import (
     WanProvisioningMode,
     olt_type_registry,
 )
-
-# Import vendor modules to register adapters
-from app.services.adapters.olt_types import huawei  # noqa: F401
 
 __all__ = [
     "OltCapabilities",

@@ -1,6 +1,3 @@
-from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-
 from app.services.network.olt_polling import (
     _parse_signal_value,
     _parse_snmp_table,

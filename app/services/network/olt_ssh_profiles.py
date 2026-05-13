@@ -427,7 +427,9 @@ def parse_traffic_tables(output: str) -> list[TrafficTableEntry]:
                 name=kv.get("name", kv.get("traffic table name", "")),
                 cir=cir,
                 pir=pir,
-                priority=int(priority_raw) if priority_raw and priority_raw.isdigit() else None,
+                priority=int(priority_raw)
+                if priority_raw and priority_raw.isdigit()
+                else None,
                 priority_policy=kv.get("priority policy", ""),
             )
         )
@@ -499,9 +501,7 @@ def parse_wan_profiles(output: str) -> list[WanProfileEntry]:
                     or ""
                 ),
                 connection_type=(
-                    connection_match.group("value").lower()
-                    if connection_match
-                    else ""
+                    connection_match.group("value").lower() if connection_match else ""
                 ),
                 nat_enabled=_parse_wan_nat_enabled(text),
                 extra=kv,

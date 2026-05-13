@@ -193,9 +193,7 @@ class TestPoolCidrDuplicateDetection:
 
         # Check for duplicates
         pools = list(
-            db_session.scalars(
-                select(IpPool).where(IpPool.is_active.is_(True))
-            ).all()
+            db_session.scalars(select(IpPool).where(IpPool.is_active.is_(True))).all()
         )
 
         cidr_pools = defaultdict(list)
@@ -230,9 +228,7 @@ class TestPoolCidrDuplicateDetection:
 
         # Check for duplicates (active only)
         pools = list(
-            db_session.scalars(
-                select(IpPool).where(IpPool.is_active.is_(True))
-            ).all()
+            db_session.scalars(select(IpPool).where(IpPool.is_active.is_(True))).all()
         )
 
         cidr_pools = defaultdict(list)
@@ -272,9 +268,7 @@ class TestPoolCidrOverlapDetection:
         db_session.commit()
 
         pools = list(
-            db_session.scalars(
-                select(IpPool).where(IpPool.is_active.is_(True))
-            ).all()
+            db_session.scalars(select(IpPool).where(IpPool.is_active.is_(True))).all()
         )
 
         overlaps = []
@@ -356,7 +350,9 @@ class TestInfrastructureIpReservation:
         # After fix, this should be True:
         # assert addr.is_reserved is True
 
-    def test_reserved_ip_cannot_be_allocated_to_ont(self, db_session, ip_pool, ont_unit):
+    def test_reserved_ip_cannot_be_allocated_to_ont(
+        self, db_session, ip_pool, ont_unit
+    ):
         """Reserved IPs should not be auto-allocated to ONTs."""
         from app.services.network.ont_management_ipam import allocate_ont_management_ip
 
@@ -563,8 +559,7 @@ class TestLegacyCacheSynchronization:
 
         # Check assignment was cleared
         assignment = db_session.scalars(
-            select(OntAssignment)
-            .where(OntAssignment.ont_unit_id == ont_unit.id)
+            select(OntAssignment).where(OntAssignment.ont_unit_id == ont_unit.id)
         ).first()
 
         if assignment:

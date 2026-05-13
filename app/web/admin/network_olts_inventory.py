@@ -116,10 +116,7 @@ def _authorization_detail_redirect_url(
     )
     if ont is None:
         return None
-    return (
-        f"/admin/network/onts/{ont.id}"
-        f"?status=success&message={quote_plus(message)}"
-    )
+    return f"/admin/network/onts/{ont.id}?status=success&message={quote_plus(message)}"
 
 
 def _log_olt_action_result(
@@ -414,7 +411,7 @@ def olt_config_pack_validation_badge(
     if not olt:
         return HTMLResponse(
             '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-500">'
-            'Not found</span>'
+            "Not found</span>"
         )
 
     validation = validate_config_pack_comprehensive(db, olt_id)
@@ -425,7 +422,7 @@ def olt_config_pack_validation_badge(
             '<span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">'
             '<svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">'
             '<path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>'
-            '</svg>Ready</span>'
+            "</svg>Ready</span>"
         )
     elif validation.is_valid:
         # Amber: Warnings but valid
@@ -433,7 +430,7 @@ def olt_config_pack_validation_badge(
             f'<span class="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">'
             f'<svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">'
             f'<path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>'
-            f'</svg>{len(validation.warnings)} warning{"s" if len(validation.warnings) != 1 else ""}</span>'
+            f"</svg>{len(validation.warnings)} warning{'s' if len(validation.warnings) != 1 else ''}</span>"
         )
     else:
         # Red: Errors
@@ -441,7 +438,7 @@ def olt_config_pack_validation_badge(
             f'<span class="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">'
             f'<svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">'
             f'<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>'
-            f'</svg>{len(validation.errors)} error{"s" if len(validation.errors) != 1 else ""}</span>'
+            f"</svg>{len(validation.errors)} error{'s' if len(validation.errors) != 1 else ''}</span>"
         )
 
 
@@ -475,11 +472,11 @@ def olt_config_pack_validation_details(
             f'<div class="flex items-start gap-2">'
             f'<svg class="h-5 w-5 flex-shrink-0 text-rose-500 dark:text-rose-400" fill="currentColor" viewBox="0 0 20 20">'
             f'<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>'
-            f'</svg>'
-            f'<div>'
+            f"</svg>"
+            f"<div>"
             f'<p class="font-medium text-rose-700 dark:text-rose-400">ONT authorization is blocked</p>'
             f'<ul class="mt-1 list-disc list-inside text-rose-600 dark:text-rose-300">{errors_html}</ul>'
-            f'</div></div></div>'
+            f"</div></div></div>"
         )
 
     # Warnings banner
@@ -490,11 +487,11 @@ def olt_config_pack_validation_details(
             f'<div class="flex items-start gap-2">'
             f'<svg class="h-5 w-5 flex-shrink-0 text-amber-500 dark:text-amber-400" fill="currentColor" viewBox="0 0 20 20">'
             f'<path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>'
-            f'</svg>'
-            f'<div>'
+            f"</svg>"
+            f"<div>"
             f'<p class="font-medium text-amber-700 dark:text-amber-400">Configuration incomplete</p>'
             f'<ul class="mt-1 list-disc list-inside text-amber-600 dark:text-amber-300">{warnings_html}</ul>'
-            f'</div></div></div>'
+            f"</div></div></div>"
         )
 
     return HTMLResponse("".join(html_parts))
@@ -695,7 +692,9 @@ def olt_assign_vlan(
     db: Session = Depends(get_db),
 ) -> Response:
     ipam_adapter.assign_vlan_to_olt(db, olt_id, vlan_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=settings", status_code=303
+    )
 
 
 @router.post(
@@ -709,7 +708,9 @@ def olt_unassign_vlan(
     db: Session = Depends(get_db),
 ) -> Response:
     ipam_adapter.unassign_vlan_from_olt(db, olt_id, vlan_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=settings", status_code=303
+    )
 
 
 @router.post(
@@ -723,7 +724,9 @@ def olt_assign_ip_pool(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     ipam_adapter.assign_ip_pool_to_olt(db, olt_id, pool_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=settings", status_code=303
+    )
 
 
 @router.post(
@@ -737,7 +740,9 @@ def olt_unassign_ip_pool(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     ipam_adapter.unassign_ip_pool_from_olt(db, olt_id, pool_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=settings", status_code=303)
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=settings", status_code=303
+    )
 
 
 @router.post(

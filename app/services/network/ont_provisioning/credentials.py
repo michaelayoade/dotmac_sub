@@ -62,7 +62,9 @@ _QUOTED_CREDENTIAL_RE = re.compile(
 def mask_credentials(cmd: str) -> str:
     """Mask credential values in OLT CLI command strings for safe logging."""
     masked = _JSON_CREDENTIAL_RE.sub(
-        lambda match: f"{match.group('prefix')}{match.group('quote')}********{match.group('quote')}",
+        lambda match: (
+            f"{match.group('prefix')}{match.group('quote')}********{match.group('quote')}"
+        ),
         cmd,
     )
     masked = _XML_CREDENTIAL_RE.sub(
@@ -76,7 +78,9 @@ def mask_credentials(cmd: str) -> str:
         _CREDENTIAL_KEYWORD_RE,
     ):
         masked = pattern.sub(
-            lambda match: f"{match.group('prefix')}{match.group('quote')}********{match.group('quote')}",
+            lambda match: (
+                f"{match.group('prefix')}{match.group('quote')}********{match.group('quote')}"
+            ),
             masked,
         )
     return masked

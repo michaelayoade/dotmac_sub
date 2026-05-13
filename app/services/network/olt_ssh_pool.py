@@ -287,7 +287,9 @@ class OltSshPool:
             for conn in connections:
                 conn.close()
 
-            logger.info("Invalidated %d pooled connections for OLT %s", len(connections), olt_id)
+            logger.info(
+                "Invalidated %d pooled connections for OLT %s", len(connections), olt_id
+            )
             return len(connections)
 
     def close_all(self) -> None:
@@ -305,9 +307,7 @@ class OltSshPool:
         """Get pool statistics."""
         with self._lock:
             total_connections = sum(len(conns) for conns in self._pools.values())
-            in_use = sum(
-                1 for conns in self._pools.values() for c in conns if c.in_use
-            )
+            in_use = sum(1 for conns in self._pools.values() for c in conns if c.in_use)
             return {
                 **self._stats,
                 "total_connections": total_connections,
@@ -329,9 +329,10 @@ class OltSshPool:
         olt_key = str(olt.id)
 
         # Get per-OLT rate limit from model, or use default
-        ops_per_minute = getattr(
-            olt, "rate_limit_ops_per_minute", None
-        ) or DEFAULT_RATE_LIMIT_OPS_PER_MINUTE
+        ops_per_minute = (
+            getattr(olt, "rate_limit_ops_per_minute", None)
+            or DEFAULT_RATE_LIMIT_OPS_PER_MINUTE
+        )
 
         decision = allow_operation(
             key=f"olt_ssh:{olt_key}",

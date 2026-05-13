@@ -197,7 +197,10 @@ def _resolve_cached_tr069_profile(
         planned_profile_id_str = str(planned_profile_id).strip()
         for profile in profiles:
             profile_id = getattr(profile, "profile_id", None)
-            if profile_id is not None and str(profile_id).strip() == planned_profile_id_str:
+            if (
+                profile_id is not None
+                and str(profile_id).strip() == planned_profile_id_str
+            ):
                 return profile
 
     return profiles[0] if len(profiles) == 1 else None
@@ -311,9 +314,7 @@ def _unified_summary_context(
             )
             or desired_wan.get("pppoe_username"),
             "wan_ip": (
-                observed_wan.get("wan_ip")
-                if isinstance(observed_wan, dict)
-                else None
+                observed_wan.get("wan_ip") if isinstance(observed_wan, dict) else None
             ),
             "status": wan_status or None,
         },
@@ -392,7 +393,9 @@ def _configure_form_context_from_state(
     has_tr069 = bool(
         linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
     )
-    acs_last_inform = getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
+    acs_last_inform = (
+        getattr(linked_tr069, "last_inform_at", None) if linked_tr069 else None
+    )
 
     config_pack_name = None
     if config_pack:
@@ -437,7 +440,9 @@ def _configure_form_context_from_state(
     }
 
 
-def _observed_config_freshness(observed_intent: dict[str, object]) -> dict[str, object] | None:
+def _observed_config_freshness(
+    observed_intent: dict[str, object],
+) -> dict[str, object] | None:
     if not observed_intent:
         return None
     fetched_at = observed_intent.get("fetched_at")
@@ -483,7 +488,9 @@ def _operator_summary_context(
                 "index": _service_port_value(port, "index") or "—",
                 "vlan_id": str(vlan_id or "—"),
                 "gem_index": str(gem_index or "—"),
-                "flow_label": " ".join(part for part in [flow_type, flow_para] if part).strip()
+                "flow_label": " ".join(
+                    part for part in [flow_type, flow_para] if part
+                ).strip()
                 or "—",
                 "state": state or "unknown",
             }
@@ -511,14 +518,22 @@ def _operator_summary_context(
 
     desired_mgmt_vlan = str(desired_mgmt.get("vlan_id") or "").strip()
     desired_wan_vlan = str(desired_wan.get("wan_vlan") or "").strip()
-    if service_ports_loaded and desired_mgmt_vlan and desired_mgmt_vlan not in observed_vlans:
+    if (
+        service_ports_loaded
+        and desired_mgmt_vlan
+        and desired_mgmt_vlan not in observed_vlans
+    ):
         blockers.append(
             {
                 "severity": "critical",
                 "message": f"Expected management VLAN {desired_mgmt_vlan} is missing from OLT service-ports.",
             }
         )
-    if service_ports_loaded and desired_wan_vlan and desired_wan_vlan not in observed_vlans:
+    if (
+        service_ports_loaded
+        and desired_wan_vlan
+        and desired_wan_vlan not in observed_vlans
+    ):
         blockers.append(
             {
                 "severity": "critical",
@@ -619,7 +634,9 @@ def unified_config_context(
             "fsp": f"{getattr(ont, 'board', '')}/{getattr(ont, 'port', '')}".strip("/"),
             "ont_id": getattr(ont, "external_id", None) or "—",
             "serial_number": getattr(ont, "serial_number", None) or "—",
-            "description": getattr(ont, "name", None) or getattr(ont, "description", None) or "—",
+            "description": getattr(ont, "name", None)
+            or getattr(ont, "description", None)
+            or "—",
         },
         "run_state": "",
         "rows": [
@@ -734,8 +751,8 @@ def unified_config_context(
     )
     desired_wan = context["desired_wan_config"]
     desired_wifi = context["desired_wifi_config"]
-    context["current_pppoe_user"] = (
-        context["current_pppoe_user"] or desired_wan.get("pppoe_username")
+    context["current_pppoe_user"] = context["current_pppoe_user"] or desired_wan.get(
+        "pppoe_username"
     )
     context["current_ssid"] = context["current_ssid"] or desired_wifi.get("ssid")
     return context
@@ -754,6 +771,7 @@ def configure_form_context(db: Session, ont_id: str) -> dict[str, object]:
         effective=effective,
         vlans=get_vlans_for_ont(db, ont),
     )
+
 
 def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build display context for OLT-side ONT config."""
@@ -779,9 +797,7 @@ def olt_status_context(db: Session, ont_id: str) -> dict[str, object]:
 
     result = fetch_olt_status(db, ont_id)
     entry = result.get("entry") or {}
-    raw_run_state = str(
-        entry.get("run_state") or entry.get("olt_status") or ""
-    ).lower()
+    raw_run_state = str(entry.get("run_state") or entry.get("olt_status") or "").lower()
     run_state = "" if raw_run_state == "unknown" else raw_run_state
     rows = [
         (

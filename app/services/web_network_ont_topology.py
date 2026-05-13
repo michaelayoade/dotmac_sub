@@ -132,7 +132,9 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
             "model": ont.model,
             "vendor": ont.vendor,
             "firmware": ont.firmware_version,
-            "distance_m": ont.distance_meters if hasattr(ont, "distance_meters") else None,
+            "distance_m": ont.distance_meters
+            if hasattr(ont, "distance_meters")
+            else None,
         },
     )
     nodes.append(ont_node)
@@ -161,7 +163,9 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
     if olt and not pon_port:
         fsp = f"0/{ont.board or '0'}/{ont.port or '0'}"
         pon_port = db.scalars(
-            select(PonPort).where(PonPort.olt_id == olt.id, PonPort.name == fsp).limit(1)
+            select(PonPort)
+            .where(PonPort.olt_id == olt.id, PonPort.name == fsp)
+            .limit(1)
         ).first()
 
     # Add OLT node
@@ -271,7 +275,11 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
 
     # Add Splitter node
     if splitter:
-        splitter_label = splitter.name or f"1:{splitter.splitter_ratio}" if splitter.splitter_ratio else "Splitter"
+        splitter_label = (
+            splitter.name or f"1:{splitter.splitter_ratio}"
+            if splitter.splitter_ratio
+            else "Splitter"
+        )
         splitter_node = TopologyNode(
             node_type="splitter",
             id=str(splitter.id),
@@ -280,7 +288,9 @@ def build_ont_fiber_path(db: Session, ont_id: str) -> FiberPathTopology:
             status="online" if splitter.is_active else "offline",
             url=f"/admin/network/splitters/{splitter.id}",
             details={
-                "ratio": f"1:{splitter.splitter_ratio}" if splitter.splitter_ratio else None,
+                "ratio": f"1:{splitter.splitter_ratio}"
+                if splitter.splitter_ratio
+                else None,
                 "port": splitter_port.port_number if splitter_port else None,
             },
         )

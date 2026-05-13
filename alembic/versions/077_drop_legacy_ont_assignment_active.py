@@ -8,6 +8,7 @@ Create Date: 2026-04-28
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "077_drop_legacy_ont_assignment_active"

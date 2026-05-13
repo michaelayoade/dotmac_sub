@@ -24,7 +24,9 @@ def test_canonical_preserves_malformed_or_non_hex_values() -> None:
 
 def test_search_candidates_include_canonical_counterparts() -> None:
     ascii_candidates = {canonical(value) for value in search_candidates("HWTC600AC29C")}
-    hex_candidates = {canonical(value) for value in search_candidates("48575443600AC29C")}
+    hex_candidates = {
+        canonical(value) for value in search_candidates("48575443600AC29C")
+    }
 
     assert "HWTC600AC29C" in ascii_candidates
     assert "HWTC600AC29C" in hex_candidates

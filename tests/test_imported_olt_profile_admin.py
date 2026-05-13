@@ -861,6 +861,7 @@ def test_apply_saved_profile_bundle_runs_backup_and_commands(db_session, monkeyp
         ),
         profile_preflight_inventory=lambda: ProfileInventory(),
     )
+
     def fake_capture(db, olt, **kwargs):
         runner = kwargs["backup_runner"]
         runner(db, str(olt.id))

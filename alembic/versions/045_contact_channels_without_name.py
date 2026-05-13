@@ -57,7 +57,9 @@ def downgrade() -> None:
 
     existing = {column["name"] for column in inspector.get_columns(_TABLE)}
     if "full_name" in existing:
-        op.execute("UPDATE subscriber_contacts SET full_name = '' WHERE full_name IS NULL")
+        op.execute(
+            "UPDATE subscriber_contacts SET full_name = '' WHERE full_name IS NULL"
+        )
         op.alter_column(
             _TABLE,
             "full_name",

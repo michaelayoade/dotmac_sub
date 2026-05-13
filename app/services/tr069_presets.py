@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.tr069 import Tr069AcsServer
-from app.services.genieacs_client import GenieACSClient, create_genieacs_client
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import (
+    GenieACSClient,
+    GenieACSError,
+    create_genieacs_client,
+)
 from app.services.tr069_web_audit import log_tr069_audit_event
 
 logger = logging.getLogger(__name__)

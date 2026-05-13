@@ -481,7 +481,9 @@ def test_authorization_baseline_does_not_push_acs_service_config(
     from app.services.network.ont_provision_steps import apply_authorization_baseline
     from app.services.network.ont_provisioning.result import StepResult
 
-    ont = OntUnit(serial_number="DESIRED-CFG-003", desired_config={"wan": {"mode": "dhcp"}})
+    ont = OntUnit(
+        serial_number="DESIRED-CFG-003", desired_config={"wan": {"mode": "dhcp"}}
+    )
     db_session.add(ont)
     db_session.flush()
 
@@ -489,8 +491,9 @@ def test_authorization_baseline_does_not_push_acs_service_config(
 
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.provision_with_reconciliation",
-        lambda *args, **kwargs: calls.append("provision")
-        or StepResult("provision_reconciled", True, "ok"),
+        lambda *args, **kwargs: (
+            calls.append("provision") or StepResult("provision_reconciled", True, "ok")
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
@@ -655,7 +658,9 @@ def test_apply_saved_service_config_skips_wan_when_wan_mode_absent(
     db_session.flush()
 
     def fail_probe(*args, **kwargs):
-        raise AssertionError("WAN probing should not run without desired_config.wan.mode")
+        raise AssertionError(
+            "WAN probing should not run without desired_config.wan.mode"
+        )
 
     monkeypatch.setattr(
         "app.services.network.ont_action_network.probe_wan_capabilities",
@@ -705,7 +710,9 @@ def test_provision_wizard_context_does_not_invent_missing_desired_config_default
     )
     monkeypatch.setattr(web_network_onts, "get_vlans_for_ont", lambda db, ont: [])
     monkeypatch.setattr(web_network_onts, "get_tr069_servers", lambda db: [])
-    monkeypatch.setattr(web_network_onts, "get_speed_profiles", lambda db, direction: [])
+    monkeypatch.setattr(
+        web_network_onts, "get_speed_profiles", lambda db, direction: []
+    )
 
     context = web_network_onts.provision_wizard_context(
         SimpleNamespace(),
@@ -999,18 +1006,22 @@ def test_authorization_baseline_continues_when_acs_inform_is_warning(
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.provision_with_reconciliation",
-        lambda *args, **kwargs: calls.append("provision")
-        or StepResult("provision_reconciled", True, "ok"),
+        lambda *args, **kwargs: (
+            calls.append("provision") or StepResult("provision_reconciled", True, "ok")
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.wait_tr069_bootstrap",
-        lambda *args, **kwargs: calls.append("wait")
-        or StepResult("wait_tr069_bootstrap", True, "informed"),
+        lambda *args, **kwargs: (
+            calls.append("wait") or StepResult("wait_tr069_bootstrap", True, "informed")
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.apply_saved_service_config",
-        lambda *args, **kwargs: calls.append("apply")
-        or StepResult("apply_saved_service_config", True, "applied"),
+        lambda *args, **kwargs: (
+            calls.append("apply")
+            or StepResult("apply_saved_service_config", True, "applied")
+        ),
     )
 
     result = apply_authorization_baseline(db_session, str(ont.id))
@@ -1388,11 +1399,11 @@ def test_ont_config_form_has_single_operator_path():
     assert 'hx-indicator="#config-spinner-wan"' in source
     assert "activeConfigScope" in source
     assert 'class="htmx-indicator h-' not in source
-    assert 'x-show="activeConfigScope === \'management\'"' in source
-    assert 'x-show="activeConfigScope === \'wan\'"' in source
-    assert 'x-show="activeConfigScope === \'lan\'"' in source
-    assert 'x-show="activeConfigScope === \'wifi\'"' in source
-    assert 'x-show="activeConfigScope === \'all\'"' in source
+    assert "x-show=\"activeConfigScope === 'management'\"" in source
+    assert "x-show=\"activeConfigScope === 'wan'\"" in source
+    assert "x-show=\"activeConfigScope === 'lan'\"" in source
+    assert "x-show=\"activeConfigScope === 'wifi'\"" in source
+    assert "x-show=\"activeConfigScope === 'all'\"" in source
     assert 'name="push_to_device" value="true"' in source
     assert "Save and apply device changes" in source
     assert "/wan/probe" not in panel

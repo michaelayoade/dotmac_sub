@@ -18,8 +18,7 @@ def _ifindex(snmp_slot: int, port: int) -> int:
 
 def _walk(ifindex: int, ont_index: int, value: int | float) -> str:
     return (
-        ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4."
-        f"{ifindex}.{ont_index} = INTEGER: {value}"
+        f".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.{ifindex}.{ont_index} = INTEGER: {value}"
     )
 
 

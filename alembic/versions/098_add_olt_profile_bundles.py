@@ -54,7 +54,9 @@ def upgrade() -> None:
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["offer_id"], ["catalog_offers.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["offer_id"], ["catalog_offers.id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["olt_id"], ["olt_devices.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -89,7 +91,9 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["offer_id"], ["catalog_offers.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["offer_id"], ["catalog_offers.id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["olt_id"], ["olt_devices.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )

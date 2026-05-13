@@ -154,12 +154,8 @@ def update_ont_config(
         if mgmt_ip_address is not None:
             desired_updates["management.ip_address"] = management_address or None
         if management_mode == "static_ip" and management_allocation is not None:
-            desired_updates["management.subnet"] = (
-                management_allocation.subnet
-            )
-            desired_updates["management.gateway"] = (
-                management_allocation.gateway
-            )
+            desired_updates["management.subnet"] = management_allocation.subnet
+            desired_updates["management.gateway"] = management_allocation.gateway
         elif management_mode in {"inactive", "dhcp"}:
             desired_updates["management.subnet"] = None
             desired_updates["management.gateway"] = None

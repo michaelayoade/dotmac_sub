@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +23,6 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.network import OLTDevice
-
 
 # Sentinel to indicate "explicitly set to None/unset"
 UNSET = object()
@@ -111,9 +109,7 @@ def find_olt_match(olt_name: str) -> str | None:
     return None
 
 
-def update_config_pack(
-    existing_pack: dict | None, updates: OltConfigUpdate
-) -> dict:
+def update_config_pack(existing_pack: dict | None, updates: OltConfigUpdate) -> dict:
     """Merge updates into existing config pack."""
     pack = dict(existing_pack) if existing_pack else {}
 
@@ -121,7 +117,9 @@ def update_config_pack(
     if updates.internet_traffic_table_inbound is not None:
         pack["internet_traffic_table_inbound"] = updates.internet_traffic_table_inbound
     if updates.internet_traffic_table_outbound is not None:
-        pack["internet_traffic_table_outbound"] = updates.internet_traffic_table_outbound
+        pack["internet_traffic_table_outbound"] = (
+            updates.internet_traffic_table_outbound
+        )
     if updates.mgmt_traffic_table_inbound is not None:
         pack["mgmt_traffic_table_inbound"] = updates.mgmt_traffic_table_inbound
     if updates.mgmt_traffic_table_outbound is not None:

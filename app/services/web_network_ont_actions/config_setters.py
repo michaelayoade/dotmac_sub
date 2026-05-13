@@ -307,9 +307,7 @@ def _reconcile_to_action_result(result_obj, *, success_message: str) -> ActionRe
             message=success_message,
             data={
                 "sync_status": result_obj.sync_status,
-                "actions_applied": [
-                    a.field for a in result_obj.actions_applied
-                ],
+                "actions_applied": [a.field for a in result_obj.actions_applied],
             },
         )
     failure = result_obj.failure
@@ -374,9 +372,7 @@ def set_wifi_password(
         result_obj, success_message="WiFi password updated."
     )
     if action_result.success:
-        _emit_wifi_password_event(
-            db, ont_id, method="reconciler", request=request
-        )
+        _emit_wifi_password_event(db, ont_id, method="reconciler", request=request)
 
     _log_action_audit(
         db,
@@ -1260,7 +1256,9 @@ def set_mgmt_remote_access(
                 if values.get("mgmt_ip_address")
                 else None
             ),
-            subnet=str(values.get("mgmt_subnet")) if values.get("mgmt_subnet") else None,
+            subnet=str(values.get("mgmt_subnet"))
+            if values.get("mgmt_subnet")
+            else None,
             gateway=(
                 str(values.get("mgmt_gateway")) if values.get("mgmt_gateway") else None
             ),

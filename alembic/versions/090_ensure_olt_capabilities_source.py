@@ -8,6 +8,7 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "090_ensure_olt_capabilities_source"
@@ -24,8 +25,7 @@ def _column_exists(table_name: str, column_name: str) -> bool:
 def _constraint_exists(table_name: str, constraint_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     return constraint_name in {
-        constraint["name"]
-        for constraint in inspector.get_check_constraints(table_name)
+        constraint["name"] for constraint in inspector.get_check_constraints(table_name)
     }
 
 

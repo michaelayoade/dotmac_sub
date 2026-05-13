@@ -309,7 +309,9 @@ class TestUpdateManagementIp:
 
     @patch("app.services.network.ont_write.resolve_olt_config_pack")
     @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-    @patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+    @patch(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies"
+    )
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
     def test_management_ip_fails_before_adapter_when_dependencies_invalid(
@@ -324,7 +326,9 @@ class TestUpdateManagementIp:
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
         mock_resolve_context.return_value = (
-            SimpleNamespace(olt=SimpleNamespace(id=olt_id), fsp="0/1/3", ont_id_on_olt=5),
+            SimpleNamespace(
+                olt=SimpleNamespace(id=olt_id), fsp="0/1/3", ont_id_on_olt=5
+            ),
             None,
         )
         mock_preflight.return_value = OltDependencyPreflightResult(
@@ -503,7 +507,9 @@ class TestUpdateServicePort:
         mock_emit.assert_not_called()
 
     @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-    @patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+    @patch(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies"
+    )
     @patch("app.services.network.ont_write.resolve_ont_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
     def test_service_port_fails_before_adapter_when_dependencies_invalid(
@@ -517,7 +523,9 @@ class TestUpdateServicePort:
         ont = MagicMock(external_id="generic:5")
         mock_get.return_value = (ont, None)
         mock_resolve_context.return_value = (
-            SimpleNamespace(olt=SimpleNamespace(id=olt_id), fsp="0/1/3", ont_id_on_olt=5),
+            SimpleNamespace(
+                olt=SimpleNamespace(id=olt_id), fsp="0/1/3", ont_id_on_olt=5
+            ),
             None,
         )
         mock_preflight.return_value = OltDependencyPreflightResult(
@@ -698,8 +706,12 @@ class TestUpdateServicePort:
 
         mock_adapter = MagicMock()
         mock_adapter.create_service_port.side_effect = [
-            OltOperationResult(success=True, message="created", data={"port_index": 777}),
-            OltOperationResult(success=True, message="created", data={"port_index": 778}),
+            OltOperationResult(
+                success=True, message="created", data={"port_index": 777}
+            ),
+            OltOperationResult(
+                success=True, message="created", data={"port_index": 778}
+            ),
         ]
         mock_adapter.get_service_ports_for_ont.return_value = OltOperationResult(
             success=True,
@@ -890,7 +902,9 @@ class TestMoveOnt:
         db.commit.assert_called_once()
 
     @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
-    @patch("app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies")
+    @patch(
+        "app.services.network.olt_dependency_preflight.validate_olt_profile_dependencies"
+    )
     @patch("app.services.network.ont_write._strict_olt_write_context")
     @patch("app.services.network.ont_write.get_ont_or_error")
     def test_move_fails_before_adapter_when_dependencies_invalid(

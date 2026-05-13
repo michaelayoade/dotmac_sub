@@ -12,8 +12,9 @@ This migration adds per-purpose GEM index defaults to OLT Config Pack:
 - IPTV: typically GEM 4
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "062_add_olt_gem_indices"
 down_revision = "061_add_acs_config_pack_and_mgmt_ip_pool"

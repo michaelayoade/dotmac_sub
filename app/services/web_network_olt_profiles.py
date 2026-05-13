@@ -200,7 +200,9 @@ def profile_sync_tasks_context(
         .where(OltProfileBundle.is_active.is_(True))
         .group_by(OltProfileBundle.drift_status)
     ).all()
-    drift_counts = {str(status or "unknown"): int(count) for status, count in drift_rows}
+    drift_counts = {
+        str(status or "unknown"): int(count) for status, count in drift_rows
+    }
     audit_events = list(
         db.scalars(
             select(AuditEvent)
@@ -369,7 +371,10 @@ def execute_profile_sync_task(
         return False, "Profile sync task not found"
     current_status = str(task.status or "")
     if current_status not in {"approved", "scheduled"}:
-        return False, f"Only approved or scheduled profile sync tasks can execute, got {current_status}"
+        return (
+            False,
+            f"Only approved or scheduled profile sync tasks can execute, got {current_status}",
+        )
     now_value = now or datetime.now(UTC)
     scheduled_for = task.scheduled_for
     if scheduled_for is not None and scheduled_for.tzinfo is None:
@@ -751,7 +756,9 @@ def _check_one_profile_bundle_drift(
     return reader.validate_profile_bundle(expected)
 
 
-def _expected_bundle_inventory(bundle: OltProfileBundle) -> dict[str, dict[str, dict[str, object]]]:
+def _expected_bundle_inventory(
+    bundle: OltProfileBundle,
+) -> dict[str, dict[str, dict[str, object]]]:
     names = _expected_bundle_names(bundle)
     return {
         "dba": {
@@ -961,10 +968,12 @@ def apply_saved_profile_bundle(
             "bundle": bundle,
         }
 
-    snapshot_preflight_ok, snapshot_preflight_message = _validate_saved_bundle_against_snapshot(
-        bundle,
-        plan,
-        reader,
+    snapshot_preflight_ok, snapshot_preflight_message = (
+        _validate_saved_bundle_against_snapshot(
+            bundle,
+            plan,
+            reader,
+        )
     )
     if not snapshot_preflight_ok:
         bundle.drift_status = "preflight_failed"
@@ -1136,7 +1145,13 @@ def _build_offer_profile_sync_plan_from_live(
     if not preflight.success:
         return False, preflight.message, olt, offer, None
 
-    return True, f"Profile sync plan built from snapshot {reader.snapshot.backup_id}", olt, offer, plan
+    return (
+        True,
+        f"Profile sync plan built from snapshot {reader.snapshot.backup_id}",
+        olt,
+        offer,
+        plan,
+    )
 
 
 def save_imported_profile_mapping(

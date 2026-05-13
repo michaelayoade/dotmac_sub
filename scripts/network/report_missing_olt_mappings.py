@@ -44,7 +44,9 @@ def _coverage_to_dict(item: OltMappingCoverage) -> dict[str, object]:
 
 def _print_text(report: list[OltMappingCoverage]) -> None:
     total_missing = sum(item.missing_count for item in report)
-    print(f"OLT mapping coverage: {len(report)} OLT(s), {total_missing} missing mapping(s)")
+    print(
+        f"OLT mapping coverage: {len(report)} OLT(s), {total_missing} missing mapping(s)"
+    )
     for item in report:
         status = "OK" if item.is_complete else f"MISSING {item.missing_count}"
         print(

@@ -70,9 +70,7 @@ def cache_current_user_context(request: Request | None) -> dict[str, Any] | None
         return None
     state = getattr(request, "state", None)
     cached = (
-        getattr(state, _CACHED_USER_CONTEXT_ATTR, None)
-        if state is not None
-        else None
+        getattr(state, _CACHED_USER_CONTEXT_ATTR, None) if state is not None else None
     )
     if cached is not None:
         return cached
@@ -90,9 +88,7 @@ def _current_user(request: Request | None) -> dict[str, Any] | None:
         return None
     state = getattr(request, "state", None)
     cached = (
-        getattr(state, _CACHED_USER_CONTEXT_ATTR, None)
-        if state is not None
-        else None
+        getattr(state, _CACHED_USER_CONTEXT_ATTR, None) if state is not None else None
     )
     if cached is not None:
         return cached

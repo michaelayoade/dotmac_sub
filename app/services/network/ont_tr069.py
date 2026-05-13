@@ -494,7 +494,9 @@ class OntTR069:
                 .join(Tr069CpeDevice, Tr069Session.device_id == Tr069CpeDevice.id)
                 .where(Tr069CpeDevice.ont_unit_id == ont.id)
                 .where(Tr069CpeDevice.is_active.is_(True))
-                .order_by(Tr069Session.started_at.desc(), Tr069Session.created_at.desc())
+                .order_by(
+                    Tr069Session.started_at.desc(), Tr069Session.created_at.desc()
+                )
                 .limit(limit)
             ).all()
         )

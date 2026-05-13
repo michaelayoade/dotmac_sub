@@ -155,9 +155,7 @@ def duplicate_warnings(
             )
         )
         if existing_subscriber:
-            warnings.append(
-                "This email is already used by another subscriber account."
-            )
+            warnings.append("This email is already used by another subscriber account.")
         contact_query = select(SubscriberContact).where(
             func.lower(SubscriberContact.email) == email.lower()
         )
@@ -190,7 +188,9 @@ def duplicate_warnings(
 
 def get_contacts_page(db: Session, customer: dict) -> dict:
     allowed_subscriber_ids = _allowed_subscriber_ids(customer, db)
-    subscriber = _subscriber(db, allowed_subscriber_ids[0]) if allowed_subscriber_ids else None
+    subscriber = (
+        _subscriber(db, allowed_subscriber_ids[0]) if allowed_subscriber_ids else None
+    )
     allowed_subscriber_uuids = _allowed_subscriber_uuids(customer, db)
     contacts = db.scalars(
         select(SubscriberContact)
@@ -266,7 +266,9 @@ def update_contact(
     contact = db.scalar(
         select(SubscriberContact).where(
             SubscriberContact.id == contact_uuid,
-            SubscriberContact.subscriber_id.in_(_allowed_subscriber_uuids(customer, db)),
+            SubscriberContact.subscriber_id.in_(
+                _allowed_subscriber_uuids(customer, db)
+            ),
         )
     )
     if not contact:
@@ -307,7 +309,9 @@ def delete_contact(db: Session, customer: dict, contact_id: str) -> None:
     contact = db.scalar(
         select(SubscriberContact).where(
             SubscriberContact.id == contact_uuid,
-            SubscriberContact.subscriber_id.in_(_allowed_subscriber_uuids(customer, db)),
+            SubscriberContact.subscriber_id.in_(
+                _allowed_subscriber_uuids(customer, db)
+            ),
         )
     )
     if not contact:

@@ -120,7 +120,9 @@ def test_retry_compensation_uses_targeted_service_layer_handler(
     failure.undo_commands = ["service_port_index:101", "service_port_index:102"]
     db_session.commit()
 
-    def _fake_rollback_service_port_indices(db, ont_id, *, port_indices, expected_olt_id):
+    def _fake_rollback_service_port_indices(
+        db, ont_id, *, port_indices, expected_olt_id
+    ):
         assert ont_id == str(failure.ont_unit_id)
         assert port_indices == [101, 102]
         assert expected_olt_id == str(failure.olt_device_id)

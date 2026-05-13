@@ -91,9 +91,7 @@ class _FakeZabbixServer:
 def test_zabbix_trapper_sends_well_formed_payload():
     with _FakeZabbixServer() as server:
         trapper = ZabbixTrapper(host="127.0.0.1", port=server.port)
-        ok = trapper.send(
-            zabbix_host="172.16.210.20", key="ont.foo", value=3
-        )
+        ok = trapper.send(zabbix_host="172.16.210.20", key="ont.foo", value=3)
     assert ok is True
     assert len(server.received) == 1
     payload = server.received[0]
@@ -202,9 +200,7 @@ def test_escalate_does_not_re_alert_on_subsequent_cycles(caplog):
     )
     error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert error_records == []
-    debug_records = [
-        r for r in caplog.records if r.levelno == logging.DEBUG
-    ]
+    debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
     assert any(r.message == SWEEP_ALERT_KIND for r in debug_records)
 
 
@@ -232,9 +228,7 @@ def test_escalate_pushes_to_zabbix_when_trapper_configured():
 
     class _FakeTrapper:
         def send(self, *, zabbix_host, key, value):
-            calls.append(
-                {"zabbix_host": zabbix_host, "key": key, "value": value}
-            )
+            calls.append({"zabbix_host": zabbix_host, "key": key, "value": value})
             return True
 
     escalate_sweep_unreachable(

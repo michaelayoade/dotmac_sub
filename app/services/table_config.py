@@ -626,9 +626,10 @@ class TableConfigurationService:
                     normalized_serial_term = "".join(
                         char for char in search_term.upper() if char.isalnum()
                     )
-                    if normalized_serial_term.startswith("HWTC") and len(
-                        normalized_serial_term
-                    ) > 4:
+                    if (
+                        normalized_serial_term.startswith("HWTC")
+                        and len(normalized_serial_term) > 4
+                    ):
                         ont_like_terms.append(f"%{normalized_serial_term[4:]}%")
                     search_columns.extend(
                         [

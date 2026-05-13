@@ -37,7 +37,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 if TYPE_CHECKING:
-
     from app.models.catalog import Subscription
     from app.models.network import OntUnit
 
@@ -165,13 +164,15 @@ class ProvisioningContext:
     @property
     def is_complete(self) -> bool:
         """Check if context has minimum required fields for provisioning."""
-        return all([
-            self.subscriber_id,
-            self.ont_id,
-            self.olt_id,
-            self.fsp,
-            self.ont_id_on_olt is not None,
-        ])
+        return all(
+            [
+                self.subscriber_id,
+                self.ont_id,
+                self.olt_id,
+                self.fsp,
+                self.ont_id_on_olt is not None,
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +435,9 @@ class DefaultSubscriberOntLinker:
                 ont_id=ont_id,
             )
 
-        subscriber_id = str(assignment.subscriber_id) if assignment.subscriber_id else None
+        subscriber_id = (
+            str(assignment.subscriber_id) if assignment.subscriber_id else None
+        )
 
         if keep_history:
             # Deactivate assignment
@@ -517,8 +520,12 @@ class DefaultSubscriberOntLinker:
             )
         ).first()
 
-        old_subscriber_id = str(current.subscriber_id) if current and current.subscriber_id else None
-        pon_port_id = str(current.pon_port_id) if current and current.pon_port_id else None
+        old_subscriber_id = (
+            str(current.subscriber_id) if current and current.subscriber_id else None
+        )
+        pon_port_id = (
+            str(current.pon_port_id) if current and current.pon_port_id else None
+        )
 
         # Unlink from current subscriber (if any)
         if current:
@@ -595,7 +602,9 @@ class DefaultSubscriberOntLinker:
             # Get service address
             service_address_str = None
             if assignment.service_address_id:
-                service_address_str = self._format_address(db, str(assignment.service_address_id))
+                service_address_str = self._format_address(
+                    db, str(assignment.service_address_id)
+                )
 
             # Get CPE device if exists
             cpe_device_id = self._find_cpe_device_id(db, ont.serial_number)
@@ -649,14 +658,17 @@ class DefaultSubscriberOntLinker:
             return None
 
         # Format full name
-        full_name = " ".join(
-            filter(None, [subscriber.first_name, subscriber.last_name])
-        ) or None
+        full_name = (
+            " ".join(filter(None, [subscriber.first_name, subscriber.last_name]))
+            or None
+        )
 
         # Get service address
         service_address_str = None
         if assignment.service_address_id:
-            service_address_str = self._format_address(db, str(assignment.service_address_id))
+            service_address_str = self._format_address(
+                db, str(assignment.service_address_id)
+            )
 
         # Get active subscription (if any)
         subscription_id = None
@@ -664,7 +676,9 @@ class DefaultSubscriberOntLinker:
         active_sub = self._get_active_subscription(db, str(subscriber.id))
         if active_sub:
             subscription_id = str(active_sub.id)
-            subscription_name = active_sub.catalog_offer.name if active_sub.catalog_offer else None
+            subscription_name = (
+                active_sub.catalog_offer.name if active_sub.catalog_offer else None
+            )
 
         return OntSubscriberInfo(
             subscriber_id=str(subscriber.id),
@@ -772,7 +786,9 @@ class DefaultSubscriberOntLinker:
                     context.olt_name = olt.name if olt else None
 
                 # Resolve FSP and ONT ID on OLT
-                context.fsp, context.ont_id_on_olt = self._resolve_ont_olt_position(db, ont)
+                context.fsp, context.ont_id_on_olt = self._resolve_ont_olt_position(
+                    db, ont
+                )
 
         # If we have subscriber but no subscription, get active subscription
         if resolved_subscriber_id and not context.subscription_id:
@@ -809,9 +825,11 @@ class DefaultSubscriberOntLinker:
 
         # Fall back to any address
         address = db.scalars(
-            select(Address).where(
+            select(Address)
+            .where(
                 Address.subscriber_id == subscriber_id,
-            ).limit(1)
+            )
+            .limit(1)
         ).first()
 
         return str(address.id) if address else None
@@ -843,15 +861,20 @@ class DefaultSubscriberOntLinker:
         # Try autofind candidate
         if ont.serial_number:
             candidate = db.scalars(
-                select(OltAutofindCandidate).where(
+                select(OltAutofindCandidate)
+                .where(
                     OltAutofindCandidate.serial_number == ont.serial_number,
                     OltAutofindCandidate.status == "pending",
-                ).order_by(OltAutofindCandidate.last_seen_at.desc())
+                )
+                .order_by(OltAutofindCandidate.last_seen_at.desc())
             ).first()
             if candidate and candidate.pon_port_id:
                 return str(candidate.pon_port_id), None
 
-        return None, "PON port could not be auto-resolved; assignment created without port binding"
+        return (
+            None,
+            "PON port could not be auto-resolved; assignment created without port binding",
+        )
 
     def _ensure_cpe_device(
         self,
@@ -945,10 +968,12 @@ class DefaultSubscriberOntLinker:
         from app.models.catalog import Subscription, SubscriptionStatus
 
         return db.scalars(
-            select(Subscription).where(
+            select(Subscription)
+            .where(
                 Subscription.subscriber_id == subscriber_id,
                 Subscription.status == SubscriptionStatus.active,
-            ).order_by(Subscription.created_at.desc())
+            )
+            .order_by(Subscription.created_at.desc())
         ).first()
 
     def _resolve_ont_olt_position(
@@ -976,7 +1001,9 @@ class DefaultSubscriberOntLinker:
                 ont_id_on_olt = int(ext)
             else:
                 # Try patterns like "huawei:4194320640.5" or "generic:5"
-                match = re.match(r"^(?:[a-z0-9_-]+:)?(?:\d+\.)*(\d+)$", ext, re.IGNORECASE)
+                match = re.match(
+                    r"^(?:[a-z0-9_-]+:)?(?:\d+\.)*(\d+)$", ext, re.IGNORECASE
+                )
                 if match:
                     ont_id_on_olt = int(match.group(1))
                 elif "." in ext:
@@ -1125,12 +1152,17 @@ def is_ont_assigned(db: Session, ont_id: str) -> bool:
     """Check if an ONT has an active assignment."""
     from app.models.network import OntAssignment
 
-    return db.scalars(
-        select(OntAssignment.id).where(
-            OntAssignment.ont_unit_id == ont_id,
-            OntAssignment.active.is_(True),
-        ).limit(1)
-    ).first() is not None
+    return (
+        db.scalars(
+            select(OntAssignment.id)
+            .where(
+                OntAssignment.ont_unit_id == ont_id,
+                OntAssignment.active.is_(True),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 def get_subscriber_ont_count(db: Session, subscriber_id: str) -> int:
@@ -1139,12 +1171,15 @@ def get_subscriber_ont_count(db: Session, subscriber_id: str) -> int:
 
     from app.models.network import OntAssignment
 
-    return db.scalar(
-        select(func.count(OntAssignment.id)).where(
-            OntAssignment.subscriber_id == subscriber_id,
-            OntAssignment.active.is_(True),
+    return (
+        db.scalar(
+            select(func.count(OntAssignment.id)).where(
+                OntAssignment.subscriber_id == subscriber_id,
+                OntAssignment.active.is_(True),
+            )
         )
-    ) or 0
+        or 0
+    )
 
 
 def find_ont_by_subscriber_and_address(

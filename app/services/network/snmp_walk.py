@@ -52,7 +52,9 @@ def run_simple_v2c_walk(
     # Resolve settings: explicit param > per-OLT attribute > default
     use_timeout = timeout
     if use_timeout is None:
-        use_timeout = getattr(linked, "snmp_timeout_seconds", None) or DEFAULT_SNMP_TIMEOUT
+        use_timeout = (
+            getattr(linked, "snmp_timeout_seconds", None) or DEFAULT_SNMP_TIMEOUT
+        )
 
     use_bulk = bulk
     if use_bulk is None:
@@ -60,7 +62,10 @@ def run_simple_v2c_walk(
 
     use_max_reps = max_repetitions
     if use_max_reps is None:
-        use_max_reps = getattr(linked, "snmp_bulk_max_repetitions", None) or DEFAULT_BULK_MAX_REPETITIONS
+        use_max_reps = (
+            getattr(linked, "snmp_bulk_max_repetitions", None)
+            or DEFAULT_BULK_MAX_REPETITIONS
+        )
 
     # Select command and build arguments
     if use_bulk and shutil.which("snmpbulkwalk"):

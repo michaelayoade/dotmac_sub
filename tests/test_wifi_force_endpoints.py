@@ -80,9 +80,7 @@ def _stub_result(success: bool, **overrides) -> ReconcileResult:
 # ── force_push_wifi_password ────────────────────────────────────────────────
 
 
-def test_force_push_invokes_reconcile_with_bootstrap_mode(
-    db_session, ont, monkeypatch
-):
+def test_force_push_invokes_reconcile_with_bootstrap_mode(db_session, ont, monkeypatch):
     captured: dict = {}
 
     def _fake_reconcile(db, ont_unit_id, *, proposed_change, mode, **_):
@@ -90,9 +88,7 @@ def test_force_push_invokes_reconcile_with_bootstrap_mode(
         captured["mode"] = mode
         return _stub_result(True)
 
-    monkeypatch.setattr(
-        "app.services.network.reconcile.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.services.network.reconcile.reconcile_ont", _fake_reconcile)
 
     result = force_push_wifi_password(db_session, str(ont.id), "newpw")
 
@@ -163,9 +159,7 @@ def test_force_resync_invokes_reconcile_with_sweep_mode_no_change(
         captured["mode"] = mode
         return _stub_result(True)
 
-    monkeypatch.setattr(
-        "app.services.network.reconcile.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.services.network.reconcile.reconcile_ont", _fake_reconcile)
 
     result = force_resync_ont(db_session, str(ont.id))
 

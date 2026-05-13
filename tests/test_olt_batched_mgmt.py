@@ -258,14 +258,18 @@ class TestBuildManagementCommandBatch:
         commands = build_management_command_batch(spec)
 
         # Find interface enter command
-        enter_cmds = [(i, c) for i, (c, d) in enumerate(commands) if d == "enter_interface_mode"]
+        enter_cmds = [
+            (i, c) for i, (c, d) in enumerate(commands) if d == "enter_interface_mode"
+        ]
         assert len(enter_cmds) == 1
 
         idx, cmd = enter_cmds[0]
         assert "interface gpon 0/3" in cmd
 
         # Exit should be after
-        exit_cmds = [(i, c) for i, (c, d) in enumerate(commands) if d == "exit_interface_mode"]
+        exit_cmds = [
+            (i, c) for i, (c, d) in enumerate(commands) if d == "exit_interface_mode"
+        ]
         assert len(exit_cmds) == 1
         exit_idx, _ = exit_cmds[0]
         assert exit_idx > idx
@@ -459,7 +463,9 @@ class TestExecuteBatchedManagementSetup:
         olt = MagicMock()
         olt.name = "Test-OLT"
 
-        mock_session_ctx.return_value.__enter__.side_effect = Exception("Connection failed")
+        mock_session_ctx.return_value.__enter__.side_effect = Exception(
+            "Connection failed"
+        )
 
         result = execute_batched_management_setup(olt, spec)
 

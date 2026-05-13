@@ -132,7 +132,11 @@ def test_live_audit_validates_profile_dependencies(monkeypatch, db_session) -> N
 
     monkeypatch.setattr(
         "app.services.network.olt_config_pack_live_audit.get_tr069_server_profiles",
-        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=2, name="ACS", acs_url="")]),
+        lambda _olt: (
+            True,
+            "ok",
+            [SimpleNamespace(profile_id=2, name="ACS", acs_url="")],
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.olt_config_pack_live_audit.get_dba_profiles",
@@ -167,7 +171,11 @@ def test_live_audit_detects_missing_wan_profile_zero(monkeypatch, db_session) ->
 
     monkeypatch.setattr(
         "app.services.network.olt_config_pack_live_audit.get_tr069_server_profiles",
-        lambda _olt: (True, "ok", [SimpleNamespace(profile_id=2, name="ACS", acs_url="")]),
+        lambda _olt: (
+            True,
+            "ok",
+            [SimpleNamespace(profile_id=2, name="ACS", acs_url="")],
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.olt_config_pack_live_audit.get_dba_profiles",

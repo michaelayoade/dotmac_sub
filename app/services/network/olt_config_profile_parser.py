@@ -77,12 +77,14 @@ def parse_dba_profiles(config_text: str) -> list[ParsedProfile]:
         if end == -1:
             end = len(config_text)
         raw_line = config_text[start:end].strip()
-        profiles.append(ParsedProfile(
-            profile_id=profile_id,
-            name=name,
-            profile_type="dba",
-            raw_line=raw_line,
-        ))
+        profiles.append(
+            ParsedProfile(
+                profile_id=profile_id,
+                name=name,
+                profile_type="dba",
+                raw_line=raw_line,
+            )
+        )
     return profiles
 
 
@@ -101,12 +103,14 @@ def parse_traffic_tables(config_text: str) -> list[ParsedProfile]:
         if end == -1:
             end = len(config_text)
         raw_line = config_text[start:end].strip()
-        profiles.append(ParsedProfile(
-            profile_id=index,
-            name=name,
-            profile_type="traffic",
-            raw_line=raw_line,
-        ))
+        profiles.append(
+            ParsedProfile(
+                profile_id=index,
+                name=name,
+                profile_type="traffic",
+                raw_line=raw_line,
+            )
+        )
     return profiles
 
 
@@ -125,12 +129,14 @@ def parse_line_profiles(config_text: str) -> list[ParsedProfile]:
         if end == -1:
             end = len(config_text)
         raw_line = config_text[start:end].strip()
-        profiles.append(ParsedProfile(
-            profile_id=profile_id,
-            name=name,
-            profile_type="line",
-            raw_line=raw_line,
-        ))
+        profiles.append(
+            ParsedProfile(
+                profile_id=profile_id,
+                name=name,
+                profile_type="line",
+                raw_line=raw_line,
+            )
+        )
     return profiles
 
 
@@ -149,12 +155,14 @@ def parse_service_profiles(config_text: str) -> list[ParsedProfile]:
         if end == -1:
             end = len(config_text)
         raw_line = config_text[start:end].strip()
-        profiles.append(ParsedProfile(
-            profile_id=profile_id,
-            name=name,
-            profile_type="service",
-            raw_line=raw_line,
-        ))
+        profiles.append(
+            ParsedProfile(
+                profile_id=profile_id,
+                name=name,
+                profile_type="service",
+                raw_line=raw_line,
+            )
+        )
     return profiles
 
 

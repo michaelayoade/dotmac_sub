@@ -170,8 +170,7 @@ def test_list_advanced_filters_by_zabbix_status(db_session, monkeypatch) -> None
         zabbix_ont_status,
         "get_ont_snapshots_from_zabbix",
         lambda db, onts: {
-            str(item.id): zabbix_ont_status.OntSignalData(online=True)
-            for item in onts
+            str(item.id): zabbix_ont_status.OntSignalData(online=True) for item in onts
         },
     )
 

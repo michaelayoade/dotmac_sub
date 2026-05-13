@@ -234,8 +234,10 @@ class HuaweiProvisioner(Provisioner, ListResponseMixin):
             raise ValueError(
                 f"{step} requires commands, edit_config, rpc, or get_filter"
             )
-        if step in {"assign_ont", "push_config"} and get_filter and not any(
-            [edit_config, rpc]
+        if (
+            step in {"assign_ont", "push_config"}
+            and get_filter
+            and not any([edit_config, rpc])
         ):
             return ProvisioningResult(
                 status="failed",
@@ -349,7 +351,9 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             params[f"{prefix}.Password"] = cwmp_password
 
         inform_interval = str(
-            config.get("periodic_inform_interval", settings.tr069_periodic_inform_interval)
+            config.get(
+                "periodic_inform_interval", settings.tr069_periodic_inform_interval
+            )
         )
         params[f"{prefix}.PeriodicInformEnable"] = "true"
         params[f"{prefix}.PeriodicInformInterval"] = inform_interval
@@ -377,7 +381,9 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
         headers = dict(connector.get("headers") or {})
         headers.update(config.get("headers") or {})
         timeout = config.get("timeout_sec") or connector.get("timeout_sec") or 30.0
-        client = create_genieacs_client(base_url, timeout=float(timeout), headers=headers)
+        client = create_genieacs_client(
+            base_url, timeout=float(timeout), headers=headers
+        )
 
         use_verified_write = bool(config.get("connection_request", True))
         results: list[dict] = []

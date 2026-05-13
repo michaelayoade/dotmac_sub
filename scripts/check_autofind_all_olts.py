@@ -18,7 +18,11 @@ def main() -> None:
     db = SessionLocal()
     try:
         # Get all active OLTs
-        stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
+        stmt = (
+            select(OLTDevice)
+            .where(OLTDevice.is_active.is_(True))
+            .order_by(OLTDevice.name)
+        )
         olts = list(db.scalars(stmt).all())
 
         if not olts:
@@ -49,9 +53,11 @@ def main() -> None:
 
                 if created or updated or disappeared:
                     print(f"  ✓ {message}")
-                    print(f"    New: {created}, Updated: {updated}, Disappeared: {disappeared}")
+                    print(
+                        f"    New: {created}, Updated: {updated}, Disappeared: {disappeared}"
+                    )
                 else:
-                    print(f"  ✓ No undiscovered ONTs")
+                    print("  ✓ No undiscovered ONTs")
             else:
                 failed += 1
                 print(f"  ✗ {message}")
@@ -59,7 +65,7 @@ def main() -> None:
         db.commit()
 
         print("\n" + "-" * 80)
-        print(f"\nSummary:")
+        print("\nSummary:")
         print(f"  OLTs checked: {len(olts)} ({successful} successful, {failed} failed)")
         print(f"  New candidates: {total_created}")
         print(f"  Updated candidates: {total_updated}")

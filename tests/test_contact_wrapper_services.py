@@ -87,7 +87,9 @@ class TestCustomerPortalContacts:
         assert contact.is_billing_contact is True
         assert contact.is_authorized is True
 
-    def test_update_contact_is_scoped_to_current_subscriber(self, db_session, subscriber):
+    def test_update_contact_is_scoped_to_current_subscriber(
+        self, db_session, subscriber
+    ):
         from app.models.subscriber import Subscriber, SubscriberContact
         from app.services import customer_portal_contacts
 
@@ -136,9 +138,7 @@ class TestCustomerPortalContacts:
         assert contact.instagram == "new_handle"
         assert contact.other_social == "TikTok: new_handle"
         assert contact.contact_type == "technical"
-        assert warnings == [
-            "This email is already used by another subscriber account."
-        ]
+        assert warnings == ["This email is already used by another subscriber account."]
 
         try:
             customer_portal_contacts.update_contact(
@@ -195,7 +195,10 @@ class TestCustomerPortalContacts:
 
         warnings = customer_portal_contacts.update_contact(
             db_session,
-            {"subscriber_id": str(subscriber.id), "account_id": str(managed_account.id)},
+            {
+                "subscriber_id": str(subscriber.id),
+                "account_id": str(managed_account.id),
+            },
             str(contact.id),
             form,
         )
@@ -245,7 +248,10 @@ class TestCustomerPortalContacts:
 
         warnings = customer_portal_contacts.create_contact(
             db_session,
-            {"subscriber_id": str(subscriber.id), "account_id": str(managed_account.id)},
+            {
+                "subscriber_id": str(subscriber.id),
+                "account_id": str(managed_account.id),
+            },
             form,
         )
 
@@ -301,13 +307,19 @@ class TestCustomerPortalContacts:
 
         warnings = customer_portal_contacts.update_contact(
             db_session,
-            {"subscriber_id": str(subscriber.id), "account_id": str(managed_account.id)},
+            {
+                "subscriber_id": str(subscriber.id),
+                "account_id": str(managed_account.id),
+            },
             str(contact.id),
             form,
         )
 
         assert "This email is already used by another subscriber account." in warnings
-        assert "This phone number is already used by another subscriber account." in warnings
+        assert (
+            "This phone number is already used by another subscriber account."
+            in warnings
+        )
 
     def test_owner_session_can_delete_contact_for_managed_account(
         self, db_session, subscriber
@@ -333,7 +345,10 @@ class TestCustomerPortalContacts:
 
         customer_portal_contacts.delete_contact(
             db_session,
-            {"subscriber_id": str(subscriber.id), "account_id": str(managed_account.id)},
+            {
+                "subscriber_id": str(subscriber.id),
+                "account_id": str(managed_account.id),
+            },
             str(contact.id),
         )
 

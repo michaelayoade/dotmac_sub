@@ -166,7 +166,9 @@ def test_get_secret_uses_default_for_missing_secret(monkeypatch, caplog):
     monkeypatch.setenv("OPENBAO_TOKEN", "test-token")
     monkeypatch.setenv("OPENBAO_KV_VERSION", "2")
 
-    request = httpx.Request("GET", "https://vault.test.local:8200/v1/secret/data/zabbix")
+    request = httpx.Request(
+        "GET", "https://vault.test.local:8200/v1/secret/data/zabbix"
+    )
     response = httpx.Response(404, request=request)
     error = httpx.HTTPStatusError("not found", request=request, response=response)
 

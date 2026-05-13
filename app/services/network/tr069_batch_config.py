@@ -199,7 +199,9 @@ class Tr069ConfigBatch:
             base_path = wifi_path or "Device.WiFi.SSID.1."
             radio_path = "Device.WiFi.Radio.1."
         else:
-            base_path = wifi_path or "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+            base_path = (
+                wifi_path or "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+            )
             radio_path = base_path
 
         base_path = base_path.rstrip(".")
@@ -355,7 +357,8 @@ class Tr069ConfigBatch:
         dhcp_end = get_desired_config_value(config, "lan", "dhcp_end")
 
         if any(
-            v is not None for v in [lan_ip, lan_subnet, dhcp_enabled, dhcp_start, dhcp_end]
+            v is not None
+            for v in [lan_ip, lan_subnet, dhcp_enabled, dhcp_start, dhcp_end]
         ):
             batch.add_lan_config(
                 lan_ip=lan_ip,
@@ -372,13 +375,15 @@ class Tr069ConfigBatch:
         wifi_channel = get_desired_config_value(config, "wifi", "channel")
 
         if any(
-            v is not None for v in [wifi_ssid, wifi_password, wifi_enabled, wifi_channel]
+            v is not None
+            for v in [wifi_ssid, wifi_password, wifi_enabled, wifi_channel]
         ):
             # Decrypt password if encrypted
             decrypted_password = None
             if wifi_password:
                 try:
                     from app.services.credential_crypto import decrypt_credential
+
                     decrypted_password = decrypt_credential(wifi_password)
                 except Exception:
                     decrypted_password = str(wifi_password)

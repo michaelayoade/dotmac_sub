@@ -8,6 +8,7 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "093_clear_ont_chassis_model_values"
@@ -18,7 +19,9 @@ depends_on = None
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def upgrade() -> None:

@@ -618,10 +618,12 @@ def get_service_detail(
         "customer_ont": customer_ont,
         "customer_wifi_ssid": getattr(customer_assignment, "wifi_ssid", None),
         "can_reboot_ont": bool(
-            customer_ont is not None and subscription.status == SubscriptionStatus.active
+            customer_ont is not None
+            and subscription.status == SubscriptionStatus.active
         ),
         "can_update_wifi": bool(
-            customer_ont is not None and subscription.status == SubscriptionStatus.active
+            customer_ont is not None
+            and subscription.status == SubscriptionStatus.active
         ),
         "billing_mode": billing_mode,
         "billing_mode_display": "Prepaid" if billing_mode == "prepaid" else "Postpaid",

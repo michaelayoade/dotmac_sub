@@ -109,9 +109,7 @@ def _sweep_one(
     cycle the threshold is crossed. ``trapper`` is forwarded as the
     Zabbix push target (None disables Zabbix; structured logs still fire).
     """
-    ont = db.execute(
-        select(OntUnit).where(OntUnit.id == ont_id)
-    ).scalar_one_or_none()
+    ont = db.execute(select(OntUnit).where(OntUnit.id == ont_id)).scalar_one_or_none()
     if ont is None:
         return False, False
 
@@ -167,9 +165,7 @@ def run_sweep_once(
     started = datetime.now(UTC)
     stats = SweepStats(started_at=started)
     effective_threshold = (
-        alert_threshold
-        if alert_threshold is not None
-        else default_threshold_from_env()
+        alert_threshold if alert_threshold is not None else default_threshold_from_env()
     )
     effective_trapper = trapper if trapper is not None else ZabbixTrapper.from_env()
 

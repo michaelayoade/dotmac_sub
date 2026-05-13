@@ -51,6 +51,7 @@ def _mbps_to_kbps(raw: object) -> int | None:
 
 from app.services.network._util import first_present
 
+
 def _first_present(*values: object) -> object | None:
     return first_present(*values, exclude_empty_list=True)
 
@@ -271,7 +272,9 @@ class ServiceIntentAdapter:
             ipv4_address=_text(getattr(subscription, "ipv4_address", None)),
             ipv6_address=_text(getattr(subscription, "ipv6_address", None)),
             mac_address=_text(getattr(subscription, "mac_address", None)),
-            service_description=_text(getattr(subscription, "service_description", None)),
+            service_description=_text(
+                getattr(subscription, "service_description", None)
+            ),
             warnings=tuple(warnings),
         )
 
@@ -321,9 +324,7 @@ class ServiceIntentAdapter:
                     connection_type=connection_type,
                     c_vlan=intent.network.c_vlan,
                     user_vlan=intent.network.c_vlan or intent.network.s_vlan,
-                    tag_transform="translate"
-                    if intent.network.c_vlan
-                    else "default",
+                    tag_transform="translate" if intent.network.c_vlan else "default",
                 )
             )
         return ProvisioningSpec(wan_services=wan_services)

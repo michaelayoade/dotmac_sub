@@ -33,7 +33,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -131,9 +131,7 @@ class FallbackCache:
         """Remove expired entries. Returns count of removed entries."""
         removed = 0
         with self._lock:
-            expired_keys = [
-                k for k, v in self._cache.items() if v.is_expired()
-            ]
+            expired_keys = [k for k, v in self._cache.items() if v.is_expired()]
             for key in expired_keys:
                 del self._cache[key]
                 removed += 1

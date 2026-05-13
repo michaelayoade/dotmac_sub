@@ -73,17 +73,56 @@ _VLAN_RANGE = range(1, 4095)
 _ONT_ID_RANGE = range(0, 256)
 _GEM_INDEX_RANGE = range(0, 256)
 _PORT_NUMBER_RANGE = range(0, 256)
-_WIFI_CHANNEL_2G = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0})  # 0=auto
-_WIFI_CHANNEL_5G = frozenset({36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112,
-                               116, 120, 124, 128, 132, 136, 140, 144, 149, 153,
-                               157, 161, 165, 0})  # 0=auto
+_WIFI_CHANNEL_2G = frozenset(
+    {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0}
+)  # 0=auto
+_WIFI_CHANNEL_5G = frozenset(
+    {
+        36,
+        40,
+        44,
+        48,
+        52,
+        56,
+        60,
+        64,
+        100,
+        104,
+        108,
+        112,
+        116,
+        120,
+        124,
+        128,
+        132,
+        136,
+        140,
+        144,
+        149,
+        153,
+        157,
+        161,
+        165,
+        0,
+    }
+)  # 0=auto
 
 # Security modes
-_WIFI_SECURITY_MODES = frozenset({
-    "None", "WEP-64", "WEP-128", "WPA-Personal", "WPA2-Personal",
-    "WPA-WPA2-Personal", "WPA3-Personal", "WPA-Enterprise",
-    "WPA2-Enterprise", "WPA3-Enterprise", "11i",  # Huawei alias
-})
+_WIFI_SECURITY_MODES = frozenset(
+    {
+        "None",
+        "WEP-64",
+        "WEP-128",
+        "WPA-Personal",
+        "WPA2-Personal",
+        "WPA-WPA2-Personal",
+        "WPA3-Personal",
+        "WPA-Enterprise",
+        "WPA2-Enterprise",
+        "WPA3-Enterprise",
+        "11i",  # Huawei alias
+    }
+)
 
 # Tag transform modes
 _TAG_TRANSFORM_MODES = frozenset({"translate", "transparent", "default"})
@@ -157,13 +196,15 @@ class ConfigValidationResult:
         suggestion: str | None = None,
     ) -> None:
         """Add an error issue."""
-        self.issues.append(ValidationIssue(
-            field=field,
-            message=message,
-            severity=ValidationSeverity.error,
-            code=code,
-            suggestion=suggestion,
-        ))
+        self.issues.append(
+            ValidationIssue(
+                field=field,
+                message=message,
+                severity=ValidationSeverity.error,
+                code=code,
+                suggestion=suggestion,
+            )
+        )
         self.is_valid = False
 
     def add_warning(
@@ -175,13 +216,15 @@ class ConfigValidationResult:
         suggestion: str | None = None,
     ) -> None:
         """Add a warning issue."""
-        self.issues.append(ValidationIssue(
-            field=field,
-            message=message,
-            severity=ValidationSeverity.warning,
-            code=code,
-            suggestion=suggestion,
-        ))
+        self.issues.append(
+            ValidationIssue(
+                field=field,
+                message=message,
+                severity=ValidationSeverity.warning,
+                code=code,
+                suggestion=suggestion,
+            )
+        )
 
     def add_info(
         self,
@@ -189,11 +232,13 @@ class ConfigValidationResult:
         message: str,
     ) -> None:
         """Add an info-level issue."""
-        self.issues.append(ValidationIssue(
-            field=field,
-            message=message,
-            severity=ValidationSeverity.info,
-        ))
+        self.issues.append(
+            ValidationIssue(
+                field=field,
+                message=message,
+                severity=ValidationSeverity.info,
+            )
+        )
 
     def merge(self, other: ConfigValidationResult) -> None:
         """Merge another result into this one."""
@@ -368,7 +413,9 @@ class BaseConfigValidator:
 
     # ========== Primitive Validators ==========
 
-    def _validate_fsp(self, fsp: str | None, result: ConfigValidationResult) -> str | None:
+    def _validate_fsp(
+        self, fsp: str | None, result: ConfigValidationResult
+    ) -> str | None:
         """Validate frame/slot/port format."""
         if not fsp:
             result.add_error("fsp", "Frame/Slot/Port is required")
@@ -377,7 +424,9 @@ class BaseConfigValidator:
         fsp = fsp.strip()
 
         if any(c in fsp for c in _DANGEROUS_CHARS):
-            result.add_error("fsp", "FSP contains invalid characters", code="INVALID_CHARS")
+            result.add_error(
+                "fsp", "FSP contains invalid characters", code="INVALID_CHARS"
+            )
             return None
 
         match = _FSP_PATTERN.match(fsp)
@@ -389,7 +438,11 @@ class BaseConfigValidator:
             )
             return None
 
-        frame, slot, port = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        frame, slot, port = (
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+        )
 
         # Range checks
         if frame > 15:
@@ -418,7 +471,9 @@ class BaseConfigValidator:
 
         if any(c in serial for c in _DANGEROUS_CHARS):
             result.add_error(
-                "serial_number", "Serial contains invalid characters", code="INVALID_CHARS"
+                "serial_number",
+                "Serial contains invalid characters",
+                code="INVALID_CHARS",
             )
             return None
 
@@ -589,7 +644,9 @@ class BaseConfigValidator:
         # Verify contiguous mask
         parts = mask.split(".")
         if len(parts) != 4:
-            result.add_error("subnet_mask", "Subnet mask must be in dotted-decimal format")
+            result.add_error(
+                "subnet_mask", "Subnet mask must be in dotted-decimal format"
+            )
             return None
 
         try:
@@ -618,7 +675,9 @@ class BaseConfigValidator:
         ssid = ssid.strip()
 
         if len(ssid) > 32:
-            result.add_error("ssid", f"SSID too long ({len(ssid)} chars). Maximum is 32.")
+            result.add_error(
+                "ssid", f"SSID too long ({len(ssid)} chars). Maximum is 32."
+            )
             return None
 
         if len(ssid) < 1:
@@ -757,9 +816,13 @@ class NetworkConfigValidator(BaseConfigValidator):
         # Description validation
         if config.description:
             if any(c in config.description for c in _DANGEROUS_CHARS):
-                result.add_error("description", "Description contains invalid characters")
+                result.add_error(
+                    "description", "Description contains invalid characters"
+                )
             elif len(config.description) > 64:
-                result.add_error("description", "Description too long (max 64 characters)")
+                result.add_error(
+                    "description", "Description too long (max 64 characters)"
+                )
 
         return result
 
@@ -802,7 +865,10 @@ class NetworkConfigValidator(BaseConfigValidator):
 
         # Cross-field validation
         if config.user_vlan is not None and config.vlan_id is not None:
-            if config.tag_transform == "transparent" and config.user_vlan != config.vlan_id:
+            if (
+                config.tag_transform == "transparent"
+                and config.user_vlan != config.vlan_id
+            ):
                 result.add_warning(
                     "tag_transform",
                     "Transparent mode with different user_vlan may cause issues",
@@ -839,12 +905,18 @@ class NetworkConfigValidator(BaseConfigValidator):
         if config.ip_mode == "static":
             self._validate_ip_address(config.ip_address, "ip_address", result)
             self._validate_subnet_mask(config.subnet_mask, result)
-            self._validate_ip_address(config.gateway, "gateway", result, allow_none=True)
+            self._validate_ip_address(
+                config.gateway, "gateway", result, allow_none=True
+            )
 
             # Cross-validate IP and gateway are in same subnet
-            if (config.ip_address and config.subnet_mask and config.gateway and
-                    result.validated_data.get("ip_address") and
-                    result.validated_data.get("gateway")):
+            if (
+                config.ip_address
+                and config.subnet_mask
+                and config.gateway
+                and result.validated_data.get("ip_address")
+                and result.validated_data.get("gateway")
+            ):
                 try:
                     ip = ipaddress.ip_address(config.ip_address)
                     gw = ipaddress.ip_address(config.gateway)
@@ -929,7 +1001,9 @@ class NetworkConfigValidator(BaseConfigValidator):
         # Service name validation (optional)
         if config.service_name:
             if any(c in config.service_name for c in _DANGEROUS_CHARS):
-                result.add_error("service_name", "Service name contains invalid characters")
+                result.add_error(
+                    "service_name", "Service name contains invalid characters"
+                )
             else:
                 result.validated_data["service_name"] = config.service_name
 

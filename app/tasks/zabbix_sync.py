@@ -148,7 +148,11 @@ def sync_single_olt_to_zabbix(olt_id: str) -> dict[str, Any]:
     except ZabbixClientError as exc:
         logger.warning(
             "zabbix_olt_sync_single_failed",
-            extra={"event": "zabbix_olt_sync_single_failed", "olt_id": olt_id, "error": str(exc)},
+            extra={
+                "event": "zabbix_olt_sync_single_failed",
+                "olt_id": olt_id,
+                "error": str(exc),
+            },
         )
         db.rollback()
         return {"error": "zabbix_unavailable", "olt_id": olt_id, "message": str(exc)}
@@ -215,7 +219,11 @@ def sync_single_nas_to_zabbix(nas_id: str) -> dict[str, Any]:
     except ZabbixClientError as exc:
         logger.warning(
             "zabbix_nas_sync_single_failed",
-            extra={"event": "zabbix_nas_sync_single_failed", "nas_id": nas_id, "error": str(exc)},
+            extra={
+                "event": "zabbix_nas_sync_single_failed",
+                "nas_id": nas_id,
+                "error": str(exc),
+            },
         )
         db.rollback()
         return {"error": "zabbix_unavailable", "nas_id": nas_id, "message": str(exc)}
@@ -270,7 +278,11 @@ def remove_device_from_zabbix_task(device_type: str, device_id: str) -> dict[str
             )
             return {"success": True, "device_type": device_type, "device_id": device_id}
         else:
-            return {"success": False, "device_type": device_type, "device_id": device_id}
+            return {
+                "success": False,
+                "device_type": device_type,
+                "device_id": device_id,
+            }
 
     except ZabbixClientError as exc:
         logger.warning(

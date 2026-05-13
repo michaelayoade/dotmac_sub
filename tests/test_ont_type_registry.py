@@ -1,7 +1,5 @@
 """Tests for ONT type adapter registry (transforms only)."""
 
-import pytest
-
 from app.services.adapters.ont_types import ont_type_registry
 from app.services.adapters.ont_types.base import OntTypeAdapter
 

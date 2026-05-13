@@ -142,7 +142,9 @@ def test_handle_delete_rejects_index_not_owned_by_target_ont(
     assert adapter.deleted == []
 
 
-def test_handle_delete_releases_only_matching_allocation(db_session, monkeypatch) -> None:
+def test_handle_delete_releases_only_matching_allocation(
+    db_session, monkeypatch
+) -> None:
     olt, ont = _create_olt_ont(db_session)
     from app.services.network.service_port_allocator import allocate_service_port
 
@@ -183,7 +185,9 @@ def test_handle_delete_keeps_allocation_reserved_when_readback_fails(
     db_session.commit()
 
     class ReadbackFailsAfterDeleteAdapter(_FakeAdapter):
-        def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        def get_service_ports_for_ont(
+            self, fsp: str, ont_id: int
+        ) -> OltOperationResult:
             if self.deleted:
                 return OltOperationResult(success=False, message="readback timeout")
             return super().get_service_ports_for_ont(fsp, ont_id)

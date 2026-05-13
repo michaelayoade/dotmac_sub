@@ -137,14 +137,11 @@ def genieacs_bootstrap_webhook(
         "ont_unit_id": str(ont.id),
         "sync_status": result.sync_status,
         "actions_applied": [a.field for a in result.actions_applied],
-        "failure_reason": (
-            result.failure.reason if result.failure else None
-        ),
+        "failure_reason": (result.failure.reason if result.failure else None),
         # ACS_CR_FAILED carries operator-actionable instructions — flag it
         # so operator dashboards can surface the recovery hint.
         "actionable": (
             result.failure is not None
-            and result.failure.reason
-            == ReconcileFailureReason.ACS_CR_FAILED
+            and result.failure.reason == ReconcileFailureReason.ACS_CR_FAILED
         ),
     }

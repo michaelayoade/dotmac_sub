@@ -45,9 +45,7 @@ class OltConfigSnapshot:
     def provenance(self) -> dict[str, Any]:
         return {
             "backup_id": self.backup_id,
-            "captured_at": self.captured_at.isoformat()
-            if self.captured_at
-            else None,
+            "captured_at": self.captured_at.isoformat() if self.captured_at else None,
             "source": "running_config_backup",
         }
 
@@ -73,10 +71,14 @@ class OltConfigSnapshotReader:
             config_text = olt_operations.read_backup_content(backup)
         except Exception as exc:
             return None, f"Backup captured but could not be read: {exc}"
-        return cls(db, olt, OltConfigSnapshot(backup=backup, config_text=config_text)), message
+        return cls(
+            db, olt, OltConfigSnapshot(backup=backup, config_text=config_text)
+        ), message
 
     @classmethod
-    def latest(cls, db: Session, olt: OLTDevice) -> tuple[OltConfigSnapshotReader | None, str]:
+    def latest(
+        cls, db: Session, olt: OLTDevice
+    ) -> tuple[OltConfigSnapshotReader | None, str]:
         from app.services.network.olt_config_audit import latest_valid_backup
 
         backup = latest_valid_backup(db, olt.id)
@@ -86,7 +88,9 @@ class OltConfigSnapshotReader:
             config_text = olt_operations.read_backup_content(backup)
         except Exception as exc:
             return None, f"Latest backup could not be read: {exc}"
-        return cls(db, olt, OltConfigSnapshot(backup=backup, config_text=config_text)), "Loaded latest running-config backup"
+        return cls(
+            db, olt, OltConfigSnapshot(backup=backup, config_text=config_text)
+        ), "Loaded latest running-config backup"
 
     def profile_inventory(self) -> dict[str, dict[int, str]]:
         inventory: dict[str, dict[int, str]] = {

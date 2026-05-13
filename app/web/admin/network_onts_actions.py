@@ -204,7 +204,9 @@ def _refresh_runtime_for_partial(
         except Exception as exc:
             db.rollback()
             success = False
-            message = f"Runtime refresh completed, but observed data reload failed: {exc}"
+            message = (
+                f"Runtime refresh completed, but observed data reload failed: {exc}"
+            )
     return success, message
 
 
@@ -1816,10 +1818,12 @@ def ont_decommission_preview(
 
     preview = preview_decommission(db, ont_id)
     context = _base_context(request, db, active_page="onts")
-    context.update({
-        "preview": preview.to_dict(),
-        "ont_id": ont_id,
-    })
+    context.update(
+        {
+            "preview": preview.to_dict(),
+            "ont_id": ont_id,
+        }
+    )
     return templates.TemplateResponse(
         "admin/network/onts/_decommission_modal.html", context
     )
@@ -1936,7 +1940,9 @@ def ont_refresh_status_get(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Refresh ONT status from OLT and TR-069 (GET for HTMX compatibility)."""
-    result = web_network_ont_actions_service.execute_refresh(db, ont_id, request=request)
+    result = web_network_ont_actions_service.execute_refresh(
+        db, ont_id, request=request
+    )
     return JSONResponse(
         {"success": result.success, "message": result.message},
         headers=_toast_headers(

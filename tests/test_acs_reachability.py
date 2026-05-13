@@ -81,9 +81,7 @@ def test_acs_reachability_accepts_routable_management_pool(db_session):
 
 def test_acs_reachability_rejects_exhausted_management_pool(db_session):
     olt, acs, vlan, pool = _acs_ready_olt(db_session, pool_cidr="172.16.202.0/30")
-    db_session.add(
-        IpBlock(pool_id=pool.id, cidr="172.16.202.0/30", is_active=True)
-    )
+    db_session.add(IpBlock(pool_id=pool.id, cidr="172.16.202.0/30", is_active=True))
     db_session.add(
         IPv4Address(
             address="172.16.202.2",
@@ -149,7 +147,10 @@ def test_acs_reachability_rejects_pool_on_different_vlan(db_session):
         current_olt=olt,
     )
 
-    assert error == "Management IP pool must be associated with the selected management VLAN."
+    assert (
+        error
+        == "Management IP pool must be associated with the selected management VLAN."
+    )
 
 
 def test_active_olt_form_requires_complete_authorization_pack(db_session):

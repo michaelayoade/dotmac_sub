@@ -353,6 +353,7 @@ def _igd_ppp_container_conflict(
         )
     return None
 
+
 # ---------------------------------------------------------------------------
 # PPPoE Configuration
 # ---------------------------------------------------------------------------
@@ -428,9 +429,7 @@ def set_pppoe_credentials(
 
     # Expected values for verification (exclude password - it's write-only)
     expected = {
-        path: value
-        for path, value in params.items()
-        if not path.endswith(".Password")
+        path: value for path, value in params.items() if not path.endswith(".Password")
     }
 
     try:

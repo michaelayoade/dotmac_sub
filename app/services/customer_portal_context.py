@@ -268,23 +268,26 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     open_count = 0
     if account_id:
         try:
-            open_count = db.scalar(
-                select(func.count(Ticket.id))
-                .where(Ticket.is_active.is_(True))
-                .where(
-                    (Ticket.subscriber_id == account_id)
-                    | (Ticket.customer_account_id == account_id)
-                )
-                .where(
-                    Ticket.status.notin_(
-                        (
-                            TicketStatus.closed,
-                            TicketStatus.canceled,
-                            TicketStatus.merged,
+            open_count = (
+                db.scalar(
+                    select(func.count(Ticket.id))
+                    .where(Ticket.is_active.is_(True))
+                    .where(
+                        (Ticket.subscriber_id == account_id)
+                        | (Ticket.customer_account_id == account_id)
+                    )
+                    .where(
+                        Ticket.status.notin_(
+                            (
+                                TicketStatus.closed,
+                                TicketStatus.canceled,
+                                TicketStatus.merged,
+                            )
                         )
                     )
                 )
-            ) or 0
+                or 0
+            )
         except Exception:
             open_count = 0
 

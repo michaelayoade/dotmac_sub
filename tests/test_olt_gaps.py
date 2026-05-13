@@ -104,7 +104,9 @@ def test_restore_from_backup_persists_startup_config(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_cmd", fake_run_huawei_cmd
     )
-    monkeypatch.setattr("app.services.network.olt_ssh.is_error_output", lambda _out: False)
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.is_error_output", lambda _out: False
+    )
 
     ok, message = restore_config_from_backup(
         SimpleNamespace(name="OLT-A"),
@@ -313,7 +315,9 @@ class TestOltCrudEvents:
             mock_emit.assert_called_once()
             assert mock_emit.call_args[0][1] == EventType.olt_updated
 
-    def test_update_olt_invalidates_ssh_pool_on_credential_change(self, db_session) -> None:
+    def test_update_olt_invalidates_ssh_pool_on_credential_change(
+        self, db_session
+    ) -> None:
         from app.services.network.olt import OLTDevices
 
         device = OLTDevices.create(
@@ -322,7 +326,9 @@ class TestOltCrudEvents:
         )
         with (
             patch("app.services.network.olt_device_crud.emit_event"),
-            patch("app.services.network.olt_ssh_pool.ssh_pool.invalidate") as mock_invalidate,
+            patch(
+                "app.services.network.olt_ssh_pool.ssh_pool.invalidate"
+            ) as mock_invalidate,
         ):
             OLTDevices.update(
                 db_session,

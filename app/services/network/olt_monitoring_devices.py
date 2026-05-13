@@ -46,7 +46,9 @@ def resolve_linked_network_device(db: Session, olt: object) -> OltMonitoringReso
                 authoritative=False,
                 warning="Monitoring device matched by hostname because no management IP match was found.",
             )
-    matched = db.scalars(select(NetworkDevice).where(NetworkDevice.name == olt.name)).first()
+    matched = db.scalars(
+        select(NetworkDevice).where(NetworkDevice.name == olt.name)
+    ).first()
     if matched:
         return OltMonitoringResolution(
             device=matched,

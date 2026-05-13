@@ -248,7 +248,11 @@ def _service_port_matches(
     if gem_index is not None and port.gem_index != gem_index:
         return False
     observed_tag_transform = getattr(port, "tag_transform", None)
-    if tag_transform and observed_tag_transform and observed_tag_transform != tag_transform:
+    if (
+        tag_transform
+        and observed_tag_transform
+        and observed_tag_transform != tag_transform
+    ):
         return False
     return True
 
@@ -515,7 +519,10 @@ def handle_delete(
         if verify_ok and any(
             _service_port_matches(port, index=index) for port in remaining_ports
         ):
-            return False, f"OLT accepted delete but service-port {index} is still present"
+            return (
+                False,
+                f"OLT accepted delete but service-port {index} is still present",
+            )
         if not verify_ok:
             return (
                 False,
@@ -643,6 +650,8 @@ def handle_diagnose(
     diagnostics_data = result.data.get("diagnostics")
     # Cast to expected type - adapter returns ServicePortDiagnostics or None
     diagnostics: ServicePortDiagnostics | None = (
-        diagnostics_data if isinstance(diagnostics_data, ServicePortDiagnostics) else None
+        diagnostics_data
+        if isinstance(diagnostics_data, ServicePortDiagnostics)
+        else None
     )
     return result.success, result.message, diagnostics

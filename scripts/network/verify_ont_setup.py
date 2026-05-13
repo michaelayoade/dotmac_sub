@@ -10,15 +10,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy import select, func
+from sqlalchemy import select
+
 from app.db import SessionLocal
 from app.models.network import (
-    OLTDevice,
-    OntUnit,
-    OntAssignment,
     OltConfigBackup,
-    OltOntRegistration,
-    OltServicePort,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
 )
 
 
@@ -53,9 +52,9 @@ class OltVerificationReport:
     matched_count: int = 0
     # Issues
     missing_from_config: list = field(default_factory=list)  # In DB but not config
-    missing_from_db: list = field(default_factory=list)      # In config but not DB
-    fsp_mismatches: list = field(default_factory=list)       # FSP doesn't match
-    ont_id_mismatches: list = field(default_factory=list)    # ONT-ID doesn't match
+    missing_from_db: list = field(default_factory=list)  # In config but not DB
+    fsp_mismatches: list = field(default_factory=list)  # FSP doesn't match
+    ont_id_mismatches: list = field(default_factory=list)  # ONT-ID doesn't match
     missing_service_ports: list = field(default_factory=list)
     errors: list = field(default_factory=list)
 
@@ -67,14 +66,14 @@ ONT_ADD_PATTERN = re.compile(
     r"(?:\s+omci\s+ont-lineprofile-id\s+(?P<line_profile>\d+))?"
     r"(?:\s+ont-srvprofile-id\s+(?P<service_profile>\d+))?"
     r'(?:\s+desc\s+"(?P<desc>[^"]*)")?',
-    re.IGNORECASE
+    re.IGNORECASE,
 )
 
 SERVICE_PORT_PATTERN = re.compile(
     r"service-port\s+(?P<index>\d+)\s+vlan\s+(?P<vlan>\d+)\s+"
     r"(?:gpon|xgpon|epon)\s+(?P<fsp>\d+/\d+/\d+)\s+"
     r"ont\s+(?P<ont_id>\d+)\s+gemport\s+(?P<gem>\d+)",
-    re.IGNORECASE
+    re.IGNORECASE,
 )
 
 
@@ -95,21 +94,27 @@ def normalize_serial(serial: str) -> str:
     return serial
 
 
-def parse_config_file(filepath: str) -> tuple[dict[str, ParsedOnt], dict[str, list[ParsedServicePort]]]:
+def parse_config_file(
+    filepath: str,
+) -> tuple[dict[str, ParsedOnt], dict[str, list[ParsedServicePort]]]:
     """Parse ONT registrations and service ports from config file."""
     onts: dict[str, ParsedOnt] = {}  # serial -> ParsedOnt
-    service_ports: dict[str, list[ParsedServicePort]] = defaultdict(list)  # fsp:ont_id -> ports
+    service_ports: dict[str, list[ParsedServicePort]] = defaultdict(
+        list
+    )  # fsp:ont_id -> ports
 
     current_interface = None
 
     try:
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        with open(filepath, encoding="utf-8", errors="ignore") as f:
             content = f.read()
     except Exception as e:
         return {}, {}
 
     # Find interface sections
-    interface_pattern = re.compile(r"interface\s+(?:gpon|epon|xgpon)\s+(\d+/\d+)", re.IGNORECASE)
+    interface_pattern = re.compile(
+        r"interface\s+(?:gpon|epon|xgpon)\s+(\d+/\d+)", re.IGNORECASE
+    )
 
     lines = content.split("\n")
     for i, line in enumerate(lines):
@@ -131,8 +136,12 @@ def parse_config_file(filepath: str) -> tuple[dict[str, ParsedOnt], dict[str, li
                 fsp=fsp,
                 ont_id=ont_id,
                 serial=serial,
-                line_profile_id=int(ont_match.group("line_profile")) if ont_match.group("line_profile") else None,
-                service_profile_id=int(ont_match.group("service_profile")) if ont_match.group("service_profile") else None,
+                line_profile_id=int(ont_match.group("line_profile"))
+                if ont_match.group("line_profile")
+                else None,
+                service_profile_id=int(ont_match.group("service_profile"))
+                if ont_match.group("service_profile")
+                else None,
                 description=ont_match.group("desc"),
             )
 
@@ -142,13 +151,15 @@ def parse_config_file(filepath: str) -> tuple[dict[str, ParsedOnt], dict[str, li
             fsp = sp_match.group("fsp")
             ont_id = int(sp_match.group("ont_id"))
             key = f"{fsp}:{ont_id}"
-            service_ports[key].append(ParsedServicePort(
-                index=int(sp_match.group("index")),
-                vlan=int(sp_match.group("vlan")),
-                fsp=fsp,
-                ont_id=ont_id,
-                gem_index=int(sp_match.group("gem")),
-            ))
+            service_ports[key].append(
+                ParsedServicePort(
+                    index=int(sp_match.group("index")),
+                    vlan=int(sp_match.group("vlan")),
+                    fsp=fsp,
+                    ont_id=ont_id,
+                    gem_index=int(sp_match.group("gem")),
+                )
+            )
 
     return onts, service_ports
 
@@ -170,6 +181,7 @@ def get_latest_backup(db, olt_id: str) -> tuple[str | None, str | None]:
             filepath = files[0][1]
             mtime = os.path.getmtime(filepath)
             from datetime import datetime
+
             date_str = datetime.fromtimestamp(mtime).isoformat()
             return filepath, date_str
 
@@ -213,11 +225,13 @@ def verify_olt(db, olt: OLTDevice) -> OltVerificationReport:
     report.config_ont_count = len(config_onts)
 
     # Get DB ONTs for this OLT
-    db_onts = list(db.scalars(
-        select(OntUnit)
-        .where(OntUnit.olt_device_id == olt.id)
-        .where(OntUnit.is_active.is_(True))
-    ).all())
+    db_onts = list(
+        db.scalars(
+            select(OntUnit)
+            .where(OntUnit.olt_device_id == olt.id)
+            .where(OntUnit.is_active.is_(True))
+        ).all()
+    )
     report.db_ont_count = len(db_onts)
 
     # Build lookup by serial
@@ -248,50 +262,62 @@ def verify_olt(db, olt: OLTDevice) -> OltVerificationReport:
                 port = assignment.pon_port
                 # Use port name which contains FSP like "0/1/0"
                 db_fsp = port.name
-            elif hasattr(db_ont, 'fsp') and db_ont.fsp:
+            elif hasattr(db_ont, "fsp") and db_ont.fsp:
                 db_fsp = db_ont.fsp
 
             if db_fsp and db_fsp != config_ont.fsp:
-                report.fsp_mismatches.append({
-                    "serial": serial,
-                    "db_fsp": db_fsp,
-                    "config_fsp": config_ont.fsp,
-                })
+                report.fsp_mismatches.append(
+                    {
+                        "serial": serial,
+                        "db_fsp": db_fsp,
+                        "config_fsp": config_ont.fsp,
+                    }
+                )
 
             # Check ONT-ID match
-            db_ont_id = getattr(db_ont, 'olt_ont_id', None) or getattr(db_ont, 'ont_id_on_olt', None)
+            db_ont_id = getattr(db_ont, "olt_ont_id", None) or getattr(
+                db_ont, "ont_id_on_olt", None
+            )
             if db_ont_id and db_ont_id != config_ont.ont_id:
-                report.ont_id_mismatches.append({
-                    "serial": serial,
-                    "db_ont_id": db_ont_id,
-                    "config_ont_id": config_ont.ont_id,
-                })
+                report.ont_id_mismatches.append(
+                    {
+                        "serial": serial,
+                        "db_ont_id": db_ont_id,
+                        "config_ont_id": config_ont.ont_id,
+                    }
+                )
 
             # Check service port exists
             sp_key = f"{config_ont.fsp}:{config_ont.ont_id}"
             if sp_key not in config_service_ports:
-                report.missing_service_ports.append({
+                report.missing_service_ports.append(
+                    {
+                        "serial": serial,
+                        "fsp": config_ont.fsp,
+                        "ont_id": config_ont.ont_id,
+                    }
+                )
+        else:
+            # In config but not in DB
+            report.missing_from_db.append(
+                {
                     "serial": serial,
                     "fsp": config_ont.fsp,
                     "ont_id": config_ont.ont_id,
-                })
-        else:
-            # In config but not in DB
-            report.missing_from_db.append({
-                "serial": serial,
-                "fsp": config_ont.fsp,
-                "ont_id": config_ont.ont_id,
-                "description": config_ont.description,
-            })
+                    "description": config_ont.description,
+                }
+            )
 
     # Find ONTs in DB but not in config
     for serial, db_ont in db_ont_by_serial.items():
         if serial not in matched_serials and serial not in config_onts:
-            report.missing_from_config.append({
-                "serial": serial,
-                "ont_id": str(db_ont.id)[:8],
-                "status": str(getattr(db_ont, 'authorization_status', 'unknown')),
-            })
+            report.missing_from_config.append(
+                {
+                    "serial": serial,
+                    "ont_id": str(db_ont.id)[:8],
+                    "status": str(getattr(db_ont, "authorization_status", "unknown")),
+                }
+            )
 
     report.matched_count = len(matched_serials)
 
@@ -307,11 +333,13 @@ def main():
     db = SessionLocal()
     try:
         # Get all active OLTs
-        olts = list(db.scalars(
-            select(OLTDevice)
-            .where(OLTDevice.status.in_(["active", "maintenance"]))
-            .order_by(OLTDevice.name)
-        ).all())
+        olts = list(
+            db.scalars(
+                select(OLTDevice)
+                .where(OLTDevice.status.in_(["active", "maintenance"]))
+                .order_by(OLTDevice.name)
+            ).all()
+        )
 
         print(f"\nFound {len(olts)} active OLTs to verify\n")
 
@@ -328,12 +356,12 @@ def main():
             total_matched += report.matched_count
 
             issues = (
-                len(report.missing_from_config) +
-                len(report.missing_from_db) +
-                len(report.fsp_mismatches) +
-                len(report.ont_id_mismatches) +
-                len(report.missing_service_ports) +
-                len(report.errors)
+                len(report.missing_from_config)
+                + len(report.missing_from_db)
+                + len(report.fsp_mismatches)
+                + len(report.ont_id_mismatches)
+                + len(report.missing_service_ports)
+                + len(report.errors)
             )
             total_issues += issues
 
@@ -350,7 +378,7 @@ def main():
             print(f"  Status: {status}")
 
             if report.errors:
-                print(f"\n  ERRORS:")
+                print("\n  ERRORS:")
                 for err in report.errors:
                     print(f"    - {err}")
 
@@ -364,27 +392,37 @@ def main():
             if report.missing_from_db:
                 print(f"\n  Missing from DB ({len(report.missing_from_db)}):")
                 for item in report.missing_from_db[:5]:
-                    desc = f" ({item['description']})" if item.get('description') else ""
-                    print(f"    - {item['serial']} at {item['fsp']}:{item['ont_id']}{desc}")
+                    desc = (
+                        f" ({item['description']})" if item.get("description") else ""
+                    )
+                    print(
+                        f"    - {item['serial']} at {item['fsp']}:{item['ont_id']}{desc}"
+                    )
                 if len(report.missing_from_db) > 5:
                     print(f"    ... and {len(report.missing_from_db) - 5} more")
 
             if report.fsp_mismatches:
                 print(f"\n  FSP Mismatches ({len(report.fsp_mismatches)}):")
                 for item in report.fsp_mismatches[:5]:
-                    print(f"    - {item['serial']}: DB={item['db_fsp']} vs Config={item['config_fsp']}")
+                    print(
+                        f"    - {item['serial']}: DB={item['db_fsp']} vs Config={item['config_fsp']}"
+                    )
                 if len(report.fsp_mismatches) > 5:
                     print(f"    ... and {len(report.fsp_mismatches) - 5} more")
 
             if report.ont_id_mismatches:
                 print(f"\n  ONT-ID Mismatches ({len(report.ont_id_mismatches)}):")
                 for item in report.ont_id_mismatches[:5]:
-                    print(f"    - {item['serial']}: DB={item['db_ont_id']} vs Config={item['config_ont_id']}")
+                    print(
+                        f"    - {item['serial']}: DB={item['db_ont_id']} vs Config={item['config_ont_id']}"
+                    )
                 if len(report.ont_id_mismatches) > 5:
                     print(f"    ... and {len(report.ont_id_mismatches) - 5} more")
 
             if report.missing_service_ports:
-                print(f"\n  Missing Service Ports ({len(report.missing_service_ports)}):")
+                print(
+                    f"\n  Missing Service Ports ({len(report.missing_service_ports)}):"
+                )
                 for item in report.missing_service_ports[:5]:
                     print(f"    - {item['serial']} at {item['fsp']}:{item['ont_id']}")
                 if len(report.missing_service_ports) > 5:
@@ -406,7 +444,9 @@ def main():
         if total_issues == 0:
             print("\n  All ONTs properly configured!")
         else:
-            print(f"\n  WARNING: {total_issues} issues found - review above for details")
+            print(
+                f"\n  WARNING: {total_issues} issues found - review above for details"
+            )
 
     finally:
         db.close()

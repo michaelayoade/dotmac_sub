@@ -6,8 +6,9 @@ Create Date: 2026-04-24
 
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "059_add_olt_rest_and_rate_limit"
 down_revision = "058_add_olt_autofind_last_sync_at"

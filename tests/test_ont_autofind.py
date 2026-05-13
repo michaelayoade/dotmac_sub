@@ -81,7 +81,9 @@ def test_refresh_autofind_from_olt_marks_missing_active_candidates_disappeared(
     db_session,
     monkeypatch,
 ):
-    olt = OLTDevice(name="OLT-Live-Autofind-Empty", mgmt_ip="198.51.100.211", is_active=True)
+    olt = OLTDevice(
+        name="OLT-Live-Autofind-Empty", mgmt_ip="198.51.100.211", is_active=True
+    )
     db_session.add(olt)
     db_session.commit()
     candidate = OltAutofindCandidate(
@@ -439,7 +441,9 @@ def test_restore_candidate_by_serial_matches_hex_variant(db_session):
 
 
 def test_restore_candidate_by_serial_returns_false_when_no_match(db_session):
-    olt = OLTDevice(name="OLT-Restore-Serial-Miss", mgmt_ip="198.51.100.222", is_active=True)
+    olt = OLTDevice(
+        name="OLT-Restore-Serial-Miss", mgmt_ip="198.51.100.222", is_active=True
+    )
     db_session.add(olt)
     db_session.commit()
     db_session.add(

@@ -6,8 +6,9 @@ Create Date: 2026-04-24
 
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "057_add_ont_assignment_release_fields"
 down_revision = "056_drop_inform_server_default"

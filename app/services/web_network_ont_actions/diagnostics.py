@@ -88,7 +88,9 @@ def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, 
 
     # Build config dict from assignment
     config: dict[str, str] = {}
-    mode_value = mgmt_ip_mode.value if hasattr(mgmt_ip_mode, "value") else str(mgmt_ip_mode)
+    mode_value = (
+        mgmt_ip_mode.value if hasattr(mgmt_ip_mode, "value") else str(mgmt_ip_mode)
+    )
     config["IP Mode"] = mode_value.upper()
 
     if mode_value == "static_ip":

@@ -85,9 +85,9 @@ def imported_service_port_summary(
     """Return aggregate visibility for imported service-port state."""
     olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
     total = db.scalar(
-        select(func.count()).select_from(OltServicePort).where(
-            OltServicePort.olt_device_id == olt_uuid
-        )
+        select(func.count())
+        .select_from(OltServicePort)
+        .where(OltServicePort.olt_device_id == olt_uuid)
     )
     latest = db.scalar(
         select(func.max(OltServicePort.last_imported_at)).where(

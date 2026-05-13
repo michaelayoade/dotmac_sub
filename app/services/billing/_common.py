@@ -180,8 +180,7 @@ def _calculate_tax_amount(
         return Decimal("0.00")
     if tax_application == TaxApplication.inclusive:
         return round_money(
-            amount
-            - (amount / (Decimal("1.00") + rate_percent / Decimal("100.00")))
+            amount - (amount / (Decimal("1.00") + rate_percent / Decimal("100.00")))
         )
     return round_money(amount * rate_percent / Decimal("100.00"))
 

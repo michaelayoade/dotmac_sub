@@ -23,8 +23,16 @@ def test_observed_runtime_summary_only_lists_present_fields(monkeypatch):
             "fetched_at": datetime(2026, 5, 4, 14, 27, tzinfo=UTC),
             "observed": {
                 "lan_hosts": [
-                    {"host_name": "phone", "ip_address": "192.168.100.10", "active": True},
-                    {"host_name": "old-phone", "ip_address": "192.168.100.11", "active": False},
+                    {
+                        "host_name": "phone",
+                        "ip_address": "192.168.100.10",
+                        "active": True,
+                    },
+                    {
+                        "host_name": "old-phone",
+                        "ip_address": "192.168.100.11",
+                        "active": False,
+                    },
                 ]
             },
             "tracked_point_index": {},
@@ -45,7 +53,9 @@ def test_observed_runtime_summary_uses_persisted_runtime_fallbacks(monkeypatch):
     monkeypatch.setattr(
         views,
         "resolve_effective_ont_config",
-        lambda _db, _ont: {"values": {"pppoe_username": "user-123", "wan_mode": "pppoe"}},
+        lambda _db, _ont: {
+            "values": {"pppoe_username": "user-123", "wan_mode": "pppoe"}
+        },
     )
     ont = SimpleNamespace(
         mac_address=None,

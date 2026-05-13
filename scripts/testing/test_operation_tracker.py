@@ -4,14 +4,14 @@ Playwright test for WebSocket Operation Tracker.
 
 Tests the operation tracker on a fast-loading page.
 """
+
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
-import re
 
 from playwright.sync_api import sync_playwright
-
 
 BASE_URL = "http://127.0.0.1:8001"
 ADMIN_USERNAME = "admin"
@@ -21,26 +21,41 @@ ADMIN_PASSWORD = "admin123"
 def get_session_cookie() -> str | None:
     """Use curl to login and get session cookie."""
     result = subprocess.run(
-        ['curl', '-s', '-c', '/tmp/cookies.txt', f'{BASE_URL}/auth/login'],
-        capture_output=True, text=True
+        ["curl", "-s", "-c", "/tmp/cookies.txt", f"{BASE_URL}/auth/login"],
+        capture_output=True,
+        text=True,
     )
     csrf_match = re.search(r'name="_csrf_token" value="([^"]+)"', result.stdout)
     if not csrf_match:
         return None
     csrf = csrf_match.group(1)
 
-    subprocess.run([
-        'curl', '-s', '-D', '/tmp/headers.txt', '-o', '/dev/null',
-        '-X', 'POST', f'{BASE_URL}/auth/login',
-        '-b', '/tmp/cookies.txt',
-        '-H', 'Content-Type: application/x-www-form-urlencoded',
-        '-d', f'username={ADMIN_USERNAME}&password={ADMIN_PASSWORD}&_csrf_token={csrf}'
-    ])
+    subprocess.run(
+        [
+            "curl",
+            "-s",
+            "-D",
+            "/tmp/headers.txt",
+            "-o",
+            "/dev/null",
+            "-X",
+            "POST",
+            f"{BASE_URL}/auth/login",
+            "-b",
+            "/tmp/cookies.txt",
+            "-H",
+            "Content-Type: application/x-www-form-urlencoded",
+            "-d",
+            f"username={ADMIN_USERNAME}&password={ADMIN_PASSWORD}&_csrf_token={csrf}",
+        ]
+    )
 
-    with open('/tmp/headers.txt', 'r') as f:
+    with open("/tmp/headers.txt") as f:
         headers = f.read()
 
-    session_match = re.search(r'set-cookie: session_token=([^;]+)', headers, re.IGNORECASE)
+    session_match = re.search(
+        r"set-cookie: session_token=([^;]+)", headers, re.IGNORECASE
+    )
     return session_match.group(1) if session_match else None
 
 
@@ -64,20 +79,28 @@ def main() -> int:
         context = browser.new_context()
         context.set_default_timeout(60000)  # 60s timeout for slow pages
 
-        context.add_cookies([{
-            "name": "session_token",
-            "value": session_token,
-            "domain": "127.0.0.1",
-            "path": "/",
-            "httpOnly": True,
-            "sameSite": "Lax"
-        }])
+        context.add_cookies(
+            [
+                {
+                    "name": "session_token",
+                    "value": session_token,
+                    "domain": "127.0.0.1",
+                    "path": "/",
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                }
+            ]
+        )
 
         page = context.new_page()
 
         # Test a faster page - the OLTs list page
         print("\n[3] Loading OLTs page (faster than dashboard)...")
-        page.goto(f"{BASE_URL}/admin/network/olts", wait_until="domcontentloaded", timeout=60000)
+        page.goto(
+            f"{BASE_URL}/admin/network/olts",
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
         print(f"    URL: {page.url}")
 
         if "/auth/login" in page.url:
@@ -106,7 +129,7 @@ def main() -> int:
         print(f"    trackOperation: {tracker_status['trackOperation']}")
         print(f"    Instance: {tracker_status['instance']}")
 
-        if not tracker_status['OperationTrackerClass']:
+        if not tracker_status["OperationTrackerClass"]:
             print("\n    ERROR: OperationTracker not loaded!")
             browser.close()
             return 1
@@ -131,7 +154,7 @@ def main() -> int:
         print(f"    Alpine.js: {toast_result.get('alpine', False)}")
 
         page.wait_for_timeout(500)
-        toast_visible = page.locator('text=Test from Playwright').count() > 0
+        toast_visible = page.locator("text=Test from Playwright").count() > 0
         print(f"    Toast appeared: {toast_visible}")
 
         # Step 5: Check autofind on an OLT (if available)
@@ -145,11 +168,15 @@ def main() -> int:
 
         if olt_link and len(olt_link) > 30:  # UUID links are longer
             print(f"    Found OLT: ...{olt_link[-40:]}")
-            page.goto(f"{BASE_URL}{olt_link}", wait_until="domcontentloaded", timeout=60000)
+            page.goto(
+                f"{BASE_URL}{olt_link}", wait_until="domcontentloaded", timeout=60000
+            )
             page.wait_for_timeout(2000)
 
             # Click autofind tab
-            autofind = page.locator('button:has-text("Autofind"), [data-tab="autofind"]').first
+            autofind = page.locator(
+                'button:has-text("Autofind"), [data-tab="autofind"]'
+            ).first
             if autofind.count() > 0:
                 print("    Clicking Autofind tab...")
                 autofind.click()
@@ -171,17 +198,27 @@ def main() -> int:
         print("\n" + "=" * 60)
         print("RESULTS")
         print("=" * 60)
-        all_passed = all([
-            tracker_status['OperationTrackerClass'],
-            tracker_status['initOperationTracker'],
-            tracker_status['trackOperation'],
-            toast_result.get('containerFound', False)
-        ])
+        all_passed = all(
+            [
+                tracker_status["OperationTrackerClass"],
+                tracker_status["initOperationTracker"],
+                tracker_status["trackOperation"],
+                toast_result.get("containerFound", False),
+            ]
+        )
 
-        print(f"  OperationTracker loaded:  {'PASS' if tracker_status['OperationTrackerClass'] else 'FAIL'}")
-        print(f"  initOperationTracker:     {'PASS' if tracker_status['initOperationTracker'] else 'FAIL'}")
-        print(f"  trackOperation:           {'PASS' if tracker_status['trackOperation'] else 'FAIL'}")
-        print(f"  Toast container:          {'PASS' if toast_result.get('containerFound') else 'FAIL'}")
+        print(
+            f"  OperationTracker loaded:  {'PASS' if tracker_status['OperationTrackerClass'] else 'FAIL'}"
+        )
+        print(
+            f"  initOperationTracker:     {'PASS' if tracker_status['initOperationTracker'] else 'FAIL'}"
+        )
+        print(
+            f"  trackOperation:           {'PASS' if tracker_status['trackOperation'] else 'FAIL'}"
+        )
+        print(
+            f"  Toast container:          {'PASS' if toast_result.get('containerFound') else 'FAIL'}"
+        )
         print(f"  Toast visible:            {'PASS' if toast_visible else 'SKIP'}")
         print("=" * 60)
         print(f"  Overall: {'ALL PASSED' if all_passed else 'SOME FAILED'}")

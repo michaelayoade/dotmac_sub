@@ -170,7 +170,9 @@ def handle_create(
     return authorization_presets.create(
         db,
         name=str(form_data["name"]),
-        description=str(form_data["description"]) if form_data.get("description") else None,
+        description=str(form_data["description"])
+        if form_data.get("description")
+        else None,
         default_vlan_id=str(form_data["default_vlan_id"])
         if form_data.get("default_vlan_id")
         else None,
@@ -198,7 +200,9 @@ def handle_update(
         db,
         preset_id,
         name=str(form_data["name"]),
-        description=str(form_data["description"]) if form_data.get("description") else None,
+        description=str(form_data["description"])
+        if form_data.get("description")
+        else None,
         default_vlan_id=str(form_data["default_vlan_id"])
         if form_data.get("default_vlan_id")
         else None,

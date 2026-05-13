@@ -69,7 +69,9 @@ def upgrade() -> None:
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("run_metadata", postgresql.JSON(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "run_metadata", postgresql.JSON(astext_type=sa.Text()), nullable=True
+        ),
         sa.ForeignKeyConstraint(["profile_id"], ["ont_provisioning_profiles.id"]),
         sa.PrimaryKeyConstraint("id"),
     )

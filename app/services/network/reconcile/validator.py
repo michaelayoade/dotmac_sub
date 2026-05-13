@@ -107,28 +107,20 @@ def _check_service_port_immutability(
         current.mgmt_service_port_index is not None
         and target.mgmt_service_port_index != current.mgmt_service_port_index
     ):
-        return Validation(
-            False, "mgmt_service_port_index is immutable post-allocation"
-        )
+        return Validation(False, "mgmt_service_port_index is immutable post-allocation")
     if (
         current.wan_service_port_index is not None
         and target.wan_service_port_index != current.wan_service_port_index
     ):
-        return Validation(
-            False, "wan_service_port_index is immutable post-allocation"
-        )
+        return Validation(False, "wan_service_port_index is immutable post-allocation")
     return Validation(True)
 
 
 def _check_mode_contradictions(target: OntDesiredState) -> Validation:
     if target.wan_mode == "bridge" and target.nat_enabled:
-        return Validation(
-            False, "bridge mode is incompatible with nat_enabled=True"
-        )
+        return Validation(False, "bridge mode is incompatible with nat_enabled=True")
     if target.wan_mode == "pppoe" and target.mgmt_vlan is None:
-        return Validation(
-            False, "wan_mode=pppoe requires a management VLAN"
-        )
+        return Validation(False, "wan_mode=pppoe requires a management VLAN")
     if target.wan_pppoe_provisioning_method == "omci":
         if target.wan_config_profile_id is None or target.wan_config_profile_id <= 0:
             return Validation(
@@ -140,7 +132,10 @@ def _check_mode_contradictions(target: OntDesiredState) -> Validation:
 
 
 def _check_vlan_ranges(target: OntDesiredState) -> Validation:
-    for label, value in (("mgmt_vlan", target.mgmt_vlan), ("wan_vlan", target.wan_vlan)):
+    for label, value in (
+        ("mgmt_vlan", target.mgmt_vlan),
+        ("wan_vlan", target.wan_vlan),
+    ):
         if value is None:
             continue
         if not (1 <= value <= 4094):
@@ -175,9 +170,7 @@ def _check_dhcp_pool(target: OntDesiredState) -> Validation:
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _validate_subnet_membership(
-    ip: str, gateway: str, subnet_mask: str
-) -> Validation:
+def _validate_subnet_membership(ip: str, gateway: str, subnet_mask: str) -> Validation:
     try:
         ip_addr = IPv4Address(ip)
         gw_addr = IPv4Address(gateway)

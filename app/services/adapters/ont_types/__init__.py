@@ -12,14 +12,13 @@ Usage:
         device_value = adapter.transform_security_mode("WPA2")  # -> "11i"
 """
 
+# Import vendor modules to register adapters
+from app.services.adapters.ont_types import huawei  # noqa: F401
 from app.services.adapters.ont_types.base import (
     OntTypeAdapter,
     OntTypeRegistry,
     ont_type_registry,
 )
-
-# Import vendor modules to register adapters
-from app.services.adapters.ont_types import huawei  # noqa: F401
 
 __all__ = [
     "OntTypeAdapter",

@@ -447,9 +447,7 @@ def olts_list_page_data(
                 "runtime_snmp_state": snmp_state,
                 "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
                 "imported_service_ports": service_port_summary["count"],
-                "imported_service_ports_at": service_port_summary[
-                    "last_imported_at"
-                ],
+                "imported_service_ports_at": service_port_summary["last_imported_at"],
                 "detail_url": f"/admin/network/olts/{olt.id}",
                 "edit_url": f"/admin/network/olts/{olt.id}/edit",
             }

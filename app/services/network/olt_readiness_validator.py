@@ -262,7 +262,11 @@ def _test_ssh_connectivity(olt: object) -> bool | None:
         ok, _message, _prompt = test_connection(olt)
         return ok
     except Exception as exc:
-        logger.warning("SSH connectivity test failed for OLT %s: %s", getattr(olt, "name", "?"), exc)
+        logger.warning(
+            "SSH connectivity test failed for OLT %s: %s",
+            getattr(olt, "name", "?"),
+            exc,
+        )
         return False
 
 

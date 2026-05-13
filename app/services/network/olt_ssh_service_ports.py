@@ -239,9 +239,7 @@ def create_single_service_port(
                     ont_id,
                     fsp,
                 )
-                core._invalidate_olt_read_cache(
-                    olt, "service_ports", "running_config"
-                )
+                core._invalidate_olt_read_cache(olt, "service_ports", "running_config")
                 return (
                     True,
                     (
@@ -267,7 +265,11 @@ def create_single_service_port(
             fsp,
         )
         core._invalidate_olt_read_cache(olt, "service_ports", "running_config")
-        return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})", port_index
+        return (
+            True,
+            f"Service-port created (VLAN {vlan_id}, GEM {gem_index})",
+            port_index,
+        )
     except Exception as exc:
         logger.error("Error creating service-port on OLT %s: %s", olt.name, exc)
         return False, f"Error: {exc}", None

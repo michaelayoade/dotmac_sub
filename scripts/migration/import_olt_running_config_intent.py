@@ -288,10 +288,15 @@ def parse_config(path: Path) -> list[ParsedOnt]:
         )
         if internet_config_match:
             parsed = onts.get(
-                (internet_config_match.group("port"), internet_config_match.group("ont"))
+                (
+                    internet_config_match.group("port"),
+                    internet_config_match.group("ont"),
+                )
             )
             if parsed:
-                parsed.internet_config_ip_index = int(internet_config_match.group("idx"))
+                parsed.internet_config_ip_index = int(
+                    internet_config_match.group("idx")
+                )
             continue
 
         wan_config_match = re.match(
@@ -300,7 +305,9 @@ def parse_config(path: Path) -> list[ParsedOnt]:
             command,
         )
         if wan_config_match:
-            parsed = onts.get((wan_config_match.group("port"), wan_config_match.group("ont")))
+            parsed = onts.get(
+                (wan_config_match.group("port"), wan_config_match.group("ont"))
+            )
             if parsed:
                 parsed.wan_config_ip_index = int(wan_config_match.group("idx"))
                 parsed.wan_config_profile_id = int(wan_config_match.group("profile"))
@@ -394,9 +401,9 @@ def import_configs(config_dir: Path, *, apply: bool = False) -> dict[str, int]:
         }
 
         for parsed in parsed_onts:
-            ont = ont_by_serial.get(_normalized_serial(parsed.serial)) or ont_by_serial.get(
-                _normalized_serial(parsed.vendor_serial)
-            )
+            ont = ont_by_serial.get(
+                _normalized_serial(parsed.serial)
+            ) or ont_by_serial.get(_normalized_serial(parsed.vendor_serial))
             if ont is None:
                 stats["unmatched_onts"] += 1
                 continue

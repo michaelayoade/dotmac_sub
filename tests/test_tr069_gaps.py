@@ -329,9 +329,7 @@ class TestInformWebhook:
         )
         assert queued == [str(ont.id)]
 
-    def test_clear_stale_runtime_clears_cached_tr069_snapshot(
-        self, db_session
-    ) -> None:
+    def test_clear_stale_runtime_clears_cached_tr069_snapshot(self, db_session) -> None:
         from app.models.network import OntUnit
         from app.services.network.provisioning_enforcement import (
             ProvisioningEnforcement,
@@ -776,9 +774,11 @@ class TestAutoLinkOnts:
             "authorization_result": None,
         }
 
-        html = Environment(loader=FileSystemLoader("templates"), autoescape=True).get_template(
-            "admin/network/onts/index.html"
-        ).render(context)
+        html = (
+            Environment(loader=FileSystemLoader("templates"), autoescape=True)
+            .get_template("admin/network/onts/index.html")
+            .render(context)
+        )
 
         assert "UI-ACS-LAST-SEEN-001" in html
         assert "Apr 28, 08:55" in html
@@ -1315,7 +1315,9 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "HWTC7D4733C3"},
         }
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [mock_device]]
             instance.extract_parameter_value.side_effect = lambda device, path: None
@@ -1332,9 +1334,7 @@ class TestDeviceResolution:
         assert device_id == "00D09E-TestProduct-HWTC7D4733C3"
         assert reason == "resolved_via_ont_acs"
 
-    def test_targeted_reconcile_links_existing_discovered_row(
-        self, db_session
-    ) -> None:
+    def test_targeted_reconcile_links_existing_discovered_row(self, db_session) -> None:
         from app.models.network import OntUnit
         from app.services.network._resolve import reconcile_ont_tr069_device
 
@@ -1404,19 +1404,19 @@ class TestDeviceResolution:
             "_lastInform": "2026-05-13T12:12:32.703Z",
             "InternetGatewayDevice": {
                 "ManagementServer": {
-                    "ConnectionRequestURL": {
-                        "_value": "http://172.16.201.137:7547/abc"
-                    }
+                    "ConnectionRequestURL": {"_value": "http://172.16.201.137:7547/abc"}
                 }
             },
         }
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [], [mock_device]]
             instance.get_device.return_value = mock_device
-            instance.extract_parameter_value.side_effect = (
-                lambda device, path: "http://172.16.201.137:7547/abc"
+            instance.extract_parameter_value.side_effect = lambda device, path: (
+                "http://172.16.201.137:7547/abc"
                 if path.endswith("ConnectionRequestURL")
                 else None
             )
@@ -1463,7 +1463,9 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "485754437D4733C3"},
         }
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [], [mock_device]]
 
@@ -1508,7 +1510,9 @@ class TestDeviceResolution:
             },
         }
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
 
@@ -1556,7 +1560,9 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
 
@@ -1600,7 +1606,9 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             MockClient.return_value.get_device.return_value = {
                 "_id": "48575443-EG8145V5-HWTC7D4806C3"
             }
@@ -1650,7 +1658,9 @@ class TestDeviceResolution:
         db_session.add(linked)
         db_session.commit()
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.get_device.side_effect = GenieACSError(
                 "Device not found: 00259E-HG8546M-48575443600AC29C"
@@ -1693,7 +1703,9 @@ class TestDeviceResolution:
         db_session.add_all([ont, observed])
         db_session.commit()
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             MockClient.return_value.get_device.return_value = {
                 "_id": "00259E-HG8546M-48575443600AC29C"
             }
@@ -1751,7 +1763,9 @@ class TestDeviceResolution:
             "00259E-HG8546M-OLD600AC29C",
         )
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [
                 {"_id": "00259E-HG8546M-48575443600AC29C"}
@@ -1810,7 +1824,9 @@ class TestDeviceResolution:
             "_deviceId": {"_SerialNumber": "48575443A31A3673"},
         }
 
-        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+        with patch(
+            "app.services.network._resolve.create_genieacs_client"
+        ) as MockClient:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [], [mock_device]]
 

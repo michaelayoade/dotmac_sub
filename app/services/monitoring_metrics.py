@@ -21,6 +21,7 @@ from app.models.network_monitoring import (
     MetricType,
     NetworkDevice,
 )
+
 logger = logging.getLogger(__name__)
 
 _VICTORIAMETRICS_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
@@ -362,9 +363,7 @@ def poll_onu_signal_strength(
         .where(OntUnit.olt_device_id == olt.id)
     )
     total = db.scalar(base_query) or 0
-    stored = (
-        db.scalar(base_query.where(OntUnit.olt_rx_signal_dbm.is_not(None))) or 0
-    )
+    stored = db.scalar(base_query.where(OntUnit.olt_rx_signal_dbm.is_not(None))) or 0
     low_signal = (
         db.scalar(
             base_query.where(OntUnit.olt_rx_signal_dbm.is_not(None)).where(

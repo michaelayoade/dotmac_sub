@@ -10,9 +10,9 @@ independent from network config while linking service settings to where
 subscriber meets device.
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "066_add_service_config"
 down_revision = "065_add_ont_desired_config_drop_overrides"

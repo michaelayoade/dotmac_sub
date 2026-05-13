@@ -123,7 +123,9 @@ def build_vlans_list_data(db, *, olt_device_id: str | None = None) -> dict[str, 
     }
 
 
-def build_vlan_new_form_data(db, *, olt_device_id: str | None = None) -> dict[str, object]:
+def build_vlan_new_form_data(
+    db, *, olt_device_id: str | None = None
+) -> dict[str, object]:
     regions = catalog_service.region_zones.list(
         db=db,
         is_active=True,

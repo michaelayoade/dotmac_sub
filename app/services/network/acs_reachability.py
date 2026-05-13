@@ -77,9 +77,7 @@ def _ensure_pool_has_active_block(db: Session, pool: IpPool) -> None:
     db.flush()
 
 
-def _networks_within(
-    candidates: list[IPv4Network], allowed: list[IPv4Network]
-) -> bool:
+def _networks_within(candidates: list[IPv4Network], allowed: list[IPv4Network]) -> bool:
     return bool(candidates) and all(
         any(candidate.subnet_of(parent) for parent in allowed)
         for candidate in candidates
@@ -140,7 +138,9 @@ def validate_olt_acs_management_reachability(
         if vlan_olt_id and vlan_olt_id != olt_id:
             return "Management VLAN belongs to a different OLT."
     if pool.vlan_id and pool.vlan_id != vlan.id:
-        return "Management IP pool must be associated with the selected management VLAN."
+        return (
+            "Management IP pool must be associated with the selected management VLAN."
+        )
 
     pool_networks = _pool_networks(db, pool)
     if not pool_networks:

@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from uuid import UUID
 
 # Add app to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -25,7 +24,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models.network import OLTDevice, OltServicePortPool, OntUnit, ServicePortAllocation
+from app.models.network import (
+    OLTDevice,
+    OltServicePortPool,
+    OntUnit,
+    ServicePortAllocation,
+)
 
 
 def parse_config(config_content: str) -> tuple[dict, dict]:
@@ -38,14 +42,14 @@ def parse_config(config_content: str) -> tuple[dict, dict]:
     interface_pattern = re.compile(r"interface gpon (\d+/\d+)")
     ont_pattern = re.compile(r'ont add (\d+)\s+(\d+)\s+sn-auth\s+"([A-Fa-f0-9]+)"')
     sp_pattern = re.compile(
-        r'service-port\s+(\d+)\s+vlan\s+(\d+)\s+gpon\s+(\d+/\d+/\d+)\s+ont\s+(\d+)\s+gemport\s+(\d+)'
+        r"service-port\s+(\d+)\s+vlan\s+(\d+)\s+gpon\s+(\d+/\d+/\d+)\s+ont\s+(\d+)\s+gemport\s+(\d+)"
     )
 
     # Parse ONT registrations
     current_frame_slot = None
     location_to_hex = {}
 
-    for line in config_content.split('\n'):
+    for line in config_content.split("\n"):
         line = line.strip()
 
         interface_match = interface_pattern.search(line)
@@ -115,10 +119,10 @@ def fix_allocations_for_olt(
     dry_run: bool = True,
 ):
     """Fix service-port allocations for a single OLT."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"OLT: {olt.name}")
     print(f"Config: {config_path}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     config_content = config_path.read_text(errors="replace")
     location_to_hex, sp_to_location = parse_config(config_content)
@@ -174,25 +178,29 @@ def fix_allocations_for_olt(
             if existing.ont_unit_id != correct_ont.id:
                 # Wrong ONT
                 wrong_ont = db.get(OntUnit, existing.ont_unit_id)
-                fixes.append({
-                    "index": sp_index,
-                    "allocation_id": existing.id,
-                    "wrong_ont_id": existing.ont_unit_id,
-                    "wrong_serial": wrong_ont.serial_number if wrong_ont else "?",
-                    "correct_ont_id": correct_ont.id,
-                    "correct_serial": correct_ont.serial_number,
-                    "vlan": vlan,
-                    "gem": gem,
-                })
+                fixes.append(
+                    {
+                        "index": sp_index,
+                        "allocation_id": existing.id,
+                        "wrong_ont_id": existing.ont_unit_id,
+                        "wrong_serial": wrong_ont.serial_number if wrong_ont else "?",
+                        "correct_ont_id": correct_ont.id,
+                        "correct_serial": correct_ont.serial_number,
+                        "vlan": vlan,
+                        "gem": gem,
+                    }
+                )
         else:
             # Missing allocation
-            creates.append({
-                "index": sp_index,
-                "ont_id": correct_ont.id,
-                "serial": correct_ont.serial_number,
-                "vlan": vlan,
-                "gem": gem,
-            })
+            creates.append(
+                {
+                    "index": sp_index,
+                    "ont_id": correct_ont.id,
+                    "serial": correct_ont.serial_number,
+                    "vlan": vlan,
+                    "gem": gem,
+                }
+            )
 
     # Report
     print(f"\nWrong allocations to fix: {len(fixes)}")
@@ -244,10 +252,13 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Fix service-port allocations")
-    parser.add_argument("--dry-run", action="store_true", default=True,
-                        help="Don't make changes (default)")
-    parser.add_argument("--execute", action="store_true",
-                        help="Actually make changes")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Don't make changes (default)",
+    )
+    parser.add_argument("--execute", action="store_true", help="Actually make changes")
     parser.add_argument("--olt", type=str, help="OLT name filter")
     args = parser.parse_args()
 
@@ -284,9 +295,9 @@ def main():
             totals["fixes"] += result["fixes"]
             totals["created"] += result["created"]
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"TOTAL: {totals['fixes']} fixes, {totals['created']} creates")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
     finally:
         db.close()

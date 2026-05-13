@@ -383,12 +383,8 @@ def build_customers_index_context(
         .filter(Subscriber.user_type != UserType.system_user)
         .filter(_not_deleted2)
     )
-    total_businesses = (
-        stats_base_query.filter(_business_customer_clause()).count() or 0
-    )
-    total_people = (
-        stats_base_query.filter(_individual_customer_clause()).count() or 0
-    )
+    total_businesses = stats_base_query.filter(_business_customer_clause()).count() or 0
+    total_people = stats_base_query.filter(_individual_customer_clause()).count() or 0
 
     # Load filter dropdown options
     nas_options = (

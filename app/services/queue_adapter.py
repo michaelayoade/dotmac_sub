@@ -40,8 +40,7 @@ class QueueDispatchResult:
 
 
 class QueueBackend(Protocol):
-    def enqueue(self, message: QueueMessage) -> QueueDispatchResult:
-        ...
+    def enqueue(self, message: QueueMessage) -> QueueDispatchResult: ...
 
 
 class CeleryQueueAdapter:

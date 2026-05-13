@@ -500,7 +500,9 @@ def authorize_autofind_ont(
 
     dependency_error = _validate_authorization_dependencies(db, olt_id=str(olt.id))
     if dependency_error is not None:
-        add_step("Validate OLT Profile Dependencies", False, dependency_error, started_at)
+        add_step(
+            "Validate OLT Profile Dependencies", False, dependency_error, started_at
+        )
         return finish(success=False, message=dependency_error, status="error")
 
     adapter = get_protocol_adapter(olt)

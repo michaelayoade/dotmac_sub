@@ -131,9 +131,7 @@ def upgrade() -> None:
         sa.Column("acs_observed_pppoe_username", sa.String(length=120), nullable=True),
         sa.Column("acs_observed_pppoe_enable", sa.Boolean(), nullable=True),
         sa.Column("acs_observed_wan_vlan", sa.Integer(), nullable=True),
-        sa.Column(
-            "acs_observed_wan_external_ip", sa.String(length=64), nullable=True
-        ),
+        sa.Column("acs_observed_wan_external_ip", sa.String(length=64), nullable=True),
         sa.Column(
             "acs_observed_wan_connection_status", sa.String(length=40), nullable=True
         ),

@@ -147,18 +147,24 @@ class TestPooledConnectionTouch:
 class TestPooledConnectionClose:
     """Tests for PooledConnection.close() method."""
 
-    def test_close_closes_channel_and_transport(self, pooled_conn, mock_channel, mock_transport):
+    def test_close_closes_channel_and_transport(
+        self, pooled_conn, mock_channel, mock_transport
+    ):
         pooled_conn.close()
         mock_channel.close.assert_called_once()
         mock_transport.close.assert_called_once()
 
-    def test_close_handles_channel_exception(self, pooled_conn, mock_channel, mock_transport):
+    def test_close_handles_channel_exception(
+        self, pooled_conn, mock_channel, mock_transport
+    ):
         mock_channel.close.side_effect = Exception("Close error")
         # Should not raise
         pooled_conn.close()
         mock_transport.close.assert_called_once()
 
-    def test_close_handles_transport_exception(self, pooled_conn, mock_channel, mock_transport):
+    def test_close_handles_transport_exception(
+        self, pooled_conn, mock_channel, mock_transport
+    ):
         mock_transport.close.side_effect = Exception("Close error")
         # Should not raise
         pooled_conn.close()
@@ -273,7 +279,9 @@ class TestOltSshPoolInvalidate:
         count = pool.invalidate("nonexistent-olt")
         assert count == 0
 
-    def test_invalidate_closes_connections(self, mock_transport, mock_channel, mock_policy):
+    def test_invalidate_closes_connections(
+        self, mock_transport, mock_channel, mock_policy
+    ):
         pool = OltSshPool()
         olt_id = "test-olt"
 

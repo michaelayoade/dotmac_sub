@@ -8,6 +8,7 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "096_add_imported_olt_service_ports"

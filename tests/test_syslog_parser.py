@@ -132,10 +132,7 @@ class TestOntAutofindParsing:
 
     def test_parse_autofind_case_insensitive(self, parser):
         """Test case insensitivity in ONTAUTOFIND parsing."""
-        data = (
-            b"<134>Jan 15 12:34:56 OLT-1 ontautofind "
-            b"ontsn=HWTC98765432 fsp=1/2/3"
-        )
+        data = b"<134>Jan 15 12:34:56 OLT-1 ontautofind ontsn=HWTC98765432 fsp=1/2/3"
         msg = parser.parse_syslog(data, source_ip="10.0.0.1")
         event = parser.parse_ont_event(msg)
 
@@ -145,10 +142,7 @@ class TestOntAutofindParsing:
 
     def test_parse_autofind_preserves_source_ip(self, parser):
         """Test that source IP is preserved in event."""
-        data = (
-            b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND "
-            b"OntSn=HWTC12345678 Fsp=0/0/0"
-        )
+        data = b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND OntSn=HWTC12345678 Fsp=0/0/0"
         msg = parser.parse_syslog(data, source_ip="192.168.1.100")
         event = parser.parse_ont_event(msg)
 
@@ -254,8 +248,7 @@ class TestEdgeCases:
     def test_very_long_serial_number(self, parser):
         """Test handling of 16-character serial number."""
         data = (
-            b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND "
-            b"OntSn=HWTC123456789ABC Fsp=0/0/0"
+            b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND OntSn=HWTC123456789ABC Fsp=0/0/0"
         )
         msg = parser.parse_syslog(data, source_ip="10.0.0.1")
         event = parser.parse_ont_event(msg)
@@ -265,10 +258,7 @@ class TestEdgeCases:
 
     def test_high_port_numbers(self, parser):
         """Test handling of high F/S/P numbers."""
-        data = (
-            b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND "
-            b"OntSn=HWTC12345678 Fsp=10/15/7"
-        )
+        data = b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND OntSn=HWTC12345678 Fsp=10/15/7"
         msg = parser.parse_syslog(data, source_ip="10.0.0.1")
         event = parser.parse_ont_event(msg)
 
@@ -280,10 +270,7 @@ class TestEdgeCases:
 
     def test_comma_separated_fsp(self, parser):
         """Test handling of comma-separated F/S/P."""
-        data = (
-            b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND "
-            b"OntSn=HWTC12345678 Fsp=0,1,2"
-        )
+        data = b"<134>Jan 15 12:34:56 OLT-1 ONTAUTOFIND OntSn=HWTC12345678 Fsp=0,1,2"
         msg = parser.parse_syslog(data, source_ip="10.0.0.1")
         event = parser.parse_ont_event(msg)
 

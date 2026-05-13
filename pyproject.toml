@@ -103,10 +103,16 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]  # Allow assert and hardcoded passwords in tests
-"scripts/**" = ["S101", "S105", "S106"]
+# Tests intentionally use asserts (S101) / hardcoded creds in fixtures
+# (S105/S106), bind to 0.0.0.0 to simulate listener defaults (S104), and
+# use lambdas to define inline serializers (E731).
+"tests/**" = ["S101", "S104", "S105", "S106", "E731"]
+"scripts/**" = ["S101", "S105", "S106", "S108"]
 "scripts/migration/**" = ["S608"]
-"alembic/**" = ["E402"]  # Allow imports not at top of file
+# Alembic migrations: data-shape SQL is by design ``text()``-built and
+# imports often sit below module-level helpers, so the standard ruff
+# rules don't apply cleanly.
+"alembic/**" = ["E402", "S608"]
 "alembic/versions_archive/**" = ["S104", "S608"]
 
 [tool.ruff.format]

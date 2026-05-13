@@ -14,9 +14,10 @@ The OLT Config Pack provides default values for ONT authorization and provisioni
 ONTs inherit these defaults from their OLT, reducing per-ONT configuration.
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision = "060_add_olt_config_pack_fields"
 down_revision = "059_add_olt_rest_and_rate_limit"

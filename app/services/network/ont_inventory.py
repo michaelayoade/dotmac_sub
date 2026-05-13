@@ -336,7 +336,9 @@ def cleanup_acs_state_for_return(db: Session, ont) -> tuple[bool, list[str], lis
     ).all()
     local_devices_to_clear = {device.id: device for device in linked_devices}
     for device in linked_devices:
-        genieacs_device_id = str(getattr(device, "genieacs_device_id", "") or "").strip()
+        genieacs_device_id = str(
+            getattr(device, "genieacs_device_id", "") or ""
+        ).strip()
         if not genieacs_device_id:
             continue
         server = db.get(Tr069AcsServer, device.acs_server_id)
@@ -484,7 +486,9 @@ def _release_management_ip_for_inventory_return(
             select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
         ).all()
     )
-    by_id = {assignment.id: assignment for assignment in [*assignments, *all_assignments]}
+    by_id = {
+        assignment.id: assignment for assignment in [*assignments, *all_assignments]
+    }
     assignments_to_clear = list(by_id.values())
     assignment_ips = {
         str(assignment.mgmt_ip_address).strip()
@@ -571,7 +575,9 @@ def _release_wan_static_ip_for_inventory_return(
             select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
         ).all()
     )
-    by_id = {assignment.id: assignment for assignment in [*assignments, *all_assignments]}
+    by_id = {
+        assignment.id: assignment for assignment in [*assignments, *all_assignments]
+    }
     assignments_to_release = list(by_id.values())
     subscriber_ids = {
         str(assignment.subscriber_id)
@@ -630,7 +636,9 @@ def _clear_assignment_links_for_inventory_return(
             select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
         ).all()
     )
-    by_id = {assignment.id: assignment for assignment in [*assignments, *all_assignments]}
+    by_id = {
+        assignment.id: assignment for assignment in [*assignments, *all_assignments]
+    }
     assignments_to_clear = list(by_id.values())
 
     for assignment in assignments_to_clear:

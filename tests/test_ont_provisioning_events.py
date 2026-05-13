@@ -73,9 +73,7 @@ def test_record_step_appends_event_log_entry(db_session) -> None:
     db_session.flush()
 
     event = db_session.scalar(
-        select(OntProvisioningEvent).where(
-            OntProvisioningEvent.ont_unit_id == ont.id
-        )
+        select(OntProvisioningEvent).where(OntProvisioningEvent.ont_unit_id == ont.id)
     )
     assert event is not None
     assert event.step_name == "wait_tr069_bootstrap"
@@ -129,9 +127,7 @@ def test_download_firmware_records_provisioning_event(
     assert result.data["firmware_image_id"] == "firmware-1"
 
     event = db_session.scalar(
-        select(OntProvisioningEvent).where(
-            OntProvisioningEvent.ont_unit_id == ont.id
-        )
+        select(OntProvisioningEvent).where(OntProvisioningEvent.ont_unit_id == ont.id)
     )
     assert event is not None
     assert event.step_name == "download_firmware"

@@ -95,7 +95,9 @@ def _has_acs_inform(db: Session, ont: OntUnit, acs_server_id: object | None) -> 
     )
     if acs_server_id:
         try:
-            query = query.where(Tr069CpeDevice.acs_server_id == coerce_uuid(acs_server_id))
+            query = query.where(
+                Tr069CpeDevice.acs_server_id == coerce_uuid(acs_server_id)
+            )
         except (TypeError, ValueError):
             query = query.where(Tr069CpeDevice.acs_server_id == acs_server_id)
     return db.scalars(query).first() is not None

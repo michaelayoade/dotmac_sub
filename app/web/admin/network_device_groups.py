@@ -15,7 +15,9 @@ from app.services.auth_dependencies import require_permission
 from app.services.network import device_groups as device_group_service
 from app.web.templates import templates
 
-router = APIRouter(prefix="/network/device-groups", tags=["web-admin-network-device-groups"])
+router = APIRouter(
+    prefix="/network/device-groups", tags=["web-admin-network-device-groups"]
+)
 
 
 def _base_context(request: Request, db: Session) -> dict:
@@ -115,7 +117,9 @@ def device_group_detail(
             "result_status": request.query_params.get("status", ""),
         }
     )
-    return templates.TemplateResponse("admin/network/device-groups/detail.html", context)
+    return templates.TemplateResponse(
+        "admin/network/device-groups/detail.html", context
+    )
 
 
 @router.get(
@@ -411,9 +415,7 @@ def device_group_action(
             metadata=result,
         )
         db.commit()
-        message = (
-            f"Queued {result['action']} for {result['ont_count']} ONT(s)"
-        )
+        message = f"Queued {result['action']} for {result['ont_count']} ONT(s)"
         status = "success"
     except Exception as exc:
         db.rollback()

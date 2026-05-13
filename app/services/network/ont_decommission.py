@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
@@ -427,7 +427,9 @@ def decommission_ont_audited(
 
     # Extract actor from request if not provided
     if actor is None and request is not None:
-        user = getattr(request.state, "user", None) if hasattr(request, "state") else None
+        user = (
+            getattr(request.state, "user", None) if hasattr(request, "state") else None
+        )
         actor = getattr(user, "email", None) if user else None
 
     result = decommission_ont(

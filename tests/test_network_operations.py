@@ -549,7 +549,9 @@ class TestParentStatusDerivation:
                 network_operations.mark_failed(db_session, str(child.id), "test error")
             elif status == NetworkOperationStatus.warning:
                 network_operations.mark_running(db_session, str(child.id))
-                network_operations.mark_warning(db_session, str(child.id), "test warning")
+                network_operations.mark_warning(
+                    db_session, str(child.id), "test warning"
+                )
             elif status == NetworkOperationStatus.waiting:
                 network_operations.mark_running(db_session, str(child.id))
                 network_operations.mark_waiting(db_session, str(child.id), "test wait")

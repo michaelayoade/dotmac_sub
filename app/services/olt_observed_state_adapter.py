@@ -264,7 +264,6 @@ class OltObservedStateAdapter:
         )
 
 
-
 olt_observed_state_adapter = OltObservedStateAdapter()
 adapter_registry.register(olt_observed_state_adapter)
 

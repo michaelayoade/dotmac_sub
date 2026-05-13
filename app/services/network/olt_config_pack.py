@@ -81,7 +81,9 @@ class OltConfigPack:
     # None = skip command (e.g., OLT firmware doesn't support it)
     # 0+ = valid ip-index for ont internet-config command
     internet_config_ip_index: int | None = None
-    wan_config_profile_id: int | None = None  # None = skip wan-config; 0+ = valid profile
+    wan_config_profile_id: int | None = (
+        None  # None = skip wan-config; 0+ = valid profile
+    )
     allow_zero_wan_config_profile_id: bool = False
     wan_provisioning_mode: str = "omci_wan_config"
     supports_ont_home_gateway_config: bool = False
@@ -130,8 +132,7 @@ class OltConfigPack:
     def has_vlans(self) -> bool:
         """True if at least internet and management VLANs are configured."""
         return (
-            self.internet_vlan.tag is not None
-            and self.management_vlan.tag is not None
+            self.internet_vlan.tag is not None and self.management_vlan.tag is not None
         )
 
     @property
@@ -328,13 +329,11 @@ def resolve_olt_config_pack(
     wan_provisioning_mode = str(
         getattr(olt, "wan_provisioning_mode", None) or "omci_wan_config"
     )
-    supports_internet_config = (
-        wan_provisioning_mode == "omci_wan_config"
-        and bool(getattr(olt, "supports_ont_internet_config", False))
+    supports_internet_config = wan_provisioning_mode == "omci_wan_config" and bool(
+        getattr(olt, "supports_ont_internet_config", False)
     )
-    supports_wan_config = (
-        wan_provisioning_mode == "omci_wan_config"
-        and bool(getattr(olt, "supports_ont_wan_config", False))
+    supports_wan_config = wan_provisioning_mode == "omci_wan_config" and bool(
+        getattr(olt, "supports_ont_wan_config", False)
     )
 
     internet_config_ip_index = _resolve_internet_config_ip_index(
@@ -384,9 +383,7 @@ def resolve_olt_config_pack(
         cr_username=pack.get("cr_username"),
         cr_password=pack.get("cr_password"),
         # Traffic table indices
-        mgmt_traffic_table_inbound=_int_or_none(
-            pack.get("mgmt_traffic_table_inbound")
-        ),
+        mgmt_traffic_table_inbound=_int_or_none(pack.get("mgmt_traffic_table_inbound")),
         mgmt_traffic_table_outbound=_int_or_none(
             pack.get("mgmt_traffic_table_outbound")
         ),

@@ -37,9 +37,7 @@ def find_device_by_zabbix_host_id(
 
 
 def get_or_create_zabbix_alert_rule(db: Session) -> AlertRule:
-    rule = db.scalars(
-        select(AlertRule).where(AlertRule.name == "Zabbix Alert")
-    ).first()
+    rule = db.scalars(select(AlertRule).where(AlertRule.name == "Zabbix Alert")).first()
     if rule:
         return rule
 

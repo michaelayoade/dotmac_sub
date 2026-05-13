@@ -113,9 +113,7 @@ def compute_plan(
     drifts: list[Drift] = []
 
     _plan_olt_side(desired, observed, mode, actions, drifts)
-    omci_wan_planned = _plan_olt_omci_wan(
-        desired, observed, mode, actions, drifts
-    )
+    omci_wan_planned = _plan_olt_omci_wan(desired, observed, mode, actions, drifts)
     _append_reset_if_needed(desired, actions)
     _plan_acs_side(desired, observed, mode, actions, drifts, omci_wan_planned)
 
@@ -164,9 +162,7 @@ def _plan_olt_side(
         # same `ont add` — no need to emit separate modify actions.
     else:
         # Present — diff individual fields.
-        if _observed_differs(
-            olt_obs.olt_line_profile_id, desired.line_profile_id
-        ):
+        if _observed_differs(olt_obs.olt_line_profile_id, desired.line_profile_id):
             actions.append(
                 OltModifyLineProfile(
                     fsp=desired.fsp,
@@ -309,9 +305,7 @@ def _plan_service_ports(
     # this is the planner's job to flag (handled by reconcile_ont with a
     # specific failure reason; not a plannable action here).
     observed_indices = {
-        sp.get("index")
-        for sp in observed.olt.olt_service_ports
-        if isinstance(sp, dict)
+        sp.get("index") for sp in observed.olt.olt_service_ports if isinstance(sp, dict)
     }
     if (
         desired.mgmt_service_port_index is not None
@@ -394,13 +388,9 @@ def _plan_olt_omci_wan(
     return True
 
 
-def _append_reset_if_needed(
-    desired: OntDesiredState, actions: list[Action]
-) -> None:
+def _append_reset_if_needed(desired: OntDesiredState, actions: list[Action]) -> None:
     if any(getattr(a, "requires_reset", False) for a in actions):
-        actions.append(
-            OltReset(fsp=desired.fsp, ont_id=desired.olt_ont_id)
-        )
+        actions.append(OltReset(fsp=desired.fsp, ont_id=desired.olt_ont_id))
 
 
 # ── ACS-side planning ───────────────────────────────────────────────────────
@@ -424,9 +414,7 @@ def _plan_acs_side(
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
     if desired.wan_mode == "pppoe" and not omci_wan_planned:
-        _plan_acs_wan_ppp(
-            desired, observed, device_id, actions, drifts
-        )
+        _plan_acs_wan_ppp(desired, observed, device_id, actions, drifts)
 
     # WiFi SSID — observable. Push when the read value differs OR when this
     # is a fresh bring-up (no ACS record yet — we have to seed it).
@@ -456,15 +444,14 @@ def _plan_acs_side(
 
     # Defensive NAT on routed mode (Fix #4 follow-up).
     if desired.wan_mode == "pppoe" and not omci_wan_planned:
-        wcd = (
-            observed.acs.acs_observed_wan_wcd_index
-            or desired.wan_pppoe_wcd_index
-        )
+        wcd = observed.acs.acs_observed_wan_wcd_index or desired.wan_pppoe_wcd_index
         inst = (
             observed.acs.acs_observed_wan_instance_index
             or desired.wan_pppoe_instance_index
         )
-        if _observed_differs(observed.acs.acs_observed_nat_enabled, desired.nat_enabled):
+        if _observed_differs(
+            observed.acs.acs_observed_nat_enabled, desired.nat_enabled
+        ):
             actions.append(
                 AcsSetNatEnabled(
                     device_id=device_id,
@@ -550,10 +537,7 @@ def _plan_acs_wan_ppp(
 
     # PPPoE params — diff or set.
     if _wan_ppp_differs(desired, observed):
-        wcd = (
-            observed.acs.acs_observed_wan_wcd_index
-            or desired.wan_pppoe_wcd_index
-        )
+        wcd = observed.acs.acs_observed_wan_wcd_index or desired.wan_pppoe_wcd_index
         inst = (
             observed.acs.acs_observed_wan_instance_index
             or desired.wan_pppoe_instance_index
@@ -610,13 +594,9 @@ def _iphost_differs(desired: OntDesiredState, observed: OntObservedState) -> boo
     return False
 
 
-def _wan_ppp_differs(
-    desired: OntDesiredState, observed: OntObservedState
-) -> bool:
+def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     acs = observed.acs
-    if _observed_differs(
-        acs.acs_observed_pppoe_username, desired.wan_pppoe_username
-    ):
+    if _observed_differs(acs.acs_observed_pppoe_username, desired.wan_pppoe_username):
         return True
     if _observed_differs(acs.acs_observed_wan_vlan, desired.wan_vlan):
         return True
@@ -628,9 +608,7 @@ def _wan_ppp_differs(
     return False
 
 
-def _dhcp_differs(
-    desired: OntDesiredState, observed: OntObservedState
-) -> bool:
+def _dhcp_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     acs = observed.acs
     if _observed_differs(acs.acs_observed_dhcp_enabled, desired.dhcp_enabled):
         return True
@@ -661,9 +639,7 @@ def _management_server_differs(
     return False
 
 
-def _should_push_wifi_password(
-    mode: ReconcileMode, observed: OntObservedState
-) -> bool:
+def _should_push_wifi_password(mode: ReconcileMode, observed: OntObservedState) -> bool:
     """Hole 3 resolution: push at desired-state change AND at BOOTSTRAP. The
     sweeper never pushes (no observable to confirm). At sync time, push when
     bringing up a fresh ONT (olt_present=False) — that's effectively the

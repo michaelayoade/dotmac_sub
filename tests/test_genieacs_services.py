@@ -746,7 +746,9 @@ class TestTaskOperations:
                 },
             )
 
-            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            call_args = (
+                mock_client.return_value.__enter__.return_value.request.call_args
+            )
             task = call_args.kwargs["json"]
             assert task["parameterValues"] == [
                 [
@@ -838,9 +840,7 @@ class TestTaskOperations:
             assert request_call.call_args.kwargs["params"] == {
                 "connection_request": "true"
             }
-            wait_for_task.assert_called_once_with(
-                "device1", "task1", timeout_sec=5
-            )
+            wait_for_task.assert_called_once_with("device1", "task1", timeout_sec=5)
 
     def test_create_task_and_wait_deletes_and_fails_pending_task(self, client):
         """A task that remains pending is failure, not UI success."""

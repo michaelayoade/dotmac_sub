@@ -215,7 +215,9 @@ def test_action_history_includes_celery_task_state(db_session, monkeypatch):
         lambda task_id: {"state": "SUCCESS", "ready": True, "result": {"processed": 1}},
     )
 
-    history = device_groups.list_device_group_action_history(db_session, group_id=group.id)
+    history = device_groups.list_device_group_action_history(
+        db_session, group_id=group.id
+    )
 
     assert history[0]["task_id"] == "task-1"
     assert history[0]["task_state"]["state"] == "SUCCESS"

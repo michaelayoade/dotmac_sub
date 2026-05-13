@@ -171,9 +171,7 @@ def test_caller_can_finalise_to_synced(db_session, ont):
     db_session.flush()
 
     row = db_session.execute(
-        text(
-            "SELECT sync_status, last_error FROM ont_units WHERE id = :id"
-        ),
+        text("SELECT sync_status, last_error FROM ont_units WHERE id = :id"),
         {"id": str(ont.id)},
     ).one()
     assert row[0] == OntSyncStatus.synced.value
@@ -190,9 +188,7 @@ def test_caller_can_finalise_to_out_of_sync(db_session, ont):
     db_session.flush()
 
     row = db_session.execute(
-        text(
-            "SELECT sync_status, last_error FROM ont_units WHERE id = :id"
-        ),
+        text("SELECT sync_status, last_error FROM ont_units WHERE id = :id"),
         {"id": str(ont.id)},
     ).one()
     assert row[0] == OntSyncStatus.out_of_sync.value

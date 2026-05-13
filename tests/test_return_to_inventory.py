@@ -189,18 +189,26 @@ class TestResetOntServiceState:
         assert sample_ont.olt_status == OnuOnlineStatus.offline
         assert sample_ont.last_seen_at is None
 
-    def test_deletes_wan_service_instances(self, db_session, sample_ont, sample_wan_service):
+    def test_deletes_wan_service_instances(
+        self, db_session, sample_ont, sample_wan_service
+    ):
         """Test that WAN service instances are deleted."""
-        assert db_session.query(OntWanServiceInstance).filter(
-            OntWanServiceInstance.ont_id == sample_ont.id
-        ).count() == 1
+        assert (
+            db_session.query(OntWanServiceInstance)
+            .filter(OntWanServiceInstance.ont_id == sample_ont.id)
+            .count()
+            == 1
+        )
 
         reset_ont_service_state(db_session, sample_ont, reason="test")
         db_session.flush()
 
-        assert db_session.query(OntWanServiceInstance).filter(
-            OntWanServiceInstance.ont_id == sample_ont.id
-        ).count() == 0
+        assert (
+            db_session.query(OntWanServiceInstance)
+            .filter(OntWanServiceInstance.ont_id == sample_ont.id)
+            .count()
+            == 0
+        )
 
 
 def test_return_to_inventory_releases_management_ip_for_reauthorization(
@@ -219,9 +227,7 @@ def test_return_to_inventory_releases_management_ip_for_reauthorization(
     )
     db_session.add(pool)
     db_session.flush()
-    db_session.add(
-        IpBlock(pool_id=pool.id, cidr="172.16.201.0/30", is_active=True)
-    )
+    db_session.add(IpBlock(pool_id=pool.id, cidr="172.16.201.0/30", is_active=True))
     sample_olt.mgmt_ip_pool_id = pool.id
     sample_assignment.mgmt_ip_mode = MgmtIpMode.static_ip
     sample_assignment.mgmt_ip_address = "172.16.201.2"
@@ -376,7 +382,9 @@ def test_return_to_inventory_does_not_release_management_ip_owned_by_other_ont(
 class TestReturnOntToInventory:
     """Tests for return_ont_to_inventory function."""
 
-    def test_success_clears_olt_binding(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_success_clears_olt_binding(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test successful return clears OLT binding fields."""
         # Mock external dependencies
         mock_adapter = MagicMock()
@@ -405,7 +413,9 @@ class TestReturnOntToInventory:
         assert sample_ont.port is None
         assert sample_ont.external_id is None
 
-    def test_success_closes_assignment(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_success_closes_assignment(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test successful return closes active assignment."""
         mock_adapter = MagicMock()
         mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
@@ -488,9 +498,7 @@ class TestReturnOntToInventory:
         )
         db_session.add(pool)
         db_session.flush()
-        db_session.add(
-            IpBlock(pool_id=pool.id, cidr="100.64.30.0/30", is_active=True)
-        )
+        db_session.add(IpBlock(pool_id=pool.id, cidr="100.64.30.0/30", is_active=True))
         address = IPv4Address(
             address="100.64.30.2",
             pool_id=pool.id,
@@ -536,7 +544,9 @@ class TestReturnOntToInventory:
         assert ip_assignment.is_active is False
         assert address.allocation_type is None
 
-    def test_success_keeps_ont_active(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_success_keeps_ont_active(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test that ONT remains active for reuse (not decommissioned)."""
         mock_adapter = MagicMock()
         mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
@@ -561,7 +571,9 @@ class TestReturnOntToInventory:
         db_session.refresh(sample_ont)
         assert sample_ont.is_active is True
 
-    def test_success_resets_service_state(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_success_resets_service_state(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test that service state is reset."""
         mock_adapter = MagicMock()
         mock_adapter.get_service_ports_for_ont.return_value = ActionResult(
@@ -804,7 +816,9 @@ class TestReturnOntToInventory:
 class TestReturnToInventoryWebAction:
     """Tests for the web action version of return_to_inventory."""
 
-    def test_success_emits_events(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_success_emits_events(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test that success emits deauthorization and service port events."""
         from app.services.network.ont_inventory import return_ont_to_inventory
 
@@ -824,9 +838,7 @@ class TestReturnToInventoryWebAction:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.network.ont_inventory.emit_event"
-            ) as mock_emit,
+            patch("app.services.network.ont_inventory.emit_event") as mock_emit,
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -834,7 +846,9 @@ class TestReturnToInventoryWebAction:
         # Check events were emitted
         assert mock_emit.call_count >= 2  # service port deleted + ont deauthorized
 
-    def test_clears_tr069_binding(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_clears_tr069_binding(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test that TR-069 device binding is cleared."""
         from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
         from app.services.network.ont_inventory import return_ont_to_inventory
@@ -878,9 +892,7 @@ class TestReturnToInventoryWebAction:
                 "app.services.genieacs_client.create_genieacs_client",
                 return_value=mock_client,
             ),
-            patch(
-                "app.services.network.ont_inventory.emit_event"
-            ),
+            patch("app.services.network.ont_inventory.emit_event"),
         ):
             result = return_ont_to_inventory(db_session, str(sample_ont.id))
 
@@ -1256,9 +1268,7 @@ class TestReturnToInventoryWebAction:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.network.ont_inventory.emit_event"
-            ),
+            patch("app.services.network.ont_inventory.emit_event"),
             patch(
                 "app.services.network.service_port_allocator.release_all_for_ont",
                 return_value=2,
@@ -1287,7 +1297,9 @@ class TestReturnToInventoryForWeb:
         assert result.success is False
         assert "not found" in result.message.lower()
 
-    def test_logs_audit_event(self, db_session, sample_ont, sample_olt, sample_assignment):
+    def test_logs_audit_event(
+        self, db_session, sample_ont, sample_olt, sample_assignment
+    ):
         """Test that audit event is logged."""
         from app.services.web_network_ont_actions.inventory import (
             return_to_inventory_for_web,
@@ -1309,9 +1321,7 @@ class TestReturnToInventoryForWeb:
                 "app.services.network.olt_protocol_adapters.get_protocol_adapter",
                 return_value=mock_adapter,
             ),
-            patch(
-                "app.services.network.ont_inventory.emit_event"
-            ),
+            patch("app.services.network.ont_inventory.emit_event"),
             patch(
                 "app.services.web_network_ont_actions.inventory._log_action_audit"
             ) as mock_audit,
@@ -1352,7 +1362,9 @@ def test_admin_return_to_inventory_runs_synchronously(monkeypatch):
         "return_to_inventory_for_web",
         fake_return_to_inventory_for_web,
     )
-    monkeypatch.setattr(network_onts_actions, "enqueue_task", fail_enqueue, raising=False)
+    monkeypatch.setattr(
+        network_onts_actions, "enqueue_task", fail_enqueue, raising=False
+    )
 
     response = network_onts_actions.ont_return_to_inventory(
         Request(),
@@ -1385,7 +1397,9 @@ class TestCleanupOltStateForReturn:
         db_session.add(ont)
         db_session.commit()
 
-        success, completed, errors = _cleanup_olt_state_for_return(db_session, str(ont.id))
+        success, completed, errors = _cleanup_olt_state_for_return(
+            db_session, str(ont.id)
+        )
 
         assert success is True
         assert errors == []
@@ -1635,7 +1649,9 @@ class TestOntWithoutOltBinding:
 def test_return_to_inventory_htmx_buttons_send_csrf_header():
     """Single-ONT HTMX return actions must pass CSRF middleware before service code runs."""
     hero_template = Path("templates/admin/network/onts/_hero_header.html").read_text()
-    health_template = Path("templates/admin/network/onts/_operational_health.html").read_text()
+    health_template = Path(
+        "templates/admin/network/onts/_operational_health.html"
+    ).read_text()
 
     for template in (hero_template, health_template):
         assert "/return-to-inventory" in template
@@ -1667,9 +1683,7 @@ def test_factory_reset_clears_stale_observed_runtime(db_session, sample_ont):
         result = factory_reset(db_session, str(sample_ont.id))
 
     assert result.success is True
-    mock_client.factory_reset_and_wait.assert_called_once_with(
-        "ABC-ONT-HWTC12345678"
-    )
+    mock_client.factory_reset_and_wait.assert_called_once_with("ABC-ONT-HWTC12345678")
     assert sample_ont.observed_wan_ip is None
     assert sample_ont.observed_pppoe_status is None
     assert sample_ont.observed_lan_mode is None
@@ -1683,7 +1697,9 @@ def test_factory_reset_clears_stale_observed_runtime(db_session, sample_ont):
 def test_factory_reset_buttons_require_confirmation():
     """Every single-ONT factory reset affordance must require explicit confirmation."""
     hero_template = Path("templates/admin/network/onts/_hero_header.html").read_text()
-    health_template = Path("templates/admin/network/onts/_operational_health.html").read_text()
+    health_template = Path(
+        "templates/admin/network/onts/_operational_health.html"
+    ).read_text()
 
     expected = (
         'hx-confirm="Factory reset will ERASE ALL configuration on this ONT. '

@@ -13,9 +13,10 @@ Management IP Pool on OLTDevice enables auto-allocation of management IPs
 to ONTs during authorization.
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision = "061_add_acs_config_pack_and_mgmt_ip_pool"
 down_revision = "060_add_olt_config_pack_fields"
@@ -236,7 +237,9 @@ def downgrade() -> None:
     # Drop IPv4Address management IP tracking columns
     ipv4_fks = [fk["name"] for fk in inspector.get_foreign_keys("ipv4_addresses")]
     if "fk_ipv4_addresses_ont_unit" in ipv4_fks:
-        op.drop_constraint("fk_ipv4_addresses_ont_unit", "ipv4_addresses", type_="foreignkey")
+        op.drop_constraint(
+            "fk_ipv4_addresses_ont_unit", "ipv4_addresses", type_="foreignkey"
+        )
 
     ipv4_indexes = [idx["name"] for idx in inspector.get_indexes("ipv4_addresses")]
     if "ix_ipv4_addresses_ont_unit_id" in ipv4_indexes:
@@ -251,7 +254,9 @@ def downgrade() -> None:
     # Drop OLTDevice FK and column
     olt_fks = [fk["name"] for fk in inspector.get_foreign_keys("olt_devices")]
     if "fk_olt_devices_mgmt_ip_pool" in olt_fks:
-        op.drop_constraint("fk_olt_devices_mgmt_ip_pool", "olt_devices", type_="foreignkey")
+        op.drop_constraint(
+            "fk_olt_devices_mgmt_ip_pool", "olt_devices", type_="foreignkey"
+        )
 
     olt_columns = [col["name"] for col in inspector.get_columns("olt_devices")]
     if "mgmt_ip_pool_id" in olt_columns:

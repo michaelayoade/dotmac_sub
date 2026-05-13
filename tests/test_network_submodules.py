@@ -1135,7 +1135,9 @@ class TestOntAssignmentsCRUD:
         assert result is not None
         assert ont.olt_device_id == pon.olt_id
 
-    def test_alignment_can_update_topology_without_creating_assignment(self, db_session):
+    def test_alignment_can_update_topology_without_creating_assignment(
+        self, db_session
+    ):
         """Telemetry reconciliation may create PON topology without customer assignment."""
         from app.services.network.ont_assignment_alignment import (
             align_ont_assignment_to_authoritative_fsp,
@@ -1156,7 +1158,9 @@ class TestOntAssignmentsCRUD:
 
         assert result is None
         assert ont.olt_device_id == pon.olt_id
-        assert db_session.query(OntAssignment).filter_by(ont_unit_id=ont.id).count() == 0
+        assert (
+            db_session.query(OntAssignment).filter_by(ont_unit_id=ont.id).count() == 0
+        )
 
     def test_alignment_does_not_reactivate_returned_inventory_assignment(
         self, db_session

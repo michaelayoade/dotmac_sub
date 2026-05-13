@@ -8,6 +8,7 @@ Create Date: 2026-05-06
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "088_add_olt_wan_provisioning_mode"
@@ -26,8 +27,7 @@ def _constraint_exists(table_name: str, constraint_name: str) -> bool:
     conn = op.get_bind()
     inspector = sa.inspect(conn)
     return constraint_name in {
-        constraint["name"]
-        for constraint in inspector.get_check_constraints(table_name)
+        constraint["name"] for constraint in inspector.get_check_constraints(table_name)
     }
 
 

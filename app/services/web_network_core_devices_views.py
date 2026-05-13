@@ -1027,9 +1027,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
 
             signal_values = []
             for ont in matched_onts:
-                signal_value = signal_data.get(
-                    str(getattr(ont, "id", "")), {}
-                ).get("olt_rx_dbm")
+                signal_value = signal_data.get(str(getattr(ont, "id", "")), {}).get(
+                    "olt_rx_dbm"
+                )
                 if signal_value is not None:
                     signal_values.append(float(signal_value))
             avg_signal_dbm = (
@@ -1271,7 +1271,9 @@ def onts_list_page_data(
     authorization_filter = (authorization or "authorized").strip().lower()
     if authorization_filter not in {"authorized", "unauthorized", "all"}:
         authorization_filter = "authorized"
-    query_authorization = None if authorization_filter == "all" else authorization_filter
+    query_authorization = (
+        None if authorization_filter == "all" else authorization_filter
+    )
 
     # Calculate pagination offset
     offset = (max(page, 1) - 1) * per_page
@@ -1415,8 +1417,7 @@ def onts_list_page_data(
         stats_filters.append(OntUnit.olt_device_id == olt_id)
 
     all_onts_count = (
-        db.scalar(select(func.count()).select_from(OntUnit).where(*stats_filters))
-        or 0
+        db.scalar(select(func.count()).select_from(OntUnit).where(*stats_filters)) or 0
     )
     online_count = (
         db.scalar(
@@ -1502,6 +1503,7 @@ def onts_list_page_data(
         else:
             serial_display_by_ont_id[ont_key] = "-"
     if ont_ids:
+
         def assignment_table_info(assignment: object) -> dict[str, str]:
             pon_port = getattr(assignment, "pon_port", None)
             olt = pon_port.olt if pon_port else None
@@ -1527,7 +1529,9 @@ def onts_list_page_data(
 
         assignment_filters = [OntAssignment.ont_unit_id.in_(ont_ids)]
         if serial_variants:
-            assignment_filters.append(func.upper(OntUnit.serial_number).in_(serial_variants))
+            assignment_filters.append(
+                func.upper(OntUnit.serial_number).in_(serial_variants)
+            )
         assign_rows = db.scalars(
             select(OntAssignment)
             .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
@@ -1551,7 +1555,10 @@ def onts_list_page_data(
                 assignment_info_by_serial[assigned_serial_key] = info
 
         for ont_key, serial_key in serial_keys_by_ont_id.items():
-            if ont_key not in assignment_info and serial_key in assignment_info_by_serial:
+            if (
+                ont_key not in assignment_info
+                and serial_key in assignment_info_by_serial
+            ):
                 assignment_info[ont_key] = {
                     **assignment_info_by_serial[serial_key],
                     "assignment_source": "normalized_serial",
@@ -1716,7 +1723,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         .first()
     )
     raw_status = getattr(ont, "olt_status", None)
-    status_val = raw_status.value if hasattr(raw_status, "value") else str(raw_status or "offline")
+    status_val = (
+        raw_status.value
+        if hasattr(raw_status, "value")
+        else str(raw_status or "offline")
+    )
     if status_val not in ONLINE_STATUS_CLASSES:
         status_val = "unknown"
     status_display_val = status_val
@@ -1871,7 +1882,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
                     else f"/admin/customers/person/{sub.id}"
                 )
                 subscriber_info["name"] = _subscriber_display_name(sub)
-                subscriber_info["status"] = sub.status.value if sub.status else "unknown"
+                subscriber_info["status"] = (
+                    sub.status.value if sub.status else "unknown"
+                )
                 subscriber_info["status_class"] = SUBSCRIBER_STATUS_CLASSES.get(
                     str(subscriber_info["status"]),
                     SUBSCRIBER_STATUS_CLASSES["unknown"],
@@ -1985,15 +1998,15 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         from app.services.network.ont_tr069 import OntTR069
 
         cached_summary = OntTR069._summary_from_snapshot(ont)
-        acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
-            cached_summary
+        acs_observed_intent = (
+            service_intent_ui_adapter.build_acs_observed_service_intent(cached_summary)
         )
     except Exception:
         logger.exception(
             "Failed to load cached ACS observed service intent for ONT %s", ont_id
         )
-        acs_observed_intent = service_intent_ui_adapter.build_acs_observed_service_intent(
-            None
+        acs_observed_intent = (
+            service_intent_ui_adapter.build_acs_observed_service_intent(None)
         )
 
     # Auto-refresh stale TR-069 data in background (> 15 min old)
@@ -2178,11 +2191,14 @@ def _acs_observed_runtime_summary(
         runtime_field("Uptime", uptime),
     ]
     runtime_fields = [field for field in runtime_fields if field is not None]
-    has_runtime = bool(runtime_fields or acs_observed_intent.get("available") or fetched_at)
+    has_runtime = bool(
+        runtime_fields or acs_observed_intent.get("available") or fetched_at
+    )
 
     return {
         "has_runtime": has_runtime,
-        "mac_address": tracked_raw("system.mac_address") or getattr(ont, "mac_address", None),
+        "mac_address": tracked_raw("system.mac_address")
+        or getattr(ont, "mac_address", None),
         "wan_ip": wan_ip,
         "pppoe_user": pppoe_user,
         "pppoe_status": pppoe_status,
@@ -2234,7 +2250,9 @@ def _active_ethernet_port_count(ports: object) -> tuple[int | None, int | None]:
     for port in ports:
         if not isinstance(port, dict):
             continue
-        status = str(port.get("link_status") or port.get("Status") or "").strip().lower()
+        status = (
+            str(port.get("link_status") or port.get("Status") or "").strip().lower()
+        )
         if status == "up":
             active += 1
     return active, len(ports)
@@ -2466,9 +2484,7 @@ def _ont_desired_config_summary(
         {
             "label": "Observed IPHOST",
             "value": _display_config_value(
-                iphost.get("IP Address")
-                or iphost.get("IP")
-                or iphost.get("ip_address")
+                iphost.get("IP Address") or iphost.get("IP") or iphost.get("ip_address")
             ),
             "value_class": "font-mono",
         },

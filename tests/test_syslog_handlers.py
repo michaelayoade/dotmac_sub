@@ -40,15 +40,17 @@ class TestHandleOntEvent:
             source_ip="10.0.0.50",
         )
 
-        with patch(
-            "app.syslog.handlers._find_olt_by_ip",
-            return_value=str(sample_olt.id),
-        ), patch(
-            "app.syslog.handlers.db_session_adapter"
-        ) as mock_adapter, patch(
-            "app.syslog.handlers.upsert_autofind_from_syslog",
-            return_value=True,
-        ) as mock_upsert:
+        with (
+            patch(
+                "app.syslog.handlers._find_olt_by_ip",
+                return_value=str(sample_olt.id),
+            ),
+            patch("app.syslog.handlers.db_session_adapter") as mock_adapter,
+            patch(
+                "app.syslog.handlers.upsert_autofind_from_syslog",
+                return_value=True,
+            ) as mock_upsert,
+        ):
             # Setup the context manager mock
             mock_adapter.session.return_value.__enter__ = lambda s: None
             mock_adapter.session.return_value.__exit__ = lambda s, *args: None
@@ -177,12 +179,15 @@ class TestHandleAutofindEvent:
             source_ip="192.168.99.99",  # Unknown IP
         )
 
-        with patch(
-            "app.syslog.handlers._find_olt_by_ip",
-            return_value=None,  # OLT not found
-        ), patch(
-            "app.syslog.handlers.upsert_autofind_from_syslog",
-        ) as mock_upsert:
+        with (
+            patch(
+                "app.syslog.handlers._find_olt_by_ip",
+                return_value=None,  # OLT not found
+            ),
+            patch(
+                "app.syslog.handlers.upsert_autofind_from_syslog",
+            ) as mock_upsert,
+        ):
             _handle_autofind_event(event)
 
             # Should not upsert when OLT not found

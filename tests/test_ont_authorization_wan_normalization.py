@@ -67,7 +67,9 @@ def test_authorization_applies_olt_baseline_but_not_followup_tasks_inline(
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.apply_authorization_baseline",
-        lambda *args, **kwargs: StepResult("authorization_baseline", True, "baseline ok"),
+        lambda *args, **kwargs: StepResult(
+            "authorization_baseline", True, "baseline ok"
+        ),
     )
     response = ont_authorization.authorize_ont(
         db_session,
@@ -356,7 +358,9 @@ def test_authorization_cleans_stale_registration_before_retry(
 
         def deauthorize_ont(self, fsp, ont_id):
             calls.append(("deauthorize", fsp, ont_id))
-            return SimpleNamespace(success=True, message="Deleted existing registration.")
+            return SimpleNamespace(
+                success=True, message="Deleted existing registration."
+            )
 
         def authorize_ont(
             self,
@@ -682,9 +686,7 @@ def test_authorization_fails_before_adapter_when_dependency_audit_fails(
     adapter_factory.assert_not_called()
 
 
-def test_authorization_ignores_explicit_foundation_failures(
-    db_session, monkeypatch
-):
+def test_authorization_ignores_explicit_foundation_failures(db_session, monkeypatch):
     """A failed OLT baseline is reported as partial authorization."""
     from app.services.network.ont_provisioning.result import StepResult
 
@@ -726,9 +728,7 @@ def test_authorization_ignores_explicit_foundation_failures(
     assert [step.name for step in response.steps] == ["Apply Authorization Baseline"]
 
 
-def test_authorization_duration_includes_olt_baseline_work(
-    db_session, monkeypatch
-):
+def test_authorization_duration_includes_olt_baseline_work(db_session, monkeypatch):
     """The synchronous result duration covers authorization and baseline work."""
     from app.services.network.ont_provisioning.result import StepResult
 
@@ -751,7 +751,9 @@ def test_authorization_duration_includes_olt_baseline_work(
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.apply_authorization_baseline",
-        lambda *args, **kwargs: StepResult("authorization_baseline", True, "baseline ok"),
+        lambda *args, **kwargs: StepResult(
+            "authorization_baseline", True, "baseline ok"
+        ),
     )
     response = ont_authorization.authorize_ont(
         db_session,

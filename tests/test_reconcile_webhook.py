@@ -99,10 +99,7 @@ def _stub_result(success: bool, **overrides) -> ReconcileResult:
 
 
 def test_serial_from_device_id_extracts_trailing_segment():
-    assert (
-        _serial_from_device_id("00259E-HG8546M-HWTC8535819A")
-        == "HWTC8535819A"
-    )
+    assert _serial_from_device_id("00259E-HG8546M-HWTC8535819A") == "HWTC8535819A"
 
 
 def test_serial_from_device_id_returns_none_on_malformed():
@@ -125,9 +122,7 @@ def test_bootstrap_webhook_triggers_reconcile_for_known_serial(
         captured["mode"] = mode
         return _stub_result(True)
 
-    monkeypatch.setattr(
-        "app.api.reconcile_webhooks.reconcile_ont", _fake_reconcile
-    )
+    monkeypatch.setattr("app.api.reconcile_webhooks.reconcile_ont", _fake_reconcile)
 
     response = client.post(
         "/api/v1/reconcile/webhooks/genieacs/bootstrap",

@@ -252,12 +252,8 @@ def test_fresh_authorize_requires_both_surfaces():
 
 def test_fresh_authorize_orders_olt_before_acs():
     plan = compute_plan(_desired(), _observed(), "sync")
-    olt_action_indices = [
-        i for i, a in enumerate(plan.actions) if a.surface == "olt"
-    ]
-    acs_action_indices = [
-        i for i, a in enumerate(plan.actions) if a.surface == "acs"
-    ]
+    olt_action_indices = [i for i, a in enumerate(plan.actions) if a.surface == "olt"]
+    acs_action_indices = [i for i, a in enumerate(plan.actions) if a.surface == "acs"]
     assert olt_action_indices  # we have OLT actions
     assert acs_action_indices  # we have ACS actions
     # Every OLT action precedes every ACS action.
@@ -266,13 +262,9 @@ def test_fresh_authorize_orders_olt_before_acs():
 
 def test_fresh_authorize_places_reset_after_olt_actions_before_acs():
     plan = compute_plan(_desired(), _observed(), "sync")
-    reset_idx = next(
-        i for i, a in enumerate(plan.actions) if isinstance(a, OltReset)
-    )
+    reset_idx = next(i for i, a in enumerate(plan.actions) if isinstance(a, OltReset))
     # Reset is the last OLT action.
-    olt_indices = [
-        i for i, a in enumerate(plan.actions) if a.surface == "olt"
-    ]
+    olt_indices = [i for i, a in enumerate(plan.actions) if a.surface == "olt"]
     assert reset_idx == max(olt_indices)
 
 
@@ -291,10 +283,10 @@ def test_fresh_authorize_clears_iphost_at_both_indices_before_writing():
 
 
 def test_fresh_authorize_uses_desired_description():
-    plan = compute_plan(_desired(description="Kolawole_Idiaro_2_a"), _observed(), "sync")
-    authorize = next(
-        a for a in plan.actions if isinstance(a, OltAuthorize)
+    plan = compute_plan(
+        _desired(description="Kolawole_Idiaro_2_a"), _observed(), "sync"
     )
+    authorize = next(a for a in plan.actions if isinstance(a, OltAuthorize))
     assert authorize.description == "Kolawole_Idiaro_2_a"
 
 
@@ -430,10 +422,10 @@ def test_stale_service_port_is_deleted():
             {"index": 99, "vlan": 999, "gem": 3, "state": "up"},  # stale
         ),
     )
-    plan = compute_plan(desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync")
-    delete_actions = [
-        a for a in plan.actions if isinstance(a, OltDeleteServicePort)
-    ]
+    plan = compute_plan(
+        desired, _observed(olt=olt, acs=_synced_observed(desired).acs), "sync"
+    )
+    delete_actions = [a for a in plan.actions if isinstance(a, OltDeleteServicePort)]
     assert len(delete_actions) == 1
     assert delete_actions[0].service_port_index == 99
 

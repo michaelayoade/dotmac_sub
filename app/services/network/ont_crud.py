@@ -256,8 +256,10 @@ class OntUnits(CRUDManager[OntUnit]):
         if signal_quality in {"good", "warning", "critical"}:
             warn, crit = get_signal_thresholds(db)
             signal_col = OntUnit.olt_rx_signal_dbm
-            stmt = stmt.where(signal_col.isnot(None)).where(signal_col >= -50.0).where(
-                signal_col <= 10.0
+            stmt = (
+                stmt.where(signal_col.isnot(None))
+                .where(signal_col >= -50.0)
+                .where(signal_col <= 10.0)
             )
             if signal_quality == "critical":
                 stmt = stmt.where(signal_col < crit)

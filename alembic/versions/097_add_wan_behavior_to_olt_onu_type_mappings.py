@@ -8,6 +8,7 @@ Create Date: 2026-05-07
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "097_add_wan_behavior_to_olt_onu_type_mappings"
@@ -19,8 +20,7 @@ depends_on = None
 def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     return any(
-        column["name"] == column_name
-        for column in inspector.get_columns(table_name)
+        column["name"] == column_name for column in inspector.get_columns(table_name)
     )
 
 
