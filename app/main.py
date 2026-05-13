@@ -4,6 +4,7 @@ import os
 import secrets
 import warnings
 from contextlib import asynccontextmanager
+from http.cookies import SimpleCookie
 from importlib import import_module
 from threading import Lock
 from time import monotonic
@@ -651,6 +652,97 @@ async def domain_routing_middleware(request: Request, call_next):
 # CSRF Protection paths - protect all web portals and auth forms
 _CSRF_PROTECTED_PATHS = ["/admin/", "/web/", "/portal/", "/reseller/", "/auth/"]
 _CSRF_EXEMPT_PATHS = ["/api/", "/health", "/metrics", "/static/"]
+_WEB_AUTH_REFRESH_PATHS = ("/admin/", "/web/")
+_WEB_AUTH_REFRESH_EXEMPT_PATHS = (
+    "/auth/",
+    "/api/",
+    "/health",
+    "/metrics",
+    "/static/",
+)
+
+
+def _rewrite_cookie_header(request: Request, name: str, value: str) -> None:
+    """Make a refreshed cookie visible to downstream dependencies in this request."""
+    cookies = dict(request.cookies)
+    cookies[name] = value
+    cookie = SimpleCookie()
+    for key, cookie_value in cookies.items():
+        cookie[key] = cookie_value
+    header_value = "; ".join(
+        f"{morsel.key}={morsel.value}" for morsel in cookie.values()
+    ).encode("latin-1")
+    headers = [
+        (key, val)
+        for key, val in request.scope.get("headers", [])
+        if key.lower() != b"cookie"
+    ]
+    headers.append((b"cookie", header_value))
+    request.scope["headers"] = headers
+    if hasattr(request, "_cookies"):
+        delattr(request, "_cookies")
+
+
+def _web_auth_refresh_candidate(request: Request) -> bool:
+    path = request.url.path
+    if any(path.startswith(exempt) for exempt in _WEB_AUTH_REFRESH_EXEMPT_PATHS):
+        return False
+    return any(path.startswith(prefix) for prefix in _WEB_AUTH_REFRESH_PATHS)
+
+
+@app.middleware("http")
+async def web_auth_refresh_middleware(request: Request, call_next):
+    """Refresh expired web access cookies before protected routes handle the request."""
+    refreshed: tuple[str, str | None] | None = None
+    if _web_auth_refresh_candidate(request):
+        db = SessionLocal()
+        from app.web.auth.dependencies import validate_session_token
+
+        try:
+            auth_info = validate_session_token(request, db)
+            if not auth_info:
+                from app.services import auth_flow as auth_flow_service
+                from app.services.auth_flow import AuthFlow
+
+                refresh_token = AuthFlow.resolve_refresh_token(request, None, db)
+                if refresh_token:
+                    result = auth_flow_service.auth_flow.refresh(
+                        db, refresh_token, request
+                    )
+                    session_token = auth_flow_service.issue_web_session_token(
+                        db, str(result.get("access_token", ""))
+                    )
+                    _rewrite_cookie_header(request, "session_token", session_token)
+                    refreshed = (session_token, result.get("refresh_token"))
+        except Exception:
+            logger.debug("Web auth pre-route refresh failed", exc_info=True)
+        finally:
+            db.close()
+
+    response = await call_next(request)
+    if refreshed is not None:
+        db = SessionLocal()
+        try:
+            from app.services.web_auth import (
+                _is_https_request,
+                _session_cookie_settings,
+                _set_refresh_cookie,
+            )
+
+            session_token, refresh_token = refreshed
+            cookie_cfg = _session_cookie_settings(db)
+            response.set_cookie(
+                key="session_token",
+                value=session_token,
+                httponly=True,
+                secure=bool(cookie_cfg["secure"]) and _is_https_request(request),
+                samesite=cookie_cfg["samesite"],
+            )
+            if refresh_token:
+                _set_refresh_cookie(response, db, refresh_token, request)
+        finally:
+            db.close()
+    return response
 
 
 @app.middleware("http")
