@@ -1,0 +1,487 @@
+"""``reconcile_ont`` — the single entry point that composes everything.
+
+Phases (each described in design doc; failure at any phase produces a
+``ReconcileResult`` rather than raising):
+
+  1. Acquire row lock — serializes concurrent reconciles, recovers crashed
+     prior. Errors: ``OntNotFound`` → ``INVALID_CHANGE``.
+  2. Mode-specific guard — ``mode=sync`` refuses against ``out_of_sync`` rows.
+     ``mode=sweep`` proceeds (this is how out_of_sync gets cleared).
+  3. Materialise current desired state from the ``OntUnit`` row.
+  4. Merge proposed_change → target desired state; validate via
+     ``validate_desired``. Errors: ``INVALID_CHANGE``.
+  5. Build target adapters (OLT SSH adapter + GenieACS client). In production
+     these are resolved from the ``OltDevice`` and ``Tr069AcsServer`` rows;
+     tests inject stubs.
+  6. Read OLT + ACS observed state in parallel (two threads, I/O-bound).
+  7. Compute the plan from (target desired, observed, mode).
+  8. Precondition: any surface the plan needs that was unreachable at read
+     time → fast-fail. Errors: ``OLT_UNREACHABLE`` / ``ACS_UNREACHABLE``.
+  9. Apply the plan via ``apply_plan``.
+ 10. Persist: upsert observation; write back desired-state mutations on
+     success; set ``sync_status``/``last_error``/``last_reconciled_at``.
+
+The function is synchronous (request-scoped) per the "no queue, no silent
+failure" design. Long operations (e.g. a full bootstrap) take up to
+``timeout_sec`` — operators expect this to be measured in tens of seconds.
+
+What this commit doesn't include yet (deliberate; follow-up):
+  * Mgmt-IP ping (set to False placeholder)
+  * Verification re-read after apply (relies on the next sweep)
+  * In-app secret resolver wiring (passthrough_secret is the default)
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.network import OLTDevice, OntSyncStatus, OntUnit
+
+from .adapters import (
+    apply_proposed_change,
+    desired_from_ont_unit,
+    upsert_ont_observation,
+)
+from .applier import ApplyContext, SecretResolver, apply_plan, passthrough_secret
+from .locking import OntNotFound, acquire_reconcile_lock
+from .planner import compute_plan
+from .readers import read_acs_state, read_olt_state
+from .state import (
+    AcsObservedFields,
+    OltObservedFields,
+    OntDesiredState,
+    OntObservedState,
+    ReconcileFailure,
+    ReconcileFailureReason,
+    ReconcileMode,
+    ReconcileResult,
+    WriteSurface,
+)
+from .validator import validate_desired
+
+logger = logging.getLogger(__name__)
+
+
+def reconcile_ont(
+    db: Session,
+    ont_unit_id: str | uuid.UUID,
+    *,
+    proposed_change: dict[str, Any] | None = None,
+    timeout_sec: int = 60,
+    mode: ReconcileMode = "sync",
+    olt_adapter: Any = None,
+    acs_client: Any = None,
+    secret_resolver: SecretResolver = passthrough_secret,
+) -> ReconcileResult:
+    """Reconcile one ONT — bring live state into agreement with desired state.
+
+    Args:
+        db: SQLAlchemy session. The reconciler commits at the end on success;
+            on failure the caller's transaction lifecycle determines whether
+            partial DB writes (status/last_error) persist — the reconciler
+            does its writes inside the lock-held transaction.
+        ont_unit_id: UUID or string id of the target ONT.
+        proposed_change: Optional dict of ``OntDesiredState`` field updates to
+            apply if the reconcile succeeds end-to-end. Validated before any
+            network call; rejected proposed_changes return ``INVALID_CHANGE``
+            with no side effects.
+        timeout_sec: Outer deadline for the whole reconcile (read + plan +
+            apply + persist). Default 60s.
+        mode: ``sync`` (operator-initiated; refuses ``out_of_sync``),
+            ``sweep`` (periodic; proceeds against ``out_of_sync``),
+            ``bootstrap`` (BOOTSTRAP event from GenieACS; like sync but
+            always force-pushes the WiFi password).
+        olt_adapter: Pre-built OLT SSH adapter. Tests pass a stub; in
+            production it's built from the ``OLTDevice`` row.
+        acs_client: Pre-built GenieACS NBI client. Same pattern.
+        secret_resolver: Maps secret refs to plaintext at apply time.
+            Defaults to passthrough so callers without OpenBao wired pass
+            plaintext directly through the ref fields.
+
+    Returns:
+        A ``ReconcileResult``. The function never raises under normal
+        operation; mapping to HTTP responses is the caller's job
+        (``ReconcileFailureReason`` constants are the categorization).
+    """
+    started_monotonic = time.monotonic()
+    started_at = datetime.now(UTC)
+    deadline = started_at + timedelta(seconds=timeout_sec)
+
+    try:
+        with acquire_reconcile_lock(db, ont_unit_id) as ont:
+            # ── Mode guard ──────────────────────────────────────────────────
+            if mode == "sync" and ont.sync_status == OntSyncStatus.out_of_sync:
+                # Including just-recovered crashes (lock module sets out_of_sync
+                # then yields). Per Hole 7 design: operator must explicitly use
+                # sweep/force-reconcile to clear.
+                return _failure_result(
+                    started_at=started_at,
+                    started_monotonic=started_monotonic,
+                    failure=ReconcileFailure(
+                        reason=ReconcileFailureReason.BLOCKED_OUT_OF_SYNC,
+                        message=(
+                            f"ONT is out_of_sync (last_error: "
+                            f"{ont.last_error or 'unknown'}); use sweep/force "
+                            "reconcile to clear before retrying."
+                        ),
+                    ),
+                )
+
+            # Transition to reconciling for the duration of this transaction.
+            # If we crash mid-pass, the rollback wipes this and the next
+            # reconcile sees the previous status; if we exit normally it gets
+            # overwritten with synced/out_of_sync at the end.
+            ont.sync_status = OntSyncStatus.reconciling
+            ont.last_reconcile_started_at = started_at
+
+            # ── Resolve desired ─────────────────────────────────────────────
+            desired_current = desired_from_ont_unit(db, ont)
+            if proposed_change:
+                # Filter the proposed_change to OntDesiredState fields only —
+                # callers may have copy-pasted extras.
+                allowed = {f for f in vars(desired_current)}
+                filtered = {
+                    k: v for k, v in proposed_change.items() if k in allowed
+                }
+                target = replace(desired_current, **filtered)
+                # Validation runs only on actual mutations — the principle is
+                # "validate at the write boundary." When proposed_change is
+                # absent (sweep / sync no-op), we trust the current DB state.
+                validation = validate_desired(target, desired_current)
+                if not validation.ok:
+                    return _finalise(
+                        db,
+                        ont,
+                        success=False,
+                        failure=ReconcileFailure(
+                            reason=ReconcileFailureReason.INVALID_CHANGE,
+                            message=validation.reason
+                            or "invalid proposed change",
+                        ),
+                        started_monotonic=started_monotonic,
+                        observed_after=None,
+                        actions_applied=(),
+                        drift_before=(),
+                        drift_after=(),
+                    )
+            else:
+                target = desired_current
+
+            # ── Resolve adapters ────────────────────────────────────────────
+            if olt_adapter is None:
+                olt_adapter = _resolve_olt_adapter(db, ont)
+            if acs_client is None:
+                acs_client = _resolve_acs_client(db, ont)
+
+            # ── Read observed (parallel OLT + ACS) ──────────────────────────
+            olt_result, acs_result = _read_observed_parallel(
+                olt_adapter, acs_client, target, deadline=deadline
+            )
+
+            observed_before = OntObservedState(
+                last_reconciled_at=started_at,
+                last_reconcile_duration_ms=int(
+                    (time.monotonic() - started_monotonic) * 1000
+                ),
+                # Mgmt-IP ping check is a follow-up; for now we report False
+                # so the planner doesn't read into reachability beyond what
+                # the read paths returned.
+                mgmt_ip_pingable=False,
+                consecutive_sweep_unreachable=(
+                    ont.consecutive_sweep_unreachable
+                ),
+                olt=olt_result.observed or _absent_olt(),
+                acs=acs_result.observed or _absent_acs(),
+            )
+
+            # ── Compute plan ────────────────────────────────────────────────
+            plan = compute_plan(target, observed_before, mode)
+
+            # ── Precondition: surfaces the plan needs must be reachable ─────
+            unreachable: set[WriteSurface] = set()
+            if olt_result.unreachable:
+                unreachable.add("olt")
+            if acs_result.unreachable:
+                unreachable.add("acs")
+            blocked = plan.required_surfaces & unreachable
+            if blocked:
+                # Pick the most-specific failure reason; OLT trumps ACS because
+                # OLT writes precede ACS writes in the action order.
+                if "olt" in blocked:
+                    reason = ReconcileFailureReason.OLT_UNREACHABLE
+                    message = (
+                        f"OLT {getattr(olt_adapter, 'olt', None)} "
+                        f"unreachable: {olt_result.error or 'no detail'}"
+                    )
+                else:
+                    reason = ReconcileFailureReason.ACS_UNREACHABLE
+                    message = (
+                        f"ACS unreachable: {acs_result.error or 'no detail'}"
+                    )
+                return _finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=ReconcileFailure(reason=reason, message=message),
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_before,
+                    actions_applied=(),
+                    drift_before=plan.drifts,
+                    drift_after=plan.drifts,
+                )
+
+            # ── Apply ───────────────────────────────────────────────────────
+            ctx = ApplyContext(
+                olt_adapter=olt_adapter,
+                acs_client=acs_client,
+                resolve_secret=secret_resolver,
+            )
+            apply_outcome = apply_plan(plan, ctx, deadline=deadline)
+
+            if not apply_outcome.success:
+                return _finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=apply_outcome.halted_by,
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_before,
+                    actions_applied=apply_outcome.actions_applied,
+                    drift_before=plan.drifts,
+                    drift_after=plan.drifts,
+                )
+
+            # ── Success: commit desired-state mutation + observation ────────
+            if proposed_change:
+                apply_proposed_change(ont, target)
+
+            # Reset the sweep-unreachable counter on any successful reconcile.
+            ont.consecutive_sweep_unreachable = 0
+
+            # Verification re-read is a deliberate follow-up: relies on the
+            # next sweep to catch any stale-cache mismatch. The applier's
+            # per-action checks already cover the immediate write outcomes.
+            return _finalise(
+                db,
+                ont,
+                success=True,
+                failure=None,
+                started_monotonic=started_monotonic,
+                observed_after=observed_before,  # pre-apply read for now
+                actions_applied=apply_outcome.actions_applied,
+                drift_before=plan.drifts,
+                drift_after=(),
+            )
+
+    except OntNotFound as exc:
+        # Lock module raised before we entered the work — no row to mutate.
+        return _failure_result(
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            failure=ReconcileFailure(
+                reason=ReconcileFailureReason.INVALID_CHANGE,
+                message=str(exc),
+            ),
+        )
+
+    except Exception as exc:
+        # Unexpected internal error. We try to record it on the row but the
+        # transaction may already be poisoned — best-effort.
+        logger.exception(
+            "reconcile_ont_internal_error",
+            extra={"ont_unit_id": str(ont_unit_id), "error": str(exc)},
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return _failure_result(
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            failure=ReconcileFailure(
+                reason=ReconcileFailureReason.OLT_WRITE_REJECTED,
+                message=f"internal error: {exc}",
+            ),
+        )
+
+
+# ── Internal helpers ────────────────────────────────────────────────────────
+
+
+def _resolve_olt_adapter(db: Session, ont: OntUnit) -> Any:
+    """Production path: build an OLT adapter from the ONT's OLT binding.
+
+    The lazy import keeps the reconcile package importable in test contexts
+    where the heavier protocol-adapter module would pull in SSH dependencies.
+    """
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+    if ont.olt_device_id is None:
+        raise RuntimeError(
+            f"ONT {ont.id} has no olt_device_id — cannot build OLT adapter"
+        )
+    olt = db.execute(
+        select(OLTDevice).where(OLTDevice.id == ont.olt_device_id)
+    ).scalar_one()
+    return get_protocol_adapter(olt)
+
+
+def _resolve_acs_client(db: Session, ont: OntUnit) -> Any:
+    """Production path: build a GenieACS client from the ONT's ACS binding."""
+    # Prefer the OntUnit's explicit ACS server FK. If absent, fall back to a
+    # default URL — most fleet ONTs share a single GenieACS instance.
+    from app.models.network import Tr069AcsServer
+    from app.services.genieacs_client import GenieACSClient
+
+    if ont.tr069_acs_server_id:
+        server = db.execute(
+            select(Tr069AcsServer).where(
+                Tr069AcsServer.id == ont.tr069_acs_server_id
+            )
+        ).scalar_one_or_none()
+        if server is not None:
+            return GenieACSClient(base_url=server.base_url)
+    return GenieACSClient(base_url="http://localhost:7557")
+
+
+def _read_observed_parallel(
+    olt_adapter: Any,
+    acs_client: Any,
+    desired: OntDesiredState,
+    *,
+    deadline: datetime,
+):
+    """Run OLT + ACS reads in parallel.
+
+    Two I/O-bound calls, one each — a small thread pool is the right fit.
+    The readers themselves don't share state, so no synchronisation needed.
+    """
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="reconcile-read") as pool:
+        olt_future = pool.submit(
+            read_olt_state, olt_adapter, desired, deadline=deadline
+        )
+        acs_future = pool.submit(
+            read_acs_state, acs_client, desired, deadline=deadline
+        )
+        olt_result = olt_future.result()
+        acs_result = acs_future.result()
+    return olt_result, acs_result
+
+
+def _absent_olt() -> OltObservedFields:
+    return OltObservedFields(
+        olt_present=False,
+        olt_match_state=None,
+        olt_run_state=None,
+        olt_distance_m=None,
+        olt_rx_dbm=None,
+        olt_tx_dbm=None,
+        olt_temperature_c=None,
+        olt_description=None,
+        olt_mgmt_ip=None,
+        olt_mgmt_vlan=None,
+        olt_line_profile_id=None,
+        olt_service_profile_id=None,
+        olt_service_ports=(),
+    )
+
+
+def _absent_acs() -> AcsObservedFields:
+    return AcsObservedFields(
+        acs_present=False,
+        acs_last_inform_at=None,
+        acs_last_boot_at=None,
+        acs_last_bootstrap_at=None,
+        acs_observed_software_version=None,
+        acs_observed_pppoe_username=None,
+        acs_observed_pppoe_enable=None,
+        acs_observed_wan_vlan=None,
+        acs_observed_wan_external_ip=None,
+        acs_observed_wan_connection_status=None,
+        acs_observed_nat_enabled=None,
+        acs_observed_dhcp_enabled=None,
+        acs_observed_ssid=None,
+        acs_observed_periodic_inform_interval_sec=None,
+        acs_observed_cr_username_set=None,
+        acs_observed_cr_password_set=None,
+        acs_observed_wan_wcd_index=None,
+        acs_observed_wan_instance_index=None,
+    )
+
+
+def _finalise(
+    db: Session,
+    ont: OntUnit,
+    *,
+    success: bool,
+    failure: ReconcileFailure | None,
+    started_monotonic: float,
+    observed_after: OntObservedState | None,
+    actions_applied,
+    drift_before,
+    drift_after,
+) -> ReconcileResult:
+    """Persist state on the OntUnit row + observation table, build the result.
+
+    Called inside the lock context — the caller's transaction commits when
+    the context exits normally.
+    """
+    now = datetime.now(UTC)
+    duration_ms = int((time.monotonic() - started_monotonic) * 1000)
+
+    if success:
+        ont.sync_status = OntSyncStatus.synced
+        ont.last_error = None
+    else:
+        ont.sync_status = OntSyncStatus.out_of_sync
+        ont.last_error = failure.message if failure else "unknown failure"
+    ont.last_reconciled_at = now
+
+    if observed_after is not None:
+        upsert_ont_observation(db, ont.id, observed_after)
+
+    return ReconcileResult(
+        success=success,
+        sync_status=("synced" if success else "out_of_sync"),
+        actions_applied=tuple(actions_applied),
+        drift_before=tuple(drift_before),
+        drift_after=tuple(drift_after),
+        observed_after=observed_after,
+        failure=failure,
+        duration_ms=duration_ms,
+        reconciled_at=now,
+    )
+
+
+def _failure_result(
+    *,
+    started_at: datetime,
+    started_monotonic: float,
+    failure: ReconcileFailure,
+) -> ReconcileResult:
+    """Build a failure result for cases that never enter the lock context
+    (ONT not found, internal error before lock acquisition)."""
+    now = datetime.now(UTC)
+    return ReconcileResult(
+        success=False,
+        sync_status="out_of_sync",
+        actions_applied=(),
+        drift_before=(),
+        drift_after=(),
+        observed_after=None,
+        failure=failure,
+        duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+        reconciled_at=now,
+    )
+
+
+__all__ = ("reconcile_ont",)

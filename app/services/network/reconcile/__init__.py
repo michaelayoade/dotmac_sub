@@ -61,6 +61,7 @@ from .applier import (
     apply_plan,
     passthrough_secret,
 )
+from .core import reconcile_ont
 from .locking import LockConflict, LockError, OntNotFound, acquire_reconcile_lock
 from .planner import Plan, compute_plan
 from .readers import ReadResult, read_acs_state, read_olt_state
@@ -139,6 +140,7 @@ __all__ = (
     "passthrough_secret",
     "read_acs_state",
     "read_olt_state",
+    "reconcile_ont",
     "upsert_ont_observation",
     "validate_desired",
 )

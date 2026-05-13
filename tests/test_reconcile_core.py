@@ -1,0 +1,754 @@
+"""Integration tests for ``reconcile_ont``.
+
+These exercise the end-to-end composition: lock + adapters + readers +
+planner + applier + persistence. Adapters/clients are stubs so no real I/O,
+but everything else runs as in production — the SQLAlchemy session is real,
+DB rows are written, sync_status transitions happen on actual ``OntUnit``
+rows.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import text
+
+from app.models.network import OLTDevice, OntSyncStatus, OntUnit
+from app.models.ont_observation import OntObservation
+from app.services.network.reconcile import (
+    OntDesiredState,
+    ReconcileFailureReason,
+    reconcile_ont,
+)
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _make_desired(ont, **overrides) -> OntDesiredState:
+    """Build a valid OntDesiredState for the fixture ONT.
+
+    Tests stub ``desired_from_ont_unit`` to return this so they don't depend
+    on the OltConfigPack + VLAN model plumbing that ``adapters.py`` reaches
+    through. The adapter conversion is exercised in
+    ``test_reconcile_adapters.py``.
+    """
+    defaults = dict(
+        ont_unit_id=str(ont.id),
+        serial_number=ont.serial_number,
+        olt_id=str(ont.olt_device_id),
+        fsp="0/1/3",
+        olt_ont_id=11,
+        line_profile_id=40,
+        service_profile_id=42,
+        description="HWTC8535819A_authd_20260513",
+        mgmt_vlan=201,
+        mgmt_ip="172.16.210.20",
+        mgmt_subnet_mask="255.255.255.0",
+        mgmt_gateway="172.16.210.1",
+        mgmt_dns_primary="8.8.8.8",
+        mgmt_dns_secondary="4.2.2.2",
+        mgmt_iphost_priority=2,
+        tr069_profile_id=2,
+        acs_server_id="acs-dotmac",
+        cr_username="admin",
+        cr_password_ref="bao://cr",
+        periodic_inform_interval_sec=300,
+        wan_mode="pppoe",
+        wan_vlan=203,
+        wan_gem_index=1,
+        wan_pppoe_username="100024456",
+        wan_pppoe_password_ref="bao://pppoe",
+        wan_pppoe_provisioning_method="tr069",
+        wan_pppoe_wcd_index=1,
+        wan_pppoe_instance_index=1,
+        wan_config_profile_id=None,
+        wan_internet_config_ip_index=None,
+        nat_enabled=True,
+        ipv6_enabled=False,
+        dhcp_enabled=True,
+        dhcp_pool_min="192.168.100.2",
+        dhcp_pool_max="192.168.100.254",
+        dhcp_subnet_mask="255.255.255.0",
+        wifi_ssid="KURSI",
+        wifi_password_ref="OLD_PASS",
+        wifi_password_pushed_at=None,
+        mgmt_service_port_index=23,
+        wan_service_port_index=22,
+        subscriber_external_id=None,
+        wan_uprate_kbps=None,
+        wan_downrate_kbps=None,
+    )
+    defaults.update(overrides)
+    return OntDesiredState(**defaults)
+
+
+@pytest.fixture
+def stub_desired(monkeypatch, ont):
+    """Make ``desired_from_ont_unit`` return a known-valid desired state for
+    the fixture ONT, so tests focus on reconcile_ont composition rather than
+    effective-config plumbing."""
+    desired = _make_desired(ont)
+
+    def _fake(db, target_ont):
+        return desired
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.desired_from_ont_unit", _fake
+    )
+    return desired
+
+
+@pytest.fixture
+def stub_ont_status(monkeypatch, ont):
+    """Default the OLT reader to return a fully synced observation.
+
+    Stubs at the ``read_olt_state`` boundary (not the underlying
+    ``get_ont_status``) because the current OLT reader doesn't yet parse
+    description / profile-id / service-ports out of ``display ont info``.
+    Until that parser lands, ``read_olt_state`` returns those as ``None``,
+    which the planner treats as "no signal" — except service-ports, where
+    the planner emits a CreateServicePort to materialise the slot. To make
+    a 'fully synced' observation in the test, we bypass the reader entirely
+    and return the shape the post-parsing reader will eventually emit.
+    """
+    from app.services.network.reconcile import OltObservedFields
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_olt_read(adapter, desired, *, deadline=None):
+        return ReadResult(
+            success=True,
+            unreachable=False,
+            observed=OltObservedFields(
+                olt_present=True,
+                olt_match_state="match",
+                olt_run_state="online",
+                olt_distance_m=4000,
+                olt_rx_dbm=-28.0,
+                olt_tx_dbm=2.0,
+                olt_temperature_c=40,
+                olt_description=desired.description,
+                olt_mgmt_ip=desired.mgmt_ip,
+                olt_mgmt_vlan=desired.mgmt_vlan,
+                olt_line_profile_id=desired.line_profile_id,
+                olt_service_profile_id=desired.service_profile_id,
+                olt_service_ports=(
+                    {
+                        "index": desired.mgmt_service_port_index,
+                        "vlan": desired.mgmt_vlan,
+                        "gem": 2,
+                        "state": "up",
+                    },
+                    {
+                        "index": desired.wan_service_port_index,
+                        "vlan": desired.wan_vlan,
+                        "gem": desired.wan_gem_index,
+                        "state": "up",
+                    },
+                ),
+            ),
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state", _fake_olt_read
+    )
+
+
+# ── Stubs ───────────────────────────────────────────────────────────────────
+
+
+class _StubOltAdapter:
+    """OLT adapter stub. Behaves like a healthy OLT with a pre-authorized
+    ONT unless configured otherwise."""
+
+    def __init__(
+        self,
+        *,
+        olt: object | None = None,
+        present: bool = True,
+        find_unreachable: bool = False,
+        fail_on: str | None = None,
+    ):
+        self.olt = olt or SimpleNamespace(name="OLT-STUB")
+        self._present = present
+        self._find_unreachable = find_unreachable
+        self._fail_on = fail_on
+        self.calls: list[str] = []
+
+    def _ok(self, method: str):
+        self.calls.append(method)
+        return SimpleNamespace(
+            success=(method != self._fail_on),
+            message="ok" if method != self._fail_on else "rejected",
+        )
+
+    def find_ont_by_serial(self, serial: str):
+        self.calls.append("find_ont_by_serial")
+        if self._find_unreachable:
+            return SimpleNamespace(
+                success=False,
+                message="Connection failed: timed out",
+                data=None,
+            )
+        registration = (
+            SimpleNamespace(fsp="0/1/3", onu_id=11) if self._present else None
+        )
+        return SimpleNamespace(
+            success=True, message="ok", data={"registration": registration}
+        )
+
+    # All other adapter methods just record + succeed (unless fail_on matches).
+    def authorize_ont(self, *a, **k):
+        return self._ok("authorize_ont")
+
+    def update_ont_profiles(self, *a, **k):
+        return self._ok("update_ont_profiles")
+
+    def clear_iphost_config(self, *a, **k):
+        return self._ok("clear_iphost_config")
+
+    def configure_iphost(self, *a, **k):
+        return self._ok("configure_iphost")
+
+    def bind_tr069_profile(self, *a, **k):
+        return self._ok("bind_tr069_profile")
+
+    def create_service_port(self, *a, **k):
+        return self._ok("create_service_port")
+
+    def delete_service_port(self, *a, **k):
+        return self._ok("delete_service_port")
+
+    def configure_pppoe(self, *a, **k):
+        return self._ok("configure_pppoe")
+
+    def configure_internet_config(self, *a, **k):
+        return self._ok("configure_internet_config")
+
+    def configure_wan_config(self, *a, **k):
+        return self._ok("configure_wan_config")
+
+    def reboot_ont(self, *a, **k):
+        return self._ok("reboot_ont")
+
+
+class _StubAcsClient:
+    """ACS NBI client stub. Returns a healthy synced-looking device unless
+    configured to be unreachable or to fault."""
+
+    def __init__(
+        self,
+        *,
+        unreachable: bool = False,
+        device: dict | None = None,
+        spv_raises: Exception | None = None,
+        spv_cr_error: str | None = None,
+    ):
+        self._unreachable = unreachable
+        self._device = device
+        self._spv_raises = spv_raises
+        self._spv_cr_error = spv_cr_error
+        self.spv_calls: list[tuple] = []
+        self.add_object_calls: list[tuple] = []
+
+    def list_devices(self, query=None, projection=None):
+        if self._unreachable:
+            from app.services.genieacs_client import GenieACSError
+
+            raise GenieACSError("502 Bad Gateway")
+        if self._device is None:
+            return []
+        return [self._device]
+
+    def add_object(self, device_id, path):
+        self.add_object_calls.append((device_id, path))
+        return {"_id": "task-addObject"}
+
+    def set_parameter_values(self, device_id, params, **kwargs):
+        self.spv_calls.append((device_id, params, kwargs))
+        if self._spv_raises is not None:
+            raise self._spv_raises
+        result: dict = {"_id": "task-spv"}
+        if self._spv_cr_error:
+            result["connectionRequestError"] = self._spv_cr_error
+        return result
+
+
+# ── Fixtures ────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def olt_device(db_session):
+    olt = OLTDevice(
+        name="OLT-CORE-TEST",
+        mgmt_ip="172.20.100.30",
+        is_active=True,
+    )
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+    return olt
+
+
+@pytest.fixture
+def ont(db_session, olt_device):
+    """Pre-authorized ONT in a synced-looking state.
+
+    ``desired_config`` carries the WiFi SSID + PSK that callers will mutate,
+    plus PPPoE creds, so this ONT can exercise the WiFi-only proposed_change
+    path end-to-end."""
+    ont = OntUnit(
+        serial_number="HWTC8535819A",
+        olt_device_id=olt_device.id,
+        board="0/1",
+        port="3",
+        external_id="11",
+        is_active=True,
+        sync_status=OntSyncStatus.synced,
+        desired_config={
+            "wifi": {"ssid": "KURSI", "password": "OLD_PASS"},
+            "wan": {
+                "pppoe_username": "100024456",
+                "pppoe_password": "PVgWc3Ch",
+            },
+            "management": {"ip_address": "172.16.210.20"},
+        },
+    )
+    db_session.add(ont)
+    db_session.commit()
+    db_session.refresh(ont)
+    return ont
+
+
+def _synced_acs_device(ont) -> dict:
+    """A GenieACS device document that matches the fixture ONT's desired
+    state — used to set up the 'no drift' baseline."""
+
+    def leaf(v):
+        return {"_value": v, "_object": False, "_writable": True}
+
+    return {
+        "_id": f"00259E-HG8546M-{ont.serial_number}",
+        "_lastInform": "2026-05-13T00:00:00.000Z",
+        "InternetGatewayDevice": {
+            "DeviceInfo": {"SoftwareVersion": leaf("V5R019C10S100")},
+            "ManagementServer": {
+                "PeriodicInformInterval": leaf("300"),
+                "ConnectionRequestUsername": leaf("admin"),
+                "ConnectionRequestPassword": leaf("admin"),
+            },
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        "1": {
+                            "WANPPPConnection": {
+                                "1": {
+                                    "Username": leaf("100024456"),
+                                    "Enable": leaf("true"),
+                                    "X_HW_VLAN": leaf("203"),
+                                    "NATEnabled": leaf("true"),
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "LANDevice": {
+                "1": {
+                    "LANHostConfigManagement": {
+                        "DHCPServerEnable": leaf("true")
+                    },
+                    "WLANConfiguration": {
+                        "1": {"SSID": leaf("KURSI")}
+                    },
+                }
+            },
+        },
+    }
+
+
+# ── Happy paths ─────────────────────────────────────────────────────────────
+
+
+def test_synced_ont_no_proposed_change_is_a_noop(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Reconciling a synced ONT with no proposed_change produces an empty
+    plan and a synced result. No adapter writes."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    db_session.flush()
+
+    assert result.success is True
+    assert result.sync_status == "synced"
+    assert result.actions_applied == ()
+    assert result.failure is None
+    # Adapter saw the reads (find_ont_by_serial + status fetch) but no writes.
+    assert "authorize_ont" not in olt.calls
+    assert "configure_iphost" not in olt.calls
+    assert acs.spv_calls == []
+
+
+def test_wifi_password_change_on_synced_ont_skips_push_per_hole3(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Operator changes WiFi password on a present-and-synced ONT. Per Hole 3
+    (no observable, never push on sync against present ONTs), the planner
+    skips the push. The desired-state change still gets persisted to the
+    OntUnit row so a subsequent bootstrap-event reconcile will pick it up.
+    """
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        proposed_change={"wifi_password_ref": "kursimining@98765"},
+        mode="sync",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    db_session.flush()
+
+    assert result.success is True
+    assert result.sync_status == "synced"
+    psk_writes = [
+        call for call in acs.spv_calls
+        if "PreSharedKey" in next(iter(call[1]))
+    ]
+    assert psk_writes == []
+    # apply_proposed_change writes the new password into desired_config.
+    db_session.refresh(ont)
+    assert ont.desired_config["wifi"]["password"] == "kursimining@98765"
+
+
+def test_bootstrap_mode_pushes_wifi_password_on_synced_ont(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """BOOTSTRAP event from GenieACS — device was wiped, push full config."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    # Bootstrap pushes WiFi PSK regardless.
+    psk_pushes = [
+        call for call in acs.spv_calls
+        if "PreSharedKey" in next(iter(call[1]))
+    ]
+    assert len(psk_pushes) == 1
+
+
+# ── Mode guard: out_of_sync blocks sync ─────────────────────────────────────
+
+
+def test_sync_mode_refuses_against_out_of_sync_ont(
+    db_session, ont, stub_desired
+):
+    """An ONT in out_of_sync state blocks sync-mode reconciles. Operator must
+    use the force-reconcile (sweep) endpoint to clear it."""
+    ont.sync_status = OntSyncStatus.out_of_sync
+    ont.last_error = "previous bootstrap failed"
+    db_session.commit()
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sync",
+        olt_adapter=_StubOltAdapter(),
+        acs_client=_StubAcsClient(),
+    )
+
+    assert result.success is False
+    assert (
+        result.failure.reason == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
+    )
+    assert "previous bootstrap failed" in result.failure.message
+
+
+def test_sweep_mode_proceeds_against_out_of_sync_ont(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """Sweep mode is how out_of_sync clears — proceed despite the status."""
+    ont.sync_status = OntSyncStatus.out_of_sync
+    ont.last_error = "previous failure"
+    db_session.commit()
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert result.sync_status == "synced"
+
+
+# ── Failure paths ──────────────────────────────────────────────────────────
+
+
+def test_ont_not_found_returns_invalid_change(db_session):
+    missing = uuid.uuid4()
+    result = reconcile_ont(
+        db_session,
+        missing,
+        olt_adapter=_StubOltAdapter(),
+        acs_client=_StubAcsClient(),
+    )
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.INVALID_CHANGE
+    assert str(missing) in result.failure.message
+
+
+def test_invalid_proposed_change_returns_invalid_change_without_writes(
+    db_session, ont, stub_desired
+):
+    """Validator rejects (here: changing serial_number)."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        proposed_change={"serial_number": "HWTCDIFFERENT"},
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.INVALID_CHANGE
+    assert "serial_number is immutable" in result.failure.message
+    # No writes.
+    assert acs.spv_calls == []
+    assert "authorize_ont" not in olt.calls
+
+
+def test_olt_unreachable_fast_fails_before_writes(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """OLT unreachable at read time — fast-fail before any apply. Doesn't
+    use the ``stub_ont_status`` fixture because we explicitly want the
+    reader to report unreachable."""
+    from app.services.network.reconcile.readers import ReadResult
+
+    def _fake_olt_unreachable(adapter, desired, *, deadline=None):
+        return ReadResult(
+            success=False,
+            unreachable=True,
+            observed=None,
+            error="Connection failed: timed out",
+        )
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.read_olt_state",
+        _fake_olt_unreachable,
+    )
+
+    olt = _StubOltAdapter()
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        proposed_change={"wifi_ssid": "NEW_SSID"},
+        mode="bootstrap",  # ensures a non-empty plan
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.OLT_UNREACHABLE
+    assert "timed out" in result.failure.message.lower()
+    # No ACS writes either — fast-fail before any apply.
+    assert acs.spv_calls == []
+
+
+def test_acs_unreachable_fast_fails_before_writes(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(unreachable=True)
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",  # ensures ACS-side actions are required
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.ACS_UNREACHABLE
+    assert "Bad Gateway" in result.failure.message
+
+
+def test_apply_failure_marks_ont_out_of_sync(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """If the applier fails mid-plan, the ONT is marked out_of_sync with the
+    failure message, and the row persists."""
+    olt = _StubOltAdapter(present=True)
+    # WiFi password push will fail because the ACS client raises.
+    acs = _StubAcsClient(
+        device=_synced_acs_device(ont),
+        spv_raises=RuntimeError("ACS exploded"),
+    )
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="bootstrap",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert (
+        result.failure.reason == ReconcileFailureReason.ACS_WRITE_FAULTED
+    )
+    db_session.flush()
+    status = db_session.execute(
+        text("SELECT sync_status, last_error FROM ont_units WHERE id = :id"),
+        {"id": str(ont.id)},
+    ).one()
+    assert status[0] == OntSyncStatus.out_of_sync.value
+    assert "ACS exploded" in (status[1] or "")
+
+
+# ── Status persistence ─────────────────────────────────────────────────────
+
+
+def test_successful_sync_clears_last_error(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """A successful reconcile clears any stale last_error on the row."""
+    ont.last_error = "ancient failure"
+    db_session.commit()
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    db_session.flush()
+
+    assert result.success is True
+    row = db_session.execute(
+        text("SELECT last_error, last_reconciled_at FROM ont_units WHERE id = :id"),
+        {"id": str(ont.id)},
+    ).one()
+    assert row[0] is None
+    assert row[1] is not None
+
+
+def test_observation_row_is_upserted(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """After a successful reconcile, the OntObservation row exists."""
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    db_session.flush()
+
+    obs = (
+        db_session.query(OntObservation)
+        .filter(OntObservation.ont_unit_id == ont.id)
+        .one()
+    )
+    assert obs.olt_present is True
+    assert obs.acs_present is True
+    assert obs.acs_observed_ssid == "KURSI"
+
+
+def test_consecutive_sweep_unreachable_resets_on_success(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """A reconcile that successfully reaches both surfaces should reset the
+    sweep-unreachable counter (so the alert escalation tracks current
+    state, not historical state)."""
+    ont.consecutive_sweep_unreachable = 5
+    db_session.commit()
+
+    olt = _StubOltAdapter(present=True)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+    db_session.flush()
+
+    row = db_session.execute(
+        text(
+            "SELECT consecutive_sweep_unreachable FROM ont_units WHERE id = :id"
+        ),
+        {"id": str(ont.id)},
+    ).scalar_one()
+    assert row == 0
+
+
+# ── Crashed-prior recovery ──────────────────────────────────────────────────
+
+
+def test_sync_refuses_after_crashed_prior_is_detected(
+    db_session, ont, stub_desired
+):
+    """If a prior reconcile crashed (sync_status stuck at reconciling), the
+    lock module flips it to out_of_sync. Sync-mode refuses thereafter."""
+    ont.sync_status = OntSyncStatus.reconciling
+    ont.last_reconcile_started_at = datetime(2026, 5, 1, tzinfo=UTC)
+    ont.last_error = None
+    db_session.commit()
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sync",
+        olt_adapter=_StubOltAdapter(),
+        acs_client=_StubAcsClient(),
+    )
+
+    assert result.success is False
+    assert (
+        result.failure.reason == ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
+    )
+    # The crash detection message surfaces in last_error.
+    assert "did not finalise" in result.failure.message
