@@ -118,6 +118,16 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _nonzero_int_or_none(value: Any) -> int | None:
+    """Return int(value) only if it's a positive non-zero integer.
+
+    Used for fields where the stored value 0 is operationally equivalent to "not
+    set" (e.g. Huawei `ont wan-config profile-id 0` is a silent no-op).
+    """
+    parsed = _int_or_none(value)
+    return parsed if parsed and parsed > 0 else None
+
+
 def internet_wcd_index_from_effective_values(
     values: dict[str, Any],
     *,
@@ -356,8 +366,14 @@ def _values_from_assignment(
         "internet_config_ip_index": _coalesce_mapping_config(
             profile_mapping, config_pack, "internet_config_ip_index"
         ),
-        "wan_config_profile_id": _coalesce_mapping_config(
-            profile_mapping, config_pack, "wan_config_profile_id"
+        # wan_config_profile_id=0 is silently a no-op on Huawei OLTs (ont wan-config
+        # profile-id 0 accepts the write but doesn't promote the WAN to routed/NAT
+        # mode). Treat it the same as "not configured" so callers fall back to a
+        # working path (TR-069) instead of emitting a useless OMCI step.
+        "wan_config_profile_id": _nonzero_int_or_none(
+            _coalesce_mapping_config(
+                profile_mapping, config_pack, "wan_config_profile_id"
+            )
         ),
         "wan_provisioning_mode": _coalesce_mapping_config(
             profile_mapping, config_pack, "wan_provisioning_mode", "omci_wan_config"

@@ -218,6 +218,25 @@ def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 delete_ont_registration = deauthorize_ont
 
 
+_DESC_ALLOWED = re.compile(r"[^A-Za-z0-9_.,/\-]+")
+
+
+def _sanitize_ont_description(value: str | None) -> str:
+    """Reduce a description to OLT-safe characters.
+
+    Huawei OLTs accept descriptions up to ~80 chars; spaces and certain symbols
+    are unreliable in scripted SSH (and inconsistent across MA5608T/MA5800
+    firmware builds). Normalize spaces to underscores and strip everything not
+    alphanumeric / ``_ . , / -``. Truncate to 64 chars (leaves margin for the
+    surrounding ``desc "..."`` quoting).
+    """
+    if not value:
+        return ""
+    candidate = str(value).strip().replace(" ", "_")
+    cleaned = _DESC_ALLOWED.sub("", candidate)
+    return cleaned[:64]
+
+
 def authorize_ont(
     olt: OLTDevice,
     fsp: str,
@@ -225,6 +244,7 @@ def authorize_ont(
     *,
     line_profile_id: int | None = None,
     service_profile_id: int | None = None,
+    description: str | None = None,
 ) -> tuple[bool, str, int | None]:
     """SSH into OLT and register an ONT via sn-auth on the given port.
 
@@ -234,6 +254,9 @@ def authorize_ont(
         serial_number: ONT serial in vendor format, e.g. "HWTC-7D4733C3".
         line_profile_id: OLT-local line profile ID resolved before authorization.
         service_profile_id: OLT-local service profile ID resolved before authorization.
+        description: Optional description to attach to the ``ont add`` command.
+            Empty/None falls back to a serial-derived stub so the ONT row in
+            ``display ont info`` never shows ``ONT_NO_DESCRIPTION``.
 
     Returns:
         Tuple of (success, message, assigned_ont_id).
@@ -283,9 +306,22 @@ def authorize_ont(
         # escape sequences (e.g. '1B' = ESC in ASCII). Hex format is reliably
         # processed by all OLT terminals.
         sn_clean = encode_to_hex_serial(serial_number) or serial_number.replace("-", "")
-        auth_cmd = f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid}"
+        desc_clean = _sanitize_ont_description(description)
+        if not desc_clean:
+            # Default placeholder so the OLT row never shows ONT_NO_DESCRIPTION.
+            from datetime import UTC, datetime
+            desc_clean = (
+                f"{sn_clean}_authd_{datetime.now(UTC).strftime('%Y%m%d')}"
+            )[:64]
+        auth_cmd = (
+            f"ont add {port_num} sn-auth {sn_clean} omci "
+            f"ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid} "
+            f'desc "{desc_clean}"'
+        )
         _send_slow(channel, auth_cmd)
-        # Huawei may prompt "{ <cr>|desc<K>|ont-type<K> }:" — send CR to confirm
+        # With desc supplied we no longer expect the "{ <cr>|desc<K>|ont-type<K> }:"
+        # follow-up prompt, but keep the fallback to handle older Huawei firmware
+        # builds that still demand a CR confirmation.
         initial = core._read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
         if "<cr>" in initial:
             channel.send("\n")

@@ -349,9 +349,34 @@ def set_and_verify(
 
     expected_values = expected if expected is not None else params
 
-    # Create SPV task
+    # Create SPV task. set_parameter_values defaults to connection_request=True so
+    # GenieACS attempts a synchronous Connection Request — that's the only way to
+    # know definitively that the device applied the write.
     spv_result: dict[str, object] = client.set_parameter_values(device_id, params)
     task_id = str(spv_result.get("_id", ""))
+    cr_error = str(spv_result.get("connectionRequestError") or "")
+
+    if cr_error:
+        # GenieACS returned 202: task was queued but CR to the device failed
+        # (typically empty ConnectionRequestUsername/Password on a fresh ONT). The
+        # task is NOT deleted — it'll drain on the next Inform. Caller is expected
+        # to either wait (PeriodicInformInterval) or force a BOOT Inform via OLT
+        # `ont reset`. Skip verification because nothing has changed on the device
+        # yet.
+        logger.info(
+            "spv_queued_no_connection_request",
+            extra={
+                "device_id": device_id,
+                "task_id": task_id,
+                "connection_request_error": cr_error,
+                "param_count": len(params),
+            },
+        )
+        raise GenieACSError(
+            "setParameterValues queued but Connection Request failed: "
+            f"{cr_error}. Task {task_id} is queued — drain via OLT `ont reset` "
+            "or wait for the next Inform."
+        )
 
     if not task_id:
         # Task accepted immediately (no pending task created)
@@ -378,7 +403,8 @@ def set_and_verify(
             client, device_id, task_id, timeout_sec=timeout_sec
         )
         if not completed:
-            _delete_task_quietly(client, spv_result)
+            # Don't delete: a CR-failed task that hasn't drained yet may still
+            # complete on the next Inform. Surface the failure but leave it queued.
             raise GenieACSError(f"setParameterValues task timed out: {msg}")
 
     if skip_verification or not expected_values:

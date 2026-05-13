@@ -105,6 +105,19 @@ def _is_serial_already_registered_message(message: str | None) -> bool:
     return "sn already exists" in lowered or "serial already exists" in lowered
 
 
+def _build_initial_ont_description(serial_number: str) -> str:
+    """Default description applied at ``ont add`` time.
+
+    The customer/service binding usually happens after authorization, so this is
+    a stub that at minimum keeps the OLT row identifiable (no more
+    ``ONT_NO_DESCRIPTION`` entries) and dates the authorization. Operators can
+    override with ``ont modify ... desc`` later.
+    """
+    from datetime import UTC, datetime
+
+    return f"{serial_number}_authd_{datetime.now(UTC).strftime('%Y%m%d')}"
+
+
 def _validate_authorization_dependencies(
     db: Session,
     *,
@@ -541,11 +554,13 @@ def authorize_autofind_ont(
             return finish(success=False, message=profiles_msg, status="error")
 
     # Authorize on OLT
+    auth_description = _build_initial_ont_description(normalized_serial)
     auth_result = adapter.authorize_ont(
         fsp,
         normalized_serial,
         line_profile_id=authorization_profiles.line_profile_id,
         service_profile_id=authorization_profiles.service_profile_id,
+        description=auth_description,
     )
     ont_id = auth_result.ont_id
 
@@ -602,6 +617,7 @@ def authorize_autofind_ont(
                     normalized_serial,
                     line_profile_id=authorization_profiles.line_profile_id,
                     service_profile_id=authorization_profiles.service_profile_id,
+                    description=auth_description,
                 )
                 ont_id = auth_result.ont_id
                 if not auth_result.success or ont_id is None:

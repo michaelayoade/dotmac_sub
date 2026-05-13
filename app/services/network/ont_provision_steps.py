@@ -545,6 +545,22 @@ def _provision_wan_service_instances(
             if not pppoe_result.success and pppoe_provisioning_method == "omci":
                 hard_failures.append(f"configure_pppoe_omci: {pppoe_result.message}")
                 return steps, needs_input, hard_failures
+            if not pppoe_result.success:
+                # auto mode: OMCI write failed; we'll fall through to TR-069 below.
+                # adapter.configure_pppoe may have partially written OMCI state before
+                # failing — clear the IPHOST at this ip_index so the TR-069 PPPoE push
+                # isn't fighting a stale OMCI dialer (the BOI TechSquad 2026-04-17
+                # dup-auth scenario).
+                clear_result = adapter.clear_iphost_config(
+                    ctx.fsp, ctx.olt_ont_id, ip_index=ip_index
+                )
+                steps.append(
+                    {
+                        "step": "rollback_pppoe_omci_partial:desired_config",
+                        "success": clear_result.success,
+                        "message": clear_result.message,
+                    }
+                )
             if pppoe_result.success:
                 inet_result = adapter.configure_internet_config(
                     ctx.fsp,
@@ -1448,8 +1464,13 @@ def provision_with_reconciliation(
     # 2. Clear any stale WAN config before applying new configuration (best-effort)
     # Huawei OLTs retain ipconfig/internet-config/wan-config after deauthorization or from
     # factory defaults, which can cause ip-index mismatch errors on new provisioning.
+    # IPHOST is also cleared here so reuse-registration paths self-heal stale entries
+    # at ip_index slots the new baseline won't itself rewrite.
     stale_cleared = []
     for ip_index in (0, 1):
+        result = adapter.clear_iphost_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
+        if result.success:
+            stale_cleared.append(f"iphost:{ip_index}")
         result = adapter.clear_internet_config(ctx.fsp, ctx.olt_ont_id, ip_index=ip_index)
         if result.success:
             stale_cleared.append(f"internet-config:{ip_index}")
@@ -1466,6 +1487,20 @@ def provision_with_reconciliation(
         )
 
     # 3. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
+    # mgmt_vlan is only legitimately absent in pure bridge mode. For any routed/NAT
+    # turn-up, a missing mgmt VLAN means the ONT will come online but never reach the
+    # ACS — fail explicitly instead of silently returning success.
+    if not mgmt_vlan and wan_mode != "bridge":
+        ms = int((time.monotonic() - t0) * 1000)
+        step_result = StepResult(
+            "provision",
+            False,
+            "Management VLAN not resolved (config pack incomplete?)",
+            ms,
+        )
+        _record_step(db, ctx.ont, "provision", step_result)
+        _send_failure_notification(ctx, ont_id, step_result)
+        return step_result
     if mgmt_vlan:
         raw_mgmt_gem_index = values.get("mgmt_gem_index")
         mgmt_spec = create_batched_mgmt_spec_from_config_pack(

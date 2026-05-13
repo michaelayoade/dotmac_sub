@@ -687,22 +687,32 @@ class GenieACSClient:
         self,
         device_id: str,
         parameters: dict[str, Any],
+        *,
+        connection_request: bool | None = True,
     ) -> dict:
         """Set parameter values on device.
 
         Args:
             device_id: Device ID
             parameters: Dict of parameter path -> value
+            connection_request: When True (default) GenieACS attempts a synchronous
+                Connection Request to the device so the task runs immediately.
+                If the device's CR credentials are empty or unreachable, the response
+                carries ``connectionRequestError`` and the task remains queued — but
+                it is *not* dropped. Setting False suppresses the CR (task simply
+                queues for the next Inform).
 
         Returns:
-            Task result
+            Task result. When ``connectionRequestError`` is set, the task is queued
+            but not delivered — caller must drain it (e.g. force an OLT-side
+            ``ont reset`` to trigger a BOOT Inform).
         """
         # GenieACS expects [[path, value, type], ...]
         param_list = [
             [k, v, _infer_cwmp_value_type(k, v)] for k, v in parameters.items()
         ]
         task = {"name": "setParameterValues", "parameterValues": param_list}
-        return self.create_task(device_id, task)
+        return self.create_task(device_id, task, connection_request=connection_request)
 
     def refresh_object(
         self,

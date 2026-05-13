@@ -1816,6 +1816,21 @@ def _build_acs_provision_script(
             return "null"
         return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+    # GenieACS provisions run in a 50 ms VM. If any declare() faults or times out,
+    # subsequent top-level statements are abandoned — leaving the device half-configured
+    # (notably with empty ConnectionRequestUsername/Password, which then makes every NBI
+    # `?connection_request` POST return 202 rather than 200 because GenieACS has no
+    # credentials to dial out with). Isolate each declare() in its own try/catch so a
+    # single bad path can't take the whole script down.
+    def safe_declare(path_js: str, value_js: str) -> str:
+        return (
+            "try { declare("
+            + path_js
+            + ", null, {value: "
+            + value_js
+            + "}); } catch (e) {}"
+        )
+
     script_lines = [
         "// DotMac ACS URL Enforcement Provision",
         "// Automatically generated - do not edit manually",
@@ -1824,40 +1839,47 @@ def _build_acs_provision_script(
         "const now = Date.now();",
         "",
         "// Detect data model by checking which root exists",
-        'let root = "Device";',
+        'let root = "InternetGatewayDevice";',
         "try {",
         '  const dm = declare("Device.DeviceInfo.Manufacturer", {value: 1});',
-        "  if (!dm.value || dm.value[0] === undefined) {",
-        '    root = "InternetGatewayDevice";',
+        "  if (dm.value && dm.value[0] !== undefined) {",
+        '    root = "Device";',
         "  }",
-        "} catch (e) {",
-        '  root = "InternetGatewayDevice";',
-        "}",
+        "} catch (e) {}",
         "",
-        "// Set ManagementServer parameters",
-        f'declare(root + ".ManagementServer.URL", null, {{value: {js_string(cwmp_url)}}});',
-        'declare(root + ".ManagementServer.PeriodicInformEnable", null, {value: true});',
-        f'declare(root + ".ManagementServer.PeriodicInformInterval", null, {{value: {periodic_inform_interval}}});',
+        "// Set ManagementServer parameters (each isolated so one fault doesn't abort the rest)",
+        safe_declare('root + ".ManagementServer.URL"', js_string(cwmp_url)),
+        safe_declare('root + ".ManagementServer.PeriodicInformEnable"', "true"),
+        safe_declare(
+            'root + ".ManagementServer.PeriodicInformInterval"',
+            str(int(periodic_inform_interval)),
+        ),
     ]
 
     if cwmp_username:
         script_lines.append(
-            f'declare(root + ".ManagementServer.Username", null, {{value: {js_string(cwmp_username)}}});'
+            safe_declare('root + ".ManagementServer.Username"', js_string(cwmp_username))
         )
 
     if cwmp_password:
         script_lines.append(
-            f'declare(root + ".ManagementServer.Password", null, {{value: {js_string(cwmp_password)}}});'
+            safe_declare('root + ".ManagementServer.Password"', js_string(cwmp_password))
         )
 
     if connection_request_username:
         script_lines.append(
-            f'declare(root + ".ManagementServer.ConnectionRequestUsername", null, {{value: {js_string(connection_request_username)}}});'
+            safe_declare(
+                'root + ".ManagementServer.ConnectionRequestUsername"',
+                js_string(connection_request_username),
+            )
         )
 
     if connection_request_password:
         script_lines.append(
-            f'declare(root + ".ManagementServer.ConnectionRequestPassword", null, {{value: {js_string(connection_request_password)}}});'
+            safe_declare(
+                'root + ".ManagementServer.ConnectionRequestPassword"',
+                js_string(connection_request_password),
+            )
         )
 
     return "\n".join(script_lines)

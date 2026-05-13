@@ -259,6 +259,7 @@ class OltProtocolAdapter:
             serial_number,
             line_profile_id=line_profile_id,
             service_profile_id=service_profile_id,
+            description=description,
         )
 
     def _ssh_authorize(
@@ -268,6 +269,7 @@ class OltProtocolAdapter:
         *,
         line_profile_id: int | None = None,
         service_profile_id: int | None = None,
+        description: str = "",
     ) -> OltOperationResult:
         """Authorize ONT via SSH CLI."""
         from app.services.network.olt_ssh_ont import authorize_ont as ssh_authorize
@@ -279,6 +281,7 @@ class OltProtocolAdapter:
                 serial_number,
                 line_profile_id=line_profile_id,
                 service_profile_id=service_profile_id,
+                description=description or None,
             )
             return OltOperationResult(
                 success=ok,
