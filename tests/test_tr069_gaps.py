@@ -1332,6 +1332,110 @@ class TestDeviceResolution:
         assert device_id == "00D09E-TestProduct-HWTC7D4733C3"
         assert reason == "resolved_via_ont_acs"
 
+    def test_targeted_reconcile_links_existing_discovered_row(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import reconcile_ont_tr069_device
+
+        server = Tr069AcsServer(
+            name="Post Auth ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HWTC600AC29C",
+            vendor_serial_number="48575443600AC29C",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        discovered = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number="48575443600AC29C",
+            genieacs_device_id="00259E-HG8546M-48575443600AC29C",
+            last_inform_at=datetime(2026, 5, 13, 12, 12, 32, tzinfo=UTC),
+            is_active=True,
+        )
+        db_session.add_all([ont, discovered])
+        db_session.commit()
+
+        device, reason = reconcile_ont_tr069_device(db_session, ont)
+
+        assert device == discovered
+        assert reason == "linked_existing_local_tr069_device"
+        assert discovered.ont_unit_id == ont.id
+        assert ont.acs_last_inform_at is not None
+        assert discovered.last_inform_at is not None
+        assert ont.acs_last_inform_at.replace(tzinfo=None) == discovered.last_inform_at
+
+    def test_targeted_reconcile_creates_and_links_live_genieacs_row(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import reconcile_ont_tr069_device
+
+        server = Tr069AcsServer(
+            name="Post Auth Live ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HWTC600AC29C",
+            vendor_serial_number="48575443600AC29C",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.commit()
+
+        mock_device = {
+            "_id": "00259E-HG8546M-48575443600AC29C",
+            "_deviceId": {
+                "_OUI": "00259E",
+                "_ProductClass": "HG8546M",
+                "_SerialNumber": "48575443600AC29C",
+            },
+            "_lastInform": "2026-05-13T12:12:32.703Z",
+            "InternetGatewayDevice": {
+                "ManagementServer": {
+                    "ConnectionRequestURL": {
+                        "_value": "http://172.16.201.137:7547/abc"
+                    }
+                }
+            },
+        }
+
+        with patch("app.services.network._resolve.create_genieacs_client") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.side_effect = [[], [], [mock_device]]
+            instance.get_device.return_value = mock_device
+            instance.extract_parameter_value.side_effect = (
+                lambda device, path: "http://172.16.201.137:7547/abc"
+                if path.endswith("ConnectionRequestURL")
+                else None
+            )
+            instance.parse_device_id.return_value = (
+                "00259E",
+                "HG8546M",
+                "48575443600AC29C",
+            )
+
+            device, reason = reconcile_ont_tr069_device(db_session, ont)
+
+        assert device is not None
+        assert reason == "created_and_linked_tr069_device"
+        assert device.ont_unit_id == ont.id
+        assert device.serial_number == "48575443600AC29C"
+        assert device.genieacs_device_id == "00259E-HG8546M-48575443600AC29C"
+        assert device.connection_request_url == "http://172.16.201.137:7547/abc"
+        assert ont.acs_last_inform_at == device.last_inform_at
+
     def test_resolve_matches_device_by_genieacs_deviceid_serial(
         self, db_session
     ) -> None:
