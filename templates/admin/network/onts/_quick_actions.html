@@ -3,15 +3,16 @@
 <div class="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
     {# Get Status #}
     <button type="button"
-            hx-post="/admin/network/onts/{{ ont.id }}/refresh-status"
+            hx-get="/admin/network/onts/{{ ont.id }}/refresh-status"
             hx-swap="none"
             hx-indicator="#status-spinner"
+            data-refresh-status-action
             class="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
         <svg id="status-spinner" class="htmx-indicator h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
         </svg>
-        <svg class="h-4 w-4 htmx-indicator-hide" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <svg class="h-4 w-4 htmx-indicator-hide" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
         Get Status
     </button>
 
@@ -89,19 +90,6 @@
                     <div class="text-xs text-slate-500 dark:text-slate-400">Power cycle via OLT command</div>
                 </div>
             </button>
-            <hr class="my-1 border-slate-200 dark:border-slate-700">
-            <button type="button"
-                    hx-post="/admin/network/onts/{{ ont.id }}/connection-request"
-                    hx-swap="none"
-                    data-connection-request-action
-                    @click="open = false"
-                    class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
-                <div>
-                    <div class="font-medium">Trigger Connection Request</div>
-                    <div class="text-xs text-slate-500 dark:text-slate-400">Wake up TR-069 session</div>
-                </div>
-            </button>
         </div>
     </div>
 
@@ -138,11 +126,11 @@
     {% endif %}
 </div>
 
-<div id="ont-connection-request-feedback" class="hidden rounded-lg border px-4 py-3 text-sm">
+<div id="ont-quick-action-feedback" class="hidden rounded-lg border px-4 py-3 text-sm">
     <div class="flex items-start gap-3">
-        <div id="ont-connection-request-feedback-message" class="min-w-0 flex-1"></div>
+        <div id="ont-quick-action-feedback-message" class="min-w-0 flex-1"></div>
         <button type="button"
-                data-connection-request-feedback-close
+                data-quick-action-feedback-close
                 class="shrink-0 rounded-md p-1 transition-colors hover:bg-black/10 focus:outline-none focus:ring-2 focus:ring-current dark:hover:bg-white/10"
                 aria-label="Close message">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -154,18 +142,28 @@
 
 <script>
     (function () {
-        if (window.__ontConnectionRequestFeedbackBound) {
+        if (window.__ontQuickActionFeedbackBound) {
             return;
         }
-        window.__ontConnectionRequestFeedbackBound = true;
+        window.__ontQuickActionFeedbackBound = true;
 
-        function connectionRequestSource(elt) {
-            return elt && elt.matches && elt.matches('[data-connection-request-action]');
+        function isQuickActionSource(elt) {
+            if (!elt || !elt.matches) {
+                return null;
+            }
+            if (elt.matches('[data-connection-request-action]')) {
+                return 'connection-request';
+            }
+            if (elt.matches('[data-refresh-status-action]')) {
+                return 'refresh-status';
+            }
+            return null;
         }
 
-        function responseMessage(xhr) {
+        function responseMessage(xhr, actionType) {
+            var fallback = actionType === 'refresh-status' ? 'Status refresh failed.' : 'Action failed.';
             if (!xhr) {
-                return 'Connection request failed.';
+                return fallback;
             }
             try {
                 var data = JSON.parse(xhr.responseText || '{}');
@@ -173,21 +171,25 @@
                     return data.message;
                 }
             } catch (e) {}
-            return xhr.statusText || 'Connection request failed.';
+            return xhr.statusText || fallback;
         }
 
-        function renderConnectionRequestFeedback(event) {
-            if (!event.detail || !connectionRequestSource(event.detail.elt)) {
+        function renderQuickActionFeedback(event) {
+            if (!event.detail) {
                 return;
             }
-            var target = document.getElementById('ont-connection-request-feedback');
-            var messageTarget = document.getElementById('ont-connection-request-feedback-message');
+            var actionType = isQuickActionSource(event.detail.elt);
+            if (!actionType) {
+                return;
+            }
+            var target = document.getElementById('ont-quick-action-feedback');
+            var messageTarget = document.getElementById('ont-quick-action-feedback-message');
             if (!target) {
                 return;
             }
             var xhr = event.detail.xhr;
             var ok = xhr && xhr.status >= 200 && xhr.status < 300;
-            var message = responseMessage(xhr);
+            var message = responseMessage(xhr, actionType);
             target.className = ok
                 ? 'rounded-lg border border-emerald-300 bg-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-950 shadow-sm dark:border-emerald-500/70 dark:bg-emerald-900 dark:text-white'
                 : 'rounded-lg border border-red-300 bg-red-100 px-4 py-3 text-sm font-semibold text-red-950 shadow-sm dark:border-red-500/70 dark:bg-red-900 dark:text-white';
@@ -197,16 +199,16 @@
             target.classList.remove('hidden');
         }
 
-        document.addEventListener('htmx:afterRequest', renderConnectionRequestFeedback);
-        document.addEventListener('htmx:responseError', renderConnectionRequestFeedback);
+        document.addEventListener('htmx:afterRequest', renderQuickActionFeedback);
+        document.addEventListener('htmx:responseError', renderQuickActionFeedback);
         document.addEventListener('click', function (event) {
             var closeButton = event.target && event.target.closest
-                ? event.target.closest('[data-connection-request-feedback-close]')
+                ? event.target.closest('[data-quick-action-feedback-close]')
                 : null;
             if (!closeButton) {
                 return;
             }
-            var target = document.getElementById('ont-connection-request-feedback');
+            var target = document.getElementById('ont-quick-action-feedback');
             if (target) {
                 target.classList.add('hidden');
             }

@@ -212,13 +212,12 @@
             <form method="POST" action="/admin/network/unconfigured-onts/refresh" class="flex flex-wrap items-center gap-2" x-data="{ submitting: false, canRefreshAutofind: {{ can_refresh_autofind|tojson }} }" @submit="submitting = true">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="olt_id" value="{{ filters.olt_id or '' }}">
-                <button type="submit" :disabled="submitting || !canRefreshAutofind" class="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition-colors dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300" :class="(submitting || !canRefreshAutofind) ? 'opacity-60 cursor-not-allowed' : 'hover:bg-emerald-100 dark:hover:bg-emerald-900/30'" title="{{ 'Run display ont autofind all on the selected OLT' if filters.olt_id else 'Select one OLT filter before refreshing' }}">
+                <button type="submit" :disabled="submitting || !canRefreshAutofind" class="inline-flex min-h-[44px] min-w-[9rem] items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 shadow-sm transition-colors dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-100" :class="(submitting || !canRefreshAutofind) ? 'opacity-60 cursor-not-allowed' : 'hover:bg-emerald-100 dark:hover:bg-emerald-900/50'" title="{{ 'Run display ont autofind all on the selected OLT' if filters.olt_id else 'Select one OLT filter before refreshing' }}">
                     <svg x-show="submitting" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span x-show="!submitting">Refresh OLT</span>
-                    <span x-show="submitting" x-cloak>Refreshing...</span>
+                    <span x-text="submitting ? 'Refreshing...' : 'Refresh OLT'">Refresh OLT</span>
                 </button>
             </form>
         </div>
