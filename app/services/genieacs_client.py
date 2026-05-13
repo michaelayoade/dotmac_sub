@@ -154,7 +154,7 @@ class GenieACSClient:
     # -------------------------------------------------------------------------
 
     def list_devices(
-        self, query: dict | None = None, projection: dict | None = None
+        self, query: dict | None = None, projection: dict | str | None = None
     ) -> list[dict[str, Any]]:
         """List devices with optional filtering.
 
@@ -169,7 +169,9 @@ class GenieACSClient:
         if query:
             params["query"] = json.dumps(query)
         if projection:
-            params["projection"] = json.dumps(projection)
+            params["projection"] = (
+                projection if isinstance(projection, str) else json.dumps(projection)
+            )
 
         response = self._request("GET", "/devices", params=params)
         return cast(list[dict[str, Any]], response.json())

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, false, func, or_, select
+from sqlalchemy import and_, false, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -704,6 +704,20 @@ class AcsServers(ListResponseMixin):
 
 
 class CpeDevices(ListResponseMixin):
+    _GENIEACS_SYNC_PROJECTION = ",".join(
+        (
+            "_id",
+            "_deviceId",
+            "_lastInform",
+            "Device.DeviceInfo.SerialNumber",
+            "Device.DeviceInfo.ProductClass",
+            "Device.ManagementServer.ConnectionRequestURL",
+            "InternetGatewayDevice.DeviceInfo.SerialNumber",
+            "InternetGatewayDevice.DeviceInfo.ProductClass",
+            "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
+        )
+    )
+
     @staticmethod
     def _clip_text(value: object | None, max_len: int) -> str | None:
         if value is None:
@@ -1008,7 +1022,9 @@ class CpeDevices(ListResponseMixin):
 
         try:
             client = create_genieacs_client(server.base_url)
-            devices = client.list_devices()
+            devices = client.list_devices(
+                projection=CpeDevices._GENIEACS_SYNC_PROJECTION
+            )
         except GenieACSError as e:
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
 
@@ -1117,6 +1133,45 @@ class CpeDevices(ListResponseMixin):
 
         db.commit()
 
+        synced_ont_status = 0
+        try:
+            result = db.execute(
+                text(
+                    """
+                    WITH latest AS (
+                        SELECT
+                            ont_unit_id,
+                            max(last_inform_at) AS last_inform_at
+                        FROM tr069_cpe_devices
+                        WHERE acs_server_id = :acs_server_id
+                          AND is_active = true
+                          AND ont_unit_id IS NOT NULL
+                          AND last_inform_at IS NOT NULL
+                        GROUP BY ont_unit_id
+                    )
+                    UPDATE ont_units AS ont
+                    SET
+                        acs_last_inform_at = latest.last_inform_at,
+                        last_seen_at = CASE
+                            WHEN ont.last_seen_at IS NULL
+                              OR ont.last_seen_at < latest.last_inform_at
+                            THEN latest.last_inform_at
+                            ELSE ont.last_seen_at
+                        END,
+                        updated_at = now()
+                    FROM latest
+                    WHERE ont.id = latest.ont_unit_id
+                      AND ont.acs_last_inform_at IS DISTINCT FROM latest.last_inform_at
+                    """
+                ),
+                {"acs_server_id": str(server.id)},
+            )
+            synced_ont_status = result.rowcount or 0
+            db.commit()
+        except Exception as e:
+            logger.warning("Bulk ONT ACS status refresh after sync failed: %s", e)
+            db.rollback()
+
         # Auto-link to ONTs by serial number
         auto_linked = 0
         explicit_links = 0
@@ -1205,6 +1260,7 @@ class CpeDevices(ListResponseMixin):
             "updated": updated,
             "total": len(devices),
             "auto_linked": auto_linked,
+            "synced_ont_status": synced_ont_status,
             "local_onts_checked": 0,
             "local_created": 0,
             "local_reactivated": 0,
