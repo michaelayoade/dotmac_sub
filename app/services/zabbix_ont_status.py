@@ -327,8 +327,14 @@ def get_olt_ont_summary_from_zabbix(
 
     try:
         client = ZabbixClient.from_env()
+        # ``olt.zabbix_host_id`` is ``str | None`` per the schema. This
+        # branch is gated above on the value being set; coerce to ``str``
+        # so the list literal type-checks without an inline suppression.
+        zabbix_host_id = str(olt.zabbix_host_id or "")
         items = client.get_items(
-            host_ids=[olt.zabbix_host_id], metric="ont.count", limit=10  # type: ignore[list-item]
+            host_ids=[zabbix_host_id],
+            metric="ont.count",
+            limit=10,
         )
     except ZabbixClientError as exc:
         if onts is not None:

@@ -28,7 +28,11 @@ def upgrade() -> None:
                             (
                                 (
                                     (
-                                        COALESCE(desired_config, '{}'::jsonb)
+                                        -- ``desired_config`` is JSON in the
+                                        -- squashed-from-models schema and
+                                        -- JSONB on pre-squash DBs. Cast so the
+                                        -- ``#-`` operator works either way.
+                                        COALESCE(desired_config::jsonb, '{}'::jsonb)
                                         #- '{tr069}'
                                     )
                                     #- '{authorization}'
