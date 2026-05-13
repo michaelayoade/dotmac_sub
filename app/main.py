@@ -51,6 +51,7 @@ _CORE_ROUTER_SPECS = [
     ("app.api.health", "router", "api", "none"),
     ("app.api.tr069_auth", "router", "api", "none"),
     ("app.api.tr069_inform", "router", "api", "none"),
+    ("app.api.reconcile_webhooks", "router", "api", "none"),
     ("app.api.search", "router", "api", "user"),
     ("app.api.network_ont_ops", "router", "api", "user"),
     ("app.api.network_olt_ops", "router", "api", "user"),
