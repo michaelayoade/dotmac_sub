@@ -24,6 +24,29 @@ applier are deliberately not re-exported here; they're implementation details
 of the reconciler and consumed only within this package.
 """
 
+from .actions import (
+    AcsAddObject,
+    AcsSetDhcpServer,
+    AcsSetManagementServer,
+    AcsSetNatEnabled,
+    AcsSetPppoe,
+    AcsSetWifiPassword,
+    AcsSetWifiSsid,
+    Action,
+    OltAuthorize,
+    OltClearIphost,
+    OltCreateServicePort,
+    OltDeleteServicePort,
+    OltIpconfig,
+    OltModifyDescription,
+    OltModifyLineProfile,
+    OltModifyServiceProfile,
+    OltOmciInternetConfig,
+    OltOmciPppoe,
+    OltOmciWanConfig,
+    OltReset,
+    OltTr069ServerConfig,
+)
 from .adapters import (
     apply_proposed_change,
     desired_from_ont_unit,
@@ -31,6 +54,7 @@ from .adapters import (
     upsert_ont_observation,
 )
 from .locking import LockConflict, LockError, OntNotFound, acquire_reconcile_lock
+from .planner import Plan, compute_plan
 from .readers import ReadResult, read_acs_state, read_olt_state
 from .state import (
     AcsObservedFields,
@@ -52,16 +76,38 @@ from .state import (
 from .validator import Validation, validate_desired
 
 __all__ = (
+    "AcsAddObject",
     "AcsObservedFields",
+    "AcsSetDhcpServer",
+    "AcsSetManagementServer",
+    "AcsSetNatEnabled",
+    "AcsSetPppoe",
+    "AcsSetWifiPassword",
+    "AcsSetWifiSsid",
+    "Action",
     "AppliedAction",
     "Drift",
     "LockConflict",
     "LockError",
     "ObserveSurface",
+    "OltAuthorize",
+    "OltClearIphost",
+    "OltCreateServicePort",
+    "OltDeleteServicePort",
+    "OltIpconfig",
+    "OltModifyDescription",
+    "OltModifyLineProfile",
+    "OltModifyServiceProfile",
     "OltObservedFields",
+    "OltOmciInternetConfig",
+    "OltOmciPppoe",
+    "OltOmciWanConfig",
+    "OltReset",
+    "OltTr069ServerConfig",
     "OntDesiredState",
     "OntNotFound",
     "OntObservedState",
+    "Plan",
     "PppoeProvisioningMethod",
     "ReadResult",
     "ReconcileFailure",
@@ -74,6 +120,7 @@ __all__ = (
     "WriteSurface",
     "acquire_reconcile_lock",
     "apply_proposed_change",
+    "compute_plan",
     "desired_from_ont_unit",
     "observed_from_ont_observation",
     "read_acs_state",
