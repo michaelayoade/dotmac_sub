@@ -24,6 +24,12 @@ applier are deliberately not re-exported here; they're implementation details
 of the reconciler and consumed only within this package.
 """
 
+from .adapters import (
+    apply_proposed_change,
+    desired_from_ont_unit,
+    observed_from_ont_observation,
+    upsert_ont_observation,
+)
 from .state import (
     AcsObservedFields,
     AppliedAction,
@@ -60,5 +66,9 @@ __all__ = (
     "Validation",
     "WanMode",
     "WriteSurface",
+    "apply_proposed_change",
+    "desired_from_ont_unit",
+    "observed_from_ont_observation",
+    "upsert_ont_observation",
     "validate_desired",
 )
