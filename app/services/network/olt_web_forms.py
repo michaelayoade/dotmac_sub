@@ -87,6 +87,9 @@ def _build_config_pack(values: Mapping[str, Any]) -> dict[str, object]:
         "iptv_vlan_id": _uuid_to_str(values.get("iptv_vlan_id")),
         "internet_config_ip_index": values.get("default_internet_config_ip_index"),
         "wan_config_profile_id": values.get("default_wan_config_profile_id"),
+        "allow_zero_wan_config_profile_id": bool(
+            values.get("allow_zero_wan_config_profile_id")
+        ),
         "cr_username": values.get("default_cr_username"),
         "cr_password": encrypted_cr_password,
         "pppoe_wcd_index": values.get("pppoe_wcd_index"),
@@ -199,6 +202,12 @@ def parse_form_values(form: Mapping[str, Any]) -> dict[str, object]:
         ),
         "default_wan_config_profile_id": _parse_int_or_none(
             str(form.get("default_wan_config_profile_id", ""))
+        ),
+        "allow_zero_wan_config_profile_id": (
+            str(form.get("allow_zero_wan_config_profile_id", "")).lower()
+            in {"1", "true", "on", "yes"}
+            if "allow_zero_wan_config_profile_id" in form
+            else None
         ),
         # Management IP pool
         "mgmt_ip_pool_id": _parse_uuid_or_none(str(form.get("mgmt_ip_pool_id", ""))),
@@ -519,6 +528,9 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         default_tr069_olt_profile_id=pack.get("tr069_olt_profile_id"),
         default_internet_config_ip_index=pack.get("internet_config_ip_index"),
         default_wan_config_profile_id=pack.get("wan_config_profile_id"),
+        allow_zero_wan_config_profile_id=bool(
+            pack.get("allow_zero_wan_config_profile_id")
+        ),
         mgmt_ip_pool_id=getattr(olt, "mgmt_ip_pool_id", None),
         default_cr_username=pack.get("cr_username"),
         default_cr_password=pack.get("cr_password"),
@@ -650,6 +662,12 @@ def update_olt(
             payload_values["default_cr_password"] = getattr(
                 current, "config_pack", {}
             ).get("cr_password")
+        if payload_values.get("allow_zero_wan_config_profile_id") is None:
+            payload_values["allow_zero_wan_config_profile_id"] = bool(
+                getattr(current, "config_pack", {}).get(
+                    "allow_zero_wan_config_profile_id"
+                )
+            )
         # Preserve SNMP fields when form doesn't submit new values
         if payload_values.get("snmp_community") is None:
             payload_values["snmp_community"] = getattr(

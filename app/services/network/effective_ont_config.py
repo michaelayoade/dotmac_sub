@@ -128,6 +128,23 @@ def _nonzero_int_or_none(value: Any) -> int | None:
     return parsed if parsed and parsed > 0 else None
 
 
+def _wan_config_profile_id_or_none(
+    value: Any, *, allow_zero_profile_id: bool = False
+) -> int | None:
+    """Resolve WAN profile IDs, optionally preserving profile-id 0.
+
+    Most OLTs should treat 0 as unset, but some imported Huawei configs define
+    and use profile-id 0 as a real routed/NAT WAN profile. Those OLTs must opt in
+    through the config pack.
+    """
+    parsed = _int_or_none(value)
+    if parsed is None:
+        return None
+    if parsed == 0 and not allow_zero_profile_id:
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def internet_wcd_index_from_effective_values(
     values: dict[str, Any],
     *,
@@ -366,14 +383,15 @@ def _values_from_assignment(
         "internet_config_ip_index": _coalesce_mapping_config(
             profile_mapping, config_pack, "internet_config_ip_index"
         ),
-        # wan_config_profile_id=0 is silently a no-op on Huawei OLTs (ont wan-config
-        # profile-id 0 accepts the write but doesn't promote the WAN to routed/NAT
-        # mode). Treat it the same as "not configured" so callers fall back to a
-        # working path (TR-069) instead of emitting a useless OMCI step.
-        "wan_config_profile_id": _nonzero_int_or_none(
+        # profile-id 0 is normally treated as unset, unless the OLT config pack
+        # explicitly marks it as a valid live WAN profile.
+        "wan_config_profile_id": _wan_config_profile_id_or_none(
             _coalesce_mapping_config(
                 profile_mapping, config_pack, "wan_config_profile_id"
-            )
+            ),
+            allow_zero_profile_id=bool(
+                getattr(config_pack, "allow_zero_wan_config_profile_id", False)
+            ),
         ),
         "wan_provisioning_mode": _coalesce_mapping_config(
             profile_mapping, config_pack, "wan_provisioning_mode", "omci_wan_config"

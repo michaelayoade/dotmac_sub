@@ -15,6 +15,71 @@ from app.services.network.olt_ssh_ont._common import (
 logger = logging.getLogger(__name__)
 
 
+def _is_ma5800(olt: OLTDevice) -> bool:
+    return "ma5800" in str(getattr(olt, "model", "") or "").lower()
+
+
+def _wan_config_display_commands(olt: OLTDevice, fsp: str, ont_id: int) -> list[str]:
+    parts = fsp.split("/")
+    port_num = parts[2] if len(parts) > 2 else "0"
+    full_cmd = f"display ont wan-config {fsp} {ont_id}"
+    short_cmd = f"display ont wan-config {port_num} {ont_id}"
+    if _is_ma5800(olt):
+        return [full_cmd, short_cmd]
+    return [short_cmd, full_cmd]
+
+
+def _parse_wan_config_display(output: str) -> dict[str, int | str] | None:
+    ip_match = re.search(r"WAN IP index\s*:\s*(\d+)", output, re.IGNORECASE)
+    profile_match = re.search(r"WAN profile ID\s*:\s*(\d+)", output, re.IGNORECASE)
+    if not ip_match or not profile_match:
+        return None
+    name_match = re.search(r"WAN profile name\s*:\s*(.+)", output, re.IGNORECASE)
+    return {
+        "ip_index": int(ip_match.group(1)),
+        "profile_id": int(profile_match.group(1)),
+        "profile_name": name_match.group(1).strip() if name_match else "",
+    }
+
+
+def read_ont_wan_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+) -> tuple[bool, str, dict[str, int | str] | None]:
+    """Read ONT WAN profile binding, using model-specific Huawei syntax."""
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err, None
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (*_SSH_CONNECTION_ERRORS, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        errors: list[str] = []
+        for command in _wan_config_display_commands(olt, fsp, ont_id):
+            output = core._run_huawei_cmd(channel, command)
+            parsed = _parse_wan_config_display(output)
+            if parsed:
+                return True, command, parsed
+            if core.is_error_output(output):
+                errors.append(output.strip()[-180:])
+                continue
+            errors.append(f"Unrecognized WAN config readback from {command!r}")
+        return False, "; ".join(errors), None
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()
+
+
 def _mask_pppoe_password(text: str) -> str:
     return re.sub(r"(password\s+)\S+", r"\1***", text)
 
@@ -66,7 +131,7 @@ def configure_ont_wan_config(
     """Set route+NAT mode on ONT management WAN via wan-config."""
     parts = fsp.split("/")
     port_num = parts[2] if len(parts) > 2 else "0"
-    return _run_ont_config_command(
+    ok, message = _run_ont_config_command(
         olt,
         fsp,
         f"ont wan-config {port_num} {ont_id} ip-index {ip_index} profile-id {profile_id}",
@@ -74,6 +139,21 @@ def configure_ont_wan_config(
             f"WAN route+NAT mode set (ip-index {ip_index}, profile-id {profile_id})"
         ),
     )
+    if not ok:
+        return ok, message
+
+    read_ok, read_message, readback = read_ont_wan_config(olt, fsp, ont_id)
+    if not read_ok or not readback:
+        return False, f"{message}; readback failed: {read_message}"
+    if readback.get("ip_index") != ip_index or readback.get("profile_id") != profile_id:
+        return (
+            False,
+            (
+                f"{message}; readback mismatch: "
+                f"ip-index={readback.get('ip_index')} profile-id={readback.get('profile_id')}"
+            ),
+        )
+    return True, f"{message}; verified via {read_message}"
 
 
 def clear_ont_wan_config(

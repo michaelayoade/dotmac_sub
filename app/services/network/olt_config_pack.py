@@ -82,6 +82,7 @@ class OltConfigPack:
     # 0+ = valid ip-index for ont internet-config command
     internet_config_ip_index: int | None = None
     wan_config_profile_id: int | None = None  # None = skip wan-config; 0+ = valid profile
+    allow_zero_wan_config_profile_id: bool = False
     wan_provisioning_mode: str = "omci_wan_config"
     supports_ont_home_gateway_config: bool = False
 
@@ -163,6 +164,7 @@ class OltConfigPack:
             "internet_ip_index": self.internet_ip_index,
             "internet_config_ip_index": self.internet_config_ip_index,
             "wan_config_profile_id": self.wan_config_profile_id,
+            "allow_zero_wan_config_profile_id": self.allow_zero_wan_config_profile_id,
             "wan_provisioning_mode": self.wan_provisioning_mode,
             "supports_ont_home_gateway_config": self.supports_ont_home_gateway_config,
             "internet_gem_index": self.internet_gem_index,
@@ -366,6 +368,9 @@ def resolve_olt_config_pack(
         # Provisioning knobs (capability-gated above)
         internet_config_ip_index=internet_config_ip_index,
         wan_config_profile_id=wan_config_profile_id,
+        allow_zero_wan_config_profile_id=bool(
+            pack.get("allow_zero_wan_config_profile_id")
+        ),
         wan_provisioning_mode=wan_provisioning_mode,
         supports_ont_home_gateway_config=bool(
             getattr(olt, "supports_ont_home_gateway_config", False)

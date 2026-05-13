@@ -125,6 +125,7 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
         "tr069_olt_profile_id": 30,
         "internet_config_ip_index": 0,
         "wan_config_profile_id": 5,
+        "allow_zero_wan_config_profile_id": True,
         "cr_username": "pack-cr-user",
         "cr_password": "pack-cr-pass",
         "internet_vlan_id": str(internet_vlan.id),
@@ -1385,6 +1386,13 @@ def test_ont_config_form_has_single_operator_path():
     assert "vlans or []" not in source
     assert 'hx-indicator="find .config-spinner"' not in source
     assert 'hx-indicator="#config-spinner-wan"' in source
+    assert "activeConfigScope" in source
+    assert 'class="htmx-indicator h-' not in source
+    assert 'x-show="activeConfigScope === \'management\'"' in source
+    assert 'x-show="activeConfigScope === \'wan\'"' in source
+    assert 'x-show="activeConfigScope === \'lan\'"' in source
+    assert 'x-show="activeConfigScope === \'wifi\'"' in source
+    assert 'x-show="activeConfigScope === \'all\'"' in source
     assert 'name="push_to_device" value="true"' in source
     assert "Save and apply device changes" in source
     assert "/wan/probe" not in panel
