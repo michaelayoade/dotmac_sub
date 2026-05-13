@@ -1,0 +1,26 @@
+[Unit]
+Description=DotMac ONT Reconciliation Sweeper
+Documentation=https://github.com/dotmac/dotmac_sub
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dotmac_sub
+EnvironmentFile=-/opt/dotmac_sub/.env
+# Same Docker compose service as the app — run inside the app container so
+# Python imports + DB connection settings are identical.
+ExecStart=/usr/bin/docker compose -f /opt/dotmac_sub/docker-compose.yml exec -T app python scripts/run_sweeper.py
+Restart=always
+RestartSec=10
+# The sweep loop catches its own exceptions; SIGTERM triggers clean shutdown
+# via the signal handlers in SweepLoop.install_signal_handlers().
+KillSignal=SIGTERM
+TimeoutStopSec=90
+# Operator should be able to see the sweep cycle logs via journalctl.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dotmac-reconcile-sweeper
+
+[Install]
+WantedBy=multi-user.target
