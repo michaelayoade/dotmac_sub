@@ -21,32 +21,44 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
 
-    op.execute(
-        """
-        UPDATE ont_units AS ou
-        SET wan_vlan_id = NULL
-        FROM vlans AS v
-        WHERE ou.wan_vlan_id = v.id
-          AND (
-            ou.olt_device_id IS NULL
-            OR v.olt_device_id IS NULL
-            OR ou.olt_device_id <> v.olt_device_id
-          )
-        """
-    )
-    op.execute(
-        """
-        UPDATE ont_units AS ou
-        SET mgmt_vlan_id = NULL
-        FROM vlans AS v
-        WHERE ou.mgmt_vlan_id = v.id
-          AND (
-            ou.olt_device_id IS NULL
-            OR v.olt_device_id IS NULL
-            OR ou.olt_device_id <> v.olt_device_id
-          )
-        """
-    )
+    # The squashed initial migration (001) builds tables directly from the
+    # current ORM models, which no longer carry the ``wan_vlan_id`` /
+    # ``mgmt_vlan_id`` columns. On a fresh squash-built DB this migration
+    # therefore has no per-column work to do, and the UPDATE-to-NULL +
+    # FK-rewrite would fail with "column does not exist". Skip the column-
+    # specific steps when the columns are absent.
+    ont_columns = {c["name"] for c in inspector.get_columns("ont_units")}
+    has_wan_vlan = "wan_vlan_id" in ont_columns
+    has_mgmt_vlan = "mgmt_vlan_id" in ont_columns
+
+    if has_wan_vlan:
+        op.execute(
+            """
+            UPDATE ont_units AS ou
+            SET wan_vlan_id = NULL
+            FROM vlans AS v
+            WHERE ou.wan_vlan_id = v.id
+              AND (
+                ou.olt_device_id IS NULL
+                OR v.olt_device_id IS NULL
+                OR ou.olt_device_id <> v.olt_device_id
+              )
+            """
+        )
+    if has_mgmt_vlan:
+        op.execute(
+            """
+            UPDATE ont_units AS ou
+            SET mgmt_vlan_id = NULL
+            FROM vlans AS v
+            WHERE ou.mgmt_vlan_id = v.id
+              AND (
+                ou.olt_device_id IS NULL
+                OR v.olt_device_id IS NULL
+                OR ou.olt_device_id <> v.olt_device_id
+              )
+            """
+        )
 
     unique_constraints = {c["name"] for c in inspector.get_unique_constraints("vlans")}
     if "uq_vlans_olt_id" not in unique_constraints:
@@ -57,17 +69,17 @@ def upgrade() -> None:
         )
 
     foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("ont_units")}
-    if "ont_units_wan_vlan_id_fkey" in foreign_keys:
+    if has_wan_vlan and "ont_units_wan_vlan_id_fkey" in foreign_keys:
         op.drop_constraint(
             "ont_units_wan_vlan_id_fkey", "ont_units", type_="foreignkey"
         )
-    if "ont_units_mgmt_vlan_id_fkey" in foreign_keys:
+    if has_mgmt_vlan and "ont_units_mgmt_vlan_id_fkey" in foreign_keys:
         op.drop_constraint(
             "ont_units_mgmt_vlan_id_fkey", "ont_units", type_="foreignkey"
         )
 
     foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys("ont_units")}
-    if "fk_ont_units_wan_vlan_olt_scope" not in foreign_keys:
+    if has_wan_vlan and "fk_ont_units_wan_vlan_olt_scope" not in foreign_keys:
         op.create_foreign_key(
             "fk_ont_units_wan_vlan_olt_scope",
             "ont_units",
@@ -75,7 +87,7 @@ def upgrade() -> None:
             ["olt_device_id", "wan_vlan_id"],
             ["olt_device_id", "id"],
         )
-    if "fk_ont_units_mgmt_vlan_olt_scope" not in foreign_keys:
+    if has_mgmt_vlan and "fk_ont_units_mgmt_vlan_olt_scope" not in foreign_keys:
         op.create_foreign_key(
             "fk_ont_units_mgmt_vlan_olt_scope",
             "ont_units",
