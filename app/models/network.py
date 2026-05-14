@@ -1681,7 +1681,10 @@ class OntUnit(Base):
         DateTime(timezone=True)
     )
     desired_config: Mapped[dict | None] = mapped_column(
-        JSON,
+        # JSONB rather than JSON so the ``#-`` / ``||`` / ``->`` operators
+        # used by the desired_config migration chain work uniformly. SA's
+        # ``dict``-mapped surface is the same for both column types.
+        JSONB,
         default=dict,
         doc="Per-ONT desired configuration intent. OLT defaults are resolved from OltConfigPack.",
     )
