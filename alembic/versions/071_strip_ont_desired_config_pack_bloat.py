@@ -70,7 +70,7 @@ def upgrade() -> None:
         SET desired_config = pruned_management.config
         FROM pruned_management
         WHERE ou.id = pruned_management.id
-          AND ou.desired_config IS DISTINCT FROM pruned_management.config
+          AND ou.desired_config::jsonb IS DISTINCT FROM pruned_management.config
         """
     )
 
