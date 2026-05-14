@@ -118,7 +118,7 @@ def calculate_delay(attempt: int, config: BackoffConfig | None = None) -> float:
     # Apply jitter: random variation of +/- jitter%
     if config.jitter > 0:
         jitter_range = capped_delay * config.jitter
-        jitter_offset = random.uniform(-jitter_range, jitter_range)  # noqa: S311
+        jitter_offset = random.uniform(-jitter_range, jitter_range)  # noqa: S311  # nosec B311
         final_delay = capped_delay + jitter_offset
     else:
         final_delay = capped_delay

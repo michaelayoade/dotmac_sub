@@ -18,7 +18,7 @@ from app.syslog.parsers import huawei_parser
 logger = logging.getLogger(__name__)
 
 # Configuration
-SYSLOG_LISTEN_HOST = os.getenv("SYSLOG_LISTEN_HOST", "0.0.0.0")  # noqa: S104
+SYSLOG_LISTEN_HOST = os.getenv("SYSLOG_LISTEN_HOST", "0.0.0.0")  # noqa: S104  # nosec B104
 SYSLOG_LISTEN_PORT = int(os.getenv("SYSLOG_LISTEN_PORT", "514"))
 SYSLOG_ENABLED = os.getenv("SYSLOG_ENABLED", "true").lower() in ("1", "true", "yes")
 

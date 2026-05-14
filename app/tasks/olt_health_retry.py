@@ -107,7 +107,7 @@ def _retry_ping_check(db, device) -> bool:
     try:
         # Simple ICMP ping with 2 second timeout, 2 attempts
         result = subprocess.run(
-            ["ping", "-c", "2", "-W", "2", device.mgmt_ip],
+            ["/bin/ping", "-c", "2", "-W", "2", device.mgmt_ip],
             capture_output=True,
             timeout=10,
         )
