@@ -105,6 +105,12 @@ def _install_idempotent_schema_ops() -> None:
     _original_add_column = op.add_column
     _original_drop_column = op.drop_column
     _original_create_table = op.create_table
+    _original_drop_table = op.drop_table
+    _original_create_index = op.create_index
+    _original_drop_index = op.drop_index
+    _original_create_unique_constraint = op.create_unique_constraint
+    _original_create_check_constraint = op.create_check_constraint
+    _original_create_foreign_key = op.create_foreign_key
 
     def _columns_of(table_name: str) -> set[str]:
         try:
@@ -117,6 +123,27 @@ def _install_idempotent_schema_ops() -> None:
         try:
             inspector = sa.inspect(op.get_bind())
             return table_name in inspector.get_table_names()
+        except Exception:
+            return False
+
+    def _index_exists(table_name: str, index_name: str) -> bool:
+        try:
+            inspector = sa.inspect(op.get_bind())
+            return any(
+                ix["name"] == index_name for ix in inspector.get_indexes(table_name)
+            )
+        except Exception:
+            return False
+
+    def _constraint_exists(table_name: str, constraint_name: str) -> bool:
+        try:
+            inspector = sa.inspect(op.get_bind())
+            unique = {c["name"] for c in inspector.get_unique_constraints(table_name)}
+            checks = {
+                c["name"] for c in inspector.get_check_constraints(table_name)
+            }
+            fks = {fk["name"] for fk in inspector.get_foreign_keys(table_name)}
+            return constraint_name in (unique | checks | fks)
         except Exception:
             return False
 
@@ -135,9 +162,51 @@ def _install_idempotent_schema_ops() -> None:
             return None
         return _original_create_table(table_name, *args, **kwargs)
 
+    def _safe_drop_table(table_name, *args, **kwargs):
+        if not _table_exists(table_name):
+            return None
+        return _original_drop_table(table_name, *args, **kwargs)
+
+    def _safe_create_index(index_name, table_name, *args, **kwargs):
+        if _index_exists(table_name, index_name):
+            return None
+        return _original_create_index(index_name, table_name, *args, **kwargs)
+
+    def _safe_drop_index(index_name, table_name=None, *args, **kwargs):
+        if table_name and not _index_exists(table_name, index_name):
+            return None
+        return _original_drop_index(index_name, table_name, *args, **kwargs)
+
+    def _safe_create_unique_constraint(constraint_name, table_name, *args, **kwargs):
+        if _constraint_exists(table_name, constraint_name):
+            return None
+        return _original_create_unique_constraint(
+            constraint_name, table_name, *args, **kwargs
+        )
+
+    def _safe_create_check_constraint(constraint_name, table_name, *args, **kwargs):
+        if _constraint_exists(table_name, constraint_name):
+            return None
+        return _original_create_check_constraint(
+            constraint_name, table_name, *args, **kwargs
+        )
+
+    def _safe_create_foreign_key(constraint_name, source_table, *args, **kwargs):
+        if constraint_name and _constraint_exists(source_table, constraint_name):
+            return None
+        return _original_create_foreign_key(
+            constraint_name, source_table, *args, **kwargs
+        )
+
     op.add_column = _safe_add_column
     op.drop_column = _safe_drop_column
     op.create_table = _safe_create_table
+    op.drop_table = _safe_drop_table
+    op.create_index = _safe_create_index
+    op.drop_index = _safe_drop_index
+    op.create_unique_constraint = _safe_create_unique_constraint
+    op.create_check_constraint = _safe_create_check_constraint
+    op.create_foreign_key = _safe_create_foreign_key
 
 
 def run_migrations_offline() -> None:
