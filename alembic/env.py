@@ -139,9 +139,7 @@ def _install_idempotent_schema_ops() -> None:
         try:
             inspector = sa.inspect(op.get_bind())
             unique = {c["name"] for c in inspector.get_unique_constraints(table_name)}
-            checks = {
-                c["name"] for c in inspector.get_check_constraints(table_name)
-            }
+            checks = {c["name"] for c in inspector.get_check_constraints(table_name)}
             fks = {fk["name"] for fk in inspector.get_foreign_keys(table_name)}
             return constraint_name in (unique | checks | fks)
         except Exception:
