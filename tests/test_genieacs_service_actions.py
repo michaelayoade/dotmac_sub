@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_genieacs_service_receives_inform(monkeypatch) -> None:
     from app.services import tr069 as tr069_service
@@ -644,6 +646,14 @@ def test_apply_acs_config_task_executes_genieacs_service_method(monkeypatch) -> 
     assert session.closed is True
 
 
+@pytest.mark.skip(
+    reason=(
+        "config_setters.set_wifi_ssid was reworked to route through "
+        "reconcile_ont (commit 3dc68c1a); it no longer dispatches to "
+        "genieacs_service per call. The new contract is covered end-to-end "
+        "by tests/test_pppoe_ssid_reconcile.py and tests/test_wifi_endpoint_reconcile.py."
+    )
+)
 def test_web_ont_config_writer_is_resolved_per_call(monkeypatch) -> None:
     from app.services.network.ont_action_common import ActionResult
     from app.services.web_network_ont_actions import config_setters

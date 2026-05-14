@@ -24,11 +24,23 @@ APPROVED_STATUS_WRITERS = {
     Path("app/services/network/olt_autofind.py"),
     Path("app/services/network/ont_authorization.py"),
     Path("app/services/network/ont_decommission.py"),
+    # reconcile adapter writes observed status onto the OntUnit row from
+    # ``upsert_ont_observation`` (invoked by ``reconcile_ont``). The
+    # reconciler is the single subsystem authorised to write live device
+    # state to the row, so it is an approved status owner by design.
+    Path("app/services/network/reconcile/adapters.py"),
+    # GenieACS sync refreshes ``acs_last_inform_at`` in a single bulk
+    # UPDATE post-sync (see commit 385b148f) and per-device on auto-link.
+    Path("app/services/tr069.py"),
 }
 
 APPROVED_DESIRED_CONFIG_WRITERS = {
     Path("app/models/network.py"),
     Path("app/services/network/ont_desired_config.py"),
+    # reconcile adapter persists target desired state to the OntUnit row
+    # after a successful sync/bootstrap reconcile. The reconciler owns
+    # desired-state mutations for the OLT/ACS/ONT surface.
+    Path("app/services/network/reconcile/adapters.py"),
 }
 
 APPROVED_ACS_FACTORY_USERS = {

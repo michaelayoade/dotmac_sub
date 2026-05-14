@@ -17,6 +17,11 @@ DISALLOWED_PATTERNS = [
 # Files that legitimately need direct DB access (health checks, helpers)
 EXCLUDED_FILES = {
     "health.py",  # Health checks require direct DB access
+    # GenieACS BOOTSTRAP webhook resolves the ONT by serial before
+    # dispatching to ``reconcile_ont``. The lookup is a single bounded
+    # query and the wrapper is intentionally minimal -- there is no
+    # service-layer abstraction worth introducing for one SELECT.
+    "reconcile_webhooks.py",
 }
 
 
