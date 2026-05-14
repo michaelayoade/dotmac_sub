@@ -369,6 +369,7 @@ def test_authorization_cleans_stale_registration_before_retry(
             *,
             line_profile_id=None,
             service_profile_id=None,
+            description=None,
         ):
             calls.append(("authorize", fsp, serial_number))
             if len([call for call in calls if call[0] == "authorize"]) == 1:
@@ -451,6 +452,7 @@ def test_authorization_reports_partial_failure_when_local_record_setup_fails(
             *,
             line_profile_id=None,
             service_profile_id=None,
+            description=None,
         ):
             return SimpleNamespace(
                 success=True,
@@ -524,6 +526,7 @@ def test_authorization_links_assignment_before_reporting_success(
             *,
             line_profile_id=None,
             service_profile_id=None,
+            description=None,
         ):
             return SimpleNamespace(
                 success=True,
@@ -597,6 +600,7 @@ def test_authorization_reports_partial_failure_when_assignment_link_fails(
             *,
             line_profile_id=None,
             service_profile_id=None,
+            description=None,
         ):
             return SimpleNamespace(
                 success=True,
