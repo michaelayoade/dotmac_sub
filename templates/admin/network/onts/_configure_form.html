@@ -433,7 +433,11 @@
                     </label>
                     <select id="pppoe_wcd_index" name="pppoe_wcd_index"
                             class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if pppoe_wcd_index_override is none %}selected{% endif %}>Inherit{% if pppoe_wcd_index_default is not none %} ({{ pppoe_wcd_index_default }}){% endif %}</option>
+                        {# value=0 maps to "clear override". An empty
+                           string would be parsed as "no change" and would
+                           strand a previously-set override when the
+                           operator switches back to Inherit. #}
+                        <option value="0" {% if pppoe_wcd_index_override is none %}selected{% endif %}>Inherit{% if pppoe_wcd_index_default is not none %} ({{ pppoe_wcd_index_default }}){% endif %}</option>
                         {% for slot in [1, 2, 3, 4] %}
                         <option value="{{ slot }}" {% if pppoe_wcd_index_override == slot %}selected{% endif %}>WCD {{ slot }}</option>
                         {% endfor %}
@@ -448,7 +452,7 @@
                     </label>
                     <select id="mgmt_wcd_index" name="mgmt_wcd_index"
                             class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if mgmt_wcd_index_override is none %}selected{% endif %}>Inherit{% if mgmt_wcd_index_default is not none %} ({{ mgmt_wcd_index_default }}){% endif %}</option>
+                        <option value="0" {% if mgmt_wcd_index_override is none %}selected{% endif %}>Inherit{% if mgmt_wcd_index_default is not none %} ({{ mgmt_wcd_index_default }}){% endif %}</option>
                         {% for slot in [1, 2, 3, 4] %}
                         <option value="{{ slot }}" {% if mgmt_wcd_index_override == slot %}selected{% endif %}>WCD {{ slot }}</option>
                         {% endfor %}
@@ -463,7 +467,7 @@
                     </label>
                     <select id="voip_wcd_index" name="voip_wcd_index"
                             class="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="" {% if voip_wcd_index_override is none %}selected{% endif %}>Inherit{% if voip_wcd_index_default is not none %} ({{ voip_wcd_index_default }}){% endif %}</option>
+                        <option value="0" {% if voip_wcd_index_override is none %}selected{% endif %}>Inherit{% if voip_wcd_index_default is not none %} ({{ voip_wcd_index_default }}){% endif %}</option>
                         {% for slot in [1, 2, 3, 4] %}
                         <option value="{{ slot }}" {% if voip_wcd_index_override == slot %}selected{% endif %}>WCD {{ slot }}</option>
                         {% endfor %}
