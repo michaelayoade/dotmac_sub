@@ -402,15 +402,37 @@ def _values_from_assignment(
             config_pack.supports_ont_home_gateway_config if config_pack else False
         ),
         "pppoe_omci_vlan": None,
-        # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i})
-        "pppoe_wcd_index": _coalesce_mapping_config(
+        # TR-069 WCD indices (OLT-provisioning-specific, determines WANConnectionDevice.{i}).
+        # Per-ONT override (desired_config) wins over per-OLT default
+        # (profile mapping / config pack). The defaults are also surfaced
+        # under ``*_wcd_index_default`` so the form can render an "inherit"
+        # label distinct from an explicit operator override.
+        "pppoe_wcd_index_default": _coalesce_mapping_config(
             profile_mapping, config_pack, "pppoe_wcd_index"
         ),
-        "mgmt_wcd_index": _coalesce_mapping_config(
+        "mgmt_wcd_index_default": _coalesce_mapping_config(
             profile_mapping, config_pack, "mgmt_wcd_index"
         ),
-        "voip_wcd_index": _coalesce_mapping_config(
+        "voip_wcd_index_default": _coalesce_mapping_config(
             profile_mapping, config_pack, "voip_wcd_index"
+        ),
+        "pppoe_wcd_index_override": _int_or_none(cfg("wan", "pppoe_wcd_index")),
+        "mgmt_wcd_index_override": _int_or_none(cfg("management", "wcd_index")),
+        "voip_wcd_index_override": _int_or_none(cfg("voip", "wcd_index")),
+        "pppoe_wcd_index": _int_or_none(cfg("wan", "pppoe_wcd_index"))
+        or _coalesce_mapping_config(profile_mapping, config_pack, "pppoe_wcd_index"),
+        "mgmt_wcd_index": _int_or_none(cfg("management", "wcd_index"))
+        or _coalesce_mapping_config(profile_mapping, config_pack, "mgmt_wcd_index"),
+        "voip_wcd_index": _int_or_none(cfg("voip", "wcd_index"))
+        or _coalesce_mapping_config(profile_mapping, config_pack, "voip_wcd_index"),
+        # Per-ONT OLT service-port indices. Currently there's no per-OLT
+        # default — the reconciler allocates on first provision when these
+        # are None, and the validator rejects post-allocation changes.
+        "mgmt_service_port_index": _int_or_none(
+            cfg("olt", "mgmt_service_port_index")
+        ),
+        "wan_service_port_index": _int_or_none(
+            cfg("olt", "wan_service_port_index")
         ),
         "authorization_line_profile_id": authorization_line_profile_id,
         "authorization_service_profile_id": authorization_service_profile_id,

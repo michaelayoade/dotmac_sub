@@ -759,3 +759,179 @@ def test_apply_uses_passthrough_when_no_resolver_provided():
     )
     apply_plan(plan, ctx)
     assert olt.calls[0][2]["password"] == "literal-pw"
+
+
+# ── Post-addObject WAN PPP instance discovery ───────────────────────────────
+
+
+class _RefreshAwareAcsClient(_StubAcsClient):
+    """Extends _StubAcsClient with refresh_object + list_devices, so the
+    applier's post-addObject discovery probe can run. ``post_refresh_doc``
+    is what list_devices returns after a refresh — the test arranges this
+    to simulate the device's reported instance index."""
+
+    def __init__(self, *, post_refresh_doc=None, **kwargs):
+        super().__init__(**kwargs)
+        self._post_refresh_doc = post_refresh_doc
+
+    def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+        self.calls.append(
+            ("refresh_object", (device_id, object_path), {"allow_when_pending": allow_when_pending})
+        )
+        return {"_id": "refresh-task"}
+
+    def list_devices(self, query=None, projection=None):
+        self.calls.append(("list_devices", (query, projection), {}))
+        return [self._post_refresh_doc] if self._post_refresh_doc else []
+
+
+def _wan_ppp_doc(*, wcd: int, instance_keys: list[int]) -> dict:
+    """Build a minimal GenieACS device document with the named
+    WANPPPConnection child instances under the given WCD slot."""
+    children = {str(k): {"_object": True} for k in instance_keys}
+    return {
+        "_id": "00259E-HG8546M-HWTC7C7E1D92",
+        "InternetGatewayDevice": {
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        str(wcd): {"WANPPPConnection": children}
+                    }
+                }
+            }
+        },
+    }
+
+
+def test_acs_add_object_records_device_returned_wan_ppp_instance_for_downstream_writes():
+    """The planner predicts WANPPPConnection.1 by default, but the device's
+    monotonic instance counter may have advanced past .1 (when prior cycles
+    created and deleted instances). After addObject, the applier refreshes
+    the parent and reads back the highest child key, then uses that index
+    for downstream AcsSetPppoe / AcsSetNatEnabled. Without this, the
+    Username/Password push lands on a non-existent .1 path and silently
+    no-ops on HG8546M V5R019C10S100 — exactly the Matrix Global Apartment
+    bug class."""
+    acs = _RefreshAwareAcsClient(
+        post_refresh_doc=_wan_ppp_doc(wcd=2, instance_keys=[3]),
+    )
+    ctx = _ctx(acs_client=acs)
+    plan = _plan(
+        AcsAddObject(
+            device_id="00259E-HG8546M-HWTC7C7E1D92",
+            object_path="InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection",
+        ),
+        AcsSetPppoe(
+            device_id="00259E-HG8546M-HWTC7C7E1D92",
+            wcd_index=2,
+            instance_index=1,  # planner's default guess
+            username="100025915",
+            password_ref="g2qMjOz7",
+            vlan=203,
+        ),
+        AcsSetNatEnabled(
+            device_id="00259E-HG8546M-HWTC7C7E1D92",
+            wcd_index=2,
+            instance_index=1,  # planner's default guess
+            enabled=True,
+        ),
+    )
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    # Override stashed on the context — and persists for the rest of this apply pass.
+    assert ctx.wan_ppp_instances == {2: 3}
+    # AcsSetPppoe used .3, not the planner's .1.
+    pppoe_calls = [c for c in acs.calls if c[0] == "set_parameter_values"]
+    pppoe_params = pppoe_calls[0][1][1]
+    pppoe_keys = list(pppoe_params.keys())
+    assert all("WANPPPConnection.3." in k for k in pppoe_keys)
+    assert not any("WANPPPConnection.1." in k for k in pppoe_keys)
+    # AcsSetNatEnabled also rewritten to .3.
+    nat_params = pppoe_calls[1][1][1]
+    nat_keys = list(nat_params.keys())
+    assert all("WANPPPConnection.3." in k for k in nat_keys)
+
+
+def test_acs_add_object_falls_back_to_planned_index_when_discovery_unavailable():
+    """The stub client has no refresh_object / list_devices. The applier
+    must still run the addObject and the downstream writes — discovery is
+    best-effort, never a hard requirement. Falls back to the planner's
+    predicted instance_index (which is correct in the common case where
+    the device's counter is at .1)."""
+    acs = _StubAcsClient()  # no refresh_object / list_devices
+    ctx = _ctx(acs_client=acs)
+    plan = _plan(
+        AcsAddObject(
+            device_id="dev",
+            object_path="InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection",
+        ),
+        AcsSetPppoe(
+            device_id="dev",
+            wcd_index=1,
+            instance_index=1,
+            username="u",
+            password_ref="p",
+            vlan=203,
+        ),
+    )
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    assert ctx.wan_ppp_instances == {}
+    pppoe_params = [c for c in acs.calls if c[0] == "set_parameter_values"][0][1][1]
+    pppoe_keys = list(pppoe_params.keys())
+    assert all("WANPPPConnection.1." in k for k in pppoe_keys)
+
+
+def test_acs_add_object_swallows_refresh_failures_silently():
+    """The post-condition probe is best-effort. A refresh_object that
+    raises (CR timeout, NBI hiccup) must not break the apply pass — the
+    addObject has already succeeded. Downstream writes fall back to the
+    planner's predicted instance_index."""
+
+    class _FlakyRefreshAcsClient(_StubAcsClient):
+        def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+            raise RuntimeError("CR timed out")
+
+        def list_devices(self, query=None, projection=None):
+            return []
+
+    acs = _FlakyRefreshAcsClient()
+    ctx = _ctx(acs_client=acs)
+    plan = _plan(
+        AcsAddObject(
+            device_id="dev",
+            object_path="InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection",
+        ),
+        AcsSetPppoe(
+            device_id="dev",
+            wcd_index=2,
+            instance_index=1,
+            username="u",
+            password_ref="p",
+            vlan=203,
+        ),
+    )
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    assert ctx.wan_ppp_instances == {}
+
+
+def test_acs_add_object_skips_discovery_for_non_wan_ppp_targets():
+    """addObject is also used for other object kinds (e.g. WANIPConnection,
+    PortMapping). The post-condition probe only applies when the target
+    parent path is …WANConnectionDevice.<N>.WANPPPConnection, so unrelated
+    addObject calls don't pay for an extra refresh + lookup."""
+    acs = _RefreshAwareAcsClient(post_refresh_doc=_wan_ppp_doc(wcd=2, instance_keys=[5]))
+    ctx = _ctx(acs_client=acs)
+    plan = _plan(
+        AcsAddObject(
+            device_id="dev",
+            object_path="InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection",
+        ),
+    )
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    # No refresh_object / list_devices probe happened.
+    assert not any(c[0] == "refresh_object" for c in acs.calls)
+    assert not any(c[0] == "list_devices" for c in acs.calls)
+    assert ctx.wan_ppp_instances == {}

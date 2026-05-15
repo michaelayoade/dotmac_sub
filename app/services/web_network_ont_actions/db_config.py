@@ -83,6 +83,11 @@ def update_ont_config(
     wifi_security_mode: str | None = None,
     wifi_password: str | None = None,
     voip_enabled: bool | None = None,
+    pppoe_wcd_index: int | None = None,
+    mgmt_wcd_index: int | None = None,
+    voip_wcd_index: int | None = None,
+    mgmt_service_port_index: int | None = None,
+    wan_service_port_index: int | None = None,
     push_to_device: bool = False,
     push_wan: bool = True,
     push_lan: bool = True,
@@ -185,6 +190,36 @@ def update_ont_config(
             desired_updates["wan.pppoe_password"] = encrypt_credential(pppoe_password)
         if wifi_password:
             desired_updates["wifi.password"] = encrypt_credential(wifi_password)
+        # WANConnectionDevice index overrides. A sentinel of 0 (or any
+        # non-positive int) clears the override and falls back to the
+        # config-pack default. Validated as positive ints upstream in the
+        # form handler — defensive coercion here is the second line.
+        if pppoe_wcd_index is not None:
+            desired_updates["wan.pppoe_wcd_index"] = (
+                int(pppoe_wcd_index) if int(pppoe_wcd_index) > 0 else None
+            )
+        if mgmt_wcd_index is not None:
+            desired_updates["management.wcd_index"] = (
+                int(mgmt_wcd_index) if int(mgmt_wcd_index) > 0 else None
+            )
+        if voip_wcd_index is not None:
+            desired_updates["voip.wcd_index"] = (
+                int(voip_wcd_index) if int(voip_wcd_index) > 0 else None
+            )
+        # OLT service-port indices. None clears the override (planner
+        # re-allocates); positive ints are written through.
+        if mgmt_service_port_index is not None:
+            desired_updates["olt.mgmt_service_port_index"] = (
+                int(mgmt_service_port_index)
+                if int(mgmt_service_port_index) > 0
+                else None
+            )
+        if wan_service_port_index is not None:
+            desired_updates["olt.wan_service_port_index"] = (
+                int(wan_service_port_index)
+                if int(wan_service_port_index) > 0
+                else None
+            )
         set_desired_config_values(ont, desired_updates)
     except ValueError as exc:
         db.rollback()

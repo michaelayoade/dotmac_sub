@@ -616,6 +616,11 @@ def ont_configure_submit(
     wifi_channel: str = Form(default=""),
     wifi_security_mode: str = Form(default=""),
     wifi_password: str = Form(default=""),
+    pppoe_wcd_index: str = Form(default=""),
+    mgmt_wcd_index: str = Form(default=""),
+    voip_wcd_index: str = Form(default=""),
+    mgmt_service_port_index: str = Form(default=""),
+    wan_service_port_index: str = Form(default=""),
     push_to_device: bool = Form(default=False),
     push_scope: str = Form(default="management"),
     db: Session = Depends(get_db),
@@ -623,6 +628,48 @@ def ont_configure_submit(
     """Handle ONT configure form submission."""
     push_wan, push_lan, push_mgmt, push_wifi = _configure_push_scope_sections(
         push_scope
+    )
+    # ``advanced`` scope persists OLT-binding overrides only — no traditional
+    # WAN/LAN/MGMT/WiFi device push runs. Index fields under the WAN or
+    # management sections also persist on those scopes so an operator can
+    # tweak the WCD slot inline with a "Apply WAN" / "Apply Mgmt" click.
+    push_advanced = (push_scope or "management").strip().lower() in {"all", "advanced"}
+
+    def _parse_index_override(raw: str) -> int | None:
+        """Empty string = no change; '0' or 'inherit' = clear override.
+        Anything else must parse as a positive int; bad input → 400.
+        """
+        text = raw.strip()
+        if text == "":
+            return None
+        if text in {"0", "inherit"}:
+            return 0
+        try:
+            value = int(text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid integer override: {raw!r}",
+            ) from exc
+        if value < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Index override must be non-negative: {value}",
+            )
+        return value
+
+    pppoe_wcd_value = (
+        _parse_index_override(pppoe_wcd_index) if (push_wan or push_advanced) else None
+    )
+    mgmt_wcd_value = (
+        _parse_index_override(mgmt_wcd_index) if (push_mgmt or push_advanced) else None
+    )
+    voip_wcd_value = _parse_index_override(voip_wcd_index) if push_advanced else None
+    mgmt_sp_value = (
+        _parse_index_override(mgmt_service_port_index) if push_advanced else None
+    )
+    wan_sp_value = (
+        _parse_index_override(wan_service_port_index) if push_advanced else None
     )
     result = web_network_ont_actions_service.update_ont_config(
         db,
@@ -648,6 +695,11 @@ def ont_configure_submit(
         wifi_channel=(wifi_channel or None) if push_wifi else None,
         wifi_security_mode=(wifi_security_mode or None) if push_wifi else None,
         wifi_password=(wifi_password or None) if push_wifi else None,
+        pppoe_wcd_index=pppoe_wcd_value,
+        mgmt_wcd_index=mgmt_wcd_value,
+        voip_wcd_index=voip_wcd_value,
+        mgmt_service_port_index=mgmt_sp_value,
+        wan_service_port_index=wan_sp_value,
         push_to_device=push_to_device,
         push_wan=push_wan,
         push_lan=push_lan,

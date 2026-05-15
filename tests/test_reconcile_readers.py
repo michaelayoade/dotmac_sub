@@ -900,6 +900,128 @@ def test_acs_reader_handles_malformed_timestamps():
     assert result.observed.acs_last_inform_at is None
 
 
+def test_acs_reader_refreshes_and_reparses_when_wan_ppp_looks_ghosted():
+    """Ghost-instance recovery. First list_devices returns a doc where
+    WANPPPConnection.1 has Username/Enable/etc. cached but no
+    ConnectionStatus — the signature of a setParameterValues that landed on
+    a non-existent CWMP path on HG8546M V5R019C10S100. The reader must
+    queue a narrow refreshObject on the affected WCD and re-parse, picking
+    up the post-refresh truth (instance gone). Without this, the planner
+    skips addObject and keeps re-writing ghosts."""
+
+    class _RefreshAwareClient:
+        def __init__(self, *, before, after):
+            self._before = before
+            self._after = after
+            self._refreshed = False
+            self.list_calls = 0
+            self.refresh_calls: list[tuple] = []
+
+        def list_devices(self, query=None, projection=None):
+            self.list_calls += 1
+            return self._after if self._refreshed else self._before
+
+        def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+            self.refresh_calls.append((device_id, object_path, allow_when_pending))
+            self._refreshed = True
+            return {"status": "queued"}
+
+    ghost_doc = _device_doc()
+    # Ghost shape: Username/Enable/X_HW_VLAN present, ConnectionStatus absent.
+    ghost_doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"] = {
+        "2": {
+            "WANPPPConnection": {
+                "1": {
+                    "Username": _leaf("100025915"),
+                    "Enable": _leaf("true"),
+                    "X_HW_VLAN": _leaf("203"),
+                    "NATEnabled": _leaf("true"),
+                }
+            }
+        }
+    }
+    truth_doc = _device_doc()
+    # Post-refresh truth: no .1 instance on the device for that WCD.
+    truth_doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"] = {
+        "2": {"WANPPPConnection": {}}
+    }
+
+    client = _RefreshAwareClient(before=[ghost_doc], after=[truth_doc])
+    result = read_acs_state(client, _desired())
+
+    assert result.success is True
+    assert client.list_calls == 2  # initial + post-refresh re-fetch
+    assert len(client.refresh_calls) == 1
+    device_id, path, allow_when_pending = client.refresh_calls[0]
+    assert path == "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2"
+    assert allow_when_pending is True
+    # Post-refresh: ghost is gone, planner will now correctly schedule addObject.
+    assert result.observed.acs_observed_wan_instance_index is None
+    assert result.observed.acs_observed_wan_wcd_index is None
+    assert result.observed.acs_observed_pppoe_username is None
+
+
+def test_acs_reader_skips_refresh_when_wan_ppp_state_is_healthy():
+    """The refresh path is opt-in via the ghost heuristic. A healthy
+    observation (ConnectionStatus reported) must not trigger any extra
+    refreshObject — sweepers run too often to pay that round-trip on every
+    ONT."""
+
+    class _RefreshAwareClient:
+        def __init__(self, *, devices):
+            self._devices = devices
+            self.refresh_calls: list[tuple] = []
+
+        def list_devices(self, query=None, projection=None):
+            return self._devices
+
+        def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+            self.refresh_calls.append((device_id, object_path, allow_when_pending))
+            return {"status": "queued"}
+
+    client = _RefreshAwareClient(devices=[_device_doc()])
+    result = read_acs_state(client, _desired())
+    assert result.success is True
+    assert result.observed.acs_observed_wan_connection_status == "Connected"
+    assert client.refresh_calls == []
+
+
+def test_acs_reader_falls_back_to_original_observation_when_refresh_fails():
+    """If the refreshObject task fails (NBI error, device unreachable for
+    CR, etc.), the reader returns the original cached observation rather
+    than crashing the read — the planner has its own safety nets."""
+
+    class _FlakyRefreshClient:
+        def __init__(self, *, devices):
+            self._devices = devices
+
+        def list_devices(self, query=None, projection=None):
+            return self._devices
+
+        def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+            raise RuntimeError("CR delivery timed out")
+
+    ghost_doc = _device_doc()
+    ghost_doc["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"] = {
+        "2": {
+            "WANPPPConnection": {
+                "1": {
+                    "Username": _leaf("100025915"),
+                    "Enable": _leaf("true"),
+                    "X_HW_VLAN": _leaf("203"),
+                }
+            }
+        }
+    }
+    client = _FlakyRefreshClient(devices=[ghost_doc])
+    result = read_acs_state(client, _desired())
+    assert result.success is True
+    # Original (ghost) observation preserved; planner will see the cached
+    # instance and the existing safety nets take over.
+    assert result.observed.acs_observed_wan_instance_index == 1
+    assert result.observed.acs_observed_pppoe_username == "100025915"
+
+
 def test_acs_reader_handles_genieacs_z_timestamp_format():
     """GenieACS commonly emits trailing-Z ISO timestamps."""
     doc = _device_doc()

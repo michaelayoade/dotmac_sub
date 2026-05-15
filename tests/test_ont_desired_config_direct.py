@@ -237,6 +237,203 @@ def test_effective_config_uses_olt_pack_and_active_assignment(db_session):
     assert values["mgmt_ip_address"] == "192.0.2.20"
 
 
+def test_effective_config_per_ont_wcd_index_overrides_beat_pack_defaults(db_session):
+    """The configure form lets an operator set per-ONT WCD index overrides
+    that take precedence over the per-OLT config-pack / profile mapping
+    defaults. Today's Matrix-Global-Apartment incident exposed that the
+    PPPoE WAN slot was always inheriting from the pack; this gives the
+    operator a UI-driven escape hatch when the device's WAN layout
+    diverges from the pack (multi-WCD devices, post-counter-advance
+    instances, etc.). Per-ONT service-port indices also surface here for
+    the first time so the planner can target operator-chosen slots instead
+    of always re-allocating fresh ones."""
+    from app.models.network import (
+        OLTDevice,
+        OltLineProfile,
+        OltOnuTypeProfileMapping,
+        OltServiceProfile,
+        OntAssignment,
+        OntUnit,
+        Vlan,
+        VlanPurpose,
+    )
+    from app.models.catalog import RegionZone
+    from app.services.network.effective_ont_config import (
+        resolve_effective_ont_config,
+    )
+
+    region = RegionZone(name="Override Region", code="wcd-override")
+    olt = OLTDevice(name="OLT Override")
+    db_session.add_all([region, olt])
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            Vlan(
+                region_id=region.id,
+                olt_device_id=olt.id,
+                name="Internet",
+                tag=203,
+                purpose=VlanPurpose.internet,
+            ),
+            Vlan(
+                region_id=region.id,
+                olt_device_id=olt.id,
+                name="Management",
+                tag=201,
+                purpose=VlanPurpose.management,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="WCD-OVERRIDE-001",
+        model="HG8546M",
+        olt_device_id=olt.id,
+        # Operator override paths set by the configure form.
+        desired_config={
+            "wan": {"pppoe_wcd_index": 4},
+            "management": {"wcd_index": 2},
+            "voip": {"wcd_index": 4},
+            "olt": {
+                "mgmt_service_port_index": 801,
+                "wan_service_port_index": 802,
+            },
+        },
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=40, name="LINE"),
+            OltServiceProfile(olt_id=olt.id, profile_id=13, name="HG8546M"),
+        ]
+    )
+    db_session.flush()
+    db_session.add(
+        OltOnuTypeProfileMapping(
+            olt_id=olt.id,
+            equipment_id="HG8546M",
+            line_profile_id=40,
+            service_profile_id=13,
+            # Pack-level defaults — the per-ONT overrides must beat all of these.
+            pppoe_wcd_index=1,
+            mgmt_wcd_index=3,
+            voip_wcd_index=2,
+            primary_wan_service="INTERNET",
+        )
+    )
+    db_session.flush()
+    db_session.add(OntAssignment(ont_unit_id=ont.id, active=True))
+    db_session.flush()
+
+    values = resolve_effective_ont_config(db_session, ont)["values"]
+
+    # Effective values reflect the per-ONT overrides.
+    assert values["pppoe_wcd_index"] == 4
+    assert values["mgmt_wcd_index"] == 2
+    assert values["voip_wcd_index"] == 4
+    # Per-OLT defaults are still surfaced for the form to render "(inherit: N)".
+    assert values["pppoe_wcd_index_default"] == 1
+    assert values["mgmt_wcd_index_default"] == 3
+    assert values["voip_wcd_index_default"] == 2
+    # Override values mirror what the form will pre-select in the dropdown.
+    assert values["pppoe_wcd_index_override"] == 4
+    assert values["mgmt_wcd_index_override"] == 2
+    assert values["voip_wcd_index_override"] == 4
+    # Service-port indices flow through to the reconciler adapter.
+    assert values["mgmt_service_port_index"] == 801
+    assert values["wan_service_port_index"] == 802
+
+
+def test_effective_config_falls_back_to_pack_defaults_when_no_ont_override(db_session):
+    """When the operator hasn't touched the advanced section, the form
+    must continue inheriting WCD indices from the config-pack / mapping.
+    Service-port indices have no pack default — they stay None until the
+    planner allocates fresh ones on first provision."""
+    from app.models.network import (
+        OLTDevice,
+        OltLineProfile,
+        OltOnuTypeProfileMapping,
+        OltServiceProfile,
+        OntAssignment,
+        OntUnit,
+        Vlan,
+        VlanPurpose,
+    )
+    from app.models.catalog import RegionZone
+    from app.services.network.effective_ont_config import (
+        resolve_effective_ont_config,
+    )
+
+    region = RegionZone(name="Inherit Region", code="wcd-inherit")
+    olt = OLTDevice(name="OLT Inherit")
+    db_session.add_all([region, olt])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Vlan(
+                region_id=region.id,
+                olt_device_id=olt.id,
+                name="Internet",
+                tag=203,
+                purpose=VlanPurpose.internet,
+            ),
+            Vlan(
+                region_id=region.id,
+                olt_device_id=olt.id,
+                name="Management",
+                tag=201,
+                purpose=VlanPurpose.management,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="WCD-INHERIT-001",
+        model="HG8546M",
+        olt_device_id=olt.id,
+        # No advanced overrides — pack defaults must win through.
+        desired_config={},
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            OltLineProfile(olt_id=olt.id, profile_id=40, name="LINE"),
+            OltServiceProfile(olt_id=olt.id, profile_id=13, name="HG8546M"),
+        ]
+    )
+    db_session.flush()
+    db_session.add(
+        OltOnuTypeProfileMapping(
+            olt_id=olt.id,
+            equipment_id="HG8546M",
+            line_profile_id=40,
+            service_profile_id=13,
+            pppoe_wcd_index=2,
+            mgmt_wcd_index=1,
+            primary_wan_service="INTERNET",
+        )
+    )
+    db_session.flush()
+    db_session.add(OntAssignment(ont_unit_id=ont.id, active=True))
+    db_session.flush()
+
+    values = resolve_effective_ont_config(db_session, ont)["values"]
+
+    assert values["pppoe_wcd_index"] == 2
+    assert values["mgmt_wcd_index"] == 1
+    assert values["pppoe_wcd_index_override"] is None
+    assert values["mgmt_wcd_index_override"] is None
+    assert values["mgmt_service_port_index"] is None
+    assert values["wan_service_port_index"] is None
+
+
 def test_effective_config_prefers_active_offer_profile_bundle(db_session):
     from app.models.catalog import (
         AccessType,

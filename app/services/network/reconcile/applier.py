@@ -51,9 +51,10 @@ the adapter/client themselves, but neither this module nor the action
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -108,11 +109,20 @@ class ApplyContext:
     ``olt_adapter`` is an ``OltProtocolAdapter`` (or any object with the
     same method surface). ``acs_client`` is a ``GenieACSClient``. Both can
     be substituted in tests. ``resolve_secret`` defaults to passthrough.
+
+    ``wan_ppp_instances`` is a per-apply, WCD-keyed override map populated
+    by the ``AcsAddObject`` arm whenever it can verify the device-returned
+    instance index. Downstream ``AcsSetPppoe`` / ``AcsSetNatEnabled`` arms
+    read it before falling back to the planner's prediction. This keeps the
+    same apply pass internally consistent when the device's monotonic
+    instance counter has advanced past ``.1`` (the planner's default
+    guess).
     """
 
     olt_adapter: Any
     acs_client: Any
     resolve_secret: SecretResolver = passthrough_secret
+    wan_ppp_instances: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -405,6 +415,23 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                     ReconcileFailureReason.ACS_WRITE_FAULTED,
                     f"addObject failed: {exc}",
                 ) from exc
+            # Post-addObject: when targeting WANPPPConnection, discover the
+            # device-created instance index and stash it on the context so
+            # downstream AcsSetPppoe / AcsSetNatEnabled in this same apply
+            # pass target the right child. The device's instance counter is
+            # monotonic — if .1 has been created+deleted before, addObject
+            # may have just created .2/.3/etc. Writes to the planner's
+            # hardcoded .1 would otherwise silently no-op (no CWMP fault on
+            # HG8546M V5R019C10S100) and we'd cache new ghosts.
+            wcd_index = _wan_ppp_wcd_from_object_path(action.object_path)
+            if wcd_index is not None:
+                discovered = _discover_wan_ppp_instance_index(
+                    ctx.acs_client,
+                    action.device_id,
+                    action.object_path,
+                )
+                if discovered is not None:
+                    ctx.wan_ppp_instances[wcd_index] = discovered
             return _ok(
                 action,
                 f"add_object[{action.object_path.split('.')[-1]}]",
@@ -415,13 +442,14 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetPppoe():
             password = _resolve_or_fail(ctx, action, action.password_ref)
+            inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)
             params = {
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.Username": action.username,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.Password": password,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.Enable": True,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.ConnectionType": "IP_Routed",
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.X_HW_VLAN": action.vlan,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.X_HW_SERVICELIST": "INTERNET",
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.Username": action.username,
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.Password": password,
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.Enable": True,
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.ConnectionType": "IP_Routed",
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.X_HW_VLAN": action.vlan,
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.X_HW_SERVICELIST": "INTERNET",
             }
             _acs_set(action, ctx, params)
             return _ok(action, "acs_pppoe", None, action.username, started)
@@ -445,8 +473,9 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             return _ok(action, "acs_wifi_password", None, "[redacted]", started)
 
         case AcsSetNatEnabled():
+            inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)
             params = {
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{action.instance_index}.NATEnabled": action.enabled
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.NATEnabled": action.enabled
             }
             _acs_set(action, ctx, params)
             return _ok(action, "acs_nat_enabled", None, action.enabled, started)
@@ -592,6 +621,96 @@ def _ok(
         new_value=new_value,
         duration_ms=int((time.monotonic() - started_monotonic) * 1000),
     )
+
+
+# ``WANDevice.1.WANConnectionDevice.<N>.WANPPPConnection`` — the parent path
+# we addObject against. Capturing N lets us scope the post-addObject scan
+# to the right WCD slot.
+_WAN_PPP_OBJECT_PATH_RE = re.compile(
+    r"WANDevice\.1\.WANConnectionDevice\.(\d+)\.WANPPPConnection$"
+)
+
+
+def _wan_ppp_wcd_from_object_path(object_path: str) -> int | None:
+    """Return the WCD index if the addObject target is WANPPPConnection,
+    else None. Other addObject targets (e.g. WANIPConnection, PortMapping)
+    don't need post-creation index discovery."""
+    match = _WAN_PPP_OBJECT_PATH_RE.search(object_path)
+    return int(match.group(1)) if match else None
+
+
+def _discover_wan_ppp_instance_index(
+    client: Any,
+    device_id: str,
+    object_path: str,
+) -> int | None:
+    """Resolve the WANPPPConnection child instance just created by addObject.
+
+    Strategy: refreshObject on the parent container so GenieACS pulls the
+    device's updated tree, then re-fetch the device document and return the
+    highest digit-keyed child of ``object_path``. The device's instance
+    counter is monotonic, so the new child is always the largest key in the
+    post-refresh snapshot.
+
+    Best-effort: any I/O failure or missing client method returns None and
+    the caller falls back to the planner's predicted instance_index. We
+    never raise — ``AcsAddObject`` has already succeeded by the time this
+    runs, and breaking the apply pass over a post-condition probe would
+    sacrifice a working write to chase a perfect one.
+    """
+    if not hasattr(client, "refresh_object") or not hasattr(client, "list_devices"):
+        return None
+    try:
+        client.refresh_object(
+            device_id,
+            object_path,
+            allow_when_pending=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort probe
+        logger.info(
+            "applier_wan_ppp_refresh_failed",
+            extra={
+                "device_id": device_id,
+                "object_path": object_path,
+                "error": str(exc),
+            },
+        )
+        return None
+    try:
+        devices = client.list_devices(
+            query={"_id": device_id},
+            projection=object_path,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort probe
+        logger.info(
+            "applier_wan_ppp_lookup_failed",
+            extra={
+                "device_id": device_id,
+                "object_path": object_path,
+                "error": str(exc),
+            },
+        )
+        return None
+    if not devices:
+        return None
+    node = _node_at_path(devices[0], object_path)
+    if not isinstance(node, dict):
+        return None
+    digit_keys = [int(k) for k in node.keys() if k.isdigit()]
+    return max(digit_keys) if digit_keys else None
+
+
+def _node_at_path(device_doc: dict[str, Any], path: str) -> Any:
+    """Walk a dotted ``object_path`` into a GenieACS device document. Returns
+    the leaf node (typically a dict of child instances) or None if any
+    segment is missing.
+    """
+    node: Any = device_doc
+    for segment in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(segment)
+    return node
 
 
 __all__ = (

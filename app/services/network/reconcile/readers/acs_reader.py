@@ -110,12 +110,79 @@ def read_acs_state(
             error=None,
         )
 
+    device = devices[0]
+    observed = _parse_device(device)
+
+    # Ghost-instance recovery. ACS may have cached ``setParameterValues``
+    # writes against a ``WANPPPConnection.<n>`` path that never existed on
+    # the device (HG8546M V5R019C10S100 silently no-ops these — no fault is
+    # raised). Subsequent reconciles then see Username/Enable/etc. populated
+    # and skip the addObject, so PPP never dials. Tell-tale: instance index
+    # resolved but ``ConnectionStatus`` has no reported ``_value``. Force a
+    # narrow ``refreshObject`` on the affected WCD and re-parse once.
+    if _looks_like_ghost_wan_instance(observed) and hasattr(client, "refresh_object"):
+        observed = _refresh_and_reparse(
+            client, device, observed, query, projection
+        )
+
     return ReadResult(
         success=True,
         unreachable=False,
-        observed=_parse_device(devices[0]),
+        observed=observed,
         error=None,
     )
+
+
+def _looks_like_ghost_wan_instance(observed: AcsObservedFields) -> bool:
+    """The reader resolved a WAN PPP instance from the cache, but
+    ``ConnectionStatus`` has no ``_value`` — the device never reported PPP
+    state for that instance. Strongest single signal that the cached
+    parameter values landed on a non-existent CWMP path.
+    """
+    return (
+        observed.acs_observed_wan_instance_index is not None
+        and observed.acs_observed_wan_connection_status is None
+    )
+
+
+def _refresh_and_reparse(
+    client: Any,
+    device: dict[str, Any],
+    observed: AcsObservedFields,
+    query: dict[str, Any],
+    projection: str,
+) -> AcsObservedFields:
+    """One-shot refresh of the WCD subtree, then re-fetch + re-parse. Any
+    failure falls through with the original observation — the planner has
+    its own safety nets and we don't want to break sweeps on a flaky ACS.
+    """
+    device_id = str(device.get("_id") or "").strip()
+    wcd = observed.acs_observed_wan_wcd_index
+    if not device_id or wcd is None:
+        return observed
+    refresh_path = (
+        f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{wcd}"
+    )
+    try:
+        client.refresh_object(
+            device_id,
+            refresh_path,
+            allow_when_pending=True,
+        )
+        refreshed = client.list_devices(query=query, projection=projection)
+    except Exception as exc:
+        logger.info(
+            "acs_reader_ghost_refresh_failed",
+            extra={
+                "error": str(exc),
+                "device_id": device_id,
+                "refresh_path": refresh_path,
+            },
+        )
+        return observed
+    if not refreshed:
+        return observed
+    return _parse_device(refreshed[0])
 
 
 # ── Query / parse helpers ───────────────────────────────────────────────────

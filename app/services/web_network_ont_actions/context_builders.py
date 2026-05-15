@@ -437,6 +437,22 @@ def _configure_form_context_from_state(
         "mgmt_ip_pool": mgmt_ip_pool_ctx.get("mgmt_ip_pool"),
         "available_mgmt_ips": mgmt_ip_pool_ctx.get("available_mgmt_ips", []),
         "mgmt_ip_choice_message": mgmt_ip_pool_ctx.get("mgmt_ip_choice_message"),
+        # WANConnectionDevice index overrides — surface both the resolved
+        # value (effective) and the inherited default so the template can
+        # render "(inherit: N)" labels on the dropdown.
+        "pppoe_wcd_index": values.get("pppoe_wcd_index"),
+        "mgmt_wcd_index": values.get("mgmt_wcd_index"),
+        "voip_wcd_index": values.get("voip_wcd_index"),
+        "pppoe_wcd_index_default": values.get("pppoe_wcd_index_default"),
+        "mgmt_wcd_index_default": values.get("mgmt_wcd_index_default"),
+        "voip_wcd_index_default": values.get("voip_wcd_index_default"),
+        "pppoe_wcd_index_override": values.get("pppoe_wcd_index_override"),
+        "mgmt_wcd_index_override": values.get("mgmt_wcd_index_override"),
+        "voip_wcd_index_override": values.get("voip_wcd_index_override"),
+        # OLT service-port indices — operator override (None = allocator
+        # picks at first provision; immutable post-allocation per validator).
+        "mgmt_service_port_index": values.get("mgmt_service_port_index"),
+        "wan_service_port_index": values.get("wan_service_port_index"),
     }
 
 

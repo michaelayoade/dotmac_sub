@@ -138,11 +138,14 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wifi_password_ref=values.get("wifi_password") or "",
         # DEFAULT: push tracking lands when the applier records WiFi pushes.
         wifi_password_pushed_at=None,
-        # DEFAULT: service-port indices come from the allocator at first
-        # provisioning; until that's wired into OntUnit, these are None
-        # (which the planner treats as "needs allocation").
-        mgmt_service_port_index=None,
-        wan_service_port_index=None,
+        # Per-ONT service-port index overrides (operator-set via the
+        # configure form, written to ``desired_config`` under the ``olt.*``
+        # section). When None, the planner allocates fresh indices on first
+        # provision. The validator rejects post-allocation changes
+        # (validator.py:107) so the form should disable these once the OLT
+        # observation shows real indices in use.
+        mgmt_service_port_index=_int_or_none(values.get("mgmt_service_port_index")),
+        wan_service_port_index=_int_or_none(values.get("wan_service_port_index")),
         # DEFAULT: forward-compat for Splynx → in-app Subscriber migration.
         subscriber_external_id=ont.external_id,
         wan_uprate_kbps=None,
