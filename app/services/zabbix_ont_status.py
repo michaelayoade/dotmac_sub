@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ _HUAWEI_EXTERNAL_ID_RE = re.compile(r"huawei:(\d+)\.(\d+)", re.IGNORECASE)
 _HUAWEI_IFINDEX_BASE = 4194304000
 _HUAWEI_IFINDEX_SLOT_STRIDE = 8192
 _HUAWEI_IFINDEX_PORT_STRIDE = 256
+_DEFAULT_WALK_CACHE_TTL_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,65 @@ def _parse_walk_entries(walk_data: str) -> list[tuple[int, int, int, float]]:
     return entries
 
 
+def _walk_cache_ttl_seconds() -> int:
+    raw = os.getenv("ZABBIX_ONT_WALK_CACHE_TTL_SECONDS")
+    if raw is None:
+        return _DEFAULT_WALK_CACHE_TTL_SECONDS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_WALK_CACHE_TTL_SECONDS
+
+
+def _cache_key_for_olt_walk(host_id: object) -> str:
+    return f"zabbix:olt-walk:{host_id}"
+
+
+def _get_cached_walk_items(host_id: object) -> list[dict] | None:
+    try:
+        from app.services.redis_client import safe_get
+
+        cached = safe_get(_cache_key_for_olt_walk(host_id))
+    except Exception:
+        return None
+    if not cached:
+        return None
+    try:
+        payload = json.loads(str(cached))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, list):
+        return None
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _set_cached_walk_items(host_id: object, items: list[dict]) -> None:
+    ttl = _walk_cache_ttl_seconds()
+    if ttl <= 0:
+        return
+    try:
+        from app.services.redis_client import safe_set
+
+        safe_set(_cache_key_for_olt_walk(host_id), json.dumps(items), ttl=ttl)
+    except Exception:
+        return
+
+
+def _get_walk_items_for_olt(olt: OLTDevice, client: ZabbixClient | None) -> list[dict]:
+    host_id = getattr(olt, "zabbix_host_id", None)
+    if client is not None:
+        # Injected clients are used by tests and one-shot callers; avoid hiding
+        # direct client behavior behind Redis state in those paths.
+        return client.get_items(host_ids=[host_id], metric="walk", limit=100)  # type: ignore[list-item]
+    cached = _get_cached_walk_items(host_id)
+    if cached is not None:
+        return cached
+    zbx = ZabbixClient.from_env()
+    items = zbx.get_items(host_ids=[host_id], metric="walk", limit=100)  # type: ignore[list-item]
+    _set_cached_walk_items(host_id, items)
+    return items
+
+
 def _item_timestamp(item: dict) -> datetime | None:
     try:
         lastclock = int(item.get("lastclock") or 0)
@@ -203,8 +265,7 @@ def get_olt_ont_snapshot_from_zabbix(
         return {ont_id: _offline("OLT not linked to Zabbix") for ont_id in result}
 
     try:
-        zbx = client or ZabbixClient.from_env()
-        items = zbx.get_items(host_ids=[olt.zabbix_host_id], metric="walk", limit=100)  # type: ignore[list-item]
+        items = _get_walk_items_for_olt(olt, client)
     except ZabbixClientError as exc:
         logger.warning("zabbix_ont_snapshot_failed", extra={"error": str(exc)})
         return {ont_id: _offline(str(exc)) for ont_id in result}

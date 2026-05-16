@@ -180,6 +180,11 @@ def test_provision_reserves_olt_pool_management_ip_before_iphost(
         message="management configured",
         data={"steps_completed": ["bind_tr069"]},
     )
+    adapter.get_tr069_profile_binding.return_value = SimpleNamespace(
+        success=True,
+        message="TR-069 profile 5 bound",
+        data={"profile_id": 5},
+    )
 
     first_values = {
         "wan_vlan": 203,

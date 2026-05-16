@@ -1766,7 +1766,7 @@ def test_ont_reboot_source_olt_uses_omci_transport(monkeypatch):
 
 
 def test_ont_reboot_default_uses_tr069_transport(monkeypatch):
-    """Plain soft reboot remains the ACS/TR-069 reboot action."""
+    """Plain soft reboot uses ACS/TR-069 when that transport succeeds."""
     from app.web.admin import network_onts_actions
 
     omci_calls: list[tuple[object, str]] = []
@@ -1806,3 +1806,46 @@ def test_ont_reboot_default_uses_tr069_transport(monkeypatch):
     assert response.status_code == 200
     assert tr069_calls == [(db, "ont-1")]
     assert omci_calls == []
+
+
+def test_ont_reboot_default_falls_back_to_omci_when_tr069_fails(monkeypatch):
+    """The UI reboot action should still work when ACS reboot cannot be delivered."""
+    from app.web.admin import network_onts_actions
+
+    omci_calls: list[tuple[object, str, object]] = []
+    tr069_calls: list[tuple[object, str]] = []
+
+    def fake_omci_reboot(db, ont_id, *, initiated_by=None):
+        omci_calls.append((db, ont_id, initiated_by))
+        return True, "ONT reboot command sent via OLT."
+
+    def fake_tr069_reboot(db, ont_id, *, request=None):
+        tr069_calls.append((db, ont_id))
+        return ActionResult(False, "Connection request error: Unexpected status code 401")
+
+    monkeypatch.setattr(
+        network_onts_actions,
+        "_ensure_ont_write_scope",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "execute_omci_reboot",
+        fake_omci_reboot,
+    )
+    monkeypatch.setattr(
+        network_onts_actions.web_network_ont_actions_service,
+        "execute_reboot",
+        fake_tr069_reboot,
+    )
+
+    db = object()
+    response = network_onts_actions.ont_reboot(
+        _request_for_action(),
+        "ont-1",
+        db=db,
+    )
+
+    assert response.status_code == 200
+    assert tr069_calls == [(db, "ont-1")]
+    assert omci_calls == [(db, "ont-1", None)]

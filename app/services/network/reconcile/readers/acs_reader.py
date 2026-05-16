@@ -121,9 +121,7 @@ def read_acs_state(
     # resolved but ``ConnectionStatus`` has no reported ``_value``. Force a
     # narrow ``refreshObject`` on the affected WCD and re-parse once.
     if _looks_like_ghost_wan_instance(observed) and hasattr(client, "refresh_object"):
-        observed = _refresh_and_reparse(
-            client, device, observed, query, projection
-        )
+        observed = _refresh_and_reparse(client, device, observed, query, projection)
 
     return ReadResult(
         success=True,
@@ -160,9 +158,7 @@ def _refresh_and_reparse(
     wcd = observed.acs_observed_wan_wcd_index
     if not device_id or wcd is None:
         return observed
-    refresh_path = (
-        f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{wcd}"
-    )
+    refresh_path = f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{wcd}"
     try:
         client.refresh_object(
             device_id,

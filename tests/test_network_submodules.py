@@ -765,7 +765,8 @@ class TestOLTDevicesCRUD:
         assert olt.hostname == "olt-sub-001.fiber.local"
         assert olt.mgmt_ip == "192.168.1.100"
         assert olt.vendor == "Huawei"
-        assert olt.is_active is True
+        # OLTDeviceCreate defaults is_active=False until configured
+        assert olt.is_active is False
 
     def test_get_olt_device(self, db_session):
         """Test getting an OLT device by ID."""
@@ -830,7 +831,7 @@ class TestOLTDevicesCRUD:
         )
         olts = network_service.olt_devices.list(
             db_session,
-            is_active=None,
+            is_active=False,
             order_by="created_at",
             order_dir="asc",
             limit=100,
@@ -847,7 +848,7 @@ class TestOLTDevicesCRUD:
             )
         page1 = network_service.olt_devices.list(
             db_session,
-            is_active=None,
+            is_active=False,
             order_by="created_at",
             order_dir="asc",
             limit=2,
@@ -855,7 +856,7 @@ class TestOLTDevicesCRUD:
         )
         page2 = network_service.olt_devices.list(
             db_session,
-            is_active=None,
+            is_active=False,
             order_by="created_at",
             order_dir="asc",
             limit=2,

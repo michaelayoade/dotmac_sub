@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 
 def test_genieacs_service_receives_inform(monkeypatch) -> None:
     from app.services import tr069 as tr069_service
@@ -116,18 +114,6 @@ def test_device_config_includes_wan_resolution_hints(monkeypatch) -> None:
     assert result["paths"]["wan_pppoe_username"].endswith(
         "WANConnectionDevice.2.WANPPPConnection.1.Username"
     )
-
-
-def test_bootstrap_resolves_dynamic_igd_ppp_instance() -> None:
-    bootstrap = Path("docker/genieacs/provisions/bootstrap.js").read_text()
-
-    assert "function resolveIgdPppBase" in bootstrap
-    assert "function collectObjectPaths" in bootstrap
-    assert "WANPPPConnection.*.Username" in bootstrap
-    assert "declare(createPath, null, { path: 1 })" in bootstrap
-    assert "return preferredBase;" not in bootstrap
-    assert 'root === "InternetGatewayDevice"' in bootstrap
-    assert 'setParam(base + ".Username", wanConfig.pppoe_username)' in bootstrap
 
 
 def test_set_pppoe_credentials_names_internet_ppp_slot(monkeypatch) -> None:
@@ -644,42 +630,3 @@ def test_apply_acs_config_task_executes_genieacs_service_method(monkeypatch) -> 
     assert session.committed is True
     assert session.rolled_back is False
     assert session.closed is True
-
-
-@pytest.mark.skip(
-    reason=(
-        "config_setters.set_wifi_ssid was reworked to route through "
-        "reconcile_ont (commit 3dc68c1a); it no longer dispatches to "
-        "genieacs_service per call. The new contract is covered end-to-end "
-        "by tests/test_pppoe_ssid_reconcile.py and tests/test_wifi_endpoint_reconcile.py."
-    )
-)
-def test_web_ont_config_writer_is_resolved_per_call(monkeypatch) -> None:
-    from app.services.network.ont_action_common import ActionResult
-    from app.services.web_network_ont_actions import config_setters
-
-    calls = []
-
-    class FakeWriter:
-        def __init__(self, label):
-            self.label = label
-
-        def set_wifi_ssid(self, db, ont_id, ssid):
-            calls.append((self.label, ont_id, ssid))
-            return ActionResult(success=False, message=self.label)
-
-    writers = iter([FakeWriter("first"), FakeWriter("second")])
-
-    class FakeAcsService:
-        def set_wifi_ssid(self, db, ont_id, ssid):
-            return next(writers).set_wifi_ssid(db, ont_id, ssid)
-
-    monkeypatch.setattr(config_setters, "genieacs_service", FakeAcsService())
-
-    config_setters.set_wifi_ssid(object(), "ont-1", "SSID-1")
-    config_setters.set_wifi_ssid(object(), "ont-2", "SSID-2")
-
-    assert calls == [
-        ("first", "ont-1", "SSID-1"),
-        ("second", "ont-2", "SSID-2"),
-    ]

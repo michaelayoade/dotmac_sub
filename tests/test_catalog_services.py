@@ -99,6 +99,7 @@ def test_overview_page_data_filters_plan_kind_and_counts(db_session, subscriber)
             access_type=AccessType.fiber,
             price_basis=PriceBasis.flat,
             description="Standard internet service",
+            status=OfferStatus.active,
         ),
     )
     ip_plan = catalog_service.offers.create(
@@ -114,6 +115,7 @@ def test_overview_page_data_filters_plan_kind_and_counts(db_session, subscriber)
                 plan_kind="ip_address",
                 ip_block_size="/29",
             ),
+            status=OfferStatus.active,
         ),
     )
 

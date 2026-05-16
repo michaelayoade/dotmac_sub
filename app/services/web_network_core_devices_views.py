@@ -905,6 +905,12 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             ont_count_by_port_index.get(ont_port_index, 0) + 1
         )
         ont_signal = signal_data.get(str(getattr(ont, "id", "")), {}).get("olt_rx_dbm")
+        # Fall back to the persisted ``olt_rx_signal_dbm`` column when the
+        # Zabbix snapshot doesn't have a value for this ONT (Zabbix outage,
+        # ONT not yet polled). Keeps the PON-port table populated during
+        # those windows.
+        if ont_signal is None:
+            ont_signal = getattr(ont, "olt_rx_signal_dbm", None)
         if ont_signal is None:
             continue
         try:
@@ -1030,6 +1036,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                 signal_value = signal_data.get(str(getattr(ont, "id", "")), {}).get(
                     "olt_rx_dbm"
                 )
+                # Same Zabbix-snapshot fallback as the primary aggregator
+                # above -- use the persisted ``olt_rx_signal_dbm`` column
+                # when Zabbix has no value for this ONT.
+                if signal_value is None:
+                    signal_value = getattr(ont, "olt_rx_signal_dbm", None)
                 if signal_value is not None:
                     signal_values.append(float(signal_value))
             avg_signal_dbm = (

@@ -216,9 +216,7 @@ def update_ont_config(
             )
         if wan_service_port_index is not None:
             desired_updates["olt.wan_service_port_index"] = (
-                int(wan_service_port_index)
-                if int(wan_service_port_index) > 0
-                else None
+                int(wan_service_port_index) if int(wan_service_port_index) > 0 else None
             )
         set_desired_config_values(ont, desired_updates)
     except ValueError as exc:
@@ -285,12 +283,18 @@ def update_ont_config(
             push_messages.append(f"WAN: {result.message}")
             push_waiting = push_waiting or result.waiting
             if not raw_result.success:
+                # Log the raw failure for diagnostics even when
+                # _delivery_pending_result has lifted it to "saved,
+                # waiting for inform".
                 logger.warning(
                     "Apply-all WAN step failed for ONT %s: %s data=%s",
                     ont_id,
                     raw_result.message,
                     action_result_audit_metadata(raw_result).get("data"),
                 )
+            # ``result`` is the post-lift value; a delivery-pending lift
+            # makes the overall push "waiting" rather than "failed".
+            if not result.success:
                 push_success = False
 
         if push_lan and any(
@@ -331,6 +335,7 @@ def update_ont_config(
                     raw_result.message,
                     action_result_audit_metadata(raw_result).get("data"),
                 )
+            if not result.success:
                 push_success = False
 
         if push_mgmt and mgmt_ip_mode is not None:
@@ -404,6 +409,7 @@ def update_ont_config(
                     raw_result.message,
                     action_result_audit_metadata(raw_result).get("data"),
                 )
+            if not result.success:
                 push_success = False
 
     _log_action_audit(

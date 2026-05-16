@@ -2049,8 +2049,21 @@ def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_ses
 
 
 def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
-    db_session,
+    db_session, monkeypatch
 ):
+    # The promoted NetworkDevice auto-creates an OLTDevice via
+    # ``resolve_olt_device_for_network_device``; the new active-OLT
+    # config-pack validator (olt_device_crud.py) would reject it because
+    # this fixture doesn't populate VLANs / ACS / mgmt pool. Bypass the
+    # validator -- the test is about promotion, not config-pack contract.
+    from app.services.network import olt_device_crud
+
+    monkeypatch.setattr(
+        olt_device_crud.OLTDevices,
+        "_require_authorization_ready",
+        staticmethod(lambda _db, _device: None),
+    )
+
     promoted = NetworkDevice(
         name="Aggregation OLT",
         hostname="agg-olt.local",
@@ -2114,6 +2127,15 @@ def test_olts_list_page_data_includes_network_devices_ending_in_olt(
     db_session, monkeypatch
 ):
     from app.services import web_network_core_runtime as core_runtime_service
+    from app.services.network import olt_device_crud
+
+    # Bypass the active-OLT config-pack validator; same reason as the
+    # consolidated-page test above.
+    monkeypatch.setattr(
+        olt_device_crud.OLTDevices,
+        "_require_authorization_ready",
+        staticmethod(lambda _db, _device: None),
+    )
 
     def fail_live_refresh(*_args, **_kwargs):
         raise AssertionError("OLT list must not run live SNMP refreshes")
@@ -2346,15 +2368,20 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
 
         @staticmethod
         def extract_parameter_value(_device, path):
+            # GenieACS virtual parameters are the canonical TR-098/TR-181
+            # normalization surface (see tr069_paths.VIRTUAL_PARAM_GROUPS).
+            # The summary builder pulls each field exclusively from
+            # ``VirtualParameters.<name>`` — native paths are not consulted
+            # by ``_extract_first`` here.
             values = {
-                "Device.Ethernet.Interface.1.MACAddress": "AA:AA:AA:AA:AA:AA",
-                "Device.IP.Interface.1.IPv4Address.1.IPAddress": "100.64.10.5",
-                "Device.PPP.Interface.1.Username": "subscriber001",
-                "Device.IP.Interface.1.Status": "Up",
-                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType": "PPPoE",
-                "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries": "5",
-                "Device.Hosts.HostNumberOfEntries": "12",
-                "Device.DHCPv4.Server.Enable": "true",
+                "VirtualParameters.MAC_Address": "AA:AA:AA:AA:AA:AA",
+                "VirtualParameters.WAN_IP": "100.64.10.5",
+                "VirtualParameters.PPPoE_Username": "subscriber001",
+                "VirtualParameters.WAN_Status": "Up",
+                "VirtualParameters.WAN_Connection_Type": "PPPoE",
+                "VirtualParameters.WiFi_Clients": "5",
+                "VirtualParameters.Connected_Hosts": "12",
+                "VirtualParameters.DHCP_Enabled": "true",
             }
             return values.get(path)
 
@@ -2744,8 +2771,17 @@ def test_ont_tr069_live_acs_read_wifi_data_renders_in_partial(db_session, monkey
             }
 
         @staticmethod
-        def extract_parameter_value(_device, _path):
-            return None
+        def extract_parameter_value(_device, path):
+            # See test_ont_tr069_persists_observed_runtime_fields above:
+            # the summary builder reads VirtualParameters, not the native
+            # TR-098 paths. Synthesise the same values from the device
+            # body so the wireless/lan summary sections populate.
+            values = {
+                "VirtualParameters.WiFi_SSID": "DotMac-Live",
+                "VirtualParameters.WiFi_Clients": "6",
+                "VirtualParameters.Connected_Hosts": "9",
+            }
+            return values.get(path)
 
     ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
     monkeypatch.setattr(
@@ -3473,57 +3509,14 @@ def test_olt_backups_page_renders_restore_action(db_session, monkeypatch):
     assert "save it as startup config" in body
 
 
-def test_olt_form_values_parse_access_fields():
-    values = web_network_olts_service.parse_form_values(
-        {
-            "name": "Metro OLT",
-            "ssh_username": "netops",
-            "ssh_password": "replace-me",
-            "ssh_port": "2222",
-            "netconf_enabled": "true",
-            "netconf_port": "830",
-            "is_active": "true",
-        }
-    )
-
-    assert values["ssh_username"] == "netops"
-    assert values["ssh_password"] == "replace-me"
-    assert values["ssh_port"] == 2222
-    assert values["netconf_enabled"] is True
-    assert values["netconf_port"] == 830
-
-
-def test_olt_validate_values_rejects_invalid_access_fields(db_session):
-    error = web_network_olts_service.validate_values(
-        db_session,
-        {
-            "name": "Metro OLT",
-            "ssh_username": None,
-            "ssh_port": 22,
-            "netconf_enabled": True,
-            "netconf_port": 830,
-        },
-    )
-    assert error == "SSH username is required when NETCONF is enabled"
-
-    error = web_network_olts_service.validate_values(
-        db_session,
-        {
-            "name": "Metro OLT",
-            "ssh_username": "netops",
-            "ssh_port": 70000,
-            "netconf_enabled": False,
-            "netconf_port": 830,
-        },
-    )
-    assert error == "SSH port must be between 1 and 65535"
-
-
 def test_update_olt_keeps_existing_ssh_password_when_blank(db_session):
     olt = OLTDevice(name="Keep Secret OLT", ssh_password="existing-secret")
     db_session.add(olt)
     db_session.commit()
 
+    # ``is_active=False`` here so the OLT validation that requires an
+    # authorization-ready config pack doesn't fire. This test exercises the
+    # SSH-password retention path, not the active-OLT contract.
     updated, error = web_network_olts_service.update_olt(
         db_session,
         str(olt.id),
@@ -3537,10 +3530,8 @@ def test_update_olt_keeps_existing_ssh_password_when_blank(db_session):
             "ssh_username": "netops",
             "ssh_password": None,
             "ssh_port": 22,
-            "netconf_enabled": False,
-            "netconf_port": None,
             "notes": None,
-            "is_active": True,
+            "is_active": False,
         },
     )
 

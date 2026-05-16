@@ -13,6 +13,7 @@ from starlette.requests import Request
 
 from app.models.network import AuthorizationPreset, OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
+from app.services.network._common import normalize_mac_address
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.serial_utils import (
@@ -409,7 +410,7 @@ def refresh_autofind_from_olt(
                 vendor_id=entry.vendor_id or None,
                 model=entry.model or None,
                 software_version=entry.software_version or None,
-                mac=entry.mac or None,
+                mac=normalize_mac_address(entry.mac),
                 equipment_sn=entry.equipment_sn or None,
                 autofind_time=entry.autofind_time or None,
                 is_active=True,
@@ -430,7 +431,7 @@ def refresh_autofind_from_olt(
             candidate.software_version = (
                 entry.software_version or candidate.software_version
             )
-            candidate.mac = entry.mac or candidate.mac
+            candidate.mac = normalize_mac_address(entry.mac) or candidate.mac
             candidate.equipment_sn = entry.equipment_sn or candidate.equipment_sn
             candidate.autofind_time = entry.autofind_time or candidate.autofind_time
             candidate.is_active = True

@@ -428,12 +428,8 @@ def _values_from_assignment(
         # Per-ONT OLT service-port indices. Currently there's no per-OLT
         # default — the reconciler allocates on first provision when these
         # are None, and the validator rejects post-allocation changes.
-        "mgmt_service_port_index": _int_or_none(
-            cfg("olt", "mgmt_service_port_index")
-        ),
-        "wan_service_port_index": _int_or_none(
-            cfg("olt", "wan_service_port_index")
-        ),
+        "mgmt_service_port_index": _int_or_none(cfg("olt", "mgmt_service_port_index")),
+        "wan_service_port_index": _int_or_none(cfg("olt", "wan_service_port_index")),
         "authorization_line_profile_id": authorization_line_profile_id,
         "authorization_service_profile_id": authorization_service_profile_id,
         "profile_bundle_id": str(profile_bundle.id) if profile_bundle else None,

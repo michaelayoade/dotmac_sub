@@ -51,7 +51,6 @@ def test_olt_detail_adapter_builds_detail_context(monkeypatch) -> None:
         ssh_username="admin",
         ssh_port=2222,
         ssh_password="secret",
-        netconf_enabled=True,
         netconf_port=830,
         firmware_version="V1R1",
         software_version="SPH001",

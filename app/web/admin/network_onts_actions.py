@@ -314,14 +314,16 @@ def _hosts_partial_response(
 def ont_reboot(
     request: Request,
     ont_id: str,
-    source: str = "tr069",
+    source: str = "auto",
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Send reboot command to ONT via the selected transport."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied  # type: ignore[return-value]
-    if (source or "").strip().lower() in {"olt", "omci"}:
+
+    source_normalized = (source or "auto").strip().lower()
+    if source_normalized in {"olt", "omci"}:
         ok, msg = web_network_ont_actions_service.execute_omci_reboot(
             db,
             ont_id,
@@ -335,7 +337,32 @@ def ont_reboot(
             ont_id=ont_id,
             status_code=200 if ok else 400,
         )
+
     result = web_network_ont_actions_service.execute_reboot(db, ont_id, request=request)
+    if (
+        source_normalized in {"auto", ""}
+        and not result.success
+        and not getattr(result, "waiting", False)
+    ):
+        ok, msg = web_network_ont_actions_service.execute_omci_reboot(
+            db,
+            ont_id,
+            initiated_by=None,
+        )
+        fallback_msg = (
+            f"TR-069 reboot failed ({result.message}); OLT reboot sent: {msg}"
+            if ok
+            else f"TR-069 reboot failed ({result.message}); OLT reboot also failed: {msg}"
+        )
+        return _action_json_response(
+            success=ok,
+            message=fallback_msg,
+            action="Reboot ONT",
+            request=request,
+            ont_id=ont_id,
+            status_code=200 if ok else 400,
+        )
+
     return _action_json_response(
         success=result.success,
         message=result.message,

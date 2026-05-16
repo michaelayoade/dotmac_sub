@@ -12,7 +12,6 @@ from app.models.network import (
     OLTDevice,
     OntAssignment,
     OntUnit,
-    OnuOnlineStatus,
     PonPort,
 )
 from app.schemas.network import OntUnitUpdate
@@ -250,8 +249,9 @@ class OntUnits(CRUDManager[OntUnit]):
                 )
             )
 
-        if olt_status in {"online", "offline"}:
-            stmt = stmt.where(OntUnit.olt_status == OnuOnlineStatus(olt_status))
+        zabbix_status_filter = (
+            olt_status if olt_status in {"online", "offline"} else None
+        )
 
         if signal_quality in {"good", "warning", "critical"}:
             warn, crit = get_signal_thresholds(db)
@@ -268,9 +268,6 @@ class OntUnits(CRUDManager[OntUnit]):
             else:
                 stmt = stmt.where(signal_col >= warn)
 
-        count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
-        total = db.scalar(count_stmt) or 0
-
         if order_by == "signal":
             signal_order = (
                 OntUnit.olt_rx_signal_dbm.desc()
@@ -286,6 +283,23 @@ class OntUnits(CRUDManager[OntUnit]):
                 "vendor": OntUnit.vendor,
             }
             stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
+
+        if zabbix_status_filter is not None:
+            from app.services.zabbix_ont_status import get_ont_snapshots_from_zabbix
+
+            ordered_results = list(db.scalars(stmt).all())
+            snapshots = get_ont_snapshots_from_zabbix(db, ordered_results)
+            filtered_results = [
+                ont
+                for ont in ordered_results
+                if snapshots.get(str(ont.id))
+                and snapshots[str(ont.id)].status == zabbix_status_filter
+            ]
+            total = len(filtered_results)
+            return filtered_results[offset : offset + limit], total
+
+        count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
+        total = db.scalar(count_stmt) or 0
         results = list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
         return results, total
 

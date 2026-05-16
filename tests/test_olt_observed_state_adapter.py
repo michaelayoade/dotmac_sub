@@ -13,7 +13,6 @@ def test_get_tr069_profiles_for_olt_persists_live_result(db_session, monkeypatch
         hostname="olt-profiles",
         mgmt_ip="10.0.0.10",
         snmp_enabled=False,
-        netconf_enabled=False,
     )
     db_session.add(olt)
     db_session.commit()
@@ -55,7 +54,6 @@ def test_get_tr069_profiles_for_olt_falls_back_to_db_snapshot(db_session, monkey
         hostname="olt-cached-profiles",
         mgmt_ip="10.0.0.11",
         snmp_enabled=False,
-        netconf_enabled=False,
         tr069_profiles_snapshot={
             "fetched_at": fetched_at.isoformat(),
             "profiles": [{"profile_id": 7, "name": "Cached ACS"}],

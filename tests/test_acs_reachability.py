@@ -159,7 +159,6 @@ def test_active_olt_form_requires_complete_authorization_pack(db_session):
         {
             "name": "Incomplete Active OLT",
             "is_active": True,
-            "netconf_enabled": False,
         },
     )
 

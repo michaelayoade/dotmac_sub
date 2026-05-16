@@ -19,10 +19,18 @@ def test_get_dba_profiles_runs_display_command(monkeypatch) -> None:
     def fake_run(_channel, command, **_kwargs):
         sent.append(command)
         if command == "display dba-profile all":
+            # Match the MA5608T-style ``display dba-profile all`` output
+            # the parser is built for (key-value blocks separated by
+            # dash dividers).
             return """
-            Profile-ID  Profile-name  Type   Assure(kbps)  Max(kbps)
-            50          DOTMAC_100M   type3  50000         100000
-            """
+  ----------------------------------------------------------------------------
+  Profile-ID    : 50
+  Profile-name  : DOTMAC_100M
+  Type          : type3
+  Assure(kbps)  : 50000
+  Max(kbps)     : 100000
+  ----------------------------------------------------------------------------
+"""
         return ""
 
     monkeypatch.setattr(

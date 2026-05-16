@@ -16,7 +16,6 @@ import json
 import logging
 import socket
 import struct
-import threading
 
 from app.services.network.reconcile.alerts import (
     DEFAULT_SWEEP_THRESHOLD,
@@ -30,71 +29,46 @@ from app.services.network.reconcile.alerts import (
 # ── ZabbixTrapper protocol ─────────────────────────────────────────────────
 
 
-class _FakeZabbixServer:
-    """Minimal TCP server that speaks the Zabbix trapper protocol.
-
-    Reads one frame (ZBXD header + length + JSON body), records the body,
-    responds with ``{"response": "success", "info": ...}``.
-    """
+class _FakeZabbixSocket:
+    """Socket-like trapper peer that records the request frame in memory."""
 
     def __init__(self, *, info: str = "processed: 1; failed: 0"):
-        self.info = info
+        response_body = json.dumps({"response": "success", "info": info}).encode(
+            "utf-8"
+        )
+        self._response = bytearray(
+            b"ZBXD\x01" + struct.pack("<q", len(response_body)) + response_body
+        )
         self.received: list[dict] = []
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._sock.bind(("127.0.0.1", 0))
-        self._sock.listen(1)
-        self.port = self._sock.getsockname()[1]
-        self._thread = threading.Thread(target=self._serve, daemon=True)
 
-    def __enter__(self) -> _FakeZabbixServer:
-        self._thread.start()
+    def __enter__(self) -> _FakeZabbixSocket:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        return None
 
-    def _serve(self) -> None:
-        try:
-            conn, _ = self._sock.accept()
-        except OSError:
-            return
-        with conn:
-            header = self._recv_exact(conn, 13)
-            if header is None or not header.startswith(b"ZBXD\x01"):
-                return
-            length = struct.unpack("<q", header[5:13])[0]
-            body = self._recv_exact(conn, length)
-            if body is None:
-                return
-            self.received.append(json.loads(body.decode("utf-8")))
+    def sendall(self, frame: bytes) -> None:
+        header = frame[:13]
+        assert header.startswith(b"ZBXD\x01")
+        length = struct.unpack("<q", header[5:13])[0]
+        self.received.append(json.loads(frame[13 : 13 + length].decode("utf-8")))
 
-            response_body = json.dumps(
-                {"response": "success", "info": self.info}
-            ).encode("utf-8")
-            frame = b"ZBXD\x01" + struct.pack("<q", len(response_body)) + response_body
-            conn.sendall(frame)
-
-    @staticmethod
-    def _recv_exact(conn, length):
-        buf = bytearray()
-        while len(buf) < length:
-            chunk = conn.recv(length - len(buf))
-            if not chunk:
-                return None
-            buf.extend(chunk)
-        return bytes(buf)
+    def recv(self, length: int) -> bytes:
+        chunk = bytes(self._response[:length])
+        del self._response[:length]
+        return chunk
 
 
-def test_zabbix_trapper_sends_well_formed_payload():
-    with _FakeZabbixServer() as server:
-        trapper = ZabbixTrapper(host="127.0.0.1", port=server.port)
-        ok = trapper.send(zabbix_host="172.16.210.20", key="ont.foo", value=3)
+def test_zabbix_trapper_sends_well_formed_payload(monkeypatch):
+    peer = _FakeZabbixSocket()
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: peer)
+
+    trapper = ZabbixTrapper(host="127.0.0.1", port=10051)
+    ok = trapper.send(zabbix_host="172.16.210.20", key="ont.foo", value=3)
+
     assert ok is True
-    assert len(server.received) == 1
-    payload = server.received[0]
+    assert len(peer.received) == 1
+    payload = peer.received[0]
     assert payload["request"] == "sender data"
     assert payload["data"][0] == {
         "host": "172.16.210.20",
@@ -103,18 +77,26 @@ def test_zabbix_trapper_sends_well_formed_payload():
     }
 
 
-def test_zabbix_trapper_returns_false_when_server_rejects_value():
+def test_zabbix_trapper_returns_false_when_server_rejects_value(monkeypatch):
     """Zabbix replies with ``processed: 0`` when the host or trapper key
     isn't configured — treat as failure so a misconfigured item isn't
     silently considered delivered."""
-    with _FakeZabbixServer(info="processed: 0; failed: 1") as server:
-        trapper = ZabbixTrapper(host="127.0.0.1", port=server.port)
-        ok = trapper.send(zabbix_host="x", key="ont.foo", value=3)
+    peer = _FakeZabbixSocket(info="processed: 0; failed: 1")
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: peer)
+
+    trapper = ZabbixTrapper(host="127.0.0.1", port=10051)
+    ok = trapper.send(zabbix_host="x", key="ont.foo", value=3)
+
     assert ok is False
 
 
-def test_zabbix_trapper_returns_false_on_connection_error():
+def test_zabbix_trapper_returns_false_on_connection_error(monkeypatch):
     """Network failure (e.g. Zabbix down) is logged and swallowed."""
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("down")),
+    )
     trapper = ZabbixTrapper(host="127.0.0.1", port=1, timeout_sec=0.1)
     ok = trapper.send(zabbix_host="x", key="ont.foo", value=3)
     assert ok is False

@@ -51,6 +51,8 @@ from app.services.network.olt_ssh_ont.status import (
 )
 from app.services.network.olt_ssh_ont.tr069 import (
     bind_tr069_server_profile,
+    get_tr069_server_profile_binding,
+    parse_tr069_binding,
     unbind_tr069_server_profile,
 )
 
@@ -90,6 +92,8 @@ __all__ = [
     "authorize_ont",
     # TR-069 operations
     "bind_tr069_server_profile",
+    "get_tr069_server_profile_binding",
+    "parse_tr069_binding",
     "unbind_tr069_server_profile",
     # Diagnostics
     "diagnose_service_ports",

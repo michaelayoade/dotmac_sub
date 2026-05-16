@@ -26,6 +26,7 @@ from app.models.network import (
     OntUnit,
     OnuOnlineStatus,
 )
+from app.services.network._common import normalize_mac_address
 from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
@@ -360,7 +361,7 @@ def create_or_find_ont_for_authorized_serial(
         external_id=str(ont_id_on_olt) if ont_id_on_olt is not None else None,
         vendor=vendor,
         model=getattr(matched_candidate, "model", None),
-        mac_address=getattr(matched_candidate, "mac", None),
+        mac_address=normalize_mac_address(getattr(matched_candidate, "mac", None)),
         olt_device_id=uuid.UUID(str(olt_id)),
         board=board,
         port=port,

@@ -208,6 +208,10 @@ class OltProtocolAdapterContract(Protocol):
 
     def get_tr069_profiles(self) -> OltOperationResult: ...
 
+    def get_tr069_profile_binding(
+        self, fsp: str, ont_id: int
+    ) -> OltOperationResult: ...
+
     def create_tr069_profile(
         self,
         *,
@@ -867,6 +871,27 @@ class OltProtocolAdapter:
                 success=False,
                 message=f"SSH get TR-069 profiles failed: {exc}",
                 data={"profiles": []},
+            )
+
+    def get_tr069_profile_binding(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Get the TR-069 profile bound to one ONT via SSH CLI."""
+        from app.services.network.olt_ssh_ont import get_tr069_server_profile_binding
+
+        try:
+            ok, message, profile_id = get_tr069_server_profile_binding(
+                self._olt, fsp, ont_id
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"profile_id": profile_id},
+            )
+        except Exception as exc:
+            logger.exception("SSH get_tr069_profile_binding failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get TR-069 binding failed: {exc}",
+                data={"profile_id": None},
             )
 
     def create_tr069_profile(

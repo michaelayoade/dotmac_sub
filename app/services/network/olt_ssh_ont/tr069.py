@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from paramiko.ssh_exception import SSHException
 
@@ -13,6 +14,77 @@ from app.services.network.olt_ssh_ont._common import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TR069_BIND_RE = re.compile(
+    r"\bont\s+tr069-server-config\s+"
+    r"(?P<port>\d+)\s+(?P<ont_id>\d+)\s+profile-id\s+(?P<profile_id>\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_tr069_binding(output: str, *, port: int, ont_id: int) -> int | None:
+    """Return the bound TR-069 profile ID for one ONT from Huawei config text."""
+    for match in _TR069_BIND_RE.finditer(output or ""):
+        if int(match.group("port")) == int(port) and int(match.group("ont_id")) == int(
+            ont_id
+        ):
+            return int(match.group("profile_id"))
+    return None
+
+
+def get_tr069_server_profile_binding(
+    olt: OLTDevice, fsp: str, ont_id: int
+) -> tuple[bool, str, int | None]:
+    """Read the active TR-069 profile binding for an ONT from the GPON config."""
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err, None
+
+    parts = fsp.split("/")
+    frame_slot = f"{parts[0]}/{parts[1]}"
+    port_num = int(parts[2])
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
+        output = core._run_huawei_cmd(channel, "display this", prompt=config_prompt)
+        profile_id = parse_tr069_binding(output, port=port_num, ont_id=ont_id)
+        if profile_id is None:
+            return (
+                True,
+                f"No TR-069 profile binding found for ONT {ont_id} on {fsp}",
+                None,
+            )
+        return (
+            True,
+            f"TR-069 profile {profile_id} bound for ONT {ont_id} on {fsp}",
+            profile_id,
+        )
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error reading TR-069 binding from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()
 
 
 def bind_tr069_server_profile(

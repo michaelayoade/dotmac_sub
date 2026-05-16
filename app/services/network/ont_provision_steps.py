@@ -1802,6 +1802,92 @@ def provision_with_reconciliation(
             ctx.ont.serial_number,
         )
 
+    expected_tr069_profile = values.get("tr069_olt_profile_id")
+    readback_tr069_profile_id: int | None = None
+    if expected_tr069_profile is not None:
+        try:
+            expected_tr069_profile_int = int(expected_tr069_profile)
+        except (TypeError, ValueError):
+            expected_tr069_profile_int = None
+        if expected_tr069_profile_int is None:
+            ms = int((time.monotonic() - t0) * 1000)
+            step_result = StepResult(
+                "provision",
+                False,
+                f"Invalid TR-069 profile id in config pack: {expected_tr069_profile}",
+                ms,
+                data={
+                    "steps_completed": steps_completed,
+                    "created_service_port_indices": created_port_indices,
+                    "readback_service_port_indices": readback_port_indices,
+                },
+            )
+            _record_step(db, ctx.ont, "provision", step_result)
+            _send_failure_notification(ctx, ont_id, step_result)
+            return step_result
+
+        try:
+            _commit_without_expiring(db)
+            tr069_binding_result = adapter.get_tr069_profile_binding(
+                ctx.fsp, ctx.olt_ont_id
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to read TR-069 profile binding after provisioning for ONT %s",
+                ctx.ont.serial_number,
+            )
+            tr069_binding_result = None
+
+        binding_data = (
+            getattr(tr069_binding_result, "data", None)
+            if tr069_binding_result is not None
+            else None
+        )
+        if isinstance(binding_data, dict):
+            raw_profile_id = binding_data.get("profile_id")
+            try:
+                readback_tr069_profile_id = (
+                    int(raw_profile_id) if raw_profile_id is not None else None
+                )
+            except (TypeError, ValueError):
+                readback_tr069_profile_id = None
+        binding_success = bool(
+            getattr(tr069_binding_result, "success", False)
+            if tr069_binding_result is not None
+            else False
+        )
+        if (
+            not binding_success
+            or readback_tr069_profile_id != expected_tr069_profile_int
+        ):
+            message = (
+                getattr(tr069_binding_result, "message", "")
+                if tr069_binding_result is not None
+                else "TR-069 binding readback failed"
+            )
+            ms = int((time.monotonic() - t0) * 1000)
+            step_result = StepResult(
+                "provision",
+                False,
+                (
+                    "TR-069 profile binding readback failed: "
+                    f"expected profile {expected_tr069_profile_int}, "
+                    f"found {readback_tr069_profile_id}. {message}"
+                ).strip(),
+                ms,
+                data={
+                    "steps_completed": steps_completed,
+                    "created_service_port_indices": created_port_indices,
+                    "readback_service_port_indices": readback_port_indices,
+                    "expected_tr069_profile_id": expected_tr069_profile_int,
+                    "readback_tr069_profile_id": readback_tr069_profile_id,
+                },
+            )
+            _record_step(db, ctx.ont, "provision", step_result)
+            _send_failure_notification(ctx, ont_id, step_result)
+            return step_result
+        steps_completed.append(f"tr069_profile_{readback_tr069_profile_id}_verified")
+
     ms = int((time.monotonic() - t0) * 1000)
     step_result = StepResult(
         "provision",
@@ -1812,6 +1898,7 @@ def provision_with_reconciliation(
             "steps_completed": steps_completed,
             "created_service_port_indices": created_port_indices,
             "readback_service_port_indices": readback_port_indices,
+            "readback_tr069_profile_id": readback_tr069_profile_id,
         },
     )
     _record_step(db, ctx.ont, "provision", step_result)

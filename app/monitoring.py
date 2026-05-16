@@ -15,12 +15,27 @@ Environment variables:
 
 import logging
 import os
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 # Default monitoring server
 DEFAULT_MONITORING_HOST = "160.119.127.195"
 DEFAULT_LOKI_URL = f"http://{DEFAULT_MONITORING_HOST}:3100/loki/api/v1/push"
+LOKI_PUSH_PATH = "/loki/api/v1/push"
+
+
+def _normalize_loki_url(loki_url: str) -> str:
+    """Accept either a Loki base URL or the full push endpoint."""
+    normalized = loki_url.strip().rstrip("/")
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        return normalized
+    if parsed.path.endswith(LOKI_PUSH_PATH):
+        return normalized
+    if parsed.path in ("", "/"):
+        return f"{normalized}{LOKI_PUSH_PATH}"
+    return normalized
 
 
 def _has_matching_loki_handler(root_logger: logging.Logger, loki_url: str) -> bool:
@@ -54,7 +69,14 @@ def _setup_loki(
         return False
 
     try:
-        handler = logging_loki.LokiHandler(
+        loki_url = _normalize_loki_url(loki_url)
+
+        class BestEffortLokiHandler(logging_loki.LokiHandler):  # type: ignore[misc]
+            def handleError(self, record: logging.LogRecord) -> None:
+                # Keep Loki transport failures local to the Loki handler.
+                return None
+
+        handler = BestEffortLokiHandler(
             url=loki_url,
             tags={
                 "app": app_name,
