@@ -1158,7 +1158,7 @@ class CpeDevices(ListResponseMixin):
                             THEN latest.last_inform_at
                             ELSE ont.last_seen_at
                         END,
-                        updated_at = now()
+                        updated_at = CURRENT_TIMESTAMP
                     FROM latest
                     WHERE ont.id = latest.ont_unit_id
                       AND ont.acs_last_inform_at IS DISTINCT FROM latest.last_inform_at

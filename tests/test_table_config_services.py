@@ -10,14 +10,20 @@ from app.schemas.table_config import TableColumnPreference
 from app.services.table_config import TableConfigurationService, TableRegistry
 
 
-def _subscriber(db_session, email: str, first_name: str = "Test") -> Subscriber:
+def _subscriber(
+    db_session,
+    email: str,
+    first_name: str = "Test",
+    *,
+    user_type: UserType = UserType.system_user,
+) -> Subscriber:
     subscriber = Subscriber(
         first_name=first_name,
         last_name="User",
         email=email,
         status=SubscriberStatus.active,
         is_active=True,
-        user_type=UserType.system_user,
+        user_type=user_type,
         billing_enabled=True,
         marketing_opt_in=False,
     )
@@ -64,8 +70,22 @@ def test_save_columns_validates_and_persists(db_session):
 
 
 def test_apply_query_config_selects_only_visible_columns(db_session):
-    user = _subscriber(db_session, "table-data-1@example.com", first_name="Alice")
-    _subscriber(db_session, "table-data-2@example.com", first_name="Bob")
+    # ``apply_query_config`` for the "subscribers" table filters out
+    # ``UserType.system_user`` rows (production excludes internal/system
+    # accounts from subscriber listings), so the rows we expect the query
+    # to return must be customer-type.
+    user = _subscriber(
+        db_session,
+        "table-data-1@example.com",
+        first_name="Alice",
+        user_type=UserType.customer,
+    )
+    _subscriber(
+        db_session,
+        "table-data-2@example.com",
+        first_name="Bob",
+        user_type=UserType.customer,
+    )
 
     TableConfigurationService.save_columns(
         db_session,
