@@ -247,6 +247,7 @@ def test_effective_config_per_ont_wcd_index_overrides_beat_pack_defaults(db_sess
     instances, etc.). Per-ONT service-port indices also surface here for
     the first time so the planner can target operator-chosen slots instead
     of always re-allocating fresh ones."""
+    from app.models.catalog import RegionZone
     from app.models.network import (
         OLTDevice,
         OltLineProfile,
@@ -257,7 +258,6 @@ def test_effective_config_per_ont_wcd_index_overrides_beat_pack_defaults(db_sess
         Vlan,
         VlanPurpose,
     )
-    from app.models.catalog import RegionZone
     from app.services.network.effective_ont_config import (
         resolve_effective_ont_config,
     )
@@ -353,6 +353,7 @@ def test_effective_config_falls_back_to_pack_defaults_when_no_ont_override(db_se
     must continue inheriting WCD indices from the config-pack / mapping.
     Service-port indices have no pack default — they stay None until the
     planner allocates fresh ones on first provision."""
+    from app.models.catalog import RegionZone
     from app.models.network import (
         OLTDevice,
         OltLineProfile,
@@ -363,7 +364,6 @@ def test_effective_config_falls_back_to_pack_defaults_when_no_ont_override(db_se
         Vlan,
         VlanPurpose,
     )
-    from app.models.catalog import RegionZone
     from app.services.network.effective_ont_config import (
         resolve_effective_ont_config,
     )

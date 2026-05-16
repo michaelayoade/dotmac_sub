@@ -1821,7 +1821,9 @@ def test_ont_reboot_default_falls_back_to_omci_when_tr069_fails(monkeypatch):
 
     def fake_tr069_reboot(db, ont_id, *, request=None):
         tr069_calls.append((db, ont_id))
-        return ActionResult(False, "Connection request error: Unexpected status code 401")
+        return ActionResult(
+            False, "Connection request error: Unexpected status code 401"
+        )
 
     monkeypatch.setattr(
         network_onts_actions,

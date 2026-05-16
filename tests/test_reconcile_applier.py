@@ -776,7 +776,11 @@ class _RefreshAwareAcsClient(_StubAcsClient):
 
     def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
         self.calls.append(
-            ("refresh_object", (device_id, object_path), {"allow_when_pending": allow_when_pending})
+            (
+                "refresh_object",
+                (device_id, object_path),
+                {"allow_when_pending": allow_when_pending},
+            )
         )
         return {"_id": "refresh-task"}
 
@@ -793,11 +797,7 @@ def _wan_ppp_doc(*, wcd: int, instance_keys: list[int]) -> dict:
         "_id": "00259E-HG8546M-HWTC7C7E1D92",
         "InternetGatewayDevice": {
             "WANDevice": {
-                "1": {
-                    "WANConnectionDevice": {
-                        str(wcd): {"WANPPPConnection": children}
-                    }
-                }
+                "1": {"WANConnectionDevice": {str(wcd): {"WANPPPConnection": children}}}
             }
         },
     }
@@ -921,7 +921,9 @@ def test_acs_add_object_skips_discovery_for_non_wan_ppp_targets():
     PortMapping). The post-condition probe only applies when the target
     parent path is …WANConnectionDevice.<N>.WANPPPConnection, so unrelated
     addObject calls don't pay for an extra refresh + lookup."""
-    acs = _RefreshAwareAcsClient(post_refresh_doc=_wan_ppp_doc(wcd=2, instance_keys=[5]))
+    acs = _RefreshAwareAcsClient(
+        post_refresh_doc=_wan_ppp_doc(wcd=2, instance_keys=[5])
+    )
     ctx = _ctx(acs_client=acs)
     plan = _plan(
         AcsAddObject(
