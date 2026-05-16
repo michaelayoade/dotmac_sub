@@ -25,9 +25,7 @@ def clear_sessions(monkeypatch):
     Redis would otherwise see the session land in Redis and the dict stay
     empty, causing spurious failures.
     """
-    monkeypatch.setattr(
-        "app.services.session_store.get_session_redis", lambda: None
-    )
+    monkeypatch.setattr("app.services.session_store.get_session_redis", lambda: None)
     reseller_portal._RESELLER_SESSIONS.clear()
     yield
     reseller_portal._RESELLER_SESSIONS.clear()
