@@ -1,0 +1,666 @@
+"""Incremental sync: Pull recent changes from Splynx into DotMac Sub.
+
+Designed to run periodically (every 15-30 min via cron or Celery beat) during
+dual-run to keep DotMac Sub in sync with Splynx.
+
+Syncs:
+1. New/updated customers → Subscriber
+2. New/updated services → Subscription
+3. New invoices → Invoice + InvoiceLine
+4. New payments → Payment + PaymentAllocation
+5. Status changes (blocked/unblocked) → Subscriber/Subscription status
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+from sqlalchemy import select
+
+from app.services.migrations.db_connections import (
+    dotmac_session,
+    fetch_all,
+    splynx_connection,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def _parse_date(val) -> datetime | None:
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val.replace(tzinfo=UTC) if val.tzinfo is None else val
+    try:
+        from datetime import date as date_type
+
+        if isinstance(val, date_type):
+            return datetime(val.year, val.month, val.day, tzinfo=UTC)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _is_splynx_deleted(value) -> bool:
+    """Normalize Splynx deleted flags from MySQL and FDW/staging rows."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _table_columns(conn, table_name: str) -> set[str]:
+    """Return source table columns from Splynx MySQL."""
+    if table_name not in {"payments"}:
+        raise ValueError(f"Unsupported Splynx table: {table_name}")
+    rows = fetch_all(conn, f"SHOW COLUMNS FROM {table_name}")  # noqa: S608
+    return {str(row.get("Field") or row.get("field") or "") for row in rows}
+
+
+def _payment_since_expression(conn) -> str:
+    columns = _table_columns(conn, "payments")
+    fields = [
+        field
+        for field in ("updated_at", "real_create_datetime", "payment_date", "date")
+        if field in columns
+    ]
+    if not fields:
+        raise RuntimeError("Splynx payments table has no usable date column")
+    if len(fields) == 1:
+        return fields[0]
+    return f"COALESCE({', '.join(fields)})"
+
+
+def _payment_paid_at(row: dict) -> datetime | None:
+    return _parse_date(
+        row.get("payment_date")
+        or row.get("date")
+        or row.get("real_create_datetime")
+        or row.get("updated_at")
+    )
+
+
+def _fetch_invoice_items(conn, inv_id: int) -> list[dict]:
+    """Fetch non-deleted line items for a Splynx invoice."""
+    return fetch_all(
+        conn,
+        f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'",  # noqa: S608
+    )
+
+
+def _compute_invoice_aggregates(
+    items: list[dict],
+    row: dict,
+) -> tuple[Decimal, Decimal, datetime | None, datetime | None]:
+    """Compute subtotal, tax_total, billing_period_start/end from line items.
+
+    Falls back to invoice-level fields when line items are missing or
+    have no period data.
+    """
+    subtotal = Decimal("0")
+    tax_total = Decimal("0")
+    period_starts: list[datetime | None] = []
+    period_ends: list[datetime | None] = []
+
+    for item in items:
+        price = Decimal(str(item.get("price") or "0"))
+        qty = Decimal(str(item.get("quantity") or "1"))
+        tax_pct = Decimal(str(item.get("tax") or "0"))
+        line_amount = price * qty
+        subtotal += line_amount
+        tax_total += line_amount * tax_pct / Decimal("100")
+
+        period_starts.append(_parse_date(item.get("period_from")))
+        period_ends.append(_parse_date(item.get("period_to")))
+
+    # Fall back to invoice total if no line items
+    if not items:
+        subtotal = Decimal(str(row.get("total") or "0"))
+        tax_total = Decimal("0")
+
+    # Billing period: min(period_from), max(period_to) from items
+    valid_starts = [d for d in period_starts if d]
+    valid_ends = [d for d in period_ends if d]
+    billing_start = (
+        min(valid_starts) if valid_starts else _parse_date(row.get("date_created"))
+    )
+    billing_end = max(valid_ends) if valid_ends else _parse_date(row.get("date_till"))
+
+    return subtotal, tax_total, billing_start, billing_end
+
+
+def _resolve_subscription_id(
+    conn,
+    service_map: dict[int, str],
+    transaction_id: int | None,
+) -> str | None:
+    """Map a line item's transaction_id → Splynx service_id → DotMac subscription_id."""
+    if not transaction_id:
+        return None
+    rows = fetch_all(
+        conn,
+        f"SELECT service_id FROM billing_transactions WHERE id = {transaction_id}",  # noqa: S608
+    )
+    if not rows:
+        return None
+    service_id = rows[0].get("service_id")
+    if not service_id:
+        return None
+    return service_map.get(int(service_id))
+
+
+def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
+    """Sync invoices created since the given timestamp."""
+    from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    customer_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+    service_map: dict[int, str] = {
+        m.splynx_id: str(m.dotmac_id)
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.service
+            )
+        ).all()
+    }
+    existing_invoice_ids = set(
+        db.scalars(
+            select(SplynxIdMapping.splynx_id).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.invoice
+            )
+        ).all()
+    )
+
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+    query = f"""
+        SELECT * FROM invoices
+        WHERE real_create_datetime >= '{since_str}'
+        ORDER BY id
+    """  # noqa: S608
+    rows = fetch_all(conn, query)
+    created = 0
+    skipped = 0
+
+    for row in rows:
+        inv_id = row["id"]
+        if inv_id in existing_invoice_ids:
+            skipped += 1
+            continue
+
+        subscriber_id = customer_map.get(row.get("customer_id"))
+        if not subscriber_id:
+            skipped += 1
+            continue
+
+        is_deleted = _is_splynx_deleted(row.get("deleted"))
+        status_raw = row.get("status", "not_paid")
+        status_map = {
+            "not_paid": InvoiceStatus.issued,
+            "paid": InvoiceStatus.paid,
+            "deleted": InvoiceStatus.void,
+            "pending": InvoiceStatus.draft,
+        }
+        status = status_map.get(status_raw, InvoiceStatus.issued)
+        if is_deleted:
+            status = InvoiceStatus.void
+
+        total = Decimal(str(row.get("total") or "0"))
+        due = Decimal(str(row.get("due") or "0"))
+
+        # Fetch line items first to compute aggregates
+        items = _fetch_invoice_items(conn, inv_id)
+        subtotal, tax_total, billing_start, billing_end = _compute_invoice_aggregates(
+            items, row
+        )
+
+        invoice = Invoice(
+            account_id=subscriber_id,
+            invoice_number=(row.get("number") or "")[:80] or None,
+            status=status,
+            currency="NGN",
+            subtotal=subtotal,
+            tax_total=tax_total,
+            total=total,
+            balance_due=due,
+            billing_period_start=billing_start,
+            billing_period_end=billing_end,
+            issued_at=_parse_date(row.get("date_created")),
+            due_at=_parse_date(row.get("date_till")),
+            paid_at=_parse_date(row.get("date_updated"))
+            if status == InvoiceStatus.paid
+            else None,
+            is_sent=row.get("is_sent") in ("1", 1, True),
+            splynx_invoice_id=inv_id,
+            is_active=not is_deleted,
+        )
+        db.add(invoice)
+        db.flush()
+
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.invoice,
+                splynx_id=inv_id,
+                dotmac_id=invoice.id,
+            )
+        )
+
+        # Create invoice line items
+        for item in items:
+            price = Decimal(str(item.get("price") or "0"))
+            qty = Decimal(str(item.get("quantity") or "1"))
+            subscription_id = _resolve_subscription_id(
+                conn, service_map, item.get("transaction_id")
+            )
+            line = InvoiceLine(
+                invoice_id=invoice.id,
+                subscription_id=subscription_id,
+                description=(item.get("description") or "Line item")[:255],
+                quantity=qty,
+                unit_price=price,
+                amount=price * qty,
+                tax_application=TaxApplication.exclusive,
+                is_active=True,
+            )
+            db.add(line)
+
+        created += 1
+
+    db.flush()
+    logger.info("Invoices synced: %d new, %d skipped", created, skipped)
+    return {"created": created, "skipped": skipped}
+
+
+def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
+    """Sync payments created since the given timestamp."""
+    from app.models.billing import Payment, PaymentStatus
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    customer_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+    existing_payment_ids = set(
+        db.scalars(
+            select(SplynxIdMapping.splynx_id).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.payment
+            )
+        ).all()
+    )
+
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+    payment_since_expr = _payment_since_expression(conn)
+    query = f"""
+        SELECT * FROM payments
+        WHERE {payment_since_expr} >= '{since_str}'
+        ORDER BY id
+    """  # noqa: S608
+    rows = fetch_all(conn, query)
+    created = 0
+    skipped = 0
+
+    for row in rows:
+        pid = row["id"]
+        if pid in existing_payment_ids:
+            skipped += 1
+            continue
+
+        subscriber_id = customer_map.get(row.get("customer_id"))
+        if not subscriber_id:
+            skipped += 1
+            continue
+
+        is_deleted = _is_splynx_deleted(row.get("deleted"))
+        amount = Decimal(str(row.get("amount") or "0"))
+        paid_at = _payment_paid_at(row)
+
+        payment = Payment(
+            account_id=subscriber_id,
+            amount=amount,
+            currency="NGN",
+            status=PaymentStatus.succeeded
+            if not is_deleted
+            else PaymentStatus.canceled,
+            paid_at=paid_at,
+            receipt_number=(row.get("receipt_number") or "")[:120] or None,
+            memo=(row.get("comment") or "")[:500] or None,
+            splynx_payment_id=pid,
+            is_active=not is_deleted,
+        )
+        db.add(payment)
+        db.flush()
+
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.payment,
+                splynx_id=pid,
+                dotmac_id=payment.id,
+            )
+        )
+        created += 1
+
+    db.flush()
+    logger.info("Payments synced: %d new, %d skipped", created, skipped)
+    return {"created": created, "skipped": skipped}
+
+
+def sync_status_changes(conn, db) -> dict[str, int]:
+    """Sync customer status changes from Splynx."""
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+    from app.models.subscriber import Subscriber, SubscriberStatus
+
+    status_map = {
+        "active": SubscriberStatus.active,
+        "blocked": SubscriberStatus.blocked,
+        "disabled": SubscriberStatus.disabled,
+        "new": SubscriberStatus.new,
+    }
+
+    # Get all customer mappings
+    customer_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+
+    # Get current Splynx statuses
+    query = "SELECT id, status FROM customers WHERE deleted='0' AND category != 'lead'"
+    rows = fetch_all(conn, query)
+    updated = 0
+
+    for row in rows:
+        dotmac_id = customer_map.get(row["id"])
+        if not dotmac_id:
+            continue
+
+        expected_status = status_map.get(row["status"])
+        if not expected_status:
+            continue
+
+        subscriber = db.get(Subscriber, dotmac_id)
+        if subscriber and subscriber.status != expected_status:
+            subscriber.status = expected_status
+            updated += 1
+
+    db.flush()
+    logger.info("Status changes synced: %d updated", updated)
+    return {"updated": updated}
+
+
+def sync_deleted_customers(conn, db) -> dict[str, int]:
+    """Detect customers deleted in Splynx and soft-delete in DotMac."""
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+    from app.models.subscriber import Subscriber, SubscriberStatus
+
+    # Get all mapped customer IDs
+    customer_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+
+    if not customer_map:
+        return {"soft_deleted": 0}
+
+    # Find which mapped customers are now deleted in Splynx
+    splynx_ids = ",".join(str(sid) for sid in customer_map)
+    query = f"SELECT id FROM customers WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    deleted_rows = fetch_all(conn, query)
+    deleted_splynx_ids = {row["id"] for row in deleted_rows}
+
+    soft_deleted = 0
+    for splynx_id in deleted_splynx_ids:
+        dotmac_id = customer_map.get(splynx_id)
+        if not dotmac_id:
+            continue
+        subscriber = db.get(Subscriber, dotmac_id)
+        if subscriber and subscriber.is_active:
+            subscriber.is_active = False
+            subscriber.status = SubscriberStatus.canceled
+            # Update metadata to record the deletion source
+            metadata = subscriber.metadata_ or {}
+            metadata["splynx_deleted"] = True
+            subscriber.metadata_ = metadata
+            soft_deleted += 1
+
+    db.flush()
+    logger.info("Deleted customers synced: %d soft-deleted", soft_deleted)
+    return {"soft_deleted": soft_deleted}
+
+
+def sync_new_credit_notes(conn, db, since: datetime) -> dict[str, int]:
+    """Sync credit notes created since the given timestamp.
+
+    Credit notes use the per-row ``splynx_credit_note_id`` column for linkage
+    (not ``splynx_id_mappings``), matching how phase2 imports them.
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.models.billing import CreditNote, CreditNoteStatus
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    customer_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+    existing_ids = set(
+        db.scalars(
+            sa_select(CreditNote.splynx_credit_note_id).where(
+                CreditNote.splynx_credit_note_id.is_not(None)
+            )
+        ).all()
+    )
+
+    status_map = {
+        "used": CreditNoteStatus.applied,
+        "not_refunded": CreditNoteStatus.issued,
+        "deleted": CreditNoteStatus.void,
+    }
+
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+    query = f"SELECT * FROM credit_notes WHERE real_create_datetime >= '{since_str}' ORDER BY id"  # noqa: S608
+    rows = fetch_all(conn, query)
+    created = 0
+    skipped = 0
+
+    for row in rows:
+        cn_id = row["id"]
+        if cn_id in existing_ids:
+            skipped += 1
+            continue
+        account_id = customer_map.get(row.get("customer_id"))
+        if not account_id:
+            skipped += 1
+            continue
+
+        is_deleted = _is_splynx_deleted(row.get("deleted"))
+        status = status_map.get(row.get("status"), CreditNoteStatus.issued)
+        if is_deleted:
+            status = CreditNoteStatus.void
+        total = Decimal(str(row.get("total") or "0"))
+        applied = total if status == CreditNoteStatus.applied else Decimal("0")
+
+        db.add(
+            CreditNote(
+                account_id=account_id,
+                credit_number=(row.get("number") or "")[:80] or None,
+                status=status,
+                currency="NGN",
+                subtotal=Decimal("0"),
+                tax_total=Decimal("0"),
+                total=total,
+                applied_total=applied,
+                memo=row.get("note") or None,
+                is_active=not is_deleted,
+                splynx_credit_note_id=cn_id,
+            )
+        )
+        created += 1
+
+    db.flush()
+    logger.info("Credit notes synced: %d new, %d skipped", created, skipped)
+    return {"created": created, "skipped": skipped}
+
+
+def sync_deleted_services(conn, db) -> dict[str, int]:
+    """Detect services deleted in Splynx and cancel in DotMac."""
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    # Get all mapped service IDs (internet services only, splynx_id < 200000)
+    service_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.service,
+                SplynxIdMapping.splynx_id < 200000,
+            )
+        ).all()
+    }
+
+    if not service_map:
+        return {"canceled": 0}
+
+    splynx_ids = ",".join(str(sid) for sid in service_map)
+    query = (
+        f"SELECT id FROM services_internet WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    )
+    deleted_rows = fetch_all(conn, query)
+    deleted_splynx_ids = {row["id"] for row in deleted_rows}
+
+    canceled = 0
+    for splynx_id in deleted_splynx_ids:
+        dotmac_id = service_map.get(splynx_id)
+        if not dotmac_id:
+            continue
+        subscription = db.get(Subscription, dotmac_id)
+        if subscription and subscription.status != SubscriptionStatus.canceled:
+            subscription.status = SubscriptionStatus.canceled
+            canceled += 1
+
+    db.flush()
+    logger.info("Deleted services synced: %d canceled", canceled)
+    return {"canceled": canceled}
+
+
+def run_incremental_sync(
+    hours_back: int = 24,
+    dry_run: bool = True,
+) -> None:
+    """Execute incremental sync."""
+    since = datetime.now(UTC) - timedelta(hours=hours_back)
+    logger.info("=== Incremental Sync (since %s) ===", since.isoformat())
+
+    with splynx_connection() as conn:
+        with dotmac_session() as db:
+            if dry_run:
+                since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+                payment_since_expr = _payment_since_expression(conn)
+                tables = [
+                    (
+                        "new invoices",
+                        f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'",
+                    ),  # noqa: S608
+                    (
+                        "new payments",
+                        "SELECT COUNT(*) as cnt FROM payments "
+                        f"WHERE {payment_since_expr} >= '{since_str}'",
+                    ),  # noqa: S608
+                    (
+                        "new credit notes",
+                        f"SELECT COUNT(*) as cnt FROM credit_notes WHERE real_create_datetime >= '{since_str}'",
+                    ),  # noqa: S608
+                    (
+                        "status changes",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE deleted='0' AND category != 'lead'",
+                    ),
+                    (
+                        "deleted customers",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE deleted='1' AND category != 'lead'",
+                    ),
+                    (
+                        "deleted services",
+                        "SELECT COUNT(*) as cnt FROM services_internet WHERE deleted='1'",
+                    ),
+                ]
+                for name, query in tables:
+                    rows = fetch_all(conn, query)
+                    logger.info("  %s: %d to check", name, rows[0]["cnt"])
+                logger.info("Run with --execute to sync")
+                return
+
+            # Step 1: New invoices
+            inv_result = sync_new_invoices(conn, db, since)
+            db.commit()
+
+            # Step 2: New payments
+            pay_result = sync_new_payments(conn, db, since)
+            db.commit()
+
+            # Step 3: New credit notes
+            cn_result = sync_new_credit_notes(conn, db, since)
+            db.commit()
+
+            # Step 4: Status changes
+            status_result = sync_status_changes(conn, db)
+            db.commit()
+
+            # Step 5: Detect deletions
+            del_cust_result = sync_deleted_customers(conn, db)
+            db.commit()
+
+            del_svc_result = sync_deleted_services(conn, db)
+            db.commit()
+
+            logger.info("=== Incremental sync complete ===")
+            logger.info(
+                "  Invoices: %d new | Payments: %d new | Credit notes: %d new"
+                " | Status: %d updated | Customers deleted: %d | Services canceled: %d",
+                inv_result["created"],
+                pay_result["created"],
+                cn_result["created"],
+                status_result["updated"],
+                del_cust_result["soft_deleted"],
+                del_svc_result["canceled"],
+            )
+
+
+if __name__ == "__main__":
+    hours = 24
+    for arg in sys.argv:
+        if arg.startswith("--hours="):
+            hours = int(arg.split("=")[1])
+
+    if "--execute" in sys.argv:
+        run_incremental_sync(hours_back=hours, dry_run=False)
+    else:
+        run_incremental_sync(hours_back=hours, dry_run=True)
+        print(
+            "\nTo execute: poetry run python -m scripts.migration.incremental_sync --execute"
+        )
+        print("Options: --hours=48 (default: 24)")
