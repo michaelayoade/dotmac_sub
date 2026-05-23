@@ -994,11 +994,21 @@ def customer_profile(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/profile", status_code=303
         )
+    # Hydrate the subscriber so the form pre-fills with actual DB values
+    # rather than the cached session blob (which only carries 'name' as a
+    # display string, not editable fields).
+    from app.models.subscriber import Subscriber as _Subscriber
+
+    subscriber = None
+    subscriber_id = customer.get("subscriber_id")
+    if subscriber_id:
+        subscriber = db.get(_Subscriber, subscriber_id)
     return templates.TemplateResponse(
         "customer/profile/index.html",
         {
             "request": request,
             "customer": customer,
+            "subscriber": subscriber,
             "active_page": "profile",
             "success": "Profile updated successfully" if saved else None,
         },
