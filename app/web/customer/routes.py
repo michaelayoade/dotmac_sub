@@ -985,6 +985,7 @@ def customer_notifications(
 @router.get("/profile", response_class=HTMLResponse)
 def customer_profile(
     request: Request,
+    saved: str | None = None,
     db: Session = Depends(get_db),
 ) -> Response:
     """Customer profile settings."""
@@ -999,6 +1000,7 @@ def customer_profile(
             "request": request,
             "customer": customer,
             "active_page": "profile",
+            "success": "Profile updated successfully" if saved else None,
         },
     )
 
@@ -1022,17 +1024,10 @@ def customer_update_profile(
         update_customer_profile(
             db, subscriber_id=subscriber_id, name=name, email=email, phone=phone
         )
-        customer = get_current_customer_from_request(request, db)
 
-    return templates.TemplateResponse(
-        "customer/profile/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            "success": "Profile updated successfully",
-            "active_page": "profile",
-        },
-    )
+    # POST-Redirect-GET: bounce to the profile page with a success flag so a
+    # browser refresh after save can't accidentally resubmit the form.
+    return RedirectResponse(url="/portal/profile?saved=1", status_code=303)
 
 
 @router.get("/contacts", response_class=HTMLResponse)

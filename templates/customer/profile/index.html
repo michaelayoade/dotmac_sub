@@ -27,7 +27,7 @@
     </div>
     {% endif %}
 
-    <form method="post" class="space-y-6">
+    <form method="post" action="/portal/profile" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
         <!-- Profile Card with Avatar -->
         <div class="rounded-2xl border border-stone-200 bg-white shadow-premium dark:border-stone-700 dark:bg-stone-800 overflow-hidden">
@@ -58,17 +58,17 @@
                 <div class="grid gap-5 sm:grid-cols-2">
                     <div class="sm:col-span-2 lg:col-span-1">
                         <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Full Name</label>
-                        <input type="text" name="name" value="{{ customer.name | default(customer.get('name') if customer else '') }}" required
+                        <input type="text" name="name" value="{{ (customer.name if customer else '') or '' }}" required
                                class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                     </div>
                     <div class="sm:col-span-2 lg:col-span-1">
                         <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Email Address</label>
-                        <input type="email" name="email" value="{{ customer.email | default(customer.get('email') if customer else '') }}" required
+                        <input type="email" name="email" value="{{ (customer.email if customer else '') or '' }}" required
                                class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                     </div>
                     <div>
                         <label class="block text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">Phone Number</label>
-                        <input type="tel" name="phone" value="{{ customer.phone | default(customer.get('phone') if customer else '') }}"
+                        <input type="tel" name="phone" value="{{ (customer.phone if customer else '') or '' }}"
                                class="block w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-sm text-stone-900 transition-all focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-4 focus:ring-[var(--color-brand-500)]/10 dark:border-stone-600 dark:bg-stone-700 dark:text-white">
                     </div>
                 </div>
