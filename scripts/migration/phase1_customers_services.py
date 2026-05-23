@@ -163,7 +163,7 @@ def _map_billing_mode(billing_type_raw: str | None):
 def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
     """Migrate Splynx customers → Subscriber (+ Organization for company customers)."""
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
-    from app.models.subscriber import Organization, Subscriber, UserType
+    from app.models.subscriber import Subscriber, UserType
 
     # Load existing mappings (partner, tax)
     partner_mappings = {
@@ -190,6 +190,35 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
             )
         ).all()
     }
+
+    # Defense in depth: a subscriber may exist with splynx_customer_id set but
+    # the corresponding splynx_id_mappings row may be missing (legacy data, or
+    # a partial earlier run). Without this guard we'd duplicate the subscriber.
+    existing_subs_by_splynx_id = {
+        sub.splynx_customer_id: sub.id
+        for sub in db.scalars(
+            select(Subscriber).where(Subscriber.splynx_customer_id.is_not(None))
+        ).all()
+    }
+    backfilled_maps = 0
+    for splynx_id, dotmac_id in existing_subs_by_splynx_id.items():
+        if splynx_id not in existing_maps:
+            db.add(
+                SplynxIdMapping(
+                    entity_type=SplynxEntityType.customer,
+                    splynx_id=splynx_id,
+                    dotmac_id=dotmac_id,
+                )
+            )
+            existing_maps[splynx_id] = dotmac_id
+            backfilled_maps += 1
+    if backfilled_maps:
+        db.flush()
+        logger.info(
+            "Customer mapping self-heal: backfilled %d missing splynx_id_mappings rows",
+            backfilled_maps,
+        )
+
     if existing_maps:
         # Also load their emails/subscriber_numbers into seen sets
         for dotmac_id in existing_maps.values():
@@ -294,21 +323,6 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
             try:
                 db.add(subscriber)
                 db.flush()
-
-                # Create Organization for company customers
-                if category == "business":
-                    org = Organization(
-                        name=(row["name"] or "Unknown Org")[:160],
-                        address_line1=subscriber.address_line1,
-                        city=subscriber.city,
-                        postal_code=subscriber.postal_code,
-                        country_code=subscriber.country_code,
-                        is_active=not is_deleted,
-                        primary_login_subscriber_id=subscriber.id,
-                    )
-                    db.add(org)
-                    db.flush()
-                    subscriber.organization_id = org.id
 
                 db.add(
                     SplynxIdMapping(
@@ -427,15 +441,45 @@ def migrate_services(
         ).all()
     }
 
-    # Load existing service mappings
+    # Load existing service mappings (services_internet uses splynx_id < 200000)
     existing_maps = {
         m.splynx_id: m.dotmac_id
         for m in db.scalars(
             select(SplynxIdMapping).where(
-                SplynxIdMapping.entity_type == SplynxEntityType.service
+                SplynxIdMapping.entity_type == SplynxEntityType.service,
+                SplynxIdMapping.splynx_id < 200000,
             )
         ).all()
     }
+
+    # Defense in depth: heal subscriptions whose splynx_service_id was set on the row
+    # but never registered in splynx_id_mappings, so we don't duplicate them.
+    existing_subs_by_splynx_id = {
+        sub.splynx_service_id: sub.id
+        for sub in db.scalars(
+            select(Subscription).where(
+                Subscription.splynx_service_id.is_not(None),
+                Subscription.splynx_service_id < 200000,
+            )
+        ).all()
+    }
+    backfilled_maps = 0
+    for splynx_id, dotmac_id in existing_subs_by_splynx_id.items():
+        if splynx_id not in existing_maps:
+            db.add(
+                SplynxIdMapping(
+                    entity_type=SplynxEntityType.service,
+                    splynx_id=splynx_id,
+                    dotmac_id=dotmac_id,
+                )
+            )
+            existing_maps[splynx_id] = dotmac_id
+            backfilled_maps += 1
+    if backfilled_maps:
+        db.flush()
+        logger.info(
+            "Internet service mapping self-heal: backfilled %d rows", backfilled_maps
+        )
 
     # Track usernames for dedup
     existing_usernames = set(db.scalars(select(AccessCredential.username)).all())
@@ -626,6 +670,34 @@ def migrate_custom_services(
             )
         ).all()
     }
+
+    # Defense in depth: heal subscriptions whose splynx_service_id is set (>=200000
+    # = custom services) but never registered in splynx_id_mappings, so we don't
+    # duplicate them on rerun.
+    existing_subs_by_splynx_id = {
+        sub.splynx_service_id: sub.id
+        for sub in db.scalars(
+            select(Subscription).where(Subscription.splynx_service_id >= 200000)
+        ).all()
+    }
+    backfilled_maps = 0
+    for splynx_id, dotmac_id in existing_subs_by_splynx_id.items():
+        if splynx_id not in existing_maps:
+            db.add(
+                SplynxIdMapping(
+                    entity_type=SplynxEntityType.service,
+                    splynx_id=splynx_id,
+                    dotmac_id=dotmac_id,
+                )
+            )
+            existing_maps[splynx_id] = dotmac_id
+            backfilled_maps += 1
+    if backfilled_maps:
+        db.flush()
+        logger.info(
+            "Custom service mapping self-heal: backfilled %d rows", backfilled_maps
+        )
+
     created = 0
     skipped = 0
 
