@@ -195,7 +195,7 @@
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                             <div>
                                 <label for="display_name" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Display Name</label>
-                                <input type="text" name="display_name" id="display_name" value="{{ customer.display_name if customer and customer_type == 'person' else '' }}" placeholder="John Doe"
+                                <input type="text" name="display_name" id="display_name" value="{{ (customer.display_name if customer and customer_type == 'person' else '') or '' }}" placeholder="John Doe"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                             <div>
