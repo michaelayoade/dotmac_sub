@@ -176,7 +176,7 @@
         <div class="flex flex-wrap items-center gap-4">
             <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ server.name }}</span>
             <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">Port {{ server.listen_port }}/UDP</span>
-            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ server.vpn_address }}</span>
+            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ server.vpn_address or '—' }}</span>
             {% if server.vpn_address_v6 %}
             <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ server.vpn_address_v6 }}</span>
             {% endif %}
