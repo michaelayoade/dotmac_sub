@@ -378,14 +378,20 @@ function bandwidthWidget(config = {}) {
         eventSource: null,
         reconnectTimer: null,
         isDestroyed: false,
+        consecutiveErrors: 0,
+        maxConsecutiveErrors: 3,
 
         get currentRxFormatted() { return formatBps(this.currentRx); },
         get currentTxFormatted() { return formatBps(this.currentTx); },
 
         async init() {
             this.isDestroyed = false;
-            await this.loadCurrent();
-            this.connectSSE();
+            // If the initial stats fetch 404s the customer has no active
+            // subscription; don't open SSE in that case.
+            const hasData = await this.loadCurrent();
+            if (hasData) {
+                this.connectSSE();
+            }
         },
 
         destroy() {
@@ -418,11 +424,16 @@ function bandwidthWidget(config = {}) {
                     const stats = await response.json();
                     this.currentRx = stats.current_rx_bps || 0;
                     this.currentTx = stats.current_tx_bps || 0;
+                    this.loading = false;
+                    return true;
                 }
+                // 404 / 401 / etc. — likely no active subscription.
                 this.loading = false;
+                return false;
             } catch (e) {
                 console.error('Error loading bandwidth:', e);
                 this.loading = false;
+                return false;
             }
         },
 
@@ -442,6 +453,7 @@ function bandwidthWidget(config = {}) {
                     if (!data) return;
                     this.currentRx = data.rx_bps || 0;
                     this.currentTx = data.tx_bps || 0;
+                    this.consecutiveErrors = 0;
                 });
 
                 source.addEventListener('error', () => {
@@ -449,10 +461,23 @@ function bandwidthWidget(config = {}) {
                         source.close();
                         this.eventSource = null;
                     }
+                    this.consecutiveErrors++;
+                    if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+                        // Server has been rejecting the stream consistently —
+                        // most likely there is no active subscription. Stop
+                        // hammering the endpoint and clean up timers.
+                        if (this.reconnectTimer) {
+                            clearTimeout(this.reconnectTimer);
+                            this.reconnectTimer = null;
+                        }
+                        return;
+                    }
                     if (this.reconnectTimer) {
                         clearTimeout(this.reconnectTimer);
                     }
-                    this.reconnectTimer = setTimeout(() => this.connectSSE(), 5000);
+                    // Exponential backoff: 5s, 10s, 20s, then stop.
+                    const delay = 5000 * Math.pow(2, this.consecutiveErrors - 1);
+                    this.reconnectTimer = setTimeout(() => this.connectSSE(), delay);
                 });
             } catch (e) {
                 console.error('SSE connection failed:', e);
