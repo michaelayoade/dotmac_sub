@@ -89,16 +89,16 @@
                     <div class="space-y-3">
                         <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
                             <span>Subtotal</span>
-                            <span class="font-semibold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.subtotal_amount or invoice.total_amount or 0) }}</span>
+                            <span class="font-semibold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.subtotal or invoice.total or 0) }}</span>
                         </div>
                         <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
                             <span>Tax</span>
-                            <span class="font-semibold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.tax_amount or 0) }}</span>
+                            <span class="font-semibold text-stone-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.tax_total or 0) }}</span>
                         </div>
                         <div class="border-t border-stone-200 pt-3 dark:border-stone-700">
                             <div class="flex items-center justify-between">
                                 <span class="text-base font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Total</span>
-                                <span class="text-xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">₦{{ "{:,.2f}".format(invoice.total_amount or 0) }}</span>
+                                <span class="text-xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">₦{{ "{:,.2f}".format(invoice.total or 0) }}</span>
                             </div>
                         </div>
                     </div>
@@ -161,7 +161,7 @@
                     {% if status_val == 'overdue' %}text-red-600 dark:text-red-400
                     {% elif status_val == 'paid' %}text-emerald-600 dark:text-emerald-400
                     {% else %}text-stone-900 dark:text-white{% endif %}" style="font-family: var(--font-display);">
-                    ₦{{ "{:,.2f}".format(invoice.balance_due or invoice.total_amount or 0) }}
+                    ₦{{ "{:,.2f}".format(invoice.balance_due or invoice.total or 0) }}
                 </p>
                 <p class="mt-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
