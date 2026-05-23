@@ -372,6 +372,8 @@ def core_device_edit(request: Request, device_id: str, db: Session = Depends(get
     dependencies=[Depends(require_permission("network:read"))],
 )
 def core_device_detail(request: Request, device_id: str, db: Session = Depends(get_db)):
+    from app.services import core_router_metrics
+
     page_data = web_network_core_devices_service.detail_page_data(
         db,
         device_id,
@@ -393,6 +395,16 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
     )
     context.update(page_data)
     context["activities"] = activities
+    # Sort monitored interfaces to the top so admins don't have to scroll past
+    # all the unwatched ones. Stable secondary sort by name keeps things predictable.
+    interfaces = list(page_data.get("interfaces") or [])
+    interfaces.sort(key=lambda i: (not bool(i.monitored), (i.name or "").lower()))
+    context["interfaces"] = interfaces
+    # Live per-interface bandwidth (no-op if no monitored interfaces or Zabbix is down)
+    context["bandwidth"] = core_router_metrics.get_interface_bandwidth(
+        db, page_data["device"], interfaces
+    )
+    context["format_bps"] = _format_bps
     return templates.TemplateResponse("admin/network/core-devices/detail.html", context)
 
 
@@ -437,9 +449,59 @@ def core_device_interface_toggle_monitored(
     web_network_core_devices_service.toggle_interface_monitored(
         db, device_id=device_id, interface_id=interface_id, monitored=monitored
     )
+    # Invalidate the live-bandwidth cache so the next poll reflects the new set.
+    from app.services import core_router_metrics
+
+    core_router_metrics.invalidate_cache(device_id)
     return RedirectResponse(
         f"/admin/network/core-devices/{device_id}",
         status_code=303,
+    )
+
+
+@router.get(
+    "/core-devices/{device_id}/interfaces/bandwidth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def core_device_interfaces_bandwidth_partial(
+    request: Request,
+    device_id: str,
+    db: Session = Depends(get_db),
+):
+    """Re-render the interfaces card with the latest Zabbix bandwidth values.
+
+    Designed to be hit by HTMX polling every ~10 s. Returns the full card
+    partial so all rows (including the search input via hx-preserve) refresh
+    in one pass.
+    """
+    from app.services import core_router_metrics
+
+    page_data = web_network_core_devices_service.detail_page_data(
+        db,
+        device_id,
+        request.query_params.get("interface_id"),
+        format_duration=_format_duration,
+        format_bps=_format_bps,
+    )
+    if not page_data:
+        return Response(status_code=404)
+
+    device = page_data.get("device")
+    interfaces = list(page_data.get("interfaces") or [])
+    interfaces.sort(key=lambda i: (not bool(i.monitored), (i.name or "").lower()))
+    bandwidth = core_router_metrics.get_interface_bandwidth(db, device, interfaces)
+    context = {
+        "request": request,
+        "device": device,
+        "interfaces": interfaces,
+        "bandwidth": bandwidth,
+        "format_bps": _format_bps,
+        "oob_swap": False,
+        "is_partial": True,  # skip outer wrapper; we only swap the inner card
+    }
+    return templates.TemplateResponse(
+        "admin/network/core-devices/_interfaces_card.html", context
     )
 
 

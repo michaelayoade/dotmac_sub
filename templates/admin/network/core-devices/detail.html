@@ -408,43 +408,88 @@
 </div>
 <script>
     (function () {
-        window.initDeviceInterfaceFilters = function () {
+        var LS_KEY_Q = "iface.filters.q";
+        var LS_KEY_STATUS = "iface.filters.status";
+        var LS_KEY_MONITORED = "iface.filters.monitored_only";
+
+        function getBody() { return document.getElementById("interfaces-body"); }
+
+        function applyFilter() {
             var searchInput = document.getElementById("interface-search");
             var statusSelect = document.getElementById("interface-status");
-            var tbody = document.getElementById("interfaces-body");
-            if (!searchInput || !statusSelect || !tbody) {
-                return;
-            }
-            if (searchInput.dataset.bound === "true" && statusSelect.dataset.bound === "true") {
-                return;
-            }
+            var monitoredOnly = document.getElementById("interface-monitored-only");
+            var tbody = getBody();
+            if (!tbody) return;
+            var query = ((searchInput && searchInput.value) || "").trim().toLowerCase();
+            var status = ((statusSelect && statusSelect.value) || "").trim().toLowerCase();
+            var monOnly = !!(monitoredOnly && monitoredOnly.checked);
+            tbody.querySelectorAll("tr").forEach(function (row) {
+                var name = row.getAttribute("data-name") || "";
+                var desc = row.getAttribute("data-description") || "";
+                var rowStatus = row.getAttribute("data-status") || "";
+                var rowMonitored = row.getAttribute("data-monitored") === "1";
+                var matchesText = !query || name.indexOf(query) !== -1 || desc.indexOf(query) !== -1;
+                var matchesStatus = !status || rowStatus === status;
+                var matchesMonitored = !monOnly || rowMonitored;
+                row.style.display = matchesText && matchesStatus && matchesMonitored ? "" : "none";
+            });
+        }
 
-            function applyFilter() {
-                var query = (searchInput.value || "").trim().toLowerCase();
-                var status = (statusSelect.value || "").trim().toLowerCase();
-                var rows = tbody.querySelectorAll("tr");
-                rows.forEach(function (row) {
-                    var name = row.getAttribute("data-name") || "";
-                    var desc = row.getAttribute("data-description") || "";
-                    var rowStatus = row.getAttribute("data-status") || "";
-                    var matchesText = !query || name.indexOf(query) !== -1 || desc.indexOf(query) !== -1;
-                    var matchesStatus = !status || rowStatus === status;
-                    row.style.display = matchesText && matchesStatus ? "" : "none";
-                });
-            }
-
-            searchInput.addEventListener("input", applyFilter);
-            statusSelect.addEventListener("change", applyFilter);
+        function initFiltersOnce() {
+            var searchInput = document.getElementById("interface-search");
+            var statusSelect = document.getElementById("interface-status");
+            var monitoredOnly = document.getElementById("interface-monitored-only");
+            if (!searchInput || !statusSelect || !monitoredOnly) return;
+            if (searchInput.dataset.bound === "true") return;
+            // Restore from localStorage
+            searchInput.value = localStorage.getItem(LS_KEY_Q) || "";
+            statusSelect.value = localStorage.getItem(LS_KEY_STATUS) || "";
+            monitoredOnly.checked = localStorage.getItem(LS_KEY_MONITORED) === "1";
+            searchInput.addEventListener("input", function () {
+                localStorage.setItem(LS_KEY_Q, searchInput.value || "");
+                applyFilter();
+            });
+            statusSelect.addEventListener("change", function () {
+                localStorage.setItem(LS_KEY_STATUS, statusSelect.value || "");
+                applyFilter();
+            });
+            monitoredOnly.addEventListener("change", function () {
+                localStorage.setItem(LS_KEY_MONITORED, monitoredOnly.checked ? "1" : "0");
+                applyFilter();
+            });
             searchInput.dataset.bound = "true";
-            statusSelect.dataset.bound = "true";
             applyFilter();
-        };
+        }
+        window.initDeviceInterfaceFilters = initFiltersOnce;
 
-        window.initDeviceInterfaceFilters();
+        // "Updated N seconds ago" stamp — read data-fetched-at (unix seconds) and tick.
+        function tickFreshness() {
+            var stamp = document.querySelector(".iface-freshness");
+            if (!stamp) return;
+            var fetchedAt = parseInt(stamp.getAttribute("data-fetched-at") || "0", 10);
+            if (!fetchedAt) return;
+            var nowSec = Math.floor(Date.now() / 1000);
+            var age = Math.max(0, nowSec - fetchedAt);
+            var label;
+            if (age < 5) label = "updated just now";
+            else if (age < 60) label = "updated " + age + "s ago";
+            else if (age < 3600) label = "updated " + Math.floor(age / 60) + "m ago";
+            else label = "updated " + Math.floor(age / 3600) + "h ago";
+            stamp.textContent = label;
+            // Color thresholds: amber > 2 min, rose > 5 min.
+            stamp.classList.remove("text-amber-600", "dark:text-amber-400", "text-rose-600", "dark:text-rose-400");
+            if (age > 300) stamp.classList.add("text-rose-600", "dark:text-rose-400");
+            else if (age > 120) stamp.classList.add("text-amber-600", "dark:text-amber-400");
+        }
+
+        initFiltersOnce();
+        tickFreshness();
+        setInterval(tickFreshness, 1000);
         document.body.addEventListener("htmx:afterSwap", function (event) {
             var target = event.detail && event.detail.target;
             if (target && target.id === "device-interfaces-card") {
-                window.initDeviceInterfaceFilters();
+                applyFilter();
+                tickFreshness();
             }
         });
     })();

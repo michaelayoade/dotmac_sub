@@ -1,8 +1,26 @@
-<div id="device-interfaces-card" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800"{% if oob_swap %} hx-swap-oob="outerHTML"{% endif %}>
+{%- set has_bandwidth = bandwidth is defined and bandwidth -%}
+{%- set bandwidth_map = bandwidth.by_interface_id if has_bandwidth else {} -%}
+{%- set bandwidth_error = bandwidth.error if has_bandwidth else None -%}
+{%- set fetched_at = bandwidth.fetched_at if has_bandwidth else None -%}
+{%- set is_partial = is_partial | default(False) -%}
+{#- Stable outer wrapper hosts the poll trigger AND the filter inputs so the
+    user's typed search persists across polls. The inner card (just the table
+    plus the freshness strip) is what gets swapped. -#}
+{%- if not is_partial -%}
+<div id="device-interfaces-card-wrap"
+     class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 overflow-hidden"
+     hx-get="/admin/network/core-devices/{{ device.id }}/interfaces/bandwidth"
+     hx-trigger="every 10s [document.visibilityState === 'visible']"
+     hx-target="#device-interfaces-card"
+     hx-swap="outerHTML">
     <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 class="font-semibold text-slate-900 dark:text-white">Interfaces</h2>
             <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <input id="interface-monitored-only" type="checkbox" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                    Monitored only
+                </label>
                 <input id="interface-search" type="text" placeholder="Search name or description"
                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-64">
                 <select id="interface-status" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white sm:w-36">
@@ -14,6 +32,19 @@
             </div>
         </div>
     </div>
+{%- endif -%}
+<div id="device-interfaces-card">
+    {# Freshness / error strip — refreshes on every poll because it's inside the swap target. #}
+    {% if bandwidth_error %}
+    <div class="border-b border-rose-200 bg-rose-50 px-6 py-2 text-xs text-rose-800 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
+        ⚠ {{ bandwidth_error }}
+    </div>
+    {% elif has_bandwidth and bandwidth_map %}
+    <div class="border-b border-slate-200 bg-slate-50 px-6 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-400 flex items-center justify-between">
+        <span>Live bandwidth · refreshes every 10s</span>
+        <span data-fetched-at="{{ fetched_at | int }}" class="iface-freshness tabular-nums">updated just now</span>
+    </div>
+    {% endif %}
     {% if interfaces %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
@@ -23,12 +54,15 @@
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Description</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Speed</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Status</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400 tabular-nums">↓ Rx</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400 tabular-nums">↑ Tx</th>
                     <th class="px-6 py-3 text-center text-xs font-medium text-slate-500 uppercase tracking-wider dark:text-slate-400">Monitor</th>
                 </tr>
             </thead>
             <tbody id="interfaces-body" class="divide-y divide-slate-200 dark:divide-slate-700">
                 {% for iface in interfaces %}
-                <tr data-name="{{ iface.name | lower }}" data-description="{{ (iface.description or '') | lower }}" data-status="{{ iface.status.value | lower }}">
+                {% set bw = bandwidth_map.get(iface.id | string) if iface.monitored else None %}
+                <tr data-name="{{ iface.name | lower }}" data-description="{{ (iface.description or '') | lower }}" data-status="{{ iface.status.value | lower }}" data-monitored="{{ '1' if iface.monitored else '0' }}">
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white font-mono">{{ iface.name }}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ iface.description or '-' }}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ (iface.speed_mbps | string) + ' Mbps' if iface.speed_mbps else '-' }}</td>
@@ -37,6 +71,12 @@
                             <span class="h-1.5 w-1.5 rounded-full {% if iface.status.value == 'up' %}bg-green-500{% elif iface.status.value == 'down' %}bg-red-500{% else %}bg-slate-400{% endif %}"></span>
                             {{ iface.status.value | upper }}
                         </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-mono tabular-nums {% if not iface.monitored %}text-slate-300 dark:text-slate-600{% elif bw and bw.rx_bps is not none %}text-slate-900 dark:text-white{% else %}text-slate-400 dark:text-slate-500{% endif %}">
+                        {% if not iface.monitored %}—{% elif bw and bw.rx_bps is not none %}{{ format_bps(bw.rx_bps) }}{% else %}—{% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-mono tabular-nums {% if not iface.monitored %}text-slate-300 dark:text-slate-600{% elif bw and bw.tx_bps is not none %}text-slate-900 dark:text-white{% else %}text-slate-400 dark:text-slate-500{% endif %}">
+                        {% if not iface.monitored %}—{% elif bw and bw.tx_bps is not none %}{{ format_bps(bw.tx_bps) }}{% else %}—{% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-center">
                         {% if device and iface.snmp_index %}
@@ -67,3 +107,6 @@
     </div>
     {% endif %}
 </div>
+{%- if not is_partial %}
+</div>
+{%- endif %}
