@@ -196,7 +196,9 @@ async def _load_deferred_api_routers(app: FastAPI) -> None:
                 "deferred_api_router_loaded",
                 extra={
                     "event": "deferred_api_router_loaded",
-                    "module": module_name,
+                    # NOTE: 'module' is a reserved LogRecord attribute; using
+                    # router_module instead avoids KeyError on every iteration.
+                    "router_module": module_name,
                     "attr": attr_name,
                 },
             )
@@ -205,11 +207,14 @@ async def _load_deferred_api_routers(app: FastAPI) -> None:
                 "deferred_api_router_load_failed",
                 extra={
                     "event": "deferred_api_router_load_failed",
-                    "module": module_name,
+                    "router_module": module_name,
                     "attr": attr_name,
                 },
             )
-            raise
+            # Continue loading the rest of the routers rather than aborting
+            # the entire deferred load — a single broken module shouldn't
+            # take down the customer/reseller portals.
+            continue
         await asyncio.sleep(0)
     logger.info(
         "deferred_api_router_load_complete",
@@ -702,7 +707,12 @@ async def web_auth_refresh_middleware(request: Request, call_next):
 
         try:
             auth_info = validate_session_token(request, db)
-            if not auth_info:
+            if auth_info:
+                request.state.auth = auth_info
+                request.state.user = auth_info["subscriber"]
+                request.state.actor_id = auth_info["subscriber_id"]
+                request.state.actor_type = auth_info.get("principal_type", "user")
+            else:
                 from app.services import auth_flow as auth_flow_service
                 from app.services.auth_flow import AuthFlow
 
@@ -760,7 +770,20 @@ async def csrf_middleware(request: Request, call_next):
 
     # Skip CSRF for exempt paths
     if any(path.startswith(exempt) for exempt in _CSRF_EXEMPT_PATHS):
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except RuntimeError as exc:
+            # Starlette BaseHTTPMiddleware quirk: client disconnect mid-request
+            # (common with Docker healthchecks racing the response) makes the
+            # inner ASGI task end without sending a response; `call_next` then
+            # raises RuntimeError("No response returned."). For the trivial
+            # /health endpoint the client has already gone, so synthesize an
+            # OK to stop filling logs with stack traces.
+            if path == "/health" and "No response returned" in str(exc):
+                from starlette.responses import JSONResponse as _JSON
+
+                return _JSON({"status": "ok"})
+            raise
 
     # Check if path needs CSRF protection
     needs_protection = any(
