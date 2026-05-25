@@ -75,8 +75,10 @@ from app.web.admin.notifications import router as notifications_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
+from app.web.admin.support_automation import router as support_automation_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.system import router as system_router
+from app.web.admin.system_whats_new import router as system_whats_new_router
 from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
 from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
@@ -133,6 +135,18 @@ def admin_reports_hub():
     return RedirectResponse(url="/admin/reports/hub", status_code=307)
 
 
+@router.get("/nas")
+def admin_nas_legacy_root_redirect():
+    """Legacy /admin/nas alias — NAS routes live under /admin/network/nas."""
+    return RedirectResponse(url="/admin/network/nas/", status_code=307)
+
+
+@router.get("/nas/{path:path}")
+def admin_nas_legacy_path_redirect(path: str):
+    """Legacy /admin/nas/<anything> alias."""
+    return RedirectResponse(url=f"/admin/network/nas/{path}", status_code=307)
+
+
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(design_system_router)
@@ -173,15 +187,15 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
-    billing_invoice_actions_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
-)
-router.include_router(
     billing_invoice_batch_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
     billing_invoice_bulk_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
+    billing_invoice_actions_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
@@ -197,6 +211,7 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(system_router)
+router.include_router(system_whats_new_router)
 router.include_router(
     network_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
@@ -331,6 +346,7 @@ router.include_router(
     ],
 )
 router.include_router(support_tickets_router)
+router.include_router(support_automation_router)
 router.include_router(
     wireguard_router,
     prefix="/network",

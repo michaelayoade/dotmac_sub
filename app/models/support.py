@@ -79,17 +79,15 @@ class Ticket(Base):
     created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    assigned_to_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
-    technician_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
-    )
+    # Assignment fields can reference internal system users. Legacy rows may still
+    # contain subscriber IDs, so keep them as plain UUIDs instead of subscriber FKs.
+    assigned_to_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    technician_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     ticket_manager_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
+        UUID(as_uuid=True)
     )
     site_coordinator_person_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
+        UUID(as_uuid=True)
     )
     service_team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
@@ -97,14 +95,14 @@ class Ticket(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     region: Mapped[str | None] = mapped_column(String(80))
-    status: Mapped[TicketStatus] = mapped_column(
-        Enum(TicketStatus, values_callable=lambda x: [e.value for e in x]),
-        default=TicketStatus.open,
+    status: Mapped[str] = mapped_column(
+        String(80),
+        default=TicketStatus.open.value,
         nullable=False,
     )
-    priority: Mapped[TicketPriority] = mapped_column(
-        Enum(TicketPriority, values_callable=lambda x: [e.value for e in x]),
-        default=TicketPriority.normal,
+    priority: Mapped[str] = mapped_column(
+        String(40),
+        default=TicketPriority.normal.value,
         nullable=False,
     )
     ticket_type: Mapped[str | None] = mapped_column(String(80))
@@ -161,9 +159,7 @@ class TicketAssignee(Base):
     ticket_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("support_tickets.id"), primary_key=True
     )
-    person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), primary_key=True
-    )
+    person_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -265,4 +261,74 @@ class TicketLink(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class AutomationTrigger(enum.Enum):
+    ticket_created = "ticket_created"
+    status_changed = "status_changed"
+    priority_changed = "priority_changed"
+
+
+class AutomationActionType(enum.Enum):
+    assign_team = "assign_team"
+    assign_technician = "assign_technician"
+    set_priority = "set_priority"
+    set_status = "set_status"
+    set_due_in_hours = "set_due_in_hours"
+    add_tag = "add_tag"
+
+
+class TicketAutomationRule(Base):
+    """Declarative rule that runs against tickets on a trigger event.
+
+    conditions: equality dict matched against the ticket
+    (e.g. {"priority": "urgent", "ticket_type": "outage"}).
+    action_value semantics depend on action_type:
+      assign_team        -> {"service_team_id": "<uuid>"}
+      assign_technician  -> {"technician_person_id": "<uuid>"}
+      set_priority       -> {"priority": "high"}
+      set_status         -> {"status": "open"}
+      set_due_in_hours   -> {"hours": 24}
+      add_tag            -> {"tag": "vip"}
+    """
+
+    __tablename__ = "support_ticket_automation_rules"
+    __table_args__ = (
+        Index("ix_support_automation_trigger_active", "trigger", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    trigger: Mapped[AutomationTrigger] = mapped_column(
+        Enum(AutomationTrigger, name="ticket_automation_trigger"), nullable=False
+    )
+    conditions: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    action_type: Mapped[AutomationActionType] = mapped_column(
+        Enum(AutomationActionType, name="ticket_automation_action_type"),
+        nullable=False,
+    )
+    action_value: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSON), default=dict, nullable=False
+    )
+    sort_order: Mapped[int] = mapped_column(default=100, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Observability: last successful application and last failure (if any).
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

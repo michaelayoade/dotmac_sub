@@ -252,6 +252,12 @@ class SubscriberUpdate(BaseModel):
 class SubscriberRead(SubscriberBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
+    # Override `email` as a plain string for reads. The DB column is a plain
+    # text column and may hold imported placeholder values (e.g. Splynx's
+    # `no-email+<id>@splynx.local`) that EmailStr's strict validator rejects
+    # as a "special-use TLD". Keep strict EmailStr on create/update payloads.
+    email: str  # type: ignore[assignment]
+
     id: UUID
     created_at: datetime
     updated_at: datetime

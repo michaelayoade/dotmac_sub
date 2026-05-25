@@ -16,11 +16,11 @@ from app.models.provisioning import ServiceOrder
 from app.models.support import (
     Ticket,
     TicketAssignee,
+    TicketChannel,
     TicketComment,
     TicketLink,
     TicketMerge,
     TicketSlaEvent,
-    TicketStatus,
 )
 from app.schemas.notification import NotificationCreate
 from app.schemas.provisioning import ServiceOrderCreate
@@ -38,8 +38,15 @@ from app.services import domain_settings as domain_settings_service
 from app.services import notification as notification_service
 from app.services import numbering as numbering_service
 from app.services import provisioning as provisioning_service
+from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.audit_helpers import log_audit_event
 from app.services.common import apply_ordering, apply_pagination
+from app.services.customer_identity_resolution import (
+    AUTOMATION_SUPPRESSION_REASON_IDENTITY_REVIEW,
+    identity_resolution_allows_sensitive_automation,
+    identity_resolution_requires_manual_review,
+    resolve_customer_identity,
+)
 from app.services.events import emit_event
 from app.services.events.types import EventType
 
@@ -64,8 +71,18 @@ def _coerce_uuid(value: str) -> UUID | None:
         return None
 
 
+def _coerce_subscriber_uuid(db: Session, value: str | UUID | None) -> UUID | None:
+    """Return the UUID only when it points at a real subscriber row."""
+    from app.models.subscriber import Subscriber
+
+    uid = _coerce_uuid(str(value)) if value is not None else None
+    if not uid:
+        return None
+    return uid if db.get(Subscriber, uid) else None
+
+
 def _ensure_not_merged_source(ticket: Ticket) -> None:
-    if ticket.merged_into_ticket_id is not None or ticket.status == TicketStatus.merged:
+    if ticket.merged_into_ticket_id is not None or support_ticket_settings_service.status_is_merged(ticket.status):
         raise HTTPException(
             status_code=409, detail="Cannot modify a merged source ticket"
         )
@@ -145,6 +162,132 @@ def _parse_mentions(body: str) -> list[str]:
     return out
 
 
+def _clean_optional_text(value: object | None) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _resolve_inbound_sender(
+    *,
+    channel: object | None,
+    metadata: dict[str, Any] | None,
+    inbound_sender: object | None,
+    inbound_sender_type: object | None,
+) -> tuple[str | None, str | None]:
+    sender = _clean_optional_text(inbound_sender)
+    sender_type = _clean_optional_text(inbound_sender_type)
+    metadata_payload = dict(metadata or {})
+
+    if not sender:
+        for key in (
+            "inbound_sender",
+            "sender",
+            "from",
+            "from_email",
+            "from_phone",
+            "from_whatsapp",
+        ):
+            sender = _clean_optional_text(metadata_payload.get(key))
+            if sender:
+                break
+
+    if not sender_type:
+        for key in ("inbound_sender_type", "sender_type"):
+            sender_type = _clean_optional_text(metadata_payload.get(key))
+            if sender_type:
+                break
+
+    if not sender_type:
+        normalized_channel = (
+            channel.value if hasattr(channel, "value") else str(channel or "")
+        ).strip()
+        if normalized_channel == TicketChannel.email.value:
+            sender_type = "email"
+        elif normalized_channel == TicketChannel.phone.value:
+            sender_type = "phone"
+        elif normalized_channel == TicketChannel.chat.value:
+            sender_type = "whatsapp"
+
+    return sender, sender_type
+
+
+def _apply_inbound_identity_resolution(db: Session, data: dict[str, Any]) -> None:
+    metadata = dict(data.get("metadata_") or {})
+    sender, sender_type = _resolve_inbound_sender(
+        channel=data.get("channel"),
+        metadata=metadata,
+        inbound_sender=data.get("inbound_sender"),
+        inbound_sender_type=data.get("inbound_sender_type"),
+    )
+    if not sender:
+        if data.get("subscriber_id") and not data.get("customer_account_id"):
+            data["customer_account_id"] = data["subscriber_id"]
+        data["metadata_"] = metadata or None
+        return
+
+    resolution = resolve_customer_identity(db, sender, channel_hint=sender_type)
+    metadata["identity_resolution"] = resolution.as_metadata()
+    metadata["inbound_sender"] = sender
+    metadata["normalized_inbound_sender"] = resolution.normalized_identifier
+    if sender_type:
+        metadata["inbound_sender_type"] = sender_type
+
+    if identity_resolution_requires_manual_review(resolution):
+        metadata["manual_review_required"] = True
+        metadata["automation_paused"] = True
+        metadata["ai_auto_actions_paused"] = True
+        metadata["account_sensitive_automation_allowed"] = False
+        metadata["automation_suppressed_reason"] = (
+            AUTOMATION_SUPPRESSION_REASON_IDENTITY_REVIEW
+        )
+    elif not identity_resolution_allows_sensitive_automation(resolution):
+        metadata["account_sensitive_automation_allowed"] = False
+    else:
+        metadata["account_sensitive_automation_allowed"] = True
+
+    if resolution.ambiguous:
+        metadata["manual_review_required"] = True
+    elif resolution.matched:
+        resolved_subscriber_id = resolution.subscriber_id
+        existing_subscriber_id = data.get("subscriber_id")
+        existing_account_id = data.get("customer_account_id")
+        if existing_subscriber_id and resolved_subscriber_id:
+            if str(existing_subscriber_id) != str(resolved_subscriber_id):
+                logger.warning(
+                    "support_ticket_identity_conflict inbound_sender=%r explicit_subscriber_id=%s resolved_subscriber_id=%s",
+                    sender,
+                    existing_subscriber_id,
+                    resolved_subscriber_id,
+                )
+                metadata["identity_resolution_conflict"] = {
+                    "explicit_subscriber_id": str(existing_subscriber_id),
+                    "resolved_subscriber_id": str(resolved_subscriber_id),
+                }
+            else:
+                data["subscriber_id"] = resolved_subscriber_id
+        elif resolved_subscriber_id:
+            data["subscriber_id"] = resolved_subscriber_id
+
+        if existing_account_id and resolved_subscriber_id:
+            if str(existing_account_id) != str(resolved_subscriber_id):
+                logger.warning(
+                    "support_ticket_account_identity_conflict inbound_sender=%r explicit_customer_account_id=%s resolved_customer_account_id=%s",
+                    sender,
+                    existing_account_id,
+                    resolved_subscriber_id,
+                )
+                metadata["identity_account_conflict"] = {
+                    "explicit_customer_account_id": str(existing_account_id),
+                    "resolved_customer_account_id": str(resolved_subscriber_id),
+                }
+        elif resolved_subscriber_id:
+            data["customer_account_id"] = resolved_subscriber_id
+
+    if data.get("subscriber_id") and not data.get("customer_account_id"):
+        data["customer_account_id"] = data["subscriber_id"]
+    data["metadata_"] = metadata or None
+
+
 class TicketComments:
     @staticmethod
     def get(db: Session, comment_id: str) -> TicketComment:
@@ -179,7 +322,7 @@ class TicketComments:
         _ensure_not_merged_source(ticket)
         comment = TicketComment(
             ticket_id=ticket.id,
-            author_person_id=payload.author_person_id,
+            author_person_id=_coerce_subscriber_uuid(db, payload.author_person_id),
             body=payload.body.strip(),
             is_internal=payload.is_internal,
             attachments=[item.model_dump() for item in payload.attachments],
@@ -373,10 +516,10 @@ class Tickets:
     def _apply_status_timestamp_rules(
         ticket: Ticket, explicit_data: dict[str, Any]
     ) -> None:
-        if ticket.status == TicketStatus.resolved:
+        if ticket.status == "resolved":
             if explicit_data.get("resolved_at") is None and ticket.resolved_at is None:
                 ticket.resolved_at = _now()
-        if ticket.status == TicketStatus.closed:
+        if ticket.status == "closed":
             if explicit_data.get("closed_at") is None and ticket.closed_at is None:
                 ticket.closed_at = _now()
 
@@ -476,6 +619,8 @@ class Tickets:
 
     @staticmethod
     def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
+        from app.models.catalog import Subscription, SubscriptionStatus
+
         tags = {
             str(tag).strip().lower() for tag in (ticket.tags or []) if str(tag).strip()
         }
@@ -491,10 +636,19 @@ class Tickets:
             if order:
                 return
 
+        active_subscription = (
+            db.query(Subscription)
+            .filter(Subscription.subscriber_id == ticket.subscriber_id)
+            .filter(Subscription.status == SubscriptionStatus.active)
+            .order_by(Subscription.created_at.desc())
+            .first()
+        )
+
         order = provisioning_service.service_orders.create(
             db,
             ServiceOrderCreate(
                 account_id=ticket.subscriber_id,
+                subscription_id=active_subscription.id if active_subscription else None,
                 notes=f"Auto-created from support ticket {ticket.number or ticket.id}",
             ),
         )
@@ -610,8 +764,8 @@ class Tickets:
             "name": event_name,
             "ticket_id": str(ticket.id),
             "ticket_number": ticket.number,
-            "status": ticket.status.value,
-            "priority": ticket.priority.value,
+            "status": ticket.status,
+            "priority": ticket.priority,
             "channel": ticket.channel.value,
             "customer_account_id": str(ticket.customer_account_id)
             if ticket.customer_account_id
@@ -635,13 +789,24 @@ class Tickets:
         db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
     ) -> Ticket:
         data = payload.model_dump()
-        data["status"] = data.get("status") or TicketStatus.open
+        data["status"] = data.get("status") or support_ticket_settings_service.default_status(db)
+        data["priority"] = data.get("priority") or support_ticket_settings_service.default_priority(db)
+        data["created_by_person_id"] = _coerce_subscriber_uuid(
+            db, data.get("created_by_person_id")
+        )
+        _apply_inbound_identity_resolution(db, data)
 
         ticket = Ticket(
             **{
                 k: v
                 for k, v in data.items()
-                if k not in {"assignee_person_ids", "related_outage_ticket_id"}
+                if k
+                not in {
+                    "assignee_person_ids",
+                    "related_outage_ticket_id",
+                    "inbound_sender",
+                    "inbound_sender_type",
+                }
             }
         )
         ticket.number = Tickets._resolve_ticket_number(db)
@@ -658,7 +823,7 @@ class Tickets:
                 from_ticket_id=ticket.id,
                 to_ticket_id=payload.related_outage_ticket_id,
                 link_type="related_outage",
-                created_by_person_id=_coerce_uuid(actor_id) if actor_id else None,
+                created_by_person_id=_coerce_subscriber_uuid(db, actor_id),
             )
             db.add(link)
 
@@ -667,6 +832,11 @@ class Tickets:
 
         Tickets._apply_status_timestamp_rules(ticket, data)
         Tickets._ensure_field_visit_work_order(db, ticket)
+
+        from app.models.support import AutomationTrigger
+        from app.services import support_automation
+
+        support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
@@ -751,12 +921,7 @@ class Tickets:
                 )
             )
         if status:
-            try:
-                query = query.filter(Ticket.status == TicketStatus(status))
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=400, detail="Invalid ticket status"
-                ) from exc
+            query = query.filter(Ticket.status == str(status).strip())
         if ticket_type:
             query = query.filter(Ticket.ticket_type == ticket_type)
         if assigned_to_person_id:
@@ -813,8 +978,8 @@ class Tickets:
         _ensure_not_merged_source(ticket)
 
         before = {
-            "status": ticket.status.value,
-            "priority": ticket.priority.value,
+            "status": ticket.status,
+            "priority": ticket.priority,
             "assigned_to_person_id": str(ticket.assigned_to_person_id)
             if ticket.assigned_to_person_id
             else None,
@@ -852,8 +1017,8 @@ class Tickets:
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)
 
         after = {
-            "status": ticket.status.value,
-            "priority": ticket.priority.value,
+            "status": ticket.status,
+            "priority": ticket.priority,
             "assigned_to_person_id": str(ticket.assigned_to_person_id)
             if ticket.assigned_to_person_id
             else None,
@@ -893,6 +1058,10 @@ class Tickets:
                 actor_id=actor_id,
                 metadata={"from": before["status"], "to": after["status"]},
             )
+            from app.models.support import AutomationTrigger
+            from app.services import support_automation
+
+            support_automation.apply_rules(db, ticket, AutomationTrigger.status_changed)
         if before["priority"] != after["priority"]:
             log_audit_event(
                 db=db,
@@ -902,6 +1071,12 @@ class Tickets:
                 entity_id=str(ticket.id),
                 actor_id=actor_id,
                 metadata={"from": before["priority"], "to": after["priority"]},
+            )
+            from app.models.support import AutomationTrigger
+            from app.services import support_automation
+
+            support_automation.apply_rules(
+                db, ticket, AutomationTrigger.priority_changed
             )
 
         if changes and any(
@@ -1058,7 +1233,7 @@ class Tickets:
             from_ticket_id=source.id,
             to_ticket_id=target.id,
             link_type=link_type,
-            created_by_person_id=_coerce_uuid(actor_id) if actor_id else None,
+            created_by_person_id=_coerce_subscriber_uuid(db, actor_id),
         )
         db.add(link)
         log_audit_event(
@@ -1170,14 +1345,14 @@ class Tickets:
 
         db.query(TicketAssignee).filter(TicketAssignee.ticket_id == source.id).delete()
 
-        source.status = TicketStatus.merged
+        source.status = "merged"
         source.merged_into_ticket_id = target.id
 
         merge_row = TicketMerge(
             source_ticket_id=source.id,
             target_ticket_id=target.id,
             reason=payload.reason,
-            merged_by_person_id=_coerce_uuid(actor_id) if actor_id else None,
+            merged_by_person_id=_coerce_subscriber_uuid(db, actor_id),
         )
         db.add(merge_row)
 
@@ -1191,7 +1366,7 @@ class Tickets:
         db.add(
             TicketComment(
                 ticket_id=source.id,
-                author_person_id=_coerce_uuid(actor_id) if actor_id else None,
+                author_person_id=_coerce_subscriber_uuid(db, actor_id),
                 body=source_comment_text,
                 is_internal=True,
                 attachments=[],
@@ -1200,7 +1375,7 @@ class Tickets:
         db.add(
             TicketComment(
                 ticket_id=target.id,
-                author_person_id=_coerce_uuid(actor_id) if actor_id else None,
+                author_person_id=_coerce_subscriber_uuid(db, actor_id),
                 body=target_comment_text,
                 is_internal=True,
                 attachments=[],
@@ -1227,7 +1402,84 @@ class Tickets:
 # ---------------------------------------------------------------------------
 
 
-def list_people(db: Session, *, limit: int = 500) -> list[dict[str, str]]:
+def _person_option(row) -> dict[str, str]:
+    full_name = " ".join(filter(None, [row.first_name, row.last_name])).strip()
+    label = row.display_name or full_name or row.email or str(row.id)
+    address = ", ".join([p for p in [row.address_line1, row.city, row.region] if p])
+    return {
+        "id": str(row.id),
+        "label": label,
+        "email": row.email or "",
+        "phone": row.phone or "",
+        "organization": row.company_name or "",
+        "address": address,
+        "subscriber_number": row.subscriber_number or "",
+        "account_number": row.account_number or "",
+        "account_status": (row.status.value if row.status else "") or "",
+        "plan": "",
+        "service_address": address,
+    }
+
+
+def _system_user_option(row) -> dict[str, str]:
+    full_name = " ".join(filter(None, [row.first_name, row.last_name])).strip()
+    label = row.display_name or full_name or row.email or str(row.id)
+    return {
+        "id": str(row.id),
+        "label": label,
+        "email": row.email or "",
+        "phone": row.phone or "",
+        "organization": "Internal User",
+        "address": "",
+        "subscriber_number": "",
+        "account_number": "",
+        "account_status": "active" if row.is_active else "inactive",
+        "plan": "",
+        "service_address": "",
+    }
+
+
+def _append_included_options(
+    options: list[dict[str, str]],
+    *,
+    include_ids: list[str | UUID] | None,
+    resolver,
+) -> list[dict[str, str]]:
+    if not include_ids:
+        return options
+    merged = list(options)
+    seen = {item["id"] for item in merged if item.get("id")}
+    for raw_id in include_ids:
+        option = resolver(raw_id)
+        if not option:
+            continue
+        option_id = option.get("id")
+        if not option_id or option_id in seen:
+            continue
+        merged.append(option)
+        seen.add(option_id)
+    return merged
+
+
+def person_option(db: Session, subscriber_id: str | UUID | None) -> dict[str, str] | None:
+    """Return one subscriber formatted for support form selectors."""
+    from app.models.subscriber import Subscriber
+
+    uid = _coerce_uuid(subscriber_id) if subscriber_id else None
+    if not uid:
+        return None
+    row = db.get(Subscriber, uid)
+    if not row:
+        return None
+    return _person_option(row)
+
+
+def list_people(
+    db: Session,
+    *,
+    limit: int = 500,
+    include_ids: list[str | UUID] | None = None,
+) -> list[dict[str, str]]:
     """Return active subscribers formatted for ticket people selectors."""
     from app.models.subscriber import Subscriber
 
@@ -1238,47 +1490,77 @@ def list_people(db: Session, *, limit: int = 500) -> list[dict[str, str]]:
         .limit(limit)
         .all()
     )
-    people: list[dict[str, str]] = []
-    for row in rows:
-        full_name = " ".join(filter(None, [row.first_name, row.last_name])).strip()
-        label = row.display_name or full_name or row.email or str(row.id)
-        people.append(
-            {
-                "id": str(row.id),
-                "label": label,
-                "email": row.email or "",
-                "phone": row.phone or "",
-                "organization": row.company_name
-                if getattr(row, "is_business", False)
-                else "",
-                "address": ", ".join(
-                    [p for p in [row.address_line1, row.city, row.region] if p]
-                ),
-                "subscriber_number": row.subscriber_number or "",
-                "account_number": row.account_number or "",
-                "account_status": (row.status.value if row.status else "") or "",
-                "plan": "",
-                "service_address": ", ".join(
-                    [p for p in [row.address_line1, row.city, row.region] if p]
-                ),
-            }
-        )
-    return people
+    return _append_included_options(
+        [_person_option(row) for row in rows],
+        include_ids=include_ids,
+        resolver=lambda raw_id: person_option(db, raw_id),
+    )
+
+
+def staff_option(db: Session, user_id: str | UUID | None) -> dict[str, str] | None:
+    """Return one internal user formatted for support assignment selectors."""
+    from app.models.system_user import SystemUser
+
+    uid = _coerce_uuid(user_id) if user_id else None
+    if not uid:
+        return None
+    row = db.get(SystemUser, uid)
+    if not row:
+        return None
+    return _system_user_option(row)
+
+
+def assignment_person_option(
+    db: Session, person_id: str | UUID | None
+) -> dict[str, str] | None:
+    """Resolve a support assignment actor, preferring system users with subscriber fallback."""
+    return staff_option(db, person_id) or person_option(db, person_id)
+
+
+def list_staff(
+    db: Session,
+    *,
+    limit: int = 500,
+    include_ids: list[str | UUID] | None = None,
+) -> list[dict[str, str]]:
+    """Return active internal users for support assignment controls."""
+    from app.models.system_user import SystemUser
+
+    rows = (
+        db.query(SystemUser)
+        .filter(SystemUser.is_active.is_(True))
+        .order_by(SystemUser.first_name.asc(), SystemUser.last_name.asc())
+        .limit(limit)
+        .all()
+    )
+    return _append_included_options(
+        [_system_user_option(row) for row in rows],
+        include_ids=include_ids,
+        resolver=lambda raw_id: staff_option(db, raw_id),
+    )
+
+
+def list_assignment_people(
+    db: Session,
+    *,
+    limit: int = 500,
+    include_ids: list[str | UUID] | None = None,
+) -> list[dict[str, str]]:
+    """Return assignment options with legacy subscriber fallback for existing tickets."""
+    return _append_included_options(
+        list_staff(db, limit=limit),
+        include_ids=include_ids,
+        resolver=lambda raw_id: assignment_person_option(db, raw_id),
+    )
 
 
 def status_totals(db: Session) -> dict[str, int]:
     """Return ticket counts grouped by status."""
     from sqlalchemy import func
 
-    statuses = [
-        TicketStatus.new,
-        TicketStatus.open,
-        TicketStatus.pending,
-        TicketStatus.on_hold,
-        TicketStatus.resolved,
-        TicketStatus.closed,
-    ]
-    counts = {item.value: 0 for item in statuses}
+    counts = {
+        item: 0 for item in support_ticket_settings_service.list_status_options(db)
+    }
     rows = (
         db.query(Ticket.status, func.count(Ticket.id))
         .filter(Ticket.is_active.is_(True))
@@ -1286,31 +1568,16 @@ def status_totals(db: Session) -> dict[str, int]:
         .all()
     )
     for status_value, count in rows:
-        key = (
-            status_value.value if hasattr(status_value, "value") else str(status_value)
-        )
-        if key in counts:
-            counts[key] = int(count)
+        key = str(status_value or "").strip()
+        if not key:
+            continue
+        counts[key] = int(count)
     return counts
 
 
 def ticket_types(db: Session) -> list[str]:
-    """Return distinct ticket types with defaults."""
-    rows = (
-        db.query(Ticket.ticket_type)
-        .filter(
-            Ticket.is_active.is_(True),
-            Ticket.ticket_type.isnot(None),
-            Ticket.ticket_type != "",
-        )
-        .distinct()
-        .order_by(Ticket.ticket_type.asc())
-        .limit(200)
-        .all()
-    )
-    discovered = [str(item[0]) for item in rows if item and item[0]]
-    defaults = ["incident", "request", "change", "maintenance", "outage"]
-    return sorted(set(discovered + defaults))
+    """Return configured ticket types for forms and filters."""
+    return support_ticket_settings_service.list_ticket_type_options(db)
 
 
 def regions(db: Session) -> list[str]:

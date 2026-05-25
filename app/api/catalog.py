@@ -537,6 +537,7 @@ def update_offer(
 )
 def delete_offer(offer_id: str, db: Session = Depends(get_db)):
     catalog_service.offers.delete(db, offer_id)
+    db.commit()
 
 
 @router.post(

@@ -433,6 +433,8 @@ def _build_pool_and_block_utilization(
     pools: list[object],
     blocks: list[object],
 ) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    from sqlalchemy import case, func, select
+
     ipv4_pools = [
         pool
         for pool in pools
@@ -450,34 +452,54 @@ def _build_pool_and_block_utilization(
     ipv4_pool_ids = [pool.id for pool in ipv4_pools]
     ipv6_pool_ids = [pool.id for pool in ipv6_pools]
 
-    ipv4_records = (
-        db.query(IPv4Address)
-        .options(joinedload(IPv4Address.assignment))
-        .filter(IPv4Address.pool_id.in_(ipv4_pool_ids))
-        .all()
-        if ipv4_pool_ids
-        else []
-    )
-    ipv6_records = (
-        db.query(IPv6Address)
-        .options(joinedload(IPv6Address.assignment))
-        .filter(IPv6Address.pool_id.in_(ipv6_pool_ids))
-        .all()
-        if ipv6_pool_ids
-        else []
-    )
+    # Aggregate counts per pool in SQL rather than loading every address row.
+    # `tracked` = address rows in DB for the pool. `used` = active assignment
+    # OR ont-management allocation. `reserved` = is_reserved AND not used.
+    def _agg_counts(addr_model, pool_ids: list) -> dict[str, dict[str, int]]:
+        if not pool_ids:
+            return {}
+        has_ont_mgmt = hasattr(addr_model, "ont_unit_id")
+        ont_mgmt_expr = (
+            (addr_model.ont_unit_id.isnot(None))
+            & (addr_model.allocation_type == "management")
+            if has_ont_mgmt
+            else None
+        )
+        is_active_used = IPAssignment.is_active.is_(True)
+        used_expr = is_active_used
+        if ont_mgmt_expr is not None:
+            used_expr = used_expr | ont_mgmt_expr
+        reserved_expr = (
+            addr_model.is_reserved.is_(True) & ~used_expr  # type: ignore[operator]
+        )
+        join_clause = (
+            (addr_model.id == IPAssignment.ipv4_address_id)
+            if addr_model is IPv4Address
+            else (addr_model.id == IPAssignment.ipv6_address_id)
+        )
+        stmt = (
+            select(
+                addr_model.pool_id,
+                func.count(addr_model.id).label("tracked"),
+                func.count(case((used_expr, 1))).label("used"),
+                func.count(case((reserved_expr, 1))).label("reserved"),
+            )
+            .select_from(addr_model)
+            .outerjoin(IPAssignment, join_clause)
+            .where(addr_model.pool_id.in_(pool_ids))
+            .group_by(addr_model.pool_id)
+        )
+        return {
+            str(row.pool_id): {
+                "tracked": int(row.tracked or 0),
+                "used": int(row.used or 0),
+                "reserved": int(row.reserved or 0),
+            }
+            for row in db.execute(stmt).all()
+        }
 
-    ipv4_by_pool: dict[str, list[IPv4Address]] = defaultdict(list)
-    for record in ipv4_records:
-        pool_id = str(getattr(record, "pool_id", "") or "")
-        if pool_id:
-            ipv4_by_pool[pool_id].append(record)
-
-    ipv6_by_pool: dict[str, list[IPv6Address]] = defaultdict(list)
-    for record in ipv6_records:
-        pool_id = str(getattr(record, "pool_id", "") or "")
-        if pool_id:
-            ipv6_by_pool[pool_id].append(record)
+    ipv4_counts = _agg_counts(IPv4Address, ipv4_pool_ids)
+    ipv6_counts = _agg_counts(IPv6Address, ipv6_pool_ids)
 
     for pool in pools:
         pool_id = str(pool.id)
@@ -487,22 +509,12 @@ def _build_pool_and_block_utilization(
             total = _ipv4_capacity_count(
                 str(pool.cidr), allow_network_broadcast=allow_network_broadcast
             )
-            records = ipv4_by_pool.get(pool_id, [])
+            counts = ipv4_counts.get(pool_id, {"tracked": 0, "used": 0, "reserved": 0})
         else:
             total = _ipv6_capacity_count(str(pool.cidr))
-            records = ipv6_by_pool.get(pool_id, [])
-        used = sum(
-            1
-            for record in records
-            if _active_assignment(record) or _is_ont_management_allocation(record)
-        )
-        reserved = sum(
-            1
-            for record in records
-            if getattr(record, "is_reserved", False)
-            and not _active_assignment(record)
-            and not _is_ont_management_allocation(record)
-        )
+            counts = ipv6_counts.get(pool_id, {"tracked": 0, "used": 0, "reserved": 0})
+        used = counts["used"]
+        reserved = counts["reserved"]
         available = max(total - used - reserved, 0)
         percent = int(round((used / total) * 100)) if total > 0 else 0
         pool_utilization[pool_id] = {
@@ -511,9 +523,33 @@ def _build_pool_and_block_utilization(
             "reserved": reserved,
             "available": available,
             "total": total,
-            "tracked": len(records),
+            "tracked": counts["tracked"],
             "percent": max(0, min(percent, 100)),
         }
+
+    # For block utilization we still need per-address records because CIDR
+    # membership is checked in Python. Load only the columns needed and limit
+    # to pools that actually have blocks.
+    block_pool_ids: set = {
+        getattr(block, "pool_id", None)
+        for block in blocks
+        if getattr(block, "pool_id", None) is not None
+    }
+    block_pool_ids = {pid for pid in block_pool_ids if pid in set(ipv4_pool_ids)}
+    if block_pool_ids:
+        block_records = (
+            db.query(IPv4Address)
+            .options(joinedload(IPv4Address.assignment))
+            .filter(IPv4Address.pool_id.in_(block_pool_ids))
+            .all()
+        )
+    else:
+        block_records = []
+    ipv4_by_pool: dict[str, list[IPv4Address]] = defaultdict(list)
+    for record in block_records:
+        pool_id = str(getattr(record, "pool_id", "") or "")
+        if pool_id:
+            ipv4_by_pool[pool_id].append(record)
 
     for block in blocks:
         block_id = str(block.id)
@@ -959,28 +995,33 @@ def build_ip_management_data(
     address_limit: int = 50,
 ) -> dict[str, object]:
     from sqlalchemy import func, select
+    from sqlalchemy.orm import selectinload
 
     from app.models.network import IpBlock, IpPool, IPv4Address, IPv6Address
 
     total_pools = db.execute(select(func.count(IpPool.id))).scalar() or 0
-    pools = network_service.ip_pools.list(
-        db=db,
-        ip_version=None,
-        is_active=None,
-        order_by="name",
-        order_dir="asc",
-        limit=max(int(total_pools), 1),
-        offset=0,
+    # Eager-load olt_device + vlan so the template's `pool.olt_device.name`
+    # and `pool.vlan.tag` accesses don't fire N+1 queries.
+    pools = list(
+        db.scalars(
+            select(IpPool)
+            .options(
+                selectinload(IpPool.olt_device),
+                selectinload(IpPool.vlan),
+            )
+            .order_by(IpPool.name.asc())
+            .limit(max(int(total_pools), 1))
+        ).all()
     )
     total_blocks = db.execute(select(func.count(IpBlock.id))).scalar() or 0
-    blocks = network_service.ip_blocks.list(
-        db=db,
-        pool_id=None,
-        is_active=None,
-        order_by="cidr",
-        order_dir="asc",
-        limit=max(int(total_blocks), 1),
-        offset=0,
+    # Eager-load pool (and pool's ip_version is on pool itself, no further hop).
+    blocks = list(
+        db.scalars(
+            select(IpBlock)
+            .options(selectinload(IpBlock.pool))
+            .order_by(IpBlock.cidr.asc())
+            .limit(max(int(total_blocks), 1))
+        ).all()
     )
     assignments = network_service.ip_assignments.list(
         db=db,
@@ -1016,25 +1057,35 @@ def build_ip_management_data(
         or 0
     )
 
-    # Fetch paginated addresses
-    ipv4_addresses = network_service.ipv4_addresses.list(
-        db=db,
-        pool_id=pool_id,
-        is_reserved=None,
-        order_by="address",
-        order_dir="asc",
-        limit=address_limit,
-        offset=offset,
+    # Fetch paginated addresses with pool + assignment eager-loaded for the
+    # template's `addr.pool.name` and `addr.assignment.is_active` lookups.
+    ipv4_q = (
+        select(IPv4Address)
+        .options(
+            selectinload(IPv4Address.pool),
+            selectinload(IPv4Address.assignment),
+        )
+        .order_by(IPv4Address.address.asc())
+        .limit(address_limit)
+        .offset(offset)
     )
-    ipv6_addresses = network_service.ipv6_addresses.list(
-        db=db,
-        pool_id=pool_id,
-        is_reserved=None,
-        order_by="address",
-        order_dir="asc",
-        limit=address_limit,
-        offset=offset,
+    if pool_id:
+        ipv4_q = ipv4_q.where(IPv4Address.pool_id == pool_id)
+    ipv4_addresses = list(db.scalars(ipv4_q).all())
+
+    ipv6_q = (
+        select(IPv6Address)
+        .options(
+            selectinload(IPv6Address.pool),
+            selectinload(IPv6Address.assignment),
+        )
+        .order_by(IPv6Address.address.asc())
+        .limit(address_limit)
+        .offset(offset)
     )
+    if pool_id:
+        ipv6_q = ipv6_q.where(IPv6Address.pool_id == pool_id)
+    ipv6_addresses = list(db.scalars(ipv6_q).all())
 
     # If there's a search term, filter in-memory for better UX (server-side search)
     if search_term:

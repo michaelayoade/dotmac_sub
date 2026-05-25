@@ -547,6 +547,8 @@
                 {% if a.get("hx_post") %}hx-post="{{ a.hx_post }}"{% endif %}
                 {% if a.get("hx_delete") %}hx-delete="{{ a.hx_delete }}"{% endif %}
                 {% if a.get("hx_confirm") %}hx-confirm="{{ a.hx_confirm }}"{% endif %}
+                {% if a.get("hx_swap") %}hx-swap="{{ a.hx_swap }}"{% endif %}
+                {% if a.get("hx_on_after_request") %}hx-on::after-request="{{ a.hx_on_after_request }}"{% endif %}
                 class="{{ btn_class }}"
                 title="{{ a.get('title', '') }}">
             {{ _action_icon(a.get("icon", "more")) }}
@@ -600,6 +602,10 @@
 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
 {% elif name == "disable" %}
 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+{% elif name == "archive" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v1a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+{% elif name == "restore" %}
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
 {% else %}
 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
 {% endif %}

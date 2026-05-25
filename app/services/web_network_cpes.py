@@ -504,67 +504,120 @@ def build_cpe_list_data(
     status: str | None = None,
     vendor: str | None = None,
     subscriber_id: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
 ) -> dict[str, object]:
+    from sqlalchemy import case, func, or_, select
+    from sqlalchemy.orm import selectinload
+
+    page = max(int(page or 1), 1)
+    per_page = max(min(int(per_page or 25), 200), 5)
+
     subscriber_filter = str(subscriber_id or "").strip() or None
-    devices = network_service.cpe_devices.list(
-        db=db,
-        subscriber_id=subscriber_filter,
-        order_by="created_at",
-        order_dir="desc",
-        limit=5000,
-        offset=0,
-    )
-    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
-    if subscriber_filter is None and inventory_subscriber_id is not None:
-        devices = [
-            device
-            for device in devices
-            if getattr(device, "subscriber_id", None) != inventory_subscriber_id
-        ]
-    search_q = str(search or "").strip().lower()
+    search_q = str(search or "").strip()
     status_q = str(status or "").strip().lower()
-    vendor_q = str(vendor or "").strip().lower()
+    vendor_q = str(vendor or "").strip()
+
+    # Build the filtered base statement once; reuse for counts and rows.
+    base = select(CPEDevice).options(selectinload(CPEDevice.subscriber))
+
+    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
+    if subscriber_filter:
+        base = base.where(CPEDevice.subscriber_id == subscriber_filter)
+    elif inventory_subscriber_id is not None:
+        base = base.where(
+            or_(
+                CPEDevice.subscriber_id.is_(None),
+                CPEDevice.subscriber_id != inventory_subscriber_id,
+            )
+        )
+
     if status_q:
-        devices = [d for d in devices if d.status.value == status_q]
+        try:
+            base = base.where(CPEDevice.status == DeviceStatus(status_q))
+        except ValueError:
+            pass  # ignore unknown status
+
     if vendor_q:
-        devices = [d for d in devices if vendor_q in str(d.vendor or "").lower()]
+        base = base.where(CPEDevice.vendor.ilike(f"%{vendor_q}%"))
+
     if search_q:
-        devices = [
-            d
-            for d in devices
-            if search_q
-            in " ".join(
-                [
-                    str(d.serial_number or ""),
-                    str(d.vendor or ""),
-                    str(d.model or ""),
-                    str(d.mac_address or ""),
-                    str(d.subscriber.full_name if d.subscriber else ""),
-                    str(d.subscriber.account_number if d.subscriber else ""),
-                ]
-            ).lower()
-        ]
-    vendors = sorted({str(d.vendor) for d in devices if d.vendor})
-    subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.user_type != UserType.system_user)
-        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
-        .limit(500)
-        .all()
+        s = f"%{search_q}%"
+        base = base.outerjoin(
+            Subscriber, CPEDevice.subscriber_id == Subscriber.id
+        ).where(
+            or_(
+                CPEDevice.serial_number.ilike(s),
+                CPEDevice.vendor.ilike(s),
+                CPEDevice.model.ilike(s),
+                CPEDevice.mac_address.ilike(s),
+                Subscriber.first_name.ilike(s),
+                Subscriber.last_name.ilike(s),
+                Subscriber.account_number.ilike(s),
+            )
+        )
+
+    # Filtered counts (total + status/vendor breakdown) in a single query.
+    counts_subq = base.with_only_columns(
+        CPEDevice.id, CPEDevice.status, CPEDevice.vendor
+    ).order_by(None).subquery()
+    counts_row = db.execute(
+        select(
+            func.count().label("total"),
+            func.count(
+                case((counts_subq.c.status == DeviceStatus.active, 1))
+            ).label("active"),
+            func.count(
+                case((counts_subq.c.vendor.ilike("%mikrotik%"), 1))
+            ).label("mikrotik"),
+        ).select_from(counts_subq)
+    ).one()
+    total = int(counts_row.total or 0)
+
+    total_pages = max(1, (total + per_page - 1) // per_page) if total else 1
+    page = min(page, total_pages)
+    offset = (page - 1) * per_page
+
+    rows_stmt = (
+        base.order_by(CPEDevice.created_at.desc())
+        .limit(per_page)
+        .offset(offset)
     )
+    devices = list(db.scalars(rows_stmt).unique().all())
+
+    # Vendor dropdown values — drawn from the full dataset, not the visible
+    # page, so paginating doesn't drop options. Single distinct-scan query.
+    vendors = [
+        v
+        for (v,) in db.execute(
+            select(CPEDevice.vendor)
+            .where(CPEDevice.vendor.isnot(None), CPEDevice.vendor != "")
+            .distinct()
+            .order_by(CPEDevice.vendor.asc())
+        ).all()
+    ]
+
+    subscribers = list(
+        db.scalars(
+            select(Subscriber)
+            .where(Subscriber.user_type != UserType.system_user)
+            .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+            .limit(500)
+        ).all()
+    )
+
     return {
         "cpes": devices,
         "vendors": vendors,
         "subscribers": subscribers,
         "stats": {
-            "total": len(devices),
-            "active": sum(
-                1 for d in devices if d.status.value == DeviceStatus.active.value
-            ),
-            "mikrotik": sum(
-                1 for d in devices if "mikrotik" in str(d.vendor or "").lower()
-            ),
+            "total": total,
+            "active": int(counts_row.active or 0),
+            "mikrotik": int(counts_row.mikrotik or 0),
         },
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
         "filters": {
             "search": str(search or "").strip(),
             "status": status_q,

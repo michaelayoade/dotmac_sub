@@ -234,12 +234,23 @@ class Offers(CRUDManager[CatalogOffer]):
 
     @staticmethod
     def delete(db: Session, offer_id: str):
+        """Soft-delete: archive the offer. Caller controls the transaction."""
         offer = db.get(CatalogOffer, offer_id)
         if not offer:
             raise HTTPException(status_code=404, detail="Offer not found")
         offer.status = OfferStatus.archived
         offer.is_active = False
-        db.commit()
+        db.flush()
+
+    @staticmethod
+    def restore(db: Session, offer_id: str):
+        """Move an archived offer back to active. Caller controls the transaction."""
+        offer = db.get(CatalogOffer, offer_id)
+        if not offer:
+            raise HTTPException(status_code=404, detail="Offer not found")
+        offer.status = OfferStatus.active
+        offer.is_active = True
+        db.flush()
 
 
 class OfferPrices(CRUDManager[OfferPrice]):

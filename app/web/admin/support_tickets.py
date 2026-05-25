@@ -333,6 +333,51 @@ def ticket_merge(
 
 
 @router.post(
+    "/{ticket_id}/quick-status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def ticket_quick_status(
+    request: Request,
+    ticket_id: UUID,
+    status: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    support_web_service.quick_update_ticket(
+        db,
+        request=request,
+        ticket_id=str(ticket_id),
+        actor_id=_actor_id(request),
+        fields={"status": status},
+    )
+    return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
+
+
+@router.post(
+    "/{ticket_id}/quick-assign",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def ticket_quick_assign(
+    request: Request,
+    ticket_id: UUID,
+    technician_person_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    fields: dict[str, str | None] = {
+        "technician_person_id": technician_person_id or None,
+    }
+    support_web_service.quick_update_ticket(
+        db,
+        request=request,
+        ticket_id=str(ticket_id),
+        actor_id=_actor_id(request),
+        fields=fields,
+    )
+    return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
+
+
+@router.post(
     "/{ticket_id}/delete",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:delete"))],

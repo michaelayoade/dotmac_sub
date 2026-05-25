@@ -13,16 +13,18 @@
         color='amber',
         color2='orange'
     ) %}
+        <a href="/admin/support/automation"
+           class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Automation Rules
+        </a>
         {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'amber', 'orange') }}
     {% endcall %}
 
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
-        {{ summary_card('New', status_totals.new, '/admin/support/tickets?status=new', 'blue') }}
-        {{ summary_card('Open', status_totals.open, '/admin/support/tickets?status=open', 'emerald') }}
-        {{ summary_card('Pending', status_totals.pending, '/admin/support/tickets?status=pending', 'amber') }}
-        {{ summary_card('On Hold', status_totals.on_hold, '/admin/support/tickets?status=on_hold', 'orange') }}
-        {{ summary_card('Resolved', status_totals.resolved, '/admin/support/tickets?status=resolved', 'teal') }}
-        {{ summary_card('Closed', status_totals.closed, '/admin/support/tickets?status=closed', 'slate') }}
+        {% for card in status_summary_cards %}
+        {{ summary_card(card.label, card.count, card.href, card.color) }}
+        {% endfor %}
     </div>
 
     {% call filter_bar() %}
@@ -52,7 +54,7 @@
                 <select name="ticket_type" class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
                     <option value="">All Types</option>
                     {% for t in ticket_type_options %}
-                    <option value="{{ t }}" {% if ticket_type == t %}selected{% endif %}>{{ t|title }}</option>
+                    <option value="{{ t }}" {% if ticket_type == t %}selected{% endif %}>{{ t }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -78,21 +80,21 @@
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Manager</label>
                     <select name="project_manager_person_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
-                        {% for p in people_options %}<option value="{{ p.id }}" {% if project_manager_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+                        {% for p in staff_options %}<option value="{{ p.id }}" {% if project_manager_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Site Coordinator</label>
                     <select name="site_coordinator_person_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
-                        {% for p in people_options %}<option value="{{ p.id }}" {% if site_coordinator_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+                        {% for p in staff_options %}<option value="{{ p.id }}" {% if site_coordinator_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
                 <div>
                     <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber / Customer</label>
                     <select name="subscriber_id" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700">
                         <option value="">All</option>
-                        {% for p in people_options %}<option value="{{ p.id }}" {% if subscriber_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+                        {% for p in subscriber_options %}<option value="{{ p.id }}" {% if subscriber_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
                 </div>
             </div>

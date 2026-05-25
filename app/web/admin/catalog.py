@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
+from app.services import catalog as catalog_service
 from app.services import web_admin as web_admin_service
 from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
 from app.services import web_catalog_calculator as web_catalog_calculator_service
@@ -201,6 +202,32 @@ def catalog_offer_edit_post(
     context = _base_context(request, db, active_page="catalog")
     context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
+
+
+@router.post(
+    "/offers/{offer_id}/archive",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_offer_archive(
+    offer_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Archive an offer (soft-delete: status=archived, is_active=False)."""
+    catalog_service.offers.delete(db, offer_id)
+    db.commit()
+    return RedirectResponse("/admin/catalog/offers", status_code=303)
+
+
+@router.post(
+    "/offers/{offer_id}/restore",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_offer_restore(
+    offer_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Restore an archived offer (status=active, is_active=True)."""
+    catalog_service.offers.restore(db, offer_id)
+    db.commit()
+    return RedirectResponse("/admin/catalog/offers?status=archived", status_code=303)
 
 
 # ---------------------------------------------------------------------------

@@ -91,6 +91,22 @@ def _offer_option(offer: object) -> dict[str, str]:
     }
 
 
+def active_offer_options(db: Session) -> list[dict[str, str]]:
+    """Return active offers shaped for plan-change dropdowns."""
+    offers = catalog_service.offers.list(
+        db=db,
+        service_type=None,
+        access_type=None,
+        status=OfferStatus.active.value,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+    return [_offer_option(offer) for offer in offers]
+
+
 def _coerce_setting_int(value: object | None) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -2003,7 +2019,10 @@ def bulk_update_status(
         try:
             sub = catalog_service.subscriptions.get(db, sub_id)
             if sub and sub.status in allowed_from:
-                payload = SubscriptionUpdate(status=target_status)
+                payload_kwargs: dict[str, object] = {"status": target_status}
+                if target_status == SubscriptionStatus.canceled:
+                    payload_kwargs["canceled_at"] = datetime.now(UTC)
+                payload = SubscriptionUpdate(**payload_kwargs)
                 catalog_service.subscriptions.update(
                     db=db, subscription_id=sub_id, payload=payload
                 )

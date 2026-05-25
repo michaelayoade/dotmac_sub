@@ -61,6 +61,7 @@ def subscription_detail_page_context(
     context: dict[str, object] = {
         "subscription": subscription,
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
+        "offer_options": core.active_offer_options(db),
     }
     context.update(core.subscription_detail_context(db, subscription))
     return context

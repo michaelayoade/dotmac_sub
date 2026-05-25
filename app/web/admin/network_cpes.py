@@ -45,6 +45,8 @@ def cpe_list(
     status: str | None = None,
     vendor: str | None = None,
     subscriber_id: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     state = web_network_cpes_service.build_cpe_list_data(
@@ -53,6 +55,8 @@ def cpe_list(
         status=status,
         vendor=vendor,
         subscriber_id=subscriber_id,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="cpes")
     context.update(state)

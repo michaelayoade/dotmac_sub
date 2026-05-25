@@ -1621,13 +1621,12 @@ def bulk_delete_customers(
 @router.get("/export", dependencies=[Depends(require_permission("customer:read"))])
 def export_customers(
     request: Request,
-    export: str = Query("csv"),
     ids: str = Query("all"),
     search: str | None = None,
     customer_type: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """Export customers to CSV or Excel format."""
+    """Export customers to CSV."""
     content, filename = web_customer_actions_service.export_customers_csv(
         db=db,
         ids=ids,

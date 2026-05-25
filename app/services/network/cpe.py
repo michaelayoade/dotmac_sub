@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain_settings import SettingDomain
 from app.models.event_store import EventStatus, EventStore
@@ -494,7 +494,7 @@ class CPEDevices(CRUDManager[CPEDevice]):
         subscription_id: str | None = None,
     ):
         del subscription_id  # Reserved for legacy callers; CPEs are subscriber-scoped.
-        query = db.query(CPEDevice)
+        query = db.query(CPEDevice).options(selectinload(CPEDevice.subscriber))
         query = apply_optional_equals(
             query,
             {

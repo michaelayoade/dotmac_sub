@@ -12,7 +12,7 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, Request
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -405,20 +405,32 @@ def _create_subscriber_channels_from_rows(
     account_id: str,
     contact_rows: list[dict],
 ) -> None:
+    from app.services.customer_identity_normalization import normalize_channel_address
+    from app.services.customer_identity_resolution import (
+        rebuild_identity_index_for_subscriber,
+    )
+
     subscriber = db.get(Subscriber, account_id)
     if not subscriber:
         return
     for row in contact_rows:
-        email = (row.get("email") or "").strip()
-        phone = (row.get("phone") or "").strip()
+        email = normalize_channel_address("email", row.get("email")) or ""
+        phone = normalize_channel_address("phone", row.get("phone")) or ""
         is_primary = bool(row.get("is_primary"))
         if email:
-            exists = (
+            existing_email_channels = (
                 db.query(SubscriberChannel)
                 .filter(SubscriberChannel.subscriber_id == subscriber.id)
                 .filter(SubscriberChannel.channel_type == ChannelType.email)
-                .filter(SubscriberChannel.address == email)
-                .first()
+                .all()
+            )
+            exists = next(
+                (
+                    channel
+                    for channel in existing_email_channels
+                    if normalize_channel_address("email", channel.address) == email
+                ),
+                None,
             )
             if not exists:
                 db.add(
@@ -431,12 +443,19 @@ def _create_subscriber_channels_from_rows(
                     )
                 )
         if phone:
-            exists = (
+            existing_phone_channels = (
                 db.query(SubscriberChannel)
                 .filter(SubscriberChannel.subscriber_id == subscriber.id)
                 .filter(SubscriberChannel.channel_type == ChannelType.phone)
-                .filter(SubscriberChannel.address == phone)
-                .first()
+                .all()
+            )
+            exists = next(
+                (
+                    channel
+                    for channel in existing_phone_channels
+                    if normalize_channel_address("phone", channel.address) == phone
+                ),
+                None,
             )
             if not exists:
                 db.add(
@@ -449,6 +468,7 @@ def _create_subscriber_channels_from_rows(
                     )
                 )
     db.flush()
+    rebuild_identity_index_for_subscriber(db, subscriber.id)
 
 
 def parse_contact_rows(contact_columns: dict[str, list[str]]) -> list[dict[str, Any]]:
@@ -1260,7 +1280,7 @@ def export_customers_csv(
     customers: list[dict[str, str]] = []
     if ids == "all":
         if customer_type != "business":
-            people_query = db.query(Subscriber).filter(
+            people_stmt = select(Subscriber).where(
                 func.lower(
                     func.coalesce(
                         Subscriber.metadata_["subscriber_category"].as_string(), ""
@@ -1269,10 +1289,12 @@ def export_customers_csv(
                 != SubscriberCategory.business.value
             )
             if search:
-                people_query = people_query.filter(
+                people_stmt = people_stmt.where(
                     Subscriber.email.ilike(f"%{search}%")
                 )
-            people = people_query.order_by(Subscriber.created_at.desc()).all()
+            people = db.scalars(
+                people_stmt.order_by(Subscriber.created_at.desc())
+            ).all()
             for person in people:
                 customers.append(
                     {
@@ -1288,7 +1310,7 @@ def export_customers_csv(
                     }
                 )
         if customer_type != "person":
-            orgs_query = db.query(Subscriber).filter(
+            orgs_stmt = select(Subscriber).where(
                 func.lower(
                     func.coalesce(
                         Subscriber.metadata_["subscriber_category"].as_string(), ""
@@ -1297,10 +1319,12 @@ def export_customers_csv(
                 == SubscriberCategory.business.value
             )
             if search:
-                orgs_query = orgs_query.filter(
+                orgs_stmt = orgs_stmt.where(
                     Subscriber.company_name.ilike(f"%{search}%")
                 )
-            orgs = orgs_query.order_by(Subscriber.company_name.asc()).all()
+            orgs = db.scalars(
+                orgs_stmt.order_by(Subscriber.company_name.asc())
+            ).all()
             for org in orgs:
                 customers.append(
                     {
@@ -1493,16 +1517,25 @@ def update_customer_profile(
     name: str,
     email: str,
     phone: str | None,
+    billing_notifications: bool,
+    sms_updates: bool,
 ) -> Subscriber | None:
     """Update a customer's basic profile fields."""
     subscriber = db.get(Subscriber, subscriber_id)
     if not subscriber:
         return None
     name_parts = name.strip().split(None, 1)
-    subscriber.first_name = name_parts[0] if name_parts else name.strip()
-    subscriber.last_name = name_parts[1] if len(name_parts) > 1 else ""
-    subscriber.email = email.strip()
-    subscriber.phone = phone.strip() if phone else None
-    db.commit()
-    db.refresh(subscriber)
-    return subscriber
+    metadata = dict(subscriber.metadata_ or {})
+    metadata["billing_notifications"] = bool(billing_notifications)
+    metadata["sms_updates"] = bool(sms_updates)
+    return subscriber_service.subscribers.update(
+        db=db,
+        subscriber_id=subscriber_id,
+        payload=SubscriberUpdate(
+            first_name=name_parts[0] if name_parts else name.strip(),
+            last_name=name_parts[1] if len(name_parts) > 1 else "",
+            email=email.strip(),
+            phone=phone.strip() if phone else None,
+            metadata_=metadata,
+        ),
+    )

@@ -10,7 +10,8 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.support import Ticket, TicketChannel, TicketPriority, TicketStatus
+from app.models.subscriber import Subscriber
+from app.models.support import Ticket, TicketChannel
 from app.schemas.support import (
     AttachmentMeta,
     TicketCommentCreate,
@@ -20,6 +21,7 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.services import support as support_service
+from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.file_storage import file_uploads
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,55 @@ def visible_ticket_columns(raw_cookie: str | None) -> list[str]:
     return visible_columns or list(DEFAULT_VISIBLE_COLUMNS)
 
 
+def _non_empty_ids(values: list[object | None]) -> list[str]:
+    ids: list[str] = []
+    for value in values:
+        if value in (None, ""):
+            continue
+        text = str(value)
+        if text not in ids:
+            ids.append(text)
+    return ids
+
+
+def _label_lookup(options: list[dict[str, str]]) -> dict[str, str]:
+    return {item["id"]: item["label"] for item in options if item.get("id")}
+
+
+def _service_team_lookup() -> dict[str, str]:
+    return {item["id"]: item["label"] for item in service_team_options()}
+
+
+def _append_missing_option(options: list[str], value: str | None) -> list[str]:
+    text = str(value or "").strip()
+    if not text or text in options:
+        return options
+    return [*options, text]
+
+
+def _status_summary_cards(db: Session) -> list[dict[str, str | int]]:
+    totals = support_service.status_totals(db)
+    return [
+        {
+            "value": status,
+            "label": support_ticket_settings_service.display_label(status),
+            "count": int(totals.get(status, 0)),
+            "href": f"/admin/support/tickets?status={status}",
+            "color": support_ticket_settings_service.status_color(status),
+        }
+        for status in support_ticket_settings_service.list_status_options(db)
+    ]
+
+
+def _resolve_uploaded_by_subscriber_id(
+    db: Session, actor_id: str | None
+) -> str | None:
+    uid = parse_uuid_or_none(actor_id)
+    if not uid:
+        return None
+    return str(uid) if db.get(Subscriber, uid) else None
+
+
 def upload_ticket_attachments(
     db: Session,
     *,
@@ -106,6 +157,7 @@ def upload_ticket_attachments(
 ) -> list[dict]:
     uploaded_records = []
     uploaded_metadata = []
+    uploaded_by = _resolve_uploaded_by_subscriber_id(db, actor_id)
     try:
         for attachment in attachments or []:
             filename = (getattr(attachment, "filename", "") or "").strip()
@@ -130,7 +182,7 @@ def upload_ticket_attachments(
                 original_filename=filename,
                 content_type=content_type,
                 data=payload,
-                uploaded_by=actor_id,
+                uploaded_by=uploaded_by,
                 owner_subscriber_id=None,
             )
             uploaded_records.append(record)
@@ -164,12 +216,22 @@ def build_ticket_form_context(
     ticket: Ticket | None = None,
 ) -> dict:
     params = query_params or {}
-    people = support_service.list_people(db)
+    status_options = support_ticket_settings_service.list_status_options(db)
+    priority_options = support_ticket_settings_service.list_priority_options(db)
+    ticket_type_options = support_ticket_settings_service.list_ticket_type_options(db)
     current_assignees = [
         str(row.person_id)
         for row in (ticket.assignees if ticket and ticket.assignees else [])
         if row.person_id
     ]
+    assignment_ids = current_assignees + _non_empty_ids(
+        [
+            ticket.technician_person_id if ticket else None,
+            ticket.ticket_manager_person_id if ticket else None,
+            ticket.site_coordinator_person_id if ticket else None,
+        ]
+    )
+    staff = support_service.list_assignment_people(db, include_ids=assignment_ids)
     prefill = {
         "title": ticket.title if ticket else str(params.get("title", "") or ""),
         "description": ticket.description
@@ -188,15 +250,21 @@ def build_ticket_form_context(
         "ticket_type": ticket.ticket_type
         if ticket
         else str(params.get("ticket_type", "") or ""),
-        "priority": ticket.priority.value
+        "priority": ticket.priority
         if ticket
-        else str(params.get("priority", TicketPriority.normal.value) or ""),
+        else str(
+            params.get("priority", support_ticket_settings_service.default_priority(db))
+            or ""
+        ),
         "channel": ticket.channel.value
         if ticket
         else str(params.get("channel", TicketChannel.web.value) or ""),
-        "status": ticket.status.value
+        "status": ticket.status
         if ticket
-        else str(params.get("status", TicketStatus.open.value) or ""),
+        else str(
+            params.get("status", support_ticket_settings_service.default_status(db))
+            or ""
+        ),
         "due_at": ticket.due_at.strftime("%Y-%m-%dT%H:%M")
         if ticket and ticket.due_at
         else "",
@@ -220,14 +288,33 @@ def build_ticket_form_context(
         else "",
         "assignee_person_ids": current_assignees,
     }
+    customer_person = support_service.person_option(db, prefill["customer_person_id"])
+    subscriber_person = support_service.person_option(db, prefill["subscriber_id"])
+    selected_person = subscriber_person or customer_person or {}
+    prefill["customer_person_label"] = (
+        customer_person["label"] if customer_person else ""
+    )
+    prefill["subscriber_label"] = subscriber_person["label"] if subscriber_person else ""
+    status_options = _append_missing_option(status_options, prefill["status"])
+    priority_options = _append_missing_option(priority_options, prefill["priority"])
+    ticket_type_options = _append_missing_option(
+        ticket_type_options, prefill["ticket_type"]
+    )
     return {
-        "all_statuses": [item.value for item in TicketStatus],
-        "all_priorities": [item.value for item in TicketPriority],
+        "all_statuses": status_options,
+        "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
         "region_options": support_service.regions(db),
-        "ticket_type_options": support_service.ticket_types(db),
+        "ticket_type_options": ticket_type_options,
         "service_team_options": service_team_options(),
-        "people_options": people,
+        "staff_options": staff,
+        "subscriber_options": support_service.list_people(
+            db,
+            include_ids=_non_empty_ids(
+                [prefill["customer_person_id"], prefill["subscriber_id"]]
+            ),
+        ),
+        "selected_person": selected_person,
         "prefill": prefill,
     }
 
@@ -259,7 +346,7 @@ def build_ticket_create_payload(**kwargs) -> TicketCreate:
         subscriber_id=parse_uuid_or_none(kwargs.get("subscriber_id")),
         customer_account_id=parse_uuid_or_none(kwargs.get("customer_account_id")),
         customer_person_id=parse_uuid_or_none(kwargs.get("customer_person_id")),
-        created_by_person_id=parse_uuid_or_none(kwargs.get("actor_id")),
+        created_by_person_id=None,
         region=kwargs.get("region") or None,
         technician_person_id=parse_uuid_or_none(kwargs.get("technician_person_id")),
         ticket_manager_person_id=parse_uuid_or_none(
@@ -363,6 +450,57 @@ def update_ticket_from_form(
     **form,
 ):
     payload = build_ticket_update_payload(**form)
+    return support_service.tickets.update(
+        db,
+        ticket_id,
+        payload,
+        actor_id=actor_id,
+        request=request,
+    )
+
+
+def quick_update_ticket(
+    db: Session,
+    *,
+    request,
+    ticket_id: str,
+    actor_id: str | None,
+    fields: dict,
+):
+    """Apply a small set of fields to a ticket (status, technician, etc.).
+
+    Surfaces invalid client input as HTTP 400 rather than a 500 from a bare
+    ValueError / pydantic ValidationError.
+    """
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    uuid_fields = {
+        "technician_person_id",
+        "ticket_manager_person_id",
+        "site_coordinator_person_id",
+        "service_team_id",
+        "assigned_to_person_id",
+    }
+    payload_data: dict = {}
+    for key, value in fields.items():
+        if value in (None, ""):
+            continue
+        if key in uuid_fields:
+            try:
+                payload_data[key] = UUID(str(value))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"{key} must be a valid UUID"
+                ) from exc
+        elif key in ("status", "priority"):
+            payload_data[key] = str(value).strip()
+        else:
+            payload_data[key] = value
+    try:
+        payload = TicketUpdate(**payload_data)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
     return support_service.tickets.update(
         db,
         ticket_id,
@@ -487,6 +625,43 @@ def delete_ticket_hx_headers() -> dict[str, str]:
     }
 
 
+def _identity_resolution_summary(ticket) -> dict[str, str] | None:
+    metadata = dict(getattr(ticket, "metadata_", None) or {})
+    resolution = metadata.get("identity_resolution")
+    if not isinstance(resolution, dict):
+        return None
+    status = str(resolution.get("status") or "").strip()
+    matched_via = str(resolution.get("matched_via") or "").strip()
+    matched_field = str(resolution.get("matched_field") or "").strip()
+    confidence = str(resolution.get("match_confidence") or "").strip().upper()
+    confidence_suffix = f", {confidence} confidence" if confidence else ""
+    if status == "matched" and matched_via == "subscriber_contact":
+        detail = "Matched via subscriber contact"
+        if matched_field:
+            detail = f"{detail} ({matched_field})"
+        if confidence_suffix:
+            detail = f"{detail}{confidence_suffix}"
+        return {"status": status, "detail": detail}
+    if status == "matched" and matched_via:
+        detail = f"Matched via {matched_via.replace('_', ' ')}"
+        if matched_field:
+            detail = f"{detail} ({matched_field})"
+        if confidence_suffix:
+            detail = f"{detail}{confidence_suffix}"
+        return {"status": status, "detail": detail}
+    if status == "ambiguous":
+        return {
+            "status": status,
+            "detail": "Inbound identity is ambiguous and requires manual review",
+        }
+    if status == "unmatched" and metadata.get("manual_review_required"):
+        return {
+            "status": status,
+            "detail": "Inbound identity requires manual review before account actions",
+        }
+    return None
+
+
 def build_tickets_list_context(
     db: Session,
     *,
@@ -504,6 +679,9 @@ def build_tickets_list_context(
     per_page: int,
     visible_columns_cookie: str | None,
 ) -> dict:
+    status_options = support_ticket_settings_service.list_status_options(db)
+    priority_options = support_ticket_settings_service.list_priority_options(db)
+    status_options = _append_missing_option(status_options, status)
     offset = (page - 1) * per_page
     rows = support_service.tickets.list(
         db,
@@ -519,7 +697,28 @@ def build_tickets_list_context(
         limit=per_page,
         offset=offset,
     )
-    people = support_service.list_people(db)
+    assignment_ids: list[object | None] = []
+    subscriber_ids: list[object | None] = [subscriber_id]
+    for ticket in rows:
+        assignment_ids.extend(
+            [
+                ticket.assigned_to_person_id,
+                ticket.technician_person_id,
+                ticket.ticket_manager_person_id,
+                ticket.site_coordinator_person_id,
+            ]
+        )
+        subscriber_ids.extend(
+            [ticket.customer_person_id, ticket.customer_account_id, ticket.subscriber_id]
+        )
+    staff = support_service.list_assignment_people(
+        db,
+        include_ids=_non_empty_ids(assignment_ids + [project_manager_person_id, site_coordinator_person_id, actor_id]),
+    )
+    subscribers = support_service.list_people(
+        db,
+        include_ids=_non_empty_ids(subscriber_ids),
+    )
     return {
         "tickets": rows,
         "search": search or "",
@@ -534,21 +733,45 @@ def build_tickets_list_context(
         "page": page,
         "per_page": per_page,
         "has_next_page": len(rows) >= per_page,
-        "status_totals": support_service.status_totals(db),
+        "status_summary_cards": _status_summary_cards(db),
         "visible_columns": visible_ticket_columns(visible_columns_cookie),
         "ticket_columns": TICKET_COLUMNS,
-        "all_statuses": [item.value for item in TicketStatus],
-        "all_priorities": [item.value for item in TicketPriority],
+        "all_statuses": status_options,
+        "all_priorities": priority_options,
         "ticket_type_options": support_service.ticket_types(db),
-        "people_options": people,
-        "people_lookup": {item["id"]: item["label"] for item in people},
+        "staff_options": staff,
+        "staff_lookup": _label_lookup(staff),
+        "subscriber_options": subscribers,
+        "subscriber_lookup": _label_lookup(subscribers),
     }
 
 
 def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
     from app.services.audit_helpers import build_audit_activities
 
+    status_options = support_ticket_settings_service.list_status_options(db)
+    priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    status_options = _append_missing_option(status_options, ticket.status)
+    priority_options = _append_missing_option(priority_options, ticket.priority)
+    staff = support_service.list_assignment_people(
+        db,
+        include_ids=_non_empty_ids(
+            [
+                ticket.assigned_to_person_id,
+                ticket.technician_person_id,
+                ticket.ticket_manager_person_id,
+                ticket.site_coordinator_person_id,
+                *[row.person_id for row in (ticket.assignees or [])],
+            ]
+        ),
+    )
+    subscribers = support_service.list_people(
+        db,
+        include_ids=_non_empty_ids(
+            [ticket.customer_person_id, ticket.customer_account_id, ticket.subscriber_id]
+        ),
+    )
     return {
         "ticket": ticket,
         "comments": support_service.ticket_comments.list(
@@ -563,12 +786,18 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
         "activities": build_audit_activities(
             db, "support_ticket", str(ticket.id), limit=100
         ),
-        "all_statuses": [item.value for item in TicketStatus],
-        "all_priorities": [item.value for item in TicketPriority],
+        "all_statuses": status_options,
+        "all_priorities": priority_options,
         "all_channels": [item.value for item in TicketChannel],
-        "people_options": support_service.list_people(db),
+        "people_options": subscribers,
+        "staff_options": staff,
+        "staff_lookup": _label_lookup(staff),
+        "subscriber_lookup": _label_lookup(subscribers),
         "service_team_options": service_team_options(),
+        "service_team_lookup": _service_team_lookup(),
         "is_merged_source": bool(
-            ticket.merged_into_ticket_id or ticket.status.value == "merged"
+            ticket.merged_into_ticket_id
+            or support_ticket_settings_service.status_is_merged(ticket.status)
         ),
+        "identity_resolution": _identity_resolution_summary(ticket),
     }

@@ -170,10 +170,32 @@
             <span class="text-xs text-slate-400 dark:text-slate-500">active</span>
         {% endcall %}
         {{ cell_status("status", offer_status|title, status_map.get(offer_status, "default")) }}
-        {{ cell_actions("actions", [
+        {% set offer_actions_list = [
             {"href": "/admin/catalog/offers/" ~ row.id, "icon": "view", "title": "View plan", "color": "violet"},
             {"href": "/admin/catalog/offers/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit plan"},
-        ]) }}
+        ] %}
+        {% if offer_status == "archived" %}
+            {% set _ = offer_actions_list.append({
+                "icon": "restore",
+                "title": "Restore plan",
+                "color": "emerald",
+                "hx_post": "/admin/catalog/offers/" ~ row.id ~ "/restore",
+                "hx_confirm": "Restore this offer to active?",
+                "hx_swap": "none",
+                "hx_on_after_request": "if (event.detail.successful) window.location.reload()",
+            }) %}
+        {% else %}
+            {% set _ = offer_actions_list.append({
+                "icon": "archive",
+                "title": "Archive plan",
+                "color": "amber",
+                "hx_post": "/admin/catalog/offers/" ~ row.id ~ "/archive",
+                "hx_confirm": "Archive this offer? Existing subscriptions are unaffected; the offer hides from new selections.",
+                "hx_swap": "none",
+                "hx_on_after_request": "if (event.detail.successful) window.location.reload()",
+            }) %}
+        {% endif %}
+        {{ cell_actions("actions", offer_actions_list) }}
     {% endcall %}
     </div>
 </div>

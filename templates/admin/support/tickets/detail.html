@@ -106,14 +106,46 @@
 
         <aside class="space-y-6 xl:col-span-4">
             {% call support_card(title='Ticket Metadata', subtitle='Assignment and lifecycle controls.') %}
+            {% set current_status = ticket.status if ticket.status else '' %}
+            {% set current_technician = (ticket.technician_person_id | string) if ticket.technician_person_id else '' %}
+
+            <form method="post" action="/admin/support/tickets/{{ ticket.id }}/quick-status" class="mb-3">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                <label class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</label>
+                <div class="mt-1 flex gap-2">
+                    <select name="status" class="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for s in all_statuses %}
+                        <option value="{{ s }}" {% if s == current_status %}selected{% endif %}>{{ s | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Set</button>
+                </div>
+            </form>
+
+            <form method="post" action="/admin/support/tickets/{{ ticket.id }}/quick-assign" class="mb-3">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                <label class="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Assigned Technician</label>
+                <div class="mt-1 flex gap-2">
+                    <select name="technician_person_id" class="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">— Unassigned —</option>
+                        {% for person in staff_options %}
+                        <option value="{{ person.id }}" {% if (person.id | string) == current_technician %}selected{% endif %}>{{ person.label or person.email or person.id }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Assign</button>
+                </div>
+            </form>
+
             <dl class="space-y-2 text-xs">
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Type</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.ticket_type or '-' }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Channel</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.channel.value if ticket.channel else '-' }}</dd></div>
+                {% if identity_resolution %}
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Identity Match</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ identity_resolution.detail }}</dd></div>
+                {% endif %}
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Region</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.region or '-' }}</dd></div>
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Technician</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ ticket.technician_person_id or '-' }}</dd></div>
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Project Manager</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ ticket.ticket_manager_person_id or '-' }}</dd></div>
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Site Coordinator</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ ticket.site_coordinator_person_id or '-' }}</dd></div>
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Service Team</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ ticket.service_team_id or '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Project Manager</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ staff_lookup.get(ticket.ticket_manager_person_id|string, ticket.ticket_manager_person_id or '-') if staff_lookup is defined else (ticket.ticket_manager_person_id or '-') }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Site Coordinator</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ staff_lookup.get(ticket.site_coordinator_person_id|string, ticket.site_coordinator_person_id or '-') if staff_lookup is defined else (ticket.site_coordinator_person_id or '-') }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Service Team</dt><dd class="break-all text-right text-slate-800 dark:text-slate-100">{{ service_team_lookup.get(ticket.service_team_id|string, ticket.service_team_id or '-') if service_team_lookup is defined else (ticket.service_team_id or '-') }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Due</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.due_at.strftime('%Y-%m-%d %H:%M') if ticket.due_at else '-' }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Created</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.created_at.strftime('%Y-%m-%d %H:%M') if ticket.created_at else '-' }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Updated</dt><dd class="text-right text-slate-800 dark:text-slate-100">{{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') if ticket.updated_at else '-' }}</dd></div>
@@ -132,9 +164,9 @@
 
             {% call support_card(title='Customer / Subscriber', subtitle='Linked account context.') %}
             <dl class="space-y-2 text-xs">
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Customer</dt><dd class="break-all text-right">{{ ticket.customer_person_id or '-' }}</dd></div>
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Customer ID</dt><dd class="break-all text-right">{{ ticket.customer_account_id or '-' }}</dd></div>
-                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Subscriber</dt><dd class="break-all text-right">{{ ticket.subscriber_id or '-' }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Customer</dt><dd class="break-all text-right">{{ subscriber_lookup.get(ticket.customer_person_id|string, ticket.customer_person_id or '-') if subscriber_lookup is defined else (ticket.customer_person_id or '-') }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Customer ID</dt><dd class="break-all text-right">{{ subscriber_lookup.get(ticket.customer_account_id|string, ticket.customer_account_id or '-') if subscriber_lookup is defined else (ticket.customer_account_id or '-') }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500 dark:text-slate-400">Subscriber</dt><dd class="break-all text-right">{{ subscriber_lookup.get(ticket.subscriber_id|string, ticket.subscriber_id or '-') if subscriber_lookup is defined else (ticket.subscriber_id or '-') }}</dd></div>
             </dl>
             {% endcall %}
 
