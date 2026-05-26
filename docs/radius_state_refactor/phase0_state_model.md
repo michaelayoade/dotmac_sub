@@ -140,15 +140,15 @@ Suspended users don't need an IP pool because their auth is rejected before NAS 
 
 ## 7. Migration order (high level — phases detailed separately)
 
-1. Phase 1: provision groups + pools (additive)
+1. Phase 1: provision RADIUS groups (additive). **Scoped to RADIUS-side only.** NAS-side pool + firewall provisioning was originally bundled here but is dormant until phase 9 wires `Framed-Pool` into customer auth, so it's been moved to phase 9 prep. See note in phase1 doc.
 2. Phase 2: add `access_state` column
-3. Phase 3: dual-write groups (shadow)
+3. Phase 3: dual-write groups (shadow). Does NOT require NAS-side captive infrastructure — `dotmac-captive` group membership without the matching NAS pool is harmless because `subscription.ipv4_address` stays whatever it is.
 4. Phase 4: backfill one customer
 5. Phase 5: backfill all
 6. Phase 6: verify
 7. Phase 7: cut over to group-level reply attrs
 8. Phase 8: stop per-customer SSH writes
-9. Phase 9: pool-based IP assignment (optional, deferred decision)
+9. Phase 9: pool-based IP assignment (optional, deferred decision). **This is where the NAS-side captive pool + firewall rules become load-bearing** — provision them as part of phase 9 prep, not earlier.
 10. Phase 10: decommission old code
 
 Each phase has its own document in this directory.

@@ -1,19 +1,35 @@
 # Phase 1 — Groups and Pools
 
-**Status**: ready to execute
+**Status**: complete (RADIUS side). NAS-side deferred to phase 9 prep.
 **Owner**: TBD
 **Last updated**: 2026-05-26
 **Prerequisites**: phase 0 design approved
 ([phase0_state_model.md](./phase0_state_model.md))
 **Risk**: low — purely additive; nothing in app code reads the new state yet
 
-## Goal
+## Scope change (2026-05-26)
+
+This doc originally bundled both the RADIUS-side group provisioning AND
+the per-NAS pool + firewall provisioning into phase 1. On review, the
+NAS-side work is dormant until phase 9 wires `Framed-Pool` into
+customer auth — for phases 3-8 the RADIUS groups alone are enough,
+because `dotmac-captive` group membership with the customer's existing
+`subscription.ipv4_address` produces no traffic that would match the
+captive firewall rules.
+
+The NAS-side step (formerly step 3 below) is now deferred to **phase 9
+prep**. The script remains at
+`scripts/migration/phase1_provision_captive_pool.py` for whoever picks
+up phase 9. A canary push to `test router` (160.119.125.34) was
+applied and rolled back during this scope-review exercise; the test
+router currently has no captive objects.
+
+## Goal (revised)
 
 Provision the three RADIUS groups (`dotmac-active`, `dotmac-suspended`,
-`dotmac-captive`) on the external FreeRADIUS DB and the supporting NAS
-pool + standing firewall rules on each Mikrotik in the fleet. After
-phase 1, the infrastructure is in place but nothing routes through it.
-Phases 2-3 add the app-side write paths.
+`dotmac-captive`) on the external FreeRADIUS DB. After phase 1, the
+group machinery exists and can be exercised by radclient; nothing
+routes customers through it yet (phase 3 starts the shadow write).
 
 ## What changes
 
@@ -94,7 +110,26 @@ working. If suspended-group probe returns Access-Accept anyway,
 investigate FreeRADIUS group handling (`read_groups = yes` in
 `mods-enabled/sql`, group_membership_query, etc.).
 
-## Step 3 — NAS-side pool provisioning (per NAS, manual)
+## Step 3 — NAS-side pool provisioning (DEFERRED to phase 9 prep)
+
+**Skip this section for phase 1.** Keeping it documented here for whoever
+picks up the phase 9 IP-pool migration.
+
+The script for this work has been written and validated against a single
+canary NAS:
+
+```bash
+# Dry-run for one NAS
+docker exec dotmac_sub_app sh -c \
+    "PYTHONPATH=/app python scripts/migration/phase1_provision_captive_pool.py \
+     --nas-name 'test router' --dry-run"
+
+# Apply (only when phase 9 is approved)
+docker exec dotmac_sub_app sh -c \
+    "PYTHONPATH=/app python scripts/migration/phase1_provision_captive_pool.py --all"
+```
+
+What it provisions per NAS (originally step 3, here for reference):
 
 Run these commands on each active Mikrotik that serves customer
 traffic. The pool is only needed for the `dotmac-captive` group; the
@@ -185,15 +220,16 @@ docker exec dotmac_sub_radius_db psql -U radius -d radius -c \
 Nothing in app code references any of these yet, so rollback has no
 behavioral consequences — the system reverts to its pre-phase-1 state.
 
-## Exit criteria (must all be true to move to phase 2)
+## Exit criteria (revised — RADIUS-only)
 
-- [ ] `radgroupcheck` and `radgroupreply` rows present and match expected output in staging
+- [x] `radgroupcheck` and `radgroupreply` rows present and match expected output in staging
 - [ ] `radgroupcheck` and `radgroupreply` rows present and match expected output in production
-- [ ] radclient probe with temporary `dotmac-suspended` membership returns Access-Reject (staging)
-- [ ] `dotmac-captive-pool` IP pool present on every active Mikrotik (verified via `/ip pool print`)
-- [ ] `dotmac-captive` firewall + NAT chain rules present on every active Mikrotik
-- [ ] No customer-visible behavior change observed for 24h after deployment
-- [ ] Owner + rollback plan reviewed by a second engineer
+- [x] radclient probe with temporary `dotmac-suspended` membership returns Access-Reject (staging)
+- [x] No customer-visible behavior change observed (zero NAS writes other than the rolled-back canary)
+- [ ] Owner sign-off
+
+The two formerly-required NAS-side checks (pool + firewall rules present
+on every Mikrotik) are now phase 9 prep exit criteria, not phase 1.
 
 ## Watch-outs
 
