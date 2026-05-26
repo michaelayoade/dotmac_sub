@@ -44,6 +44,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
+from app.services import radius_access_state as ras
 from app.services.radius_access_state import (
     derive_access_state,
     set_subscription_access_state,
@@ -136,6 +137,17 @@ def main() -> int:
 
     db = SessionLocal()
     try:
+        # Pre-compute external sync configs once and monkey-patch the
+        # lookup so set_subscription_access_state doesn't repeat the N+1
+        # connector_config query on every row. The configs are stable
+        # for the duration of this run.
+        cached_configs = ras._active_external_sync_configs(db)
+        ras._active_external_sync_configs = lambda _db: cached_configs
+        logger.info(
+            "cached external sync configs at startup: %d target(s)",
+            len(cached_configs),
+        )
+
         counts: Counter[str] = Counter()
         errors: list[tuple[str, str]] = []
         n_done = 0

@@ -10,6 +10,7 @@ See ``docs/radius_state_refactor/phase0_state_model.md``.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import Column, Integer, String, delete, insert, select
 from sqlalchemy.orm import Session
@@ -20,6 +21,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
 from app.services.radius import (
     _active_external_sync_configs,
@@ -96,44 +98,107 @@ def derive_access_state(
     return None
 
 
+# Subscriber-level aggregation priority. AccessCredential belongs to
+# a subscriber, not a subscription — so when a subscriber has multiple
+# subscriptions in different states, their auth state must be the
+# "best" (most permissive) of those derived per-sub states. A
+# subscriber with any active sub is "active", with captive but no
+# active is "captive", etc. Terminated wins only when every sub is
+# terminated.
+_STATE_PRIORITY: tuple[AccessState, ...] = (
+    AccessState.active,
+    AccessState.captive,
+    AccessState.suspended,
+    AccessState.terminated,
+)
+
+
+def derive_subscriber_access_state(
+    db: Session, subscriber_id: Any
+) -> AccessState | None:
+    """Aggregate per-subscription derived states across all of a
+    subscriber's subscriptions to produce the subscriber-level access
+    state. Returns the most-permissive state across all subs.
+
+    Returns None only when the subscriber has zero subs, OR when every
+    sub maps to None (all pending/hidden/archived).
+    """
+    rows = list(
+        db.execute(
+            select(
+                Subscription.status, Subscriber.captive_redirect_enabled
+            )
+            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+            .where(Subscription.subscriber_id == coerce_uuid(subscriber_id))
+        ).all()
+    )
+    if not rows:
+        return None
+    # subscriber.captive_redirect_enabled is a subscriber-level flag —
+    # same value on every row of the join. Read it once.
+    captive_flag = bool(rows[0][1])
+    states = {
+        derive_access_state(status, captive_redirect_enabled=captive_flag)
+        for status, _ in rows
+    }
+    for candidate in _STATE_PRIORITY:
+        if candidate in states:
+            return candidate
+    return None
+
+
 def set_subscription_access_state(
     db: Session,
     subscription_id: str,
     state: AccessState | None,
 ) -> dict[str, int]:
-    """Set ``subscription.access_state`` in the app DB AND mirror to
-    external RADIUS ``radusergroup``. Idempotent.
+    """Set ``subscription.access_state`` to ``state`` and mirror the
+    SUBSCRIBER's aggregate state to external RADIUS ``radusergroup``.
+    Idempotent.
+
+    Two writes happen:
+
+      1. ``subscription.access_state = state`` (per-sub column write).
+         Reflects what this single subscription thinks its state should
+         be. Used for observability/debugging.
+
+      2. ``radusergroup`` row for every credential of the SUBSCRIBER
+         is set to the group of the subscriber-aggregate state (see
+         ``derive_subscriber_access_state``). Reflects the user's
+         effective auth state, because credentials are per-subscriber
+         and a subscriber with multiple subs in different states must
+         get the most-permissive state's group (active > captive >
+         suspended > terminated).
 
     The radusergroup write is the SHADOW path during phases 3-7 — the
-    legacy block path (IP rewrite + per-user radcheck/radreply + per-
-    customer firewall address-list) still runs in parallel. Callers
-    typically wrap this in a feature-flag check (see
-    ``DomainSetting radius.group_routing_enabled``).
-
-    Semantics per state:
-      * active / suspended / captive — UPSERT one radusergroup row per
-        credential with groupname = dotmac-<state>.
-      * terminated — DELETE the user's dotmac-* radusergroup rows. No
-        new row inserted; auth fails with user-not-found.
-      * None — same as terminated (no row), used for unprovisioned subs.
+    legacy block path still runs in parallel. Callers typically wrap
+    this in a feature-flag check.
 
     The DELETE is scoped to ``groupname LIKE 'dotmac-%'`` so any
     operator-managed groups outside this namespace are preserved.
 
     Returns counts for observability:
-      {"credentials": n, "external_rows_written": n, "external_rows_deleted": n}
+      {"credentials": n, "external_rows_written": n,
+       "external_rows_deleted": n, "aggregate_state": str | None}
     """
     sub = db.get(Subscription, coerce_uuid(subscription_id))
     if sub is None:
-        return {"credentials": 0, "external_rows_written": 0, "external_rows_deleted": 0}
+        return {
+            "credentials": 0,
+            "external_rows_written": 0,
+            "external_rows_deleted": 0,
+            "aggregate_state": None,
+        }
 
-    # 1. App DB
+    # 1. Per-sub column write
     new_value = state.value if state is not None else None
     if sub.access_state != new_value:
         sub.access_state = new_value
         db.flush()
 
-    # 2. External RADIUS mirror
+    # 2. Subscriber-aggregate radusergroup write
+    aggregate_state = derive_subscriber_access_state(db, sub.subscriber_id)
+
     credentials = list(
         db.scalars(
             select(AccessCredential).where(
@@ -146,11 +211,15 @@ def set_subscription_access_state(
             "credentials": 0,
             "external_rows_written": 0,
             "external_rows_deleted": 0,
+            "aggregate_state": aggregate_state.value if aggregate_state else None,
         }
 
     target_group: str | None = None
-    if state is not None and state != AccessState.terminated:
-        target_group = _GROUP_FOR_STATE[state]
+    if (
+        aggregate_state is not None
+        and aggregate_state != AccessState.terminated
+    ):
+        target_group = _GROUP_FOR_STATE[aggregate_state]
 
     external_configs = _active_external_sync_configs(db)
     if not external_configs:
@@ -201,4 +270,5 @@ def set_subscription_access_state(
         "credentials": len(credentials),
         "external_rows_written": rows_written,
         "external_rows_deleted": rows_deleted,
+        "aggregate_state": aggregate_state.value if aggregate_state else None,
     }
