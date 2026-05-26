@@ -67,12 +67,18 @@ class EnforcementHandler:
         *,
         reason: str = "suspended",
         reject_reason: str = "blocked",
+        terminal: bool = False,
     ) -> None:
-        """Apply RADIUS reject, remove credentials, disconnect sessions, and
-        add address-list block for a single subscription.  Callable both from
-        the event-driven path and directly after ``emit=False`` lifecycle calls.
-        Each step is individually guarded so one failure does not prevent the
-        remaining enforcement actions."""
+        """Apply RADIUS reject, block/remove credentials, disconnect sessions,
+        and add address-list block for a single subscription. Callable both
+        from the event-driven path and directly after ``emit=False`` lifecycle
+        calls. Each step is individually guarded so one failure does not
+        prevent the remaining enforcement actions.
+
+        When ``terminal=True`` (subscription canceled), credentials are
+        fully removed. Otherwise (suspended) they're flagged with a single
+        ``Auth-Type := Reject`` row, so unblock is a single DELETE rather
+        than a full credential rebuild."""
         subscription = db.get(Subscription, subscription_id)
 
         # RADIUS reject IP
@@ -91,15 +97,21 @@ class EnforcementHandler:
                 exc,
             )
 
-        # Remove external RADIUS credentials
+        # Block (or for terminal status, fully remove) external RADIUS credentials
         if subscription:
             try:
-                radius_service.remove_external_radius_credentials(
-                    db, str(subscription.subscriber_id)
-                )
+                if terminal:
+                    radius_service.remove_external_radius_credentials(
+                        db, str(subscription.subscriber_id)
+                    )
+                else:
+                    radius_service.block_external_radius_credentials(
+                        db, str(subscription.subscriber_id)
+                    )
             except Exception as exc:
                 logger.error(
-                    "Failed to remove RADIUS credentials for subscriber %s: %s",
+                    "Failed to %s RADIUS credentials for subscriber %s: %s",
+                    "remove" if terminal else "block",
                     subscription.subscriber_id,
                     exc,
                 )
@@ -149,6 +161,7 @@ class EnforcementHandler:
             str(subscription_id),
             reason=reason,
             reject_reason=reject_reason,
+            terminal=(reason == "canceled"),
         )
 
     def _handle_subscription_cancel(self, db: Session, event: Event) -> None:
@@ -179,6 +192,21 @@ class EnforcementHandler:
                 logger.error(
                     "Failed to recompute account status for subscription %s: %s",
                     subscription_id,
+                    exc,
+                )
+
+        # Lift the Auth-Type := Reject overlay before the reconcile rebuild,
+        # so the rebuild doesn't carry the block forward via the
+        # status-aware sync path.
+        if subscription:
+            try:
+                radius_service.unblock_external_radius_credentials(
+                    db, str(subscription.subscriber_id)
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to unblock RADIUS credentials for subscriber %s: %s",
+                    subscription.subscriber_id,
                     exc,
                 )
 

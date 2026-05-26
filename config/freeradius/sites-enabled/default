@@ -7,6 +7,10 @@ server default {
 		type = auth
 		ipaddr = *
 		port = 0
+		# BlastRADIUS (CVE-2024-3596) mitigation — reject Access-Request
+		# packets without a valid Message-Authenticator. Per-client overrides
+		# live in the `nas` table's require_message_authenticator column.
+		require_message_authenticator = yes
 	}
 
 	listen {
@@ -18,6 +22,9 @@ server default {
 	authorize {
 		filter_username
 		preprocess
+		# CHAP must run in authorize so it can set Auth-Type := CHAP
+		# when CHAP-Password is present in the request.
+		chap
 		if (&MS-CHAP-Challenge && (&MS-CHAP-Response || &MS-CHAP2-Response)) {
 			update control {
 				Auth-Type := MS-CHAP
@@ -51,6 +58,9 @@ server default {
 		sql
 	}
 
+	# Simultaneous-Use enforcement uses simul_count_query / simul_verify_query
+	# defined in mods-enabled/sql. Remove this block if Simultaneous-Use is
+	# not set on any radcheck/radgroupcheck row — it costs one query per auth.
 	session {
 		sql
 	}

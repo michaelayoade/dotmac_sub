@@ -1,5 +1,6 @@
 """NAS device provisioning execution engine."""
 
+import contextlib
 import logging
 import time
 from typing import Any
@@ -7,6 +8,28 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
+
+
+class _SshSession:
+    """Thin wrapper around an open paramiko SSHClient.
+
+    Created via ``DeviceProvisioner.ssh_session(device)``. Holds the
+    connection open across multiple ``execute()`` calls so callers don't
+    pay TCP+KEX+auth on every command.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def execute(self, command: str, *, timeout_seconds: int = 60) -> str:
+        stdin, stdout, stderr = self._client.exec_command(  # nosec B601
+            command, timeout=timeout_seconds
+        )
+        output: str = stdout.read().decode()
+        error: str = stderr.read().decode()
+        if error and not output:
+            raise Exception(f"SSH error: {error}")
+        return output or error
 
 from app.models.catalog import (
     ConfigBackupMethod,
@@ -325,13 +348,19 @@ class DeviceProvisioner:
             )
 
     @staticmethod
-    def _execute_ssh(device: NasDevice, command: str, timeout_seconds: int = 60) -> str:
-        """Execute command via SSH."""
+    @contextlib.contextmanager
+    def ssh_session(device: NasDevice):
+        """Open one SSH session and yield it for many .execute() calls.
+
+        Use this when a caller will run multiple commands on the same NAS
+        in quick succession (firewall rule push, kick + address-list add).
+        Paramiko connect is the dominant cost (~300-1000ms); chaining
+        commands inside one session amortises it.
+        """
         import paramiko
 
         if not device.management_ip and not device.ip_address:
             raise HTTPException(status_code=400, detail="Device has no management IP")
-
         if not device.ssh_username:
             raise HTTPException(status_code=400, detail="Device has no SSH credentials")
 
@@ -360,7 +389,6 @@ class DeviceProvisioner:
 
         try:
             if device.ssh_key:
-                # Use SSH key authentication - decrypt key before use
                 import io
 
                 decrypted_key = decrypt_credential(device.ssh_key)
@@ -369,7 +397,6 @@ class DeviceProvisioner:
                     host, port=port, username=device.ssh_username, pkey=key, timeout=30
                 )
             else:
-                # Use password authentication - decrypt password before use
                 decrypted_password = decrypt_credential(device.ssh_password)
                 client.connect(
                     host,
@@ -378,20 +405,16 @@ class DeviceProvisioner:
                     password=decrypted_password,
                     timeout=30,
                 )
-
-            stdin, stdout, stderr = client.exec_command(  # nosec B601
-                command, timeout=timeout_seconds
-            )
-            output: str = stdout.read().decode()
-            error: str = stderr.read().decode()
-
-            if error and not output:
-                raise Exception(f"SSH error: {error}")
-
-            return output or error
-
+            yield _SshSession(client)
         finally:
             client.close()
+
+    @staticmethod
+    def _execute_ssh(device: NasDevice, command: str, timeout_seconds: int = 60) -> str:
+        """Execute one command via SSH. For multiple commands on the same
+        device, prefer ``ssh_session()`` to amortise the connect cost."""
+        with DeviceProvisioner.ssh_session(device) as session:
+            return session.execute(command, timeout_seconds=timeout_seconds)
 
     @staticmethod
     def _execute_api(

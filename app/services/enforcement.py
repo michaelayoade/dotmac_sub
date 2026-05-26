@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import HTTPException
 from pyrad.client import Client, Timeout
@@ -75,6 +78,53 @@ def _coa_retries(db: Session) -> int:
         return int(str(retries)) if retries is not None else 1
     except (TypeError, ValueError):
         return 1
+
+
+# Per-NAS negative cache for CoA support. After a CoA times out we skip
+# the attempt for ``_COA_NEG_TTL`` to avoid paying ~6s (timeout * retries)
+# per customer on NASes where CoA isn't enabled. Cleared on first
+# successful CoA. Reset manually via ``reset_coa_cache()``.
+_COA_NEG_TTL = timedelta(minutes=15)
+_COA_NEG_CACHE: dict[Any, datetime] = {}
+_COA_CACHE_LOCK = threading.Lock()
+
+
+def _coa_disabled_for_nas(nas_id: Any) -> bool:
+    if nas_id is None:
+        return False
+    with _COA_CACHE_LOCK:
+        expires_at = _COA_NEG_CACHE.get(nas_id)
+        if expires_at is None:
+            return False
+        if expires_at <= datetime.now(UTC):
+            _COA_NEG_CACHE.pop(nas_id, None)
+            return False
+        return True
+
+
+def _mark_coa_unsupported(nas_id: Any) -> None:
+    if nas_id is None:
+        return
+    with _COA_CACHE_LOCK:
+        _COA_NEG_CACHE[nas_id] = datetime.now(UTC) + _COA_NEG_TTL
+
+
+def _mark_coa_supported(nas_id: Any) -> None:
+    if nas_id is None:
+        return
+    with _COA_CACHE_LOCK:
+        _COA_NEG_CACHE.pop(nas_id, None)
+
+
+def reset_coa_cache(nas_id: Any = None) -> None:
+    """Clear the CoA negative cache. Pass a nas_id to clear one entry,
+    or call with no args to wipe everything (e.g., after a NAS config
+    change re-enables CoA)."""
+    with _COA_CACHE_LOCK:
+        if nas_id is None:
+            _COA_NEG_CACHE.clear()
+        else:
+            _COA_NEG_CACHE.pop(nas_id, None)
 
 
 def _mikrotik_kill_enabled(db: Session) -> bool:
@@ -158,6 +208,11 @@ def _send_coa_disconnect(
 ) -> bool:
     if not _coa_enabled(db):
         return False
+    if _coa_disabled_for_nas(nas_device.id):
+        logger.debug(
+            "Skipping CoA disconnect for NAS %s (negative-cached).", nas_device.id
+        )
+        return False
     if not nas_device.shared_secret:
         logger.warning("Missing NAS shared secret for CoA disconnect.")
         return False
@@ -196,9 +251,15 @@ def _send_coa_disconnect(
         req["Acct-Session-Id"] = session_id
     try:
         client.SendPacket(req)
+        _mark_coa_supported(nas_device.id)
         return True
     except Timeout:
-        logger.warning("CoA disconnect timed out for NAS %s.", nas_device.id)
+        _mark_coa_unsupported(nas_device.id)
+        logger.warning(
+            "CoA disconnect timed out for NAS %s — marking unsupported for %s.",
+            nas_device.id,
+            _COA_NEG_TTL,
+        )
         return False
     except Exception as exc:
         logger.warning("CoA disconnect failed for NAS %s: %s", nas_device.id, exc)
@@ -243,6 +304,11 @@ def _send_coa_update(
     the subscriber.
     """
     if not _coa_enabled(db):
+        return False
+    if _coa_disabled_for_nas(nas_device.id):
+        logger.debug(
+            "Skipping CoA update for NAS %s (negative-cached).", nas_device.id
+        )
         return False
     if not nas_device.shared_secret:
         logger.warning("Missing NAS shared secret for CoA update.")
@@ -293,6 +359,7 @@ def _send_coa_update(
             pass
     try:
         client.SendPacket(req)
+        _mark_coa_supported(nas_device.id)
         logger.info(
             "CoA update sent for user=%s on NAS %s (profile=%s).",
             username,
@@ -301,7 +368,12 @@ def _send_coa_update(
         )
         return True
     except Timeout:
-        logger.warning("CoA update timed out for NAS %s.", nas_device.id)
+        _mark_coa_unsupported(nas_device.id)
+        logger.warning(
+            "CoA update timed out for NAS %s — marking unsupported for %s.",
+            nas_device.id,
+            _COA_NEG_TTL,
+        )
         return False
     except Exception as exc:
         logger.warning("CoA update failed for NAS %s: %s", nas_device.id, exc)
@@ -369,8 +441,15 @@ def update_subscription_sessions(
     return count
 
 
+def _run_ssh(nas_device: NasDevice, command: str, ssh=None) -> str:
+    """Run command on the supplied open session, or open a one-shot one."""
+    if ssh is not None:
+        return ssh.execute(command)
+    return DeviceProvisioner._execute_ssh(nas_device, command)
+
+
 def _disconnect_mikrotik_session(
-    db: Session, nas_device: NasDevice, username: str | None
+    db: Session, nas_device: NasDevice, username: str | None, ssh=None
 ) -> bool:
     if not username:
         return False
@@ -379,11 +458,11 @@ def _disconnect_mikrotik_session(
     if not _mikrotik_kill_enabled(db):
         return False
     try:
-        # Try PPPoE first
         safe_user = _sanitize_routeros_value(username)
-        DeviceProvisioner._execute_ssh(
+        _run_ssh(
             nas_device,
             f'/ppp active remove [find where name="{safe_user}"]',
+            ssh=ssh,
         )
         return True
     except Exception as exc:
@@ -392,7 +471,7 @@ def _disconnect_mikrotik_session(
 
 
 def _disconnect_mikrotik_hotspot_session(
-    db: Session, nas_device: NasDevice, username: str | None
+    db: Session, nas_device: NasDevice, username: str | None, ssh=None
 ) -> bool:
     """Disconnect an active MikroTik hotspot session."""
     if not username:
@@ -403,9 +482,10 @@ def _disconnect_mikrotik_hotspot_session(
         return False
     try:
         safe_user = _sanitize_routeros_value(username)
-        DeviceProvisioner._execute_ssh(
+        _run_ssh(
             nas_device,
             f'/ip hotspot active remove [find user="{safe_user}"]',
+            ssh=ssh,
         )
         return True
     except Exception as exc:
@@ -414,16 +494,17 @@ def _disconnect_mikrotik_hotspot_session(
 
 
 def _apply_mikrotik_address_list(
-    nas_device: NasDevice, list_name: str, address: str
+    nas_device: NasDevice, list_name: str, address: str, ssh=None
 ) -> bool:
     if nas_device.vendor != NasVendor.mikrotik:
         return False
     try:
         safe_list = _sanitize_routeros_value(list_name)
         safe_addr = _sanitize_routeros_value(address)
-        DeviceProvisioner._execute_ssh(
+        _run_ssh(
             nas_device,
             f'/ip firewall address-list add list="{safe_list}" address="{safe_addr}"',
+            ssh=ssh,
         )
         return True
     except Exception as exc:
@@ -432,16 +513,17 @@ def _apply_mikrotik_address_list(
 
 
 def _remove_mikrotik_address_list(
-    nas_device: NasDevice, list_name: str, address: str
+    nas_device: NasDevice, list_name: str, address: str, ssh=None
 ) -> bool:
     if nas_device.vendor != NasVendor.mikrotik:
         return False
     try:
         safe_list = _sanitize_routeros_value(list_name)
         safe_addr = _sanitize_routeros_value(address)
-        DeviceProvisioner._execute_ssh(
+        _run_ssh(
             nas_device,
             f'/ip firewall address-list remove [find list="{safe_list}" address="{safe_addr}"]',
+            ssh=ssh,
         )
         return True
     except Exception as exc:
@@ -464,20 +546,60 @@ def disconnect_subscription_sessions(
     )
     if not sessions:
         return 0
-    count = 0
+    framed_ip = subscription.ipv4_address
+
+    # Group sessions by NAS so we open at most one SSH connection per device
+    # for the SSH-kick fallback, instead of one per session.
+    by_nas: dict[Any, list[tuple[Any, str | None, str]]] = {}
     for session in sessions:
-        credential = db.get(AccessCredential, session.access_credential_id)
         nas_device = _resolve_nas_device(db, session)
+        if not nas_device:
+            continue
+        credential = db.get(AccessCredential, session.access_credential_id)
         username = credential.username if credential else None
-        framed_ip = subscription.ipv4_address
-        session_id = session.session_id
-        if nas_device:
-            if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
+        by_nas.setdefault(nas_device.id, []).append(
+            (nas_device, username, session.session_id)
+        )
+
+    count = 0
+    for entries in by_nas.values():
+        nas_device = entries[0][0]
+        # Try CoA for every session first (UDP, no connection cost worth sharing).
+        coa_ok: set[int] = set()
+        needs_ssh_kick = False
+        for idx, (_, username, session_id) in enumerate(entries):
+            if _send_coa_disconnect(
+                db, nas_device, username, framed_ip, session_id
+            ):
+                coa_ok.add(idx)
                 count += 1
-            elif _disconnect_mikrotik_session(db, nas_device, username):
-                count += 1
-            elif _disconnect_mikrotik_hotspot_session(db, nas_device, username):
-                count += 1
+            else:
+                needs_ssh_kick = True
+
+        if not needs_ssh_kick:
+            continue
+
+        # Only open SSH if at least one session needs the fallback.
+        try:
+            with DeviceProvisioner.ssh_session(nas_device) as ssh:
+                for idx, (_, username, _session_id) in enumerate(entries):
+                    if idx in coa_ok:
+                        continue
+                    if _disconnect_mikrotik_session(
+                        db, nas_device, username, ssh=ssh
+                    ):
+                        count += 1
+                    elif _disconnect_mikrotik_hotspot_session(
+                        db, nas_device, username, ssh=ssh
+                    ):
+                        count += 1
+        except Exception as exc:
+            logger.warning(
+                "Failed to open SSH session for kick on %s: %s",
+                getattr(nas_device, "name", "?"),
+                exc,
+            )
+
     if count:
         logger.info(
             "Disconnected %s active sessions for subscription %s (%s).",
@@ -555,20 +677,28 @@ def apply_subscription_address_list_block(db: Session, subscription_id: str) -> 
         .all()
     )
     count = 0
-    targets: list[NasDevice] = []
+    targets: dict[Any, NasDevice] = {}
     for session in sessions:
         nas_device = _resolve_nas_device(db, session)
         if nas_device:
-            targets.append(nas_device)
+            targets.setdefault(nas_device.id, nas_device)
     if not targets and subscription.provisioning_nas_device_id:
         nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
         if nas_device:
-            targets.append(nas_device)
-    for nas_device in targets:
-        if _apply_mikrotik_address_list(
-            nas_device, list_name, subscription.ipv4_address
-        ):
-            count += 1
+            targets[nas_device.id] = nas_device
+    for nas_device in targets.values():
+        try:
+            with DeviceProvisioner.ssh_session(nas_device) as ssh:
+                if _apply_mikrotik_address_list(
+                    nas_device, list_name, subscription.ipv4_address, ssh=ssh
+                ):
+                    count += 1
+        except Exception as exc:
+            logger.warning(
+                "Address-list add: SSH open failed for %s: %s",
+                getattr(nas_device, "name", "?"),
+                exc,
+            )
     return count
 
 
@@ -593,20 +723,28 @@ def remove_subscription_address_list_block(db: Session, subscription_id: str) ->
         .all()
     )
     count = 0
-    targets: list[NasDevice] = []
+    targets: dict[Any, NasDevice] = {}
     for session in sessions:
         nas_device = _resolve_nas_device(db, session)
         if nas_device:
-            targets.append(nas_device)
+            targets.setdefault(nas_device.id, nas_device)
     if not targets and subscription.provisioning_nas_device_id:
         nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
         if nas_device:
-            targets.append(nas_device)
-    for nas_device in targets:
-        if _remove_mikrotik_address_list(
-            nas_device, list_name, subscription.ipv4_address
-        ):
-            count += 1
+            targets[nas_device.id] = nas_device
+    for nas_device in targets.values():
+        try:
+            with DeviceProvisioner.ssh_session(nas_device) as ssh:
+                if _remove_mikrotik_address_list(
+                    nas_device, list_name, subscription.ipv4_address, ssh=ssh
+                ):
+                    count += 1
+        except Exception as exc:
+            logger.warning(
+                "Address-list remove: SSH open failed for %s: %s",
+                getattr(nas_device, "name", "?"),
+                exc,
+            )
     return count
 
 
@@ -706,12 +844,13 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
                     profile=profile,
                     action="delete",
                 )
-                for cmd in commands:
-                    try:
-                        DeviceProvisioner._execute_ssh(nas_device, cmd)
-                        stats["nas_commands_sent"] += 1
-                    except Exception as cmd_exc:
-                        logger.warning("NAS cleanup command failed: %s", cmd_exc)
+                with DeviceProvisioner.ssh_session(nas_device) as ssh:
+                    for cmd in commands:
+                        try:
+                            ssh.execute(cmd)
+                            stats["nas_commands_sent"] += 1
+                        except Exception as cmd_exc:
+                            logger.warning("NAS cleanup command failed: %s", cmd_exc)
             except Exception as exc:
                 logger.warning(
                     "NAS cleanup failed for subscription %s: %s", subscription_id, exc

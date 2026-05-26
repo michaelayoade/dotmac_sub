@@ -387,7 +387,7 @@ services:
     - nominatim_data:/var/lib/postgresql/14/main
     - nominatim_flatnode:/var/lib/nominatim/flatnode
   freeradius:
-    image: freeradius/freeradius-server:3.2.3
+    image: freeradius/freeradius-server:3.2.7
     container_name: dotmac_sub_freeradius
     restart: unless-stopped
     mem_limit: 256m
@@ -514,7 +514,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@75.119.157.91:6379/0
       VICTORIAMETRICS_URL: http://victoriametrics:8428
       BANDWIDTH_POLLING_ENABLED: 'true'
-      BANDWIDTH_POLL_INTERVAL_MS: '1000'
+      BANDWIDTH_POLL_INTERVAL_MS: '5000'
       BANDWIDTH_HOT_RETENTION_HOURS: '24'
       BANDWIDTH_REDIS_STREAM: bandwidth:samples
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}

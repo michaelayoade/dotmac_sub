@@ -488,14 +488,15 @@ def push_reject_rules_to_radius_nas(db: Session) -> dict[str, Any]:
         if str(getattr(device.vendor, "value", device.vendor)) != "mikrotik":
             continue
         try:
-            for cmd in commands:
-                try:
-                    DeviceProvisioner._execute_ssh(device, cmd)
-                except Exception:
-                    # Safe to ignore "remove [find ...]" misses during idempotent refresh.
-                    if " remove [find " in cmd:
-                        continue
-                    raise
+            with DeviceProvisioner.ssh_session(device) as ssh:
+                for cmd in commands:
+                    try:
+                        ssh.execute(cmd)
+                    except Exception:
+                        # Safe to ignore "remove [find ...]" misses during idempotent refresh.
+                        if " remove [find " in cmd:
+                            continue
+                        raise
             pushed += 1
         except Exception as exc:
             failed += 1

@@ -60,7 +60,10 @@ CREATE TABLE nas (
     secret VARCHAR(60) NOT NULL,
     server VARCHAR(64),
     community VARCHAR(50),
-    description VARCHAR(200)
+    description VARCHAR(200),
+    -- BlastRADIUS (CVE-2024-3596) mitigation, FreeRADIUS >= 3.2.5
+    require_message_authenticator BOOLEAN DEFAULT TRUE,
+    limit_proxy_state BOOLEAN DEFAULT FALSE
 );
 CREATE INDEX idx_nas_nasname ON nas(nasname);
 
@@ -70,14 +73,14 @@ CREATE TABLE radacct (
     acctsessionid VARCHAR(64) NOT NULL,
     acctuniqueid VARCHAR(32) NOT NULL UNIQUE,
     username VARCHAR(64),
-    nasipaddress VARCHAR(15),
+    nasipaddress INET,
     nasportid VARCHAR(32),
     nasporttype VARCHAR(32),
     acctstarttime TIMESTAMP WITH TIME ZONE,
     acctupdatetime TIMESTAMP WITH TIME ZONE,
     acctstoptime TIMESTAMP WITH TIME ZONE,
     acctinterval INTEGER,
-    acctsessiontime INTEGER,
+    acctsessiontime BIGINT,
     acctauthentic VARCHAR(32),
     connectinfo_start VARCHAR(50),
     connectinfo_stop VARCHAR(50),
@@ -88,17 +91,24 @@ CREATE TABLE radacct (
     acctterminatecause VARCHAR(32),
     servicetype VARCHAR(32),
     framedprotocol VARCHAR(32),
-    framedipaddress VARCHAR(15),
+    framedipaddress INET,
     framedipv6address VARCHAR(45),
     framedipv6prefix VARCHAR(45),
     framedinterfaceid VARCHAR(44),
-    delegatedipv6prefix VARCHAR(45)
+    delegatedipv6prefix VARCHAR(45),
+    class VARCHAR(64)
 );
 CREATE INDEX idx_radacct_username ON radacct(username);
 CREATE INDEX idx_radacct_acctsessionid ON radacct(acctsessionid);
 CREATE INDEX idx_radacct_acctstarttime ON radacct(acctstarttime);
 CREATE INDEX idx_radacct_acctstoptime ON radacct(acctstoptime);
 CREATE INDEX idx_radacct_nasipaddress ON radacct(nasipaddress);
+-- Hot-path partial indexes for "active sessions" lookups (accounting-on/off,
+-- simul_count_query, online-user views). Skips ~99% of rows in a busy DB.
+CREATE INDEX idx_radacct_active_user
+    ON radacct(username) WHERE acctstoptime IS NULL;
+CREATE INDEX idx_radacct_active_nas
+    ON radacct(nasipaddress) WHERE acctstoptime IS NULL;
 
 -- Post-auth logging
 CREATE TABLE radpostauth (
@@ -106,7 +116,11 @@ CREATE TABLE radpostauth (
     username VARCHAR(64) NOT NULL,
     pass VARCHAR(64),
     reply VARCHAR(32),
-    authdate TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    authdate TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    -- Forensic context for reject investigations.
+    nasipaddress INET,
+    calledstationid VARCHAR(50),
+    callingstationid VARCHAR(50)
 );
 CREATE INDEX idx_radpostauth_username ON radpostauth(username);
 CREATE INDEX idx_radpostauth_authdate ON radpostauth(authdate);

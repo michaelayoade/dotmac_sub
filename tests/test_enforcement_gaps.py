@@ -252,3 +252,119 @@ class TestProvisioningHandlerAutoProvisioning:
         ) as mock_sync:
             handler._sync_radius_on_activation(db, str(uuid4()))
             mock_sync.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# CoA negative-cache (auto-detect NASes that don't support CoA)
+# ---------------------------------------------------------------------------
+
+
+class TestCoaNegativeCache:
+    """A CoA Timeout poisons the NAS for 15 minutes; a success clears it."""
+
+    def setup_method(self) -> None:
+        from app.services import enforcement
+
+        enforcement.reset_coa_cache()
+
+    def teardown_method(self) -> None:
+        from app.services import enforcement
+
+        enforcement.reset_coa_cache()
+
+    def _device(self, nas_id):
+        device = MagicMock(spec=NasDevice)
+        device.id = nas_id
+        device.shared_secret = "enc:secret"
+        device.nas_ip = "10.1.1.1"
+        device.management_ip = "10.1.1.1"
+        device.ip_address = "10.1.1.1"
+        device.coa_port = 3799
+        return device
+
+    @patch("app.services.enforcement.decrypt_credential", return_value="secret")
+    @patch("app.services.enforcement._radius_dictionary_path", return_value="/dict")
+    @patch("app.services.enforcement.Dictionary")
+    @patch("app.services.enforcement.Client")
+    def test_timeout_populates_cache_and_skips_next_call(
+        self, mock_client_cls, mock_dict, mock_path, mock_decrypt
+    ):
+        from pyrad.client import Timeout
+
+        from app.services.enforcement import _coa_disabled_for_nas, _send_coa_disconnect
+
+        db = MagicMock()
+        nas_id = uuid4()
+        device = self._device(nas_id)
+        mock_client = MagicMock()
+        mock_client.SendPacket.side_effect = Timeout()
+        mock_client_cls.return_value = mock_client
+
+        with patch("app.services.enforcement._coa_enabled", return_value=True), \
+             patch("app.services.enforcement._coa_retries", return_value=0), \
+             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01):
+            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is False
+
+        assert _coa_disabled_for_nas(nas_id) is True
+
+        # Second call must short-circuit: Client must NOT be instantiated again.
+        mock_client_cls.reset_mock()
+        with patch("app.services.enforcement._coa_enabled", return_value=True):
+            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is False
+        mock_client_cls.assert_not_called()
+
+    @patch("app.services.enforcement.decrypt_credential", return_value="secret")
+    @patch("app.services.enforcement._radius_dictionary_path", return_value="/dict")
+    @patch("app.services.enforcement.Dictionary")
+    @patch("app.services.enforcement.Client")
+    def test_success_clears_negative_cache(
+        self, mock_client_cls, mock_dict, mock_path, mock_decrypt
+    ):
+        from app.services.enforcement import (
+            _coa_disabled_for_nas,
+            _mark_coa_unsupported,
+            _send_coa_disconnect,
+        )
+
+        db = MagicMock()
+        nas_id = uuid4()
+        device = self._device(nas_id)
+        _mark_coa_unsupported(nas_id)
+        assert _coa_disabled_for_nas(nas_id) is True
+
+        # Manually clear so the next call actually runs (success path then re-clears).
+        from app.services import enforcement
+
+        enforcement.reset_coa_cache(nas_id)
+
+        mock_client = MagicMock()
+        mock_client.SendPacket.return_value = None
+        mock_client_cls.return_value = mock_client
+
+        with patch("app.services.enforcement._coa_enabled", return_value=True), \
+             patch("app.services.enforcement._coa_retries", return_value=0), \
+             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01):
+            assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is True
+
+        # Successful send must keep the cache clear.
+        assert _coa_disabled_for_nas(nas_id) is False
+
+    def test_reset_coa_cache_all_and_per_nas(self):
+        from app.services.enforcement import (
+            _coa_disabled_for_nas,
+            _mark_coa_unsupported,
+            reset_coa_cache,
+        )
+
+        a, b = uuid4(), uuid4()
+        _mark_coa_unsupported(a)
+        _mark_coa_unsupported(b)
+        assert _coa_disabled_for_nas(a) is True
+        assert _coa_disabled_for_nas(b) is True
+
+        reset_coa_cache(a)
+        assert _coa_disabled_for_nas(a) is False
+        assert _coa_disabled_for_nas(b) is True
+
+        reset_coa_cache()
+        assert _coa_disabled_for_nas(b) is False
