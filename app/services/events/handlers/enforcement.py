@@ -12,6 +12,7 @@ from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec
 from app.services.enforcement import (
+    _setting_bool,
     apply_radius_profile_to_account,
     apply_subscription_address_list_block,
     disconnect_account_sessions,
@@ -21,6 +22,10 @@ from app.services.enforcement import (
 )
 from app.services.events import emit_event
 from app.services.events.types import Event, EventType
+from app.services.radius_access_state import (
+    derive_access_state,
+    set_subscription_access_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,43 @@ class EnforcementHandler:
             self._handle_payment_received(db, event)
         elif event.event_type == EventType.invoice_overdue:
             self._handle_invoice_overdue(db, event)
+
+    def _shadow_write_access_state(self, db: Session, subscription_id: str) -> None:
+        """Phase 3 shadow write — mirror the derived access_state to
+        ``subscription.access_state`` and external RADIUS radusergroup.
+        Gated by the ``radius.group_routing_enabled`` DomainSetting,
+        defaults OFF so the new path is dormant until explicitly enabled.
+
+        Failures are logged and swallowed — the legacy block path is still
+        authoritative until phase 7."""
+        if not _setting_bool(
+            db, SettingDomain.radius, "group_routing_enabled", False
+        ):
+            return
+        sub = db.get(Subscription, subscription_id)
+        if not sub:
+            return
+        subscriber = (
+            db.get(Subscriber, sub.subscriber_id) if sub.subscriber_id else None
+        )
+        captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
+        state = derive_access_state(sub.status, captive_redirect_enabled=captive)
+        try:
+            result = set_subscription_access_state(
+                db, str(subscription_id), state
+            )
+            logger.info(
+                "shadow access_state: sub=%s state=%s %s",
+                subscription_id,
+                state.value if state else None,
+                result,
+            )
+        except Exception as exc:
+            logger.warning(
+                "shadow access_state write failed for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
 
     def _enforce_subscription_block(
         self,
@@ -115,6 +157,10 @@ class EnforcementHandler:
                     subscription.subscriber_id,
                     exc,
                 )
+
+        # Phase 3 shadow write — mirror the derived state to radusergroup.
+        # No-op unless DomainSetting radius.group_routing_enabled is true.
+        self._shadow_write_access_state(db, str(subscription_id))
 
         # Disconnect sessions and apply address list block
         try:
@@ -225,6 +271,10 @@ class EnforcementHandler:
                 subscription_id,
                 exc,
             )
+
+        # Phase 3 shadow write — mirror the restored state to radusergroup.
+        # No-op unless DomainSetting radius.group_routing_enabled is true.
+        self._shadow_write_access_state(db, str(subscription_id))
 
         # Refresh sessions and remove address block
         try:
