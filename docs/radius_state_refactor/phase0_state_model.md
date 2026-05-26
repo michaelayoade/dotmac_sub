@@ -222,12 +222,12 @@ Documented in each phase doc. Common pattern:
 - Phase 8: revertible by re-enabling the address-list write call sites.
 - Phase 9 (if undertaken): the only one that's not cheaply revertible. Requires IP-pool teardown + re-assigning per-customer IPs from backup. Document the rollback in its own runbook before merging.
 
-## 12. Open questions
+## 12. Decisions (formerly open questions)
 
-- **Q1**: do we want `captive` to be a `SubscriptionStatus` value too, or stay derived from `subscriber.captive_redirect_enabled + status=suspended`? Affects Splynx import (Splynx has its own captive flag).
-- **Q2**: for users with multiple active credentials (rare but possible), do all credentials share a state, or can each credential have its own? Recommend: shared (state lives on the subscription, not the credential).
-- **Q3**: do we keep the existing 5 reject pools running during phases 1-8 as belt-and-suspenders, or rip them out at phase 8? Recommend: keep until phase 9; the standing rules are cheap.
-- **Q4**: who owns the NAS-side pool provisioning script (phase 1)? Manual or part of NAS auto-config?
+- **Q1** — `captive` is **derived**, not a `SubscriptionStatus` value. Computed from `subscriber.captive_redirect_enabled + status=suspended`. Keeps `SubscriptionStatus` enum stable and Splynx-aligned. Decided 2026-05-26.
+- **Q2** — Access state is **shared across all credentials** of a subscription. State lives on the subscription, not the credential. Multi-credential subscribers (rare) get one state that applies to all their usernames. Decided 2026-05-26.
+- **Q3** — The existing 5 reject pools **stay running** through phase 8 as belt-and-suspenders. Standing rules at each NAS are cheap to leave in place. Decommissioned in phase 9 only if/when we commit to the IP-pool migration. Decided 2026-05-26.
+- **Q4** — NAS-side pool provisioning is **manual** (per-NAS by the operator), not scripted. Phase 1 doc supplies the exact RouterOS commands as a runbook. Decided 2026-05-26.
 
 ## 13. Validation checklist before approving phase 1
 
