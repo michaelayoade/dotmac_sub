@@ -129,6 +129,31 @@ class BillingMode(enum.Enum):
     postpaid = "postpaid"
 
 
+PLAN_FAMILY_VALUES = ("unlimited", "dedicated", "home_flex")
+
+
+class AccessState(enum.Enum):
+    """Network access state — single source of truth for what RADIUS does
+    with a subscriber. See docs/radius_state_refactor/phase0_state_model.md.
+
+    Derived from ``SubscriptionStatus`` + ``Subscriber.captive_redirect_enabled``
+    via ``app.services.radius_access_state.derive_access_state``. Stored as
+    a string column rather than a PG enum so future states (e.g.
+    ``throttled``, ``trial_expired``) can be added by code change alone.
+
+    Maps to RADIUS groups (phase 1 of the refactor):
+      active     → dotmac-active     (normal customer)
+      suspended  → dotmac-suspended  (hard block, Auth-Type := Reject)
+      captive    → dotmac-captive    (soft block, captive portal)
+      terminated → no radusergroup row (auth not-found)
+    """
+
+    active = "active"
+    suspended = "suspended"
+    captive = "captive"
+    terminated = "terminated"
+
+
 class SubscriptionStatus(enum.Enum):
     """Service/subscription status — mirrors Splynx service status lifecycle.
 
@@ -456,6 +481,7 @@ class CatalogOffer(Base):
     service_description: Mapped[str | None] = mapped_column(Text)
     burst_profile: Mapped[str | None] = mapped_column(String(120))
     prepaid_period: Mapped[str | None] = mapped_column(String(40))
+    plan_family: Mapped[str | None] = mapped_column(String(40))
     allowed_change_plan_ids: Mapped[str | None] = mapped_column(Text)
     status: Mapped[OfferStatus] = mapped_column(
         Enum(OfferStatus), default=OfferStatus.active
@@ -714,6 +740,10 @@ class Subscription(Base):
     status: Mapped[SubscriptionStatus] = mapped_column(
         Enum(SubscriptionStatus), default=SubscriptionStatus.pending
     )
+    # access_state is the RADIUS-facing state, derived from `status` +
+    # subscriber.captive_redirect_enabled. Nullable until phase 5 backfill.
+    # See docs/radius_state_refactor/phase0_state_model.md.
+    access_state: Mapped[str | None] = mapped_column(String(20))
     billing_mode: Mapped[BillingMode] = mapped_column(
         Enum(BillingMode), default=BillingMode.prepaid
     )
