@@ -735,3 +735,319 @@ class TestRadiusAuthenticate:
                 radius_auth.authenticate(
                     db_session, "testuser", "testpass", str(radius_server.id)
                 )
+
+
+# =============================================================================
+# Block / Unblock external RADIUS credentials
+# (Group/Auth-Type-based blocking — see app/services/radius.py)
+# =============================================================================
+
+
+def _write_full_radius_sqlite(db_path, *, radcheck=None, radreply=None, radusergroup=None):
+    """Set up a sqlite stand-in for the external FreeRADIUS DB with all three
+    tables `_external_sync_users` operates on."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE radcheck (username TEXT, attribute TEXT, op TEXT, value TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE radreply (username TEXT, attribute TEXT, op TEXT, value TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE radusergroup (username TEXT, groupname TEXT, priority INTEGER)"
+        )
+        for row in radcheck or []:
+            conn.execute(
+                "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, ?, ?, ?)",
+                row,
+            )
+        for row in radreply or []:
+            conn.execute(
+                "INSERT INTO radreply (username, attribute, op, value) VALUES (?, ?, ?, ?)",
+                row,
+            )
+        for row in radusergroup or []:
+            conn.execute(
+                "INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, ?)",
+                row,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _fake_external_config(db_path):
+    return {
+        "db_url": f"sqlite:///{db_path}",
+        "radcheck_table": "radcheck",
+        "radreply_table": "radreply",
+        "radusergroup_table": "radusergroup",
+        "nas_table": "nas",
+        "password_attribute": "Cleartext-Password",
+        "password_op": ":=",
+        "use_group": False,
+        "group_priority": 0,
+        "default_reply_op": ":=",
+    }
+
+
+def _read_radcheck(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        return list(
+            conn.execute(
+                "SELECT username, attribute, op, value FROM radcheck ORDER BY rowid"
+            )
+        )
+    finally:
+        conn.close()
+
+
+def _read_radreply(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        return list(
+            conn.execute(
+                "SELECT username, attribute, op, value FROM radreply ORDER BY rowid"
+            )
+        )
+    finally:
+        conn.close()
+
+
+class TestBlockUnblockExternalRadiusCredentials:
+    """Group-based blocking writes one Auth-Type:=Reject row in radcheck
+    while leaving password/reply/group rows intact. Unblock deletes just
+    that row."""
+
+    def _seed(self, db_session, tmp_path, subscriber):
+        cred = AccessCredential(
+            subscriber_id=subscriber.id,
+            username="100099999",
+            secret_hash="plain:hunter2",
+            is_active=True,
+        )
+        db_session.add(cred)
+        db_session.commit()
+
+        radius_db = tmp_path / "external.db"
+        _write_full_radius_sqlite(
+            radius_db,
+            radcheck=[("100099999", "Cleartext-Password", ":=", "hunter2")],
+            radreply=[("100099999", "Framed-IP-Address", ":=", "10.0.0.5")],
+        )
+        return cred, radius_db
+
+    def test_block_inserts_reject_row_and_preserves_password(
+        self, db_session, tmp_path, subscriber
+    ):
+        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
+        config = _fake_external_config(radius_db)
+
+        with patch(
+            "app.services.radius._active_external_sync_configs",
+            return_value=[config],
+        ):
+            n = radius_service.block_external_radius_credentials(
+                db_session, subscriber.id
+            )
+
+        assert n == 1
+        rows = _read_radcheck(radius_db)
+        # Original password row is untouched.
+        assert ("100099999", "Cleartext-Password", ":=", "hunter2") in rows
+        # New Auth-Type := Reject row is present.
+        assert ("100099999", "Auth-Type", ":=", "Reject") in rows
+        # radreply is untouched.
+        assert _read_radreply(radius_db) == [
+            ("100099999", "Framed-IP-Address", ":=", "10.0.0.5")
+        ]
+
+    def test_block_is_idempotent(
+        self, db_session, tmp_path, subscriber
+    ):
+        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
+        config = _fake_external_config(radius_db)
+
+        with patch(
+            "app.services.radius._active_external_sync_configs",
+            return_value=[config],
+        ):
+            radius_service.block_external_radius_credentials(db_session, subscriber.id)
+            radius_service.block_external_radius_credentials(db_session, subscriber.id)
+
+        # Exactly one Reject row, not two — the delete-then-insert pattern
+        # in block() ensures idempotency.
+        reject_rows = [
+            r for r in _read_radcheck(radius_db) if r[1] == "Auth-Type"
+        ]
+        assert len(reject_rows) == 1
+
+    def test_unblock_removes_only_reject_row(
+        self, db_session, tmp_path, subscriber
+    ):
+        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
+        config = _fake_external_config(radius_db)
+
+        with patch(
+            "app.services.radius._active_external_sync_configs",
+            return_value=[config],
+        ):
+            radius_service.block_external_radius_credentials(db_session, subscriber.id)
+            n = radius_service.unblock_external_radius_credentials(
+                db_session, subscriber.id
+            )
+
+        assert n == 1
+        rows = _read_radcheck(radius_db)
+        assert ("100099999", "Cleartext-Password", ":=", "hunter2") in rows
+        assert not any(r[1] == "Auth-Type" for r in rows)
+        # Reply attrs untouched the whole time.
+        assert _read_radreply(radius_db) == [
+            ("100099999", "Framed-IP-Address", ":=", "10.0.0.5")
+        ]
+
+    def test_unblock_is_noop_when_no_reject_row(
+        self, db_session, tmp_path, subscriber
+    ):
+        cred, radius_db = self._seed(db_session, tmp_path, subscriber)
+        config = _fake_external_config(radius_db)
+
+        with patch(
+            "app.services.radius._active_external_sync_configs",
+            return_value=[config],
+        ):
+            n = radius_service.unblock_external_radius_credentials(
+                db_session, subscriber.id
+            )
+
+        assert n == 0
+        assert _read_radcheck(radius_db) == [
+            ("100099999", "Cleartext-Password", ":=", "hunter2")
+        ]
+
+    def test_block_returns_zero_with_no_active_configs(
+        self, db_session, tmp_path, subscriber
+    ):
+        cred, _ = self._seed(db_session, tmp_path, subscriber)
+        with patch(
+            "app.services.radius._active_external_sync_configs",
+            return_value=[],
+        ):
+            n = radius_service.block_external_radius_credentials(
+                db_session, subscriber.id
+            )
+        assert n == 0
+
+
+# =============================================================================
+# Status-aware _external_sync_users
+# (active → full rebuild, suspended → Reject row only, canceled → delete all)
+# =============================================================================
+
+
+class TestExternalSyncUsersStatusAware:
+    def _seed(self, db_session, tmp_path, subscriber, catalog_offer, status):
+        sub = Subscription(
+            subscriber_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=status,
+            login="100088888",
+        )
+        db_session.add(sub)
+        db_session.flush()
+        cred = AccessCredential(
+            subscriber_id=subscriber.id,
+            username="100088888",
+            secret_hash="plain:swordfish",
+            is_active=True,
+        )
+        db_session.add(cred)
+        db_session.commit()
+        # Seed stale rows that sync should rewrite/delete.
+        radius_db = tmp_path / "external.db"
+        _write_full_radius_sqlite(
+            radius_db,
+            radcheck=[("100088888", "Cleartext-Password", ":=", "old-password")],
+            radreply=[("100088888", "Framed-IP-Address", ":=", "192.0.2.1")],
+        )
+        return cred, radius_db
+
+    def test_active_subscription_triggers_full_rebuild(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        cred, radius_db = self._seed(
+            db_session, tmp_path, subscriber, catalog_offer, SubscriptionStatus.active
+        )
+        config = _fake_external_config(radius_db)
+
+        with patch(
+            "app.services.connection_type_provisioning.build_radius_reply_attributes",
+            return_value=[],
+        ):
+            result = radius_service._external_sync_users(db_session, config, [cred])
+
+        assert result == {"external_users_synced": 1}
+        rows = _read_radcheck(radius_db)
+        # Password row rewritten (still Cleartext-Password since secret_hash starts with "plain:")
+        assert any(r[1] == "Cleartext-Password" for r in rows)
+        # No Reject row for an active subscription.
+        assert not any(r[1] == "Auth-Type" and r[3] == "Reject" for r in rows)
+
+    def test_suspended_subscription_writes_reject_only(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        cred, radius_db = self._seed(
+            db_session,
+            tmp_path,
+            subscriber,
+            catalog_offer,
+            SubscriptionStatus.suspended,
+        )
+        config = _fake_external_config(radius_db)
+
+        result = radius_service._external_sync_users(db_session, config, [cred])
+
+        assert result == {"external_users_synced": 1}
+        rows = _read_radcheck(radius_db)
+        # Stale password row is gone, only the Reject row remains.
+        assert rows == [("100088888", "Auth-Type", ":=", "Reject")]
+        # Reply attrs are wiped for a suspended sub.
+        assert _read_radreply(radius_db) == []
+
+    def test_canceled_subscription_deletes_all_rows(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        cred, radius_db = self._seed(
+            db_session,
+            tmp_path,
+            subscriber,
+            catalog_offer,
+            SubscriptionStatus.canceled,
+        )
+        config = _fake_external_config(radius_db)
+
+        result = radius_service._external_sync_users(db_session, config, [cred])
+
+        assert result == {"external_users_synced": 1}
+        # Canceled: leave the user with no rows -> auth not-found.
+        assert _read_radcheck(radius_db) == []
+        assert _read_radreply(radius_db) == []
+
+    def test_expired_subscription_also_deletes_all_rows(
+        self, db_session, tmp_path, subscriber, catalog_offer
+    ):
+        cred, radius_db = self._seed(
+            db_session,
+            tmp_path,
+            subscriber,
+            catalog_offer,
+            SubscriptionStatus.expired,
+        )
+        config = _fake_external_config(radius_db)
+
+        radius_service._external_sync_users(db_session, config, [cred])
+
+        assert _read_radcheck(radius_db) == []
+        assert _read_radreply(radius_db) == []
