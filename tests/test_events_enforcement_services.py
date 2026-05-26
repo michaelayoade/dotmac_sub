@@ -1377,8 +1377,29 @@ class TestEnforcementServiceHelpers:
         result = _apply_mikrotik_address_list(device, "blocked", "10.0.0.1")
         assert result is True
         assert len(commands) == 1
-        assert "add" in commands[0]
-        assert "10.0.0.1" in commands[0]
+        # Conditional add so re-blocking is a no-op instead of an error.
+        assert commands[0].startswith(":if ([:len [/ip firewall address-list find")
+        assert 'list="blocked"' in commands[0]
+        assert 'address="10.0.0.1"' in commands[0]
+        assert "do={/ip firewall address-list add" in commands[0]
+
+    def test_apply_mikrotik_address_list_idempotent_on_repeat(self, monkeypatch):
+        """RouterOS executes the conditional locally; from our side calling
+        the helper twice in a row must succeed both times without raising."""
+        calls = {"n": 0}
+
+        def _fake_ssh(_device, _command):
+            calls["n"] += 1
+
+        monkeypatch.setattr(
+            "app.services.enforcement.DeviceProvisioner._execute_ssh", _fake_ssh
+        )
+        from app.services.enforcement import _apply_mikrotik_address_list
+
+        device = NasDevice(name="r1", vendor=NasVendor.mikrotik)
+        assert _apply_mikrotik_address_list(device, "blocked", "10.0.0.1") is True
+        assert _apply_mikrotik_address_list(device, "blocked", "10.0.0.1") is True
+        assert calls["n"] == 2
 
     def test_apply_mikrotik_address_list_wrong_vendor(self):
         from app.services.enforcement import _apply_mikrotik_address_list

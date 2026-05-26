@@ -501,9 +501,16 @@ def _apply_mikrotik_address_list(
     try:
         safe_list = _sanitize_routeros_value(list_name)
         safe_addr = _sanitize_routeros_value(address)
+        # Conditional add — re-blocking the same customer (e.g., duplicate
+        # event delivery) is a no-op instead of an error/duplicate entry.
         _run_ssh(
             nas_device,
-            f'/ip firewall address-list add list="{safe_list}" address="{safe_addr}"',
+            (
+                f':if ([:len [/ip firewall address-list find '
+                f'list="{safe_list}" address="{safe_addr}"]] = 0) '
+                f'do={{/ip firewall address-list add '
+                f'list="{safe_list}" address="{safe_addr}"}}'
+            ),
             ssh=ssh,
         )
         return True
