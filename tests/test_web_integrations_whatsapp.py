@@ -87,16 +87,22 @@ def test_save_config_rejects_invalid_templates_json(db_session):
 def test_whatsapp_connector_normalize_webhook_shapes():
     twilio = whatsapp_connector.normalize_inbound_webhook(
         provider="twilio",
-        payload={"From": "whatsapp:+1", "Body": "Hello", "MessageSid": "sid-1"},
+        payload={
+            "From": "whatsapp:08012345678",
+            "Body": "Hello",
+            "MessageSid": "sid-1",
+        },
     )
-    assert twilio["from"] == "whatsapp:+1"
+    assert twilio["from"] == "whatsapp:08012345678"
+    assert twilio["normalized_from"] == "+2348012345678"
     assert twilio["external_id"] == "sid-1"
 
     messagebird = whatsapp_connector.normalize_inbound_webhook(
         provider="messagebird",
-        payload={"from": "+2", "text": "Yo", "id": "msg-2"},
+        payload={"from": "08081112222", "text": "Yo", "id": "msg-2"},
     )
     assert messagebird["text"] == "Yo"
+    assert messagebird["normalized_from"] == "+2348081112222"
 
 
 def test_settings_spec_keys_resolve_for_whatsapp(db_session):

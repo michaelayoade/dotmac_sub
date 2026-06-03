@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.services.credential_crypto import decrypt_credential
+from app.services.customer_identity_normalization import normalize_phone_identifier
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -264,25 +265,31 @@ def normalize_inbound_webhook(
     """Normalize inbound provider webhook payload to a common shape."""
     if provider == WHATSAPP_PROVIDER_META:
         message = payload.get("message") or {}
+        sender = message.get("from") or payload.get("from")
         return {
             "provider": provider,
-            "from": message.get("from") or payload.get("from"),
+            "from": sender,
+            "normalized_from": normalize_phone_identifier(sender),
             "text": message.get("text") or payload.get("text"),
             "external_id": message.get("id") or payload.get("id"),
             "raw": payload,
         }
     if provider == WHATSAPP_PROVIDER_TWILIO:
+        sender = payload.get("From")
         return {
             "provider": provider,
-            "from": payload.get("From"),
+            "from": sender,
+            "normalized_from": normalize_phone_identifier(sender),
             "text": payload.get("Body"),
             "external_id": payload.get("MessageSid"),
             "raw": payload,
         }
     if provider == WHATSAPP_PROVIDER_MESSAGEBIRD:
+        sender = payload.get("from")
         return {
             "provider": provider,
-            "from": payload.get("from"),
+            "from": sender,
+            "normalized_from": normalize_phone_identifier(sender),
             "text": payload.get("text"),
             "external_id": payload.get("id"),
             "raw": payload,
