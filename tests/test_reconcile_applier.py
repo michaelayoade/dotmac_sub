@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from app.services.network.reconcile import (
     AcsAddObject,
+    AcsDeleteObject,
     AcsSetDhcpServer,
     AcsSetManagementServer,
     AcsSetNatEnabled,
@@ -129,6 +130,12 @@ class _StubAcsClient:
             raise RuntimeError("addObject blew up")
         return {"_id": "task-123"}
 
+    def delete_object(self, device_id, path):
+        self.calls.append(("delete_object", (device_id, path), {}))
+        if self._raise_on == "delete_object":
+            raise RuntimeError("deleteObject blew up")
+        return {"_id": "task-del"}
+
     def set_parameter_values(self, device_id, params, **kwargs):
         self.calls.append(("set_parameter_values", (device_id, params), kwargs))
         if self._raise_on == "set_parameter_values":
@@ -171,6 +178,27 @@ def test_empty_plan_returns_success_with_no_actions():
     assert result.success is True
     assert result.actions_applied == ()
     assert result.halted_by is None
+
+
+def test_acs_delete_object_dispatches_to_client():
+    acs = _StubAcsClient()
+    ctx = _ctx(acs_client=acs)
+    plan = _plan(
+        AcsDeleteObject(
+            device_id="dev",
+            object_path="InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.3.",
+        )
+    )
+    result = apply_plan(plan, ctx)
+    assert result.success is True
+    assert acs.calls[0] == (
+        "delete_object",
+        (
+            "dev",
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.3.",
+        ),
+        {},
+    )
 
 
 # ── OLT action dispatch (happy path) ────────────────────────────────────────

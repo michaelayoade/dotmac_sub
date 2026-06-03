@@ -117,10 +117,12 @@ def _sample_observed() -> OntObservedState:
             acs_observed_dhcp_enabled=True,
             acs_observed_ssid="KURSI",
             acs_observed_periodic_inform_interval_sec=300,
+            acs_observed_cr_username="admin",
             acs_observed_cr_username_set=True,
             acs_observed_cr_password_set=True,
             acs_observed_wan_wcd_index=1,
             acs_observed_wan_instance_index=1,
+            acs_observed_wan_ppp_locations=((1, 1),),
         ),
     )
 

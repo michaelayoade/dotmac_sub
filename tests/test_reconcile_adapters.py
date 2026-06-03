@@ -257,10 +257,12 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
             acs_observed_dhcp_enabled=True,
             acs_observed_ssid="KURSI",
             acs_observed_periodic_inform_interval_sec=300,
+            acs_observed_cr_username="admin",
             acs_observed_cr_username_set=True,
             acs_observed_cr_password_set=True,
             acs_observed_wan_wcd_index=1,
             acs_observed_wan_instance_index=1,
+            acs_observed_wan_ppp_locations=((1, 1),),
         ),
     )
     upsert_ont_observation(db_session, ont.id, observed)
@@ -316,10 +318,12 @@ def _minimal_observed(*, ssid: str = "KURSI") -> OntObservedState:
             acs_observed_dhcp_enabled=None,
             acs_observed_ssid=ssid,
             acs_observed_periodic_inform_interval_sec=None,
+            acs_observed_cr_username=None,
             acs_observed_cr_username_set=None,
             acs_observed_cr_password_set=None,
             acs_observed_wan_wcd_index=None,
             acs_observed_wan_instance_index=None,
+            acs_observed_wan_ppp_locations=(),
         ),
     )
 

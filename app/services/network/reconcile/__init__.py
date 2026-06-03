@@ -26,6 +26,7 @@ of the reconciler and consumed only within this package.
 
 from .actions import (
     AcsAddObject,
+    AcsDeleteObject,
     AcsSetDhcpServer,
     AcsSetManagementServer,
     AcsSetNatEnabled,
@@ -86,6 +87,7 @@ from .validator import Validation, validate_desired
 
 __all__ = (
     "AcsAddObject",
+    "AcsDeleteObject",
     "AcsObservedFields",
     "AcsSetDhcpServer",
     "AcsSetManagementServer",

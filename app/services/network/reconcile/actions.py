@@ -277,6 +277,21 @@ class AcsAddObject:
 
 
 @dataclass(frozen=True)
+class AcsDeleteObject:
+    """``POST /devices/<id>/tasks {deleteObject: path}``.
+
+    Removes a stale WANPPPConnection instance after the target child is in
+    place on the desired WCD slot.
+    """
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    object_path: str  # e.g. "...WANPPPConnection.3."
+
+
+@dataclass(frozen=True)
 class AcsSetPppoe:
     """``setParameterValues`` for WANPPPConnection.{Username, Password, Enable, X_HW_VLAN, ConnectionType, X_HW_SERVICELIST}``.
 
@@ -408,6 +423,7 @@ OltAction = (
 
 AcsAction = (
     AcsAddObject
+    | AcsDeleteObject
     | AcsSetPppoe
     | AcsSetWifiSsid
     | AcsSetWifiPassword
@@ -425,6 +441,7 @@ __all__ = (
     "Action",
     "OltAction",
     "AcsAddObject",
+    "AcsDeleteObject",
     "AcsSetDhcpServer",
     "AcsSetManagementServer",
     "AcsSetNatEnabled",

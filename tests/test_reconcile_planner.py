@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 from app.services.network.reconcile import (
     AcsAddObject,
+    AcsDeleteObject,
     AcsObservedFields,
     AcsSetDhcpServer,
     AcsSetManagementServer,
@@ -129,10 +130,12 @@ def _acs_observed(**overrides) -> AcsObservedFields:
         acs_observed_dhcp_enabled=None,
         acs_observed_ssid=None,
         acs_observed_periodic_inform_interval_sec=None,
+        acs_observed_cr_username=None,
         acs_observed_cr_username_set=None,
         acs_observed_cr_password_set=None,
         acs_observed_wan_wcd_index=None,
         acs_observed_wan_instance_index=None,
+        acs_observed_wan_ppp_locations=(),
     )
     defaults.update(overrides)
     return AcsObservedFields(**defaults)
@@ -189,10 +192,14 @@ def _synced_observed(desired: OntDesiredState) -> OntObservedState:
             acs_observed_periodic_inform_interval_sec=(
                 desired.periodic_inform_interval_sec
             ),
+            acs_observed_cr_username=desired.cr_username,
             acs_observed_cr_username_set=True,
             acs_observed_cr_password_set=True,
             acs_observed_wan_wcd_index=desired.wan_pppoe_wcd_index,
             acs_observed_wan_instance_index=desired.wan_pppoe_instance_index,
+            acs_observed_wan_ppp_locations=(
+                (desired.wan_pppoe_wcd_index, desired.wan_pppoe_instance_index),
+            ),
         ),
     )
 
@@ -402,6 +409,54 @@ def test_omci_wan_skipped_when_method_is_tr069():
     assert AcsSetPppoe in _types(plan)
 
 
+def test_tr069_wan_wrong_wcd_is_healed_on_desired_wcd_and_stale_child_deleted():
+    desired = _desired(wan_pppoe_wcd_index=2, wan_pppoe_instance_index=1)
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_wan_wcd_index=1,
+            acs_observed_wan_instance_index=1,
+            acs_observed_wan_ppp_locations=((1, 1),),
+        ),
+    )
+    plan = compute_plan(desired, observed, "sweep")
+    add = next(a for a in plan.actions if isinstance(a, AcsAddObject))
+    ppp = next(a for a in plan.actions if isinstance(a, AcsSetPppoe))
+    nat = next(a for a in plan.actions if isinstance(a, AcsSetNatEnabled))
+    assert add.object_path.endswith("WANConnectionDevice.2.WANPPPConnection")
+    assert ppp.wcd_index == 2
+    assert nat.wcd_index == 2
+    # The old child is not pruned here because the reader's live PPP values are
+    # still sourced from WCD 1, making deletion ambiguous and potentially
+    # destructive.
+    assert AcsDeleteObject not in _types(plan)
+
+
+def test_tr069_wan_duplicate_children_keep_primary_target_and_delete_stale_one():
+    desired = _desired(wan_pppoe_wcd_index=2, wan_pppoe_instance_index=1)
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_wan_wcd_index=2,
+            acs_observed_wan_instance_index=1,
+            acs_observed_wan_ppp_locations=((2, 1), (2, 3)),
+        ),
+    )
+    plan = compute_plan(desired, observed, "sweep")
+    assert AcsAddObject not in _types(plan)
+    ppp = next(a for a in plan.actions if isinstance(a, AcsSetPppoe))
+    nat = next(a for a in plan.actions if isinstance(a, AcsSetNatEnabled))
+    delete = next(a for a in plan.actions if isinstance(a, AcsDeleteObject))
+    assert ppp.wcd_index == 2
+    assert ppp.instance_index == 1
+    assert nat.instance_index == 1
+    assert delete.object_path.endswith("WANConnectionDevice.2.WANPPPConnection.3.")
+
+
 # ── Service-port repair ─────────────────────────────────────────────────────
 
 
@@ -479,8 +534,34 @@ def test_missing_cr_credentials_trigger_management_server_push():
         observed,
         acs=dataclasses.replace(
             observed.acs,
+            acs_observed_cr_username="",
             acs_observed_cr_username_set=False,
             acs_observed_cr_password_set=False,
+        ),
+    )
+    plan = compute_plan(desired, observed, "sweep")
+    assert AcsSetManagementServer in _types(plan)
+
+
+def test_mismatched_cr_username_triggers_management_server_push():
+    desired = _desired()
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(observed.acs, acs_observed_cr_username="wrong-admin"),
+    )
+    plan = compute_plan(desired, observed, "sweep")
+    assert AcsSetManagementServer in _types(plan)
+
+
+def test_missing_inform_interval_triggers_management_server_push():
+    desired = _desired()
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_periodic_inform_interval_sec=None,
         ),
     )
     plan = compute_plan(desired, observed, "sweep")

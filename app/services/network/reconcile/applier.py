@@ -25,6 +25,7 @@ Action → adapter call mapping:
 
     ACS actions
       AcsAddObject              → client.add_object
+      AcsDeleteObject           → client.delete_object
       AcsSetPppoe               → client.set_parameter_values (6 params)
       AcsSetWifiSsid            → client.set_parameter_values (1 param)
       AcsSetWifiPassword        → client.set_parameter_values (1 param)
@@ -61,6 +62,7 @@ from typing import Any
 from .actions import (
     AcsAction,
     AcsAddObject,
+    AcsDeleteObject,
     AcsSetDhcpServer,
     AcsSetManagementServer,
     AcsSetNatEnabled,
@@ -437,6 +439,23 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 f"add_object[{action.object_path.split('.')[-1]}]",
                 None,
                 action.object_path,
+                started,
+            )
+
+        case AcsDeleteObject():
+            try:
+                ctx.acs_client.delete_object(action.device_id, action.object_path)
+            except Exception as exc:  # noqa: BLE001 — translate to ApplyError
+                raise ApplyError(
+                    action,
+                    ReconcileFailureReason.ACS_WRITE_FAULTED,
+                    f"deleteObject failed: {exc}",
+                ) from exc
+            return _ok(
+                action,
+                f"delete_object[{action.object_path.rstrip('.').split('.')[-1]}]",
+                action.object_path,
+                None,
                 started,
             )
 

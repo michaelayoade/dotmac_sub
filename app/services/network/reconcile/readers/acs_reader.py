@@ -207,7 +207,7 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
     dev_info = _path(dev_root, "DeviceInfo")
 
     wan_root = _path(igd, "WANDevice", "1", "WANConnectionDevice") or {}
-    wcd_index, instance_index, wan_ppp = _resolve_wan_ppp(wan_root)
+    wcd_index, instance_index, wan_ppp, wan_ppp_locations = _resolve_wan_ppp(wan_root)
 
     return AcsObservedFields(
         acs_present=True,
@@ -236,6 +236,10 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
             _value_int(igd_ms, "PeriodicInformInterval"),
             _value_int(dev_ms, "PeriodicInformInterval"),
         ),
+        acs_observed_cr_username=_first_not_none(
+            _value(igd_ms, "ConnectionRequestUsername"),
+            _value(dev_ms, "ConnectionRequestUsername"),
+        ),
         acs_observed_cr_username_set=_first_not_none(
             _value_present(igd_ms, "ConnectionRequestUsername"),
             _value_present(dev_ms, "ConnectionRequestUsername"),
@@ -246,6 +250,7 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
         ),
         acs_observed_wan_wcd_index=wcd_index,
         acs_observed_wan_instance_index=instance_index,
+        acs_observed_wan_ppp_locations=wan_ppp_locations,
     )
 
 
@@ -265,24 +270,34 @@ def _absent_fields() -> AcsObservedFields:
         acs_observed_dhcp_enabled=None,
         acs_observed_ssid=None,
         acs_observed_periodic_inform_interval_sec=None,
+        acs_observed_cr_username=None,
         acs_observed_cr_username_set=None,
         acs_observed_cr_password_set=None,
         acs_observed_wan_wcd_index=None,
         acs_observed_wan_instance_index=None,
+        acs_observed_wan_ppp_locations=(),
     )
 
 
 def _resolve_wan_ppp(
     wan_connection_device: dict[str, Any],
-) -> tuple[int | None, int | None, dict[str, Any] | None]:
+) -> tuple[
+    int | None,
+    int | None,
+    dict[str, Any] | None,
+    tuple[tuple[int, int], ...],
+]:
     """Locate the first WANPPPConnection instance under any WCD slot.
 
-    Returns ``(wcd_index, instance_index, wan_ppp_dict)``. The fleet's
+    Returns ``(wcd_index, instance_index, wan_ppp_dict, locations)``. The fleet's
     HG8546M devices typically expose ``WANConnectionDevice.1.WANPPPConnection.1``
     but provisioned ONTs sometimes have it on ``.2`` (e.g. UnitedAbuja). This
     helper scans the live tree for whichever slot actually carries a
     ``WANPPPConnection`` so the rest of the parser doesn't hardcode ``.1``.
     """
+    locations = _wan_ppp_locations(wan_connection_device)
+    if not locations:
+        return None, None, None, ()
     for wcd_key, wcd_val in (wan_connection_device or {}).items():
         if not wcd_key.isdigit() or not isinstance(wcd_val, dict):
             continue
@@ -292,8 +307,25 @@ def _resolve_wan_ppp(
         for ppp_key, ppp_val in wan_ppp_root.items():
             if not ppp_key.isdigit() or not isinstance(ppp_val, dict):
                 continue
-            return int(wcd_key), int(ppp_key), ppp_val
-    return None, None, None
+            return int(wcd_key), int(ppp_key), ppp_val, locations
+    return None, None, None, locations
+
+
+def _wan_ppp_locations(
+    wan_connection_device: dict[str, Any],
+) -> tuple[tuple[int, int], ...]:
+    locations: list[tuple[int, int]] = []
+    for wcd_key, wcd_val in (wan_connection_device or {}).items():
+        if not wcd_key.isdigit() or not isinstance(wcd_val, dict):
+            continue
+        wan_ppp_root = wcd_val.get("WANPPPConnection")
+        if not isinstance(wan_ppp_root, dict):
+            continue
+        for ppp_key, ppp_val in wan_ppp_root.items():
+            if not ppp_key.isdigit() or not isinstance(ppp_val, dict):
+                continue
+            locations.append((int(wcd_key), int(ppp_key)))
+    return tuple(sorted(locations))
 
 
 def _first_not_none(*values):

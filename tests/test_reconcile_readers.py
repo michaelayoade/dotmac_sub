@@ -814,10 +814,12 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_dhcp_enabled is True
     assert obs.acs_observed_ssid == "KURSI"
     assert obs.acs_observed_periodic_inform_interval_sec == 300
+    assert obs.acs_observed_cr_username == "admin"
     assert obs.acs_observed_cr_username_set is True
     assert obs.acs_observed_cr_password_set is True
     assert obs.acs_observed_wan_wcd_index == 1
     assert obs.acs_observed_wan_instance_index == 1
+    assert obs.acs_observed_wan_ppp_locations == ((1, 1),)
 
 
 def test_acs_reader_locates_wan_ppp_on_alternate_wcd_slot():
@@ -840,6 +842,7 @@ def test_acs_reader_locates_wan_ppp_on_alternate_wcd_slot():
     result = read_acs_state(client, _desired())
     assert result.observed.acs_observed_wan_wcd_index == 2
     assert result.observed.acs_observed_wan_instance_index == 1
+    assert result.observed.acs_observed_wan_ppp_locations == ((2, 1),)
     assert result.observed.acs_observed_pppoe_username == "100099999"
 
 
@@ -856,17 +859,16 @@ def test_acs_reader_handles_device_with_no_wan_ppp_instance():
     assert result.observed.acs_observed_wan_instance_index is None
 
 
-def test_acs_reader_handles_empty_cr_credentials_as_set_false():
-    """Empty string for CR username is 'set but blank' — equivalent to unset
-    for the precondition layer's purposes. acs_observed_cr_username_set is
-    False, not None."""
+def test_acs_reader_handles_empty_cr_username_as_blank_string():
+    """CR username is value-verified. A blank string stays distinct from a
+    missing field so the planner can treat it as a mismatch."""
     doc = _device_doc()
     doc["InternetGatewayDevice"]["ManagementServer"]["ConnectionRequestUsername"] = (
         _leaf("")
     )
     client = _StubGenieAcsClient(devices=[doc])
     result = read_acs_state(client, _desired())
-    # Empty value → present check returns False
+    assert result.observed.acs_observed_cr_username == ""
     assert result.observed.acs_observed_cr_username_set is False
 
 
@@ -958,6 +960,7 @@ def test_acs_reader_refreshes_and_reparses_when_wan_ppp_looks_ghosted():
     # Post-refresh: ghost is gone, planner will now correctly schedule addObject.
     assert result.observed.acs_observed_wan_instance_index is None
     assert result.observed.acs_observed_wan_wcd_index is None
+    assert result.observed.acs_observed_wan_ppp_locations == ()
     assert result.observed.acs_observed_pppoe_username is None
 
 

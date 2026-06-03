@@ -163,8 +163,10 @@ class AcsObservedFields:
     forcing a ``refreshObject``; ``VERIFICATION_MISMATCH`` catches the rare
     stale case post-write.
 
-    ``acs_observed_cr_username_set`` / ``acs_observed_cr_password_set`` track
-    presence only — the values themselves are never read back.
+    ``acs_observed_cr_username`` and
+    ``acs_observed_periodic_inform_interval_sec`` are value-verified from the
+    CWMP cache. ``acs_observed_cr_password_set`` remains presence-only because
+    the password itself is not safely readable.
     """
 
     acs_present: bool
@@ -181,10 +183,12 @@ class AcsObservedFields:
     acs_observed_dhcp_enabled: bool | None
     acs_observed_ssid: str | None
     acs_observed_periodic_inform_interval_sec: int | None
+    acs_observed_cr_username: str | None
     acs_observed_cr_username_set: bool | None
     acs_observed_cr_password_set: bool | None
     acs_observed_wan_wcd_index: int | None
     acs_observed_wan_instance_index: int | None
+    acs_observed_wan_ppp_locations: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)

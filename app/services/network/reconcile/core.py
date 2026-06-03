@@ -515,10 +515,12 @@ def _absent_acs() -> AcsObservedFields:
         acs_observed_dhcp_enabled=None,
         acs_observed_ssid=None,
         acs_observed_periodic_inform_interval_sec=None,
+        acs_observed_cr_username=None,
         acs_observed_cr_username_set=None,
         acs_observed_cr_password_set=None,
         acs_observed_wan_wcd_index=None,
         acs_observed_wan_instance_index=None,
+        acs_observed_wan_ppp_locations=(),
     )
 
 

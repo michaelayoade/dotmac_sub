@@ -44,6 +44,7 @@ from dataclasses import dataclass
 
 from .actions import (
     AcsAddObject,
+    AcsDeleteObject,
     AcsSetDhcpServer,
     AcsSetManagementServer,
     AcsSetNatEnabled,
@@ -444,12 +445,12 @@ def _plan_acs_side(
 
     # Defensive NAT on routed mode (Fix #4 follow-up).
     if desired.wan_mode == "pppoe" and not omci_wan_planned:
-        wcd = observed.acs.acs_observed_wan_wcd_index or desired.wan_pppoe_wcd_index
+        wcd = desired.wan_pppoe_wcd_index
         inst = (
-            observed.acs.acs_observed_wan_instance_index
+            _desired_wan_ppp_instance(desired, observed)
             or desired.wan_pppoe_instance_index
         )
-        if _observed_differs(
+        if _wan_ppp_needs_heal(desired, observed) or _observed_differs(
             observed.acs.acs_observed_nat_enabled, desired.nat_enabled
         ):
             actions.append(
@@ -467,6 +468,18 @@ def _plan_acs_side(
                     desired=desired.nat_enabled,
                     observed=observed.acs.acs_observed_nat_enabled,
                     repairable=True,
+                )
+            )
+
+        for stale_wcd, stale_inst in _stale_wan_ppp_locations(desired, observed):
+            actions.append(
+                AcsDeleteObject(
+                    device_id=device_id,
+                    object_path=(
+                        "InternetGatewayDevice.WANDevice.1."
+                        f"WANConnectionDevice.{stale_wcd}."
+                        f"WANPPPConnection.{stale_inst}."
+                    ),
                 )
             )
 
@@ -513,8 +526,9 @@ def _plan_acs_wan_ppp(
     drifts: list[Drift],
 ) -> None:
     """Plan WAN PPP via TR-069 — addObject if missing, then PPPoE params."""
+    target_inst = _desired_wan_ppp_instance(desired, observed)
     # If ACS doesn't have a WAN PPP instance, addObject first.
-    if observed.acs.acs_observed_wan_instance_index is None:
+    if target_inst is None:
         actions.append(
             AcsAddObject(
                 device_id=device_id,
@@ -534,19 +548,15 @@ def _plan_acs_wan_ppp(
                 repairable=True,
             )
         )
+        target_inst = desired.wan_pppoe_instance_index
 
     # PPPoE params — diff or set.
-    if _wan_ppp_differs(desired, observed):
-        wcd = observed.acs.acs_observed_wan_wcd_index or desired.wan_pppoe_wcd_index
-        inst = (
-            observed.acs.acs_observed_wan_instance_index
-            or desired.wan_pppoe_instance_index
-        )
+    if _wan_ppp_needs_heal(desired, observed) or _wan_ppp_differs(desired, observed):
         actions.append(
             AcsSetPppoe(
                 device_id=device_id,
-                wcd_index=wcd,
-                instance_index=inst,
+                wcd_index=desired.wan_pppoe_wcd_index,
+                instance_index=target_inst,
                 username=desired.wan_pppoe_username or "",
                 password_ref=desired.wan_pppoe_password_ref or "",
                 vlan=desired.wan_vlan or 0,
@@ -608,6 +618,91 @@ def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bo
     return False
 
 
+def _observed_wan_ppp_locations(
+    observed: OntObservedState,
+) -> tuple[tuple[int, int], ...]:
+    acs = observed.acs
+    if acs.acs_observed_wan_ppp_locations:
+        return acs.acs_observed_wan_ppp_locations
+    if (
+        acs.acs_observed_wan_wcd_index is not None
+        and acs.acs_observed_wan_instance_index is not None
+    ):
+        return ((acs.acs_observed_wan_wcd_index, acs.acs_observed_wan_instance_index),)
+    return ()
+
+
+def _primary_observed_wan_ppp_location(
+    observed: OntObservedState,
+) -> tuple[int, int] | None:
+    acs = observed.acs
+    if (
+        acs.acs_observed_wan_wcd_index is not None
+        and acs.acs_observed_wan_instance_index is not None
+    ):
+        return (
+            acs.acs_observed_wan_wcd_index,
+            acs.acs_observed_wan_instance_index,
+        )
+    return None
+
+
+def _desired_wan_ppp_instance(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+) -> int | None:
+    primary = _primary_observed_wan_ppp_location(observed)
+    if primary and primary[0] == desired.wan_pppoe_wcd_index:
+        return primary[1]
+    instances = [
+        inst
+        for wcd, inst in _observed_wan_ppp_locations(observed)
+        if wcd == desired.wan_pppoe_wcd_index
+    ]
+    if not instances:
+        return None
+    # Prefer the lowest discovered instance when the reader did not expose a
+    # primary location on the desired WCD. This avoids steering toward a
+    # later duplicate child and keeps deleteObject disabled for ambiguous
+    # layouts until we have a confirmed primary target.
+    return min(instances)
+
+
+def _target_wan_ppp_location(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+) -> tuple[int, int] | None:
+    inst = _desired_wan_ppp_instance(desired, observed)
+    if inst is None:
+        return None
+    return (desired.wan_pppoe_wcd_index, inst)
+
+
+def _stale_wan_ppp_locations(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+) -> tuple[tuple[int, int], ...]:
+    target = _target_wan_ppp_location(desired, observed)
+    primary = _primary_observed_wan_ppp_location(observed)
+    # Only prune duplicates when the target matches the same live child the
+    # reader used for observed values. Otherwise the layout is ambiguous and
+    # deleteObject risks removing the active session.
+    if target is None or primary != target:
+        return ()
+    return tuple(
+        pair for pair in _observed_wan_ppp_locations(observed) if pair != target
+    )
+
+
+def _wan_ppp_needs_heal(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    locations = _observed_wan_ppp_locations(observed)
+    if not locations:
+        return False
+    if _desired_wan_ppp_instance(desired, observed) is None:
+        return True
+    return bool(_stale_wan_ppp_locations(desired, observed))
+
+
 def _dhcp_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     acs = observed.acs
     if _observed_differs(acs.acs_observed_dhcp_enabled, desired.dhcp_enabled):
@@ -627,12 +722,11 @@ def _management_server_differs(
     if (
         acs.acs_observed_periodic_inform_interval_sec
         != desired.periodic_inform_interval_sec
-        and acs.acs_observed_periodic_inform_interval_sec is not None
     ):
         return True
-    # Empty/missing CR credentials drive every NBI write toward 202 (queued,
-    # not delivered) — always emit when not confirmed present.
-    if not acs.acs_observed_cr_username_set:
+    # Empty/missing/mismatched CR username drives every NBI write toward 202
+    # (queued, not delivered) — always emit when not confirmed equal.
+    if acs.acs_observed_cr_username != desired.cr_username:
         return True
     if not acs.acs_observed_cr_password_set:
         return True

@@ -251,10 +251,12 @@ def observed_from_ont_observation(
             acs_observed_periodic_inform_interval_sec=(
                 obs.acs_observed_periodic_inform_interval_sec
             ),
+            acs_observed_cr_username=None,
             acs_observed_cr_username_set=obs.acs_observed_cr_username_set,
             acs_observed_cr_password_set=obs.acs_observed_cr_password_set,
             acs_observed_wan_wcd_index=obs.acs_observed_wan_wcd_index,
             acs_observed_wan_instance_index=obs.acs_observed_wan_instance_index,
+            acs_observed_wan_ppp_locations=(),
         ),
     )
 
