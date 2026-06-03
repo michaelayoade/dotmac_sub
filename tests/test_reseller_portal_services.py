@@ -1013,6 +1013,8 @@ def test_create_impersonation_session_with_active_subscription(
     session = customer_portal.get_customer_session(token)
     assert session is not None
     assert session["subscription_id"] == str(subscription.id)
+    assert session["is_impersonation"] is True
+    assert session["return_to"] == "/dashboard"
 
 
 def test_create_impersonation_session_with_pending_subscription(
@@ -1073,3 +1075,5 @@ def test_create_impersonation_session_with_pending_subscription(
     session = customer_portal.get_customer_session(token)
     assert session is not None
     assert session["subscription_id"] == str(subscription.id)
+    assert session["is_impersonation"] is True
+    assert session["return_to"] == "/dashboard"

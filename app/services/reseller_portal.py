@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,7 @@ from app.models.billing import (
 )
 from app.models.catalog import CatalogOffer, Subscription
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Reseller, ResellerUser, Subscriber
+from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services.common import coerce_uuid
@@ -88,6 +88,39 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
     display = f"{first} {last}".strip()
     display_name = _clean_str(getattr(base, "display_name", None))
     return display or display_name or "Customer"
+
+
+def _customer_accounts_query(db: Session, reseller_id: str):
+    reseller_uuid = coerce_uuid(reseller_id)
+    return (
+        db.query(Subscriber)
+        .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(
+            or_(
+                Subscriber.user_type.is_(None),
+                Subscriber.user_type != UserType.reseller,
+            )
+        )
+    )
+
+
+def _get_customer_account(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+) -> Subscriber | None:
+    return (
+        _customer_accounts_query(db, reseller_id)
+        .filter(Subscriber.id == coerce_uuid(account_id))
+        .first()
+    )
+
+
+def _customer_account_join_filter():
+    return or_(
+        Subscriber.user_type.is_(None),
+        Subscriber.user_type != UserType.reseller,
+    )
 
 
 def _get_reseller_user(db: Session, subscriber_id: str) -> ResellerUser | None:
@@ -358,9 +391,7 @@ def list_accounts(
     offset: int,
     search: str | None = None,
 ) -> list[dict]:
-    query = db.query(Subscriber).filter(
-        Subscriber.reseller_id == coerce_uuid(reseller_id)
-    )
+    query = _customer_accounts_query(db, reseller_id)
     if search:
         pattern = f"%{search.strip()}%"
         query = query.filter(
@@ -435,8 +466,8 @@ def get_dashboard_summary(
     accounts = list_accounts(db, reseller_id, limit, offset)
 
     total_accounts = (
-        db.query(func.count(Subscriber.id))
-        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        _customer_accounts_query(db, reseller_id)
+        .with_entities(func.count(Subscriber.id))
         .scalar()
         or 0
     )
@@ -452,6 +483,7 @@ def get_dashboard_summary(
         )
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        .filter(_customer_account_join_filter())
         .filter(Invoice.status.in_(open_statuses))
         .first()
     )
@@ -463,6 +495,7 @@ def get_dashboard_summary(
         db.query(func.count(Invoice.id))
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        .filter(_customer_account_join_filter())
         .filter(Invoice.status == InvoiceStatus.overdue)
         .scalar()
         or 0
@@ -470,8 +503,8 @@ def get_dashboard_summary(
 
     week_ago = datetime.now(UTC) - timedelta(days=7)
     new_this_week = (
-        db.query(func.count(Subscriber.id))
-        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        _customer_accounts_query(db, reseller_id)
+        .with_entities(func.count(Subscriber.id))
         .filter(Subscriber.created_at >= week_ago)
         .scalar()
         or 0
@@ -480,8 +513,8 @@ def get_dashboard_summary(
     from app.models.subscriber import SubscriberStatus
 
     suspended_count = (
-        db.query(func.count(Subscriber.id))
-        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        _customer_accounts_query(db, reseller_id)
+        .with_entities(func.count(Subscriber.id))
         .filter(
             Subscriber.status.in_(
                 [SubscriberStatus.suspended, SubscriberStatus.blocked]
@@ -541,8 +574,8 @@ def get_account_detail(
     Returns dict with subscriber details and active subscriptions,
     or None if account not found or not owned by reseller.
     """
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if not account or str(account.reseller_id) != str(coerce_uuid(reseller_id)):
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
         return None
 
     # Fetch subscriptions with offer details
@@ -610,8 +643,8 @@ def list_account_invoices(
 
     Returns list of invoice dicts, or None if account not owned by reseller.
     """
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if not account or str(account.reseller_id) != str(coerce_uuid(reseller_id)):
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
         return None
 
     invoices = (
@@ -650,8 +683,8 @@ def get_invoice_detail(
 
     Returns dict with invoice data, or None if not found/not authorized.
     """
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if not account or str(account.reseller_id) != str(coerce_uuid(reseller_id)):
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
         return None
 
     invoice = db.get(Invoice, coerce_uuid(invoice_id))
@@ -729,6 +762,7 @@ def get_revenue_summary(
         db.query(func.coalesce(func.sum(Invoice.total), 0))
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(_customer_account_join_filter())
         .filter(Invoice.status == InvoiceStatus.paid)
         .scalar()
     ) or 0
@@ -743,6 +777,7 @@ def get_revenue_summary(
         db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(_customer_account_join_filter())
         .filter(Invoice.status.in_(open_statuses))
         .scalar()
     ) or 0
@@ -757,6 +792,7 @@ def get_revenue_summary(
         )
         .join(Subscriber, Invoice.account_id == Subscriber.id)
         .filter(Subscriber.reseller_id == reseller_uuid)
+        .filter(_customer_account_join_filter())
         .filter(Invoice.status == InvoiceStatus.paid)
         .group_by("year", "month")
         .order_by(
@@ -780,8 +816,8 @@ def get_revenue_summary(
 
     # Account count
     account_count = (
-        db.query(func.count(Subscriber.id))
-        .filter(Subscriber.reseller_id == reseller_uuid)
+        _customer_accounts_query(db, reseller_id)
+        .with_entities(func.count(Subscriber.id))
         .scalar()
     ) or 0
 
@@ -799,8 +835,8 @@ def create_customer_imsubscriberation_session(
     account_id: str,
     return_to: str,
 ) -> str:
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if not account or str(account.reseller_id) != str(reseller_id):
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found"
         )
@@ -837,6 +873,7 @@ def create_customer_imsubscriberation_session(
         account_id=account.id,
         subscriber_id=account.id,
         subscription_id=selected_subscription_id,
+        is_impersonation=True,
         return_to=return_to,
     )
     _emit_reseller_event(
