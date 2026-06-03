@@ -1,9 +1,11 @@
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Address, SubscriberCategory
 from app.models.subscription_engine import SettingValueType
+from app.web.admin import customers as customer_routes
 from app.services.web_customer_details import (
     build_business_detail_snapshot,
     build_person_detail_snapshot,
@@ -95,3 +97,133 @@ def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber
         json.loads(context["geocode_target"]["payload_json"])
         == context["geocode_target"]["payload"]
     )
+
+
+def test_normalize_usage_period_tolerates_trailing_punctuation():
+    assert customer_routes._normalize_usage_period("last,") == "last"
+    assert customer_routes._normalize_usage_period("CURRENT!") == "current"
+    assert customer_routes._normalize_usage_period("unexpected") == "current"
+
+
+def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
+    captured: dict[str, object] = {}
+
+    def _template_response(template_name, context, status_code=200):
+        captured["template_name"] = template_name
+        captured["context"] = context
+        captured["status_code"] = status_code
+        return SimpleNamespace(
+            template_name=template_name,
+            context=context,
+            status_code=status_code,
+        )
+
+    monkeypatch.setattr(
+        customer_routes,
+        "templates",
+        SimpleNamespace(TemplateResponse=_template_response),
+    )
+    monkeypatch.setattr(
+        customer_routes.web_customer_details_service,
+        "build_customer_detail_snapshot",
+        lambda db, customer_id: {"customer": SimpleNamespace(id=customer_id)},
+    )
+
+    import app.web.admin as admin_module
+
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+
+    response = customer_routes.person_detail(
+        request=SimpleNamespace(headers={}),
+        customer_id="cust-123",
+        usage_period="last,",
+        usage_page=2,
+        usage_per_page=50,
+        db=db_session,
+    )
+
+    assert response.status_code == 200
+    assert captured["template_name"] == "admin/customers/detail.html"
+    assert captured["context"]["usage_period"] == "last"
+
+
+def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
+    captured: dict[str, object] = {}
+
+    def _template_response(template_name, context, status_code=200):
+        captured["template_name"] = template_name
+        captured["context"] = context
+        captured["status_code"] = status_code
+        return SimpleNamespace(
+            template_name=template_name,
+            context=context,
+            status_code=status_code,
+        )
+
+    def _get_usage_page(
+        db,
+        usage_customer,
+        *,
+        period,
+        page,
+        per_page,
+        allow_postgres_fallback,
+    ):
+        captured["period"] = period
+        return {
+            "usage_records": [],
+            "period": period,
+            "page": page,
+            "per_page": per_page,
+            "total": 0,
+            "total_pages": 1,
+            "usage_summary": {},
+            "fup_status": None,
+            "usage_source": "none",
+            "has_subscription": False,
+        }
+
+    monkeypatch.setattr(
+        customer_routes,
+        "templates",
+        SimpleNamespace(TemplateResponse=_template_response),
+    )
+    monkeypatch.setattr(
+        customer_routes,
+        "_get_subscriber",
+        lambda db, subscriber_id: SimpleNamespace(id=subscriber_id),
+    )
+    monkeypatch.setattr(
+        customer_routes.customer_portal,
+        "get_usage_page",
+        _get_usage_page,
+    )
+    monkeypatch.setattr(
+        customer_routes,
+        "resolve_customer_subscription",
+        lambda db, usage_customer: SimpleNamespace(id="sub-123"),
+    )
+    monkeypatch.setattr(
+        customer_routes,
+        "_load_initial_bandwidth_stats",
+        lambda db, subscription_id: {"current_rx_formatted": "1.20 Mbps"},
+    )
+
+    response = customer_routes.person_detail_stats(
+        request=SimpleNamespace(headers={}),
+        customer_id="cust-123",
+        usage_period="last,",
+        usage_page=1,
+        usage_per_page=25,
+        db=db_session,
+    )
+
+    assert response.status_code == 200
+    assert captured["period"] == "last"
+    assert captured["template_name"] == "admin/customers/_stats_panel.html"
+    assert captured["context"]["usage_portal"]["period"] == "last"
+    assert captured["context"]["usage_subscription_id"] == "sub-123"
+    assert captured["context"]["bandwidth_chart_initial_stats"] == {
+        "current_rx_formatted": "1.20 Mbps"
+    }

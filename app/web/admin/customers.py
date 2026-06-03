@@ -3,7 +3,9 @@
 import json
 import logging
 import uuid
-from typing import Literal
+from typing import Any, Literal
+
+import anyio
 
 from fastapi import (
     APIRouter,
@@ -35,12 +37,15 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.bandwidth import bandwidth_samples
+from app.services.customer_portal_context import resolve_customer_subscription
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 contacts_router = APIRouter(prefix="/contacts", tags=["web-admin-contacts"])
+_ALLOWED_USAGE_PERIODS = {"current", "last"}
 
 
 def _htmx_error_response(
@@ -76,6 +81,58 @@ def _load_tax_rates(db: Session):
 
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
     return web_customer_actions_service.billing_form_defaults(customer)
+
+
+def _normalize_usage_period(value: str | None) -> str:
+    normalized = str(value or "").strip().lower().rstrip(".,;:!?")
+    if normalized in _ALLOWED_USAGE_PERIODS:
+        return normalized
+    return "current"
+
+
+def _format_bps(value: float | int | None) -> str:
+    amount = float(value or 0)
+    if amount <= 0:
+        return "0 bps"
+    units = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"]
+    unit_index = 0
+    while amount >= 1000 and unit_index < len(units) - 1:
+        amount /= 1000
+        unit_index += 1
+    precision = 0 if unit_index == 0 else (2 if amount < 10 else 1)
+    return f"{amount:.{precision}f} {units[unit_index]}"
+
+
+def _load_initial_bandwidth_stats(
+    db: Session, subscription_id: str | uuid.UUID | None
+) -> dict[str, Any] | None:
+    if not subscription_id:
+        return None
+    try:
+        stats = anyio.from_thread.run(
+            bandwidth_samples.get_bandwidth_stats,
+            db,
+            subscription_id,
+            "24h",
+        )
+    except Exception:
+        logger.debug(
+            "admin_customer_initial_bandwidth_stats_failed",
+            extra={
+                "event": "admin_customer_initial_bandwidth_stats_failed",
+                "subscription_id": str(subscription_id),
+            },
+            exc_info=True,
+        )
+        return None
+
+    return {
+        **stats,
+        "current_rx_formatted": _format_bps(stats.get("current_rx_bps")),
+        "current_tx_formatted": _format_bps(stats.get("current_tx_bps")),
+        "peak_rx_formatted": _format_bps(stats.get("peak_rx_bps")),
+        "peak_tx_formatted": _format_bps(stats.get("peak_tx_bps")),
+    }
 
 
 def _toast_response(
@@ -517,9 +574,13 @@ def customer_create(
 def person_detail(
     request: Request,
     customer_id: str,
+    usage_period: str = Query("current"),
+    usage_page: int = Query(1, ge=1),
+    usage_per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """View customer details (unified — person and org members)."""
+    usage_period = _normalize_usage_period(usage_period)
     try:
         detail_data = web_customer_details_service.build_customer_detail_snapshot(
             db=db,
@@ -545,8 +606,56 @@ def person_detail(
         {
             "request": request,
             **detail_data,
+            "usage_period": usage_period,
+            "usage_page": usage_page,
+            "usage_per_page": usage_per_page,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
+        },
+    )
+
+
+@router.get(
+    "/person/{customer_id}/stats",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def person_detail_stats(
+    request: Request,
+    customer_id: str,
+    usage_period: str = Query("current"),
+    usage_page: int = Query(1, ge=1),
+    usage_per_page: int = Query(25, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
+    usage_period = _normalize_usage_period(usage_period)
+    subscriber = _get_subscriber(db=db, subscriber_id=customer_id)
+
+    usage_customer = {"subscriber_id": str(subscriber.id)}
+    usage_portal = customer_portal.get_usage_page(
+        db,
+        usage_customer,
+        period=usage_period,
+        page=usage_page,
+        per_page=usage_per_page,
+        allow_postgres_fallback=True,
+    )
+    usage_subscription = resolve_customer_subscription(db, usage_customer)
+    initial_bandwidth_stats = _load_initial_bandwidth_stats(
+        db,
+        usage_subscription.id if usage_subscription else None,
+    )
+
+    return templates.TemplateResponse(
+        "admin/customers/_stats_panel.html",
+        {
+            "request": request,
+            "customer_id": str(subscriber.id),
+            "usage_portal": usage_portal,
+            "bandwidth_chart_initial_stats": initial_bandwidth_stats,
+            "usage_subscription_id": (
+                str(usage_subscription.id) if usage_subscription else None
+            ),
         },
     )
 
