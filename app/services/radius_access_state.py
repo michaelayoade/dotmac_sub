@@ -31,6 +31,8 @@ from app.services.radius import (
 
 logger = logging.getLogger(__name__)
 
+AccessStateWriteResult = dict[str, int | str | None]
+
 # Status sets — declared here as constants so callers can also reason
 # about which SubscriptionStatus values map to a given AccessState
 # without inverting the function.
@@ -151,7 +153,7 @@ def set_subscription_access_state(
     db: Session,
     subscription_id: str,
     state: AccessState | None,
-) -> dict[str, int]:
+) -> AccessStateWriteResult:
     """Set ``subscription.access_state`` to ``state`` and mirror the
     SUBSCRIBER's aggregate state to external RADIUS ``radusergroup``.
     Idempotent.
@@ -227,6 +229,7 @@ def set_subscription_access_state(
             "credentials": len(credentials),
             "external_rows_written": 0,
             "external_rows_deleted": 0,
+            "aggregate_state": aggregate_state.value if aggregate_state else None,
         }
 
     rows_written = 0

@@ -369,10 +369,11 @@ class TestSubscriberAggregation:
             set_subscription_access_state(
                 db_session, str(sub_active.id), AccessState.active
             )
-            set_subscription_access_state(
+            result = set_subscription_access_state(
                 db_session, str(sub_terminated.id), AccessState.terminated
             )
 
+        assert result["aggregate_state"] == "active"
         assert _read_radusergroup(radius_db, "agg-1") == [
             ("agg-1", "dotmac-active", 0)
         ]
@@ -442,9 +443,10 @@ class TestSubscriberAggregation:
             "app.services.radius_access_state._active_external_sync_configs",
             return_value=[config],
         ):
-            set_subscription_access_state(
+            result = set_subscription_access_state(
                 db_session, str(sub1.id), AccessState.terminated
             )
 
+        assert result["aggregate_state"] == "terminated"
         # Both subs terminated → aggregate terminated → no row, stale wiped.
         assert _read_radusergroup(radius_db, "agg-3") == []
