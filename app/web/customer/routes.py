@@ -202,7 +202,8 @@ def customer_support_detail(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(
-            url="/portal/auth/login?next=/portal/support", status_code=303
+            url=f"/portal/auth/login?next=/portal/support/{quote_plus(ticket_id)}",
+            status_code=303,
         )
 
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
@@ -270,7 +271,8 @@ def customer_work_order_detail(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(
-            url="/portal/auth/login?next=/portal/work-orders", status_code=303
+            url=f"/portal/auth/login?next=/portal/work-orders/{quote_plus(work_order_id)}",
+            status_code=303,
         )
     subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_order_detail_context(
