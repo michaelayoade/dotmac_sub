@@ -1,5 +1,6 @@
 from starlette.requests import Request
 
+from app.services import customer_portal
 from app.services import web_customer_auth as web_customer_auth_service
 
 
@@ -60,3 +61,20 @@ def test_get_current_customer_returns_none_when_session_missing(monkeypatch):
         )
         is None
     )
+
+
+def test_customer_session_can_store_impersonation_marker(db_session, subscriber):
+    token = customer_portal.create_customer_session(
+        username="imsubscriberate:reseller:test",
+        account_id=subscriber.id,
+        subscriber_id=subscriber.id,
+        return_to="/reseller/accounts",
+        is_impersonation=True,
+        db=db_session,
+    )
+
+    session = customer_portal.get_customer_session(token)
+
+    assert session is not None
+    assert session["is_impersonation"] is True
+    assert session["return_to"] == "/reseller/accounts"

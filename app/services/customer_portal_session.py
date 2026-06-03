@@ -52,6 +52,7 @@ def create_customer_session(
     subscriber_id: UUID | None,
     subscription_id: UUID | None = None,
     return_to: str | None = None,
+    is_impersonation: bool = False,
     remember: bool = False,
     db: Session | None = None,
 ) -> str:
@@ -64,6 +65,7 @@ def create_customer_session(
         "subscriber_id": str(subscriber_id) if subscriber_id else None,
         "subscription_id": str(subscription_id) if subscription_id else None,
         "return_to": return_to,
+        "is_impersonation": is_impersonation,
         "remember": remember,
         "created_at": datetime.now(UTC).isoformat(),
         "expires_at": (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat(),
