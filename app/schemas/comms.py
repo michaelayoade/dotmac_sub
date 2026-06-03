@@ -11,6 +11,7 @@ from app.models.comms import CustomerNotificationStatus
 class CustomerNotificationBase(BaseModel):
     entity_type: str = Field(min_length=1, max_length=40)
     entity_id: UUID
+    subscriber_id: UUID | None = None
     channel: str = Field(min_length=1, max_length=40)
     recipient: str = Field(min_length=1, max_length=255)
     message: str = Field(min_length=1)

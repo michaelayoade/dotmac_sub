@@ -3,6 +3,9 @@
 {% block title %}Profile - My Account{% endblock %}
 
 {% block content %}
+{% set notification_meta = subscriber.metadata_ if subscriber and subscriber.metadata_ else {} %}
+{% set billing_notifications_enabled = notification_meta.get('billing_notifications', True) %}
+{% set sms_updates_enabled = notification_meta.get('sms_updates', True) %}
 <div class="space-y-8">
     <!-- Page Header -->
     <div>
@@ -84,7 +87,7 @@
             <div class="space-y-4">
                 <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
                     <div class="relative flex items-center justify-center">
-                        <input type="checkbox" name="billing_notifications" checked class="peer sr-only">
+                        <input type="checkbox" name="billing_notifications" value="true" {% if billing_notifications_enabled %}checked{% endif %} class="peer sr-only">
                         <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
                             <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
@@ -104,7 +107,7 @@
 
                 <label class="group flex items-center gap-4 rounded-xl border-2 border-stone-200 bg-stone-50 p-4 cursor-pointer transition-all hover:border-[var(--color-brand-300)] dark:border-stone-700 dark:bg-stone-700/30 dark:hover:border-[var(--color-brand-500)]">
                     <div class="relative flex items-center justify-center">
-                        <input type="checkbox" name="sms_updates" class="peer sr-only">
+                        <input type="checkbox" name="sms_updates" value="true" {% if sms_updates_enabled %}checked{% endif %} class="peer sr-only">
                         <div class="h-6 w-6 rounded-lg border-2 border-stone-300 bg-white transition-all peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700">
                             <svg class="h-full w-full text-white opacity-0 peer-checked:opacity-100 p-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>

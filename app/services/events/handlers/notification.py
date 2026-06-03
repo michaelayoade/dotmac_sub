@@ -1,11 +1,12 @@
-"""Notification handler for the event system.
+"""Notification handler for the event system."""
 
-Queues customer notifications based on configured notification templates.
-"""
+from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.notification import (
@@ -13,6 +14,10 @@ from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
     NotificationTemplate,
+)
+from app.services.customer_notification_policy import (
+    is_notification_enabled_for_subscriber,
+    resolve_subscriber_id_for_recipient,
 )
 from app.services.events.types import Event, EventType
 
@@ -28,37 +33,336 @@ CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
 }
 
 
-# Mapping from EventType to notification template codes
-# These codes are used to look up templates in the notification_templates table
+@dataclass(frozen=True)
+class EventNotificationSpec:
+    template_code: str
+    category: str
+    channels: tuple[NotificationChannel, ...]
+    subject: str
+    body: str
+
+
+EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
+    EventType.subscriber_created: EventNotificationSpec(
+        template_code="subscriber_created",
+        category="account",
+        channels=(NotificationChannel.email,),
+        subject="Your customer account is ready",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your customer account has been created successfully. "
+            "You can now manage your services and billing through the portal.\n\n"
+            "Thank you for choosing us."
+        ),
+    ),
+    EventType.subscriber_updated: EventNotificationSpec(
+        template_code="subscriber_updated",
+        category="account",
+        channels=(NotificationChannel.email,),
+        subject="Your account profile was updated",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your account profile was updated successfully.\n\n"
+            "Updated fields: {updated_fields}\n\n"
+            "If you did not make this change, please contact support immediately."
+        ),
+    ),
+    EventType.subscription_created: EventNotificationSpec(
+        template_code="subscription_created",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your new service subscription",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your subscription to {offer_name} has been created. "
+            "A service order will be created for installation.\n\n"
+            "If you have questions, contact our support team."
+        ),
+    ),
+    EventType.subscription_activated: EventNotificationSpec(
+        template_code="subscription_activated",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your service is now active",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {offer_name} subscription is now active and ready to use."
+        ),
+    ),
+    EventType.subscription_suspended: EventNotificationSpec(
+        template_code="subscription_suspended",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Service suspended",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {offer_name} subscription has been suspended. "
+            "Please make payment or contact support to restore service."
+        ),
+    ),
+    EventType.subscription_resumed: EventNotificationSpec(
+        template_code="subscription_resumed",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your service has been resumed",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {offer_name} subscription has been resumed successfully."
+        ),
+    ),
+    EventType.subscription_canceled: EventNotificationSpec(
+        template_code="subscription_canceled",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Subscription canceled",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {offer_name} subscription has been canceled. "
+            "If this was unexpected, please contact support."
+        ),
+    ),
+    EventType.subscription_expiring: EventNotificationSpec(
+        template_code="subscription_expiring",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your subscription is expiring soon",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {offer_name} subscription will expire soon. "
+            "Please renew to avoid interruption."
+        ),
+    ),
+    EventType.subscription_expired: EventNotificationSpec(
+        template_code="subscription_expired",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your subscription has expired",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your {offer_name} subscription has expired. "
+            "Renew your service to restore access."
+        ),
+    ),
+    EventType.subscription_suspension_warning: EventNotificationSpec(
+        template_code="suspension_warning",
+        category="billing",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Payment reminder — suspension in {grace_hours} hours",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Invoice #{invoice_number} for {amount} is overdue. "
+            "Your service may be suspended in {grace_hours} hours if payment is not received."
+        ),
+    ),
+    EventType.subscription_upgraded: EventNotificationSpec(
+        template_code="subscription_upgraded",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your plan has been upgraded",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your service has been upgraded from {old_offer_name} to {new_offer_name}."
+        ),
+    ),
+    EventType.subscription_downgraded: EventNotificationSpec(
+        template_code="subscription_downgraded",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your plan has been updated",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your service has been changed from {old_offer_name} to {new_offer_name}."
+        ),
+    ),
+    EventType.invoice_created: EventNotificationSpec(
+        template_code="invoice_created",
+        category="billing",
+        channels=(NotificationChannel.email,),
+        subject="New invoice #{invoice_number}",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "A new invoice #{invoice_number} for {amount} has been generated. "
+            "Due date: {due_date}."
+        ),
+    ),
+    EventType.invoice_sent: EventNotificationSpec(
+        template_code="invoice_sent",
+        category="billing",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Invoice #{invoice_number} — payment due {due_date}",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Invoice #{invoice_number} for {amount} is due on {due_date}. "
+            "Please pay before the due date to avoid disruption."
+        ),
+    ),
+    EventType.invoice_paid: EventNotificationSpec(
+        template_code="invoice_paid",
+        category="billing",
+        channels=(NotificationChannel.email,),
+        subject="Invoice #{invoice_number} has been paid",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Invoice #{invoice_number} has been paid successfully. "
+            "Thank you for your payment."
+        ),
+    ),
+    EventType.invoice_overdue: EventNotificationSpec(
+        template_code="invoice_overdue",
+        category="billing",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Overdue invoice #{invoice_number}",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Invoice #{invoice_number} for {amount} is overdue. "
+            "Please pay immediately to avoid service disruption."
+        ),
+    ),
+    EventType.payment_received: EventNotificationSpec(
+        template_code="payment_received",
+        category="billing",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Payment received — thank you",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We have received your payment of {amount}. Thank you."
+        ),
+    ),
+    EventType.payment_failed: EventNotificationSpec(
+        template_code="payment_failed",
+        category="billing",
+        channels=(NotificationChannel.email,),
+        subject="Payment failed — please retry",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your recent payment attempt of {amount} was not successful. "
+            "Please try again or use a different payment method."
+        ),
+    ),
+    EventType.payment_refunded: EventNotificationSpec(
+        template_code="payment_refunded",
+        category="billing",
+        channels=(NotificationChannel.email,),
+        subject="Payment refunded",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "A refund of {amount} has been processed on your account."
+        ),
+    ),
+    EventType.usage_warning: EventNotificationSpec(
+        template_code="usage_warning",
+        category="usage",
+        channels=(NotificationChannel.email,),
+        subject="Data usage warning — {usage_percent}% used",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "You have used {usage_percent}% of your monthly data allowance on {offer_name}."
+        ),
+    ),
+    EventType.usage_exhausted: EventNotificationSpec(
+        template_code="usage_exhausted",
+        category="usage",
+        channels=(NotificationChannel.email,),
+        subject="Data allowance exhausted",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your monthly data allowance on {offer_name} has been exhausted."
+        ),
+    ),
+    EventType.usage_topped_up: EventNotificationSpec(
+        template_code="usage_topped_up",
+        category="usage",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Top-up received",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your account has been topped up with {amount}. Reference: {reference}."
+        ),
+    ),
+    EventType.provisioning_completed: EventNotificationSpec(
+        template_code="provisioning_completed",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Service installation complete",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Your service installation has been completed successfully."
+        ),
+    ),
+    EventType.provisioning_failed: EventNotificationSpec(
+        template_code="provisioning_failed",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Service installation issue",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "We encountered an issue while setting up your service. "
+            "Our technical team will follow up shortly."
+        ),
+    ),
+    EventType.service_order_created: EventNotificationSpec(
+        template_code="service_order_created",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your service order has been created",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Service order #{service_order_id} has been created for your account."
+        ),
+    ),
+    EventType.service_order_assigned: EventNotificationSpec(
+        template_code="service_order_assigned",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your service order is in progress",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Service order #{service_order_id} is now being worked on by our team."
+        ),
+    ),
+    EventType.service_order_completed: EventNotificationSpec(
+        template_code="service_order_completed",
+        category="service",
+        channels=(NotificationChannel.email, NotificationChannel.sms),
+        subject="Your service order is complete",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "Service order #{service_order_id} has been completed successfully."
+        ),
+    ),
+    EventType.ont_offline: EventNotificationSpec(
+        template_code="ont_offline",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Network device offline — {device_serial}",
+        body="ONT {device_serial} has gone offline at {location}.",
+    ),
+    EventType.ont_online: EventNotificationSpec(
+        template_code="ont_online",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Network device back online — {device_serial}",
+        body="ONT {device_serial} is back online.",
+    ),
+    EventType.ont_signal_degraded: EventNotificationSpec(
+        template_code="ont_signal_degraded",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="Fiber signal degraded — {device_serial}",
+        body="ONT {device_serial} is reporting degraded optical signal levels.",
+    ),
+    EventType.ont_discovered: EventNotificationSpec(
+        template_code="ont_discovered",
+        category="service",
+        channels=(NotificationChannel.email,),
+        subject="New ONT discovered — {device_serial}",
+        body="A new ONT has been discovered on the network.",
+    ),
+}
+
 EVENT_TYPE_TO_TEMPLATE = {
-    # Subscriber events
-    EventType.subscriber_created: "subscriber_created",
-    # Subscription events
-    EventType.subscription_created: "subscription_created",
-    EventType.subscription_activated: "subscription_activated",
-    EventType.subscription_suspended: "subscription_suspended",
-    EventType.subscription_resumed: "subscription_resumed",
-    EventType.subscription_canceled: "subscription_canceled",
-    EventType.subscription_expiring: "subscription_expiring",
-    EventType.subscription_suspension_warning: "suspension_warning",
-    # Billing events
-    EventType.invoice_created: "invoice_created",
-    EventType.invoice_sent: "invoice_sent",
-    EventType.invoice_overdue: "invoice_overdue",
-    EventType.payment_received: "payment_received",
-    EventType.payment_failed: "payment_failed",
-    # Usage events
-    EventType.usage_warning: "usage_warning",
-    EventType.usage_exhausted: "usage_exhausted",
-    EventType.usage_topped_up: "usage_topped_up",
-    # Provisioning events
-    EventType.provisioning_completed: "provisioning_completed",
-    EventType.provisioning_failed: "provisioning_failed",
-    # Network / OLT events
-    EventType.ont_offline: "ont_offline",
-    EventType.ont_online: "ont_online",
-    EventType.ont_signal_degraded: "ont_signal_degraded",
-    EventType.ont_discovered: "ont_discovered",
+    event_type: spec.template_code
+    for event_type, spec in EVENT_NOTIFICATION_SPECS.items()
 }
 
 
@@ -66,36 +370,26 @@ class NotificationHandler:
     """Handler that queues customer notifications."""
 
     def handle(self, db: Session, event: Event) -> None:
-        """Process an event by creating notifications.
-
-        Looks up the notification template for the event type. If found
-        and active, creates a Notification record for each configured channel.
-
-        Args:
-            db: Database session
-            event: The event to process
-        """
-        # Get template code for this event type
-        template_code = EVENT_TYPE_TO_TEMPLATE.get(event.event_type)
-        if template_code is None:
+        spec = EVENT_NOTIFICATION_SPECS.get(event.event_type)
+        if spec is None:
             return
 
-        templates = self._load_templates(db, template_code)
+        templates = self._load_templates(db, spec.template_code)
         if not templates:
-            templates = self._seed_and_reload_templates(db, template_code)
-        if not templates:
-            if template_code not in _LOGGED_MISSING_TEMPLATE_CODES:
-                logger.warning(
-                    "No active notification template for code %s", template_code
-                )
-                _LOGGED_MISSING_TEMPLATE_CODES.add(template_code)
-            return
+            templates = self._seed_and_reload_templates(db, spec.template_code)
+        if not templates and spec.template_code not in _LOGGED_MISSING_TEMPLATE_CODES:
+            logger.warning(
+                "No active notification template for code %s", spec.template_code
+            )
+            _LOGGED_MISSING_TEMPLATE_CODES.add(spec.template_code)
 
-        # Build enriched context and render
         context = self._build_render_context(db, event)
+        templates_by_channel = {
+            (template.channel or NotificationChannel.email): template
+            for template in templates
+        }
 
-        for template in templates:
-            channel = template.channel or NotificationChannel.email
+        for channel in spec.channels:
             recipient = self._resolve_recipient(db, event, channel)
             if not recipient:
                 logger.debug(
@@ -105,12 +399,32 @@ class NotificationHandler:
                 )
                 continue
 
-            notification = Notification(
-                template_id=template.id,
+            subscriber_id = self._resolve_subscriber_id(db, event, recipient)
+            if not is_notification_enabled_for_subscriber(
+                db,
+                subscriber_id=subscriber_id,
                 channel=channel,
+                category=spec.category,
                 recipient=recipient,
-                subject=self._render_subject(template, event, context),
-                body=self._render_body(template, event, context),
+            ):
+                logger.info(
+                    "Suppressed notification for event %s on %s to %s by preferences",
+                    event.event_type.value,
+                    channel.value,
+                    recipient,
+                )
+                continue
+
+            template = templates_by_channel.get(channel)
+            notification = Notification(
+                template_id=template.id if template else None,
+                subscriber_id=subscriber_id,
+                channel=channel,
+                event_type=spec.template_code,
+                category=spec.category,
+                recipient=recipient,
+                subject=self._render_subject(template, spec, context),
+                body=self._render_body(template, spec, context),
                 status=NotificationStatus.queued,
             )
             db.add(notification)
@@ -127,7 +441,6 @@ class NotificationHandler:
         db: Session,
         template_code: str,
     ) -> list[NotificationTemplate]:
-        """Load active templates for the event's base code and channel variants."""
         candidate_codes = {
             template_code,
             *(
@@ -135,11 +448,12 @@ class NotificationHandler:
                 for suffix in CHANNEL_TEMPLATE_SUFFIXES.values()
             ),
         }
-        templates = (
-            db.query(NotificationTemplate)
-            .filter(NotificationTemplate.code.in_(candidate_codes))
-            .filter(NotificationTemplate.is_active.is_(True))
-            .all()
+        templates = list(
+            db.scalars(
+                select(NotificationTemplate)
+                .where(NotificationTemplate.code.in_(candidate_codes))
+                .where(NotificationTemplate.is_active.is_(True))
+            ).all()
         )
         return self._order_templates(templates, template_code)
 
@@ -148,7 +462,6 @@ class NotificationHandler:
         db: Session,
         template_code: str,
     ) -> list[NotificationTemplate]:
-        """Best-effort self-heal for missing default templates without committing."""
         try:
             from app.services.settings_seed import _seed_missing_notification_templates
 
@@ -187,28 +500,40 @@ class NotificationHandler:
 
         return list(ordered.values())
 
+    def _resolve_subscriber_id(
+        self,
+        db: Session,
+        event: Event,
+        recipient: str | None,
+    ):
+        if event.account_id:
+            return event.account_id
+        if event.subscriber_id:
+            return event.subscriber_id
+        return resolve_subscriber_id_for_recipient(db, recipient)
+
     def _resolve_recipient(
         self,
         db: Session,
         event: Event,
         channel: NotificationChannel,
     ) -> str | None:
-        """Resolve the notification recipient from event context."""
         email = event.payload.get("email")
         phone = event.payload.get("phone") or event.payload.get("phone_number")
+        subscriber_id = event.account_id or event.subscriber_id
 
-        if event.account_id:
+        if subscriber_id:
             from app.models.subscriber import Subscriber
 
-            account = db.get(Subscriber, event.account_id)
-            if channel == NotificationChannel.email and account and account.email:
-                return account.email
+            subscriber = db.get(Subscriber, subscriber_id)
+            if channel == NotificationChannel.email and subscriber and subscriber.email:
+                return subscriber.email
             if (
                 channel in {NotificationChannel.sms, NotificationChannel.whatsapp}
-                and account
-                and account.phone
+                and subscriber
+                and subscriber.phone
             ):
-                return account.phone
+                return subscriber.phone
 
         if channel == NotificationChannel.email and isinstance(email, str) and email:
             return email
@@ -223,43 +548,32 @@ class NotificationHandler:
             return email
         if isinstance(phone, str) and phone:
             return phone
-
         return None
 
     def _build_render_context(self, db: Session, event: Event) -> dict[str, str]:
-        """Build variable substitution context from event payload + resolved data.
-
-        Enriches the raw event payload with commonly needed variables
-        that templates reference but events don't carry directly:
-        subscriber_name, due_date, portal_url, device_serial, etc.
-        """
         context: dict[str, str] = {}
-
-        # Start with raw payload
         for key, value in event.payload.items():
             if value is not None:
                 context[key] = str(value)
 
-        # Resolve subscriber name from account_id
-        if "subscriber_name" not in context and event.account_id:
-            try:
-                from app.models.subscriber import Subscriber
+        if "subscriber_name" not in context:
+            subscriber_id = event.account_id or event.subscriber_id
+            if subscriber_id:
+                try:
+                    from app.models.subscriber import Subscriber
 
-                subscriber = db.get(Subscriber, event.account_id)
-                if subscriber:
-                    name = subscriber.full_name or subscriber.display_name or ""
-                    if not name and subscriber.first_name:
-                        name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
-                    context["subscriber_name"] = name or "Valued Customer"
-            except Exception:
-                logger.warning(
-                    "Failed to resolve subscriber name (account_id=%s)",
-                    event.account_id,
-                    exc_info=True,
-                )
-                context.setdefault("subscriber_name", "Valued Customer")
+                    subscriber = db.get(Subscriber, subscriber_id)
+                    if subscriber:
+                        context["subscriber_name"] = (
+                            subscriber.name or "Valued Customer"
+                        )
+                except Exception:
+                    logger.warning(
+                        "Failed to resolve subscriber name (subscriber_id=%s)",
+                        subscriber_id,
+                        exc_info=True,
+                    )
 
-        # Resolve invoice details if invoice_id present
         if event.invoice_id and "invoice_number" not in context:
             try:
                 from app.models.billing import Invoice
@@ -280,58 +594,78 @@ class NotificationHandler:
                     exc_info=True,
                 )
 
-        # Normalize amount formatting
+        if event.subscription_id:
+            try:
+                from app.models.catalog import CatalogOffer, Subscription
+
+                subscription = db.get(Subscription, event.subscription_id)
+                if subscription:
+                    offer = db.get(CatalogOffer, subscription.offer_id)
+                    if offer:
+                        context.setdefault("offer_name", offer.name or "")
+                        context.setdefault("plan_name", offer.name or "")
+            except Exception:
+                logger.warning(
+                    "Failed to resolve subscription details (subscription_id=%s)",
+                    event.subscription_id,
+                    exc_info=True,
+                )
+
+        if event.service_order_id:
+            context.setdefault("service_order_id", str(event.service_order_id))
+        elif "service_order_id" in context:
+            context["service_order_id"] = str(context["service_order_id"])
+
+        if "old_offer" in context:
+            context.setdefault("old_offer_name", context["old_offer"])
+        if "new_offer" in context:
+            context.setdefault("new_offer_name", context["new_offer"])
+
+        if "updated_fields" in context:
+            context["updated_fields"] = context["updated_fields"].strip("[]")
+
         if "amount" in context and not context["amount"].startswith("₦"):
             try:
                 from decimal import Decimal, InvalidOperation
 
-                amt = Decimal(context["amount"])
-                context["amount"] = f"₦{amt:,.2f}"
+                amount = Decimal(context["amount"])
+                context["amount"] = f"₦{amount:,.2f}"
             except (InvalidOperation, ValueError):
                 pass
 
-        # Map ONT payload keys to template variables
         context.setdefault("device_serial", context.get("serial_number", ""))
-
-        # Usage percentage
-        if "threshold" in context and "usage_percent" not in context:
-            try:
-                pct = float(context["threshold"]) * 100
-                context["usage_percent"] = f"{pct:.0f}"
-            except (ValueError, TypeError):
-                pass
-
-        # Portal URL (configurable, with sensible default)
-        context.setdefault("portal_url", "/portal")
-
-        # Location placeholder for ONT events
         context.setdefault("location", context.get("olt_name", ""))
-
-        # Fallback for subscriber_name
+        context.setdefault("portal_url", "/portal")
         context.setdefault("subscriber_name", "Valued Customer")
-
+        context.setdefault("offer_name", context.get("plan_name", "your service"))
+        context.setdefault("old_offer_name", "your current plan")
+        context.setdefault("new_offer_name", "your updated plan")
+        context.setdefault("updated_fields", "profile details")
         return context
 
-    def _render_subject(
-        self, template: NotificationTemplate, event: Event, context: dict[str, str]
-    ) -> str:
-        """Render the notification subject with event data."""
-        if not template.subject:
-            return f"Notification: {event.event_type.value}"
-
-        subject = template.subject
+    def _render_text(self, text: str, context: dict[str, str]) -> str:
+        rendered = text
         for key, value in context.items():
-            subject = subject.replace(f"{{{key}}}", value)
-        return subject
+            rendered = rendered.replace(f"{{{key}}}", value)
+        return rendered
+
+    def _render_subject(
+        self,
+        template: NotificationTemplate | None,
+        spec: EventNotificationSpec,
+        context: dict[str, str],
+    ) -> str:
+        return self._render_text(
+            (template.subject if template and template.subject else spec.subject),
+            context,
+        )
 
     def _render_body(
-        self, template: NotificationTemplate, event: Event, context: dict[str, str]
+        self,
+        template: NotificationTemplate | None,
+        spec: EventNotificationSpec,
+        context: dict[str, str],
     ) -> str:
-        """Render the notification body with event data."""
-        if not template.body:
-            return f"Event: {event.event_type.value}\n{event.payload}"
-
-        body = template.body
-        for key, value in context.items():
-            body = body.replace(f"{{{key}}}", value)
-        return body
+        return self._render_text(
+            (template.body if template and template.body else spec.body), context
+        )

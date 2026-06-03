@@ -2,6 +2,7 @@ import html
 import logging
 import os
 import smtplib
+from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
@@ -11,8 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import (
+    DeliveryStatus,
     Notification,
     NotificationChannel,
+    NotificationDelivery,
     NotificationStatus,
 )
 from app.models.subscription_engine import SettingValueType
@@ -730,6 +733,7 @@ def send_email(
     track: bool = True,
     sender_key: str | None = None,
     activity: str | None = None,
+    notification_id: str | None = None,
 ) -> bool:
     """
     Send an email via SMTP.
@@ -757,7 +761,9 @@ def send_email(
     msg.attach(MIMEText(body_html, "html"))
 
     notification = None
-    if track and db:
+    if notification_id and db is not None:
+        notification = db.get(Notification, notification_id)
+    if notification is None and track and db:
         notification = Notification(
             channel=NotificationChannel.email,
             recipient=to_email,
@@ -768,6 +774,16 @@ def send_email(
         db.add(notification)
         db.commit()
         db.refresh(notification)
+    elif notification is not None and db is not None:
+        notification.channel = NotificationChannel.email
+        notification.recipient = to_email
+        notification.subject = subject
+        notification.body = body_html
+        notification.status = NotificationStatus.sending
+        notification.last_error = None
+        db.commit()
+
+    provider_name = f"smtp:{config.get('sender_key', 'default')}"
 
     try:
         server = _create_smtp_client(
@@ -787,6 +803,18 @@ def send_email(
 
         if notification and db is not None:
             notification.status = NotificationStatus.delivered
+            notification.last_error = None
+            notification.sent_at = datetime.now(UTC)
+            db.add(
+                NotificationDelivery(
+                    notification_id=notification.id,
+                    provider=provider_name,
+                    provider_message_id=None,
+                    status=DeliveryStatus.delivered,
+                    response_code="sent",
+                    response_body="SMTP send completed",
+                )
+            )
             db.commit()
 
         logger.info(
@@ -801,6 +829,16 @@ def send_email(
         if notification and db is not None:
             notification.status = NotificationStatus.failed
             notification.last_error = "SMTP authentication failed"
+            db.add(
+                NotificationDelivery(
+                    notification_id=notification.id,
+                    provider=provider_name,
+                    provider_message_id=None,
+                    status=DeliveryStatus.failed,
+                    response_code="smtp_auth_failed",
+                    response_body="SMTP authentication failed",
+                )
+            )
             db.commit()
         return False
     except Exception as e:
@@ -813,6 +851,16 @@ def send_email(
         if notification and db is not None:
             notification.status = NotificationStatus.failed
             notification.last_error = str(e)
+            db.add(
+                NotificationDelivery(
+                    notification_id=notification.id,
+                    provider=provider_name,
+                    provider_message_id=None,
+                    status=DeliveryStatus.failed,
+                    response_code="smtp_error",
+                    response_body=str(e),
+                )
+            )
             db.commit()
         return False
 

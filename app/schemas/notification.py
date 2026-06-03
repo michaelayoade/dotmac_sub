@@ -45,7 +45,10 @@ class NotificationTemplateRead(NotificationTemplateBase):
 
 class NotificationBase(BaseModel):
     template_id: UUID | None = None
+    subscriber_id: UUID | None = None
     channel: NotificationChannel
+    event_type: str | None = Field(default=None, max_length=120)
+    category: str | None = Field(default=None, max_length=40)
     recipient: str = Field(min_length=1, max_length=255)
     subject: str | None = Field(default=None, max_length=200)
     body: str | None = None
@@ -63,7 +66,10 @@ class NotificationCreate(NotificationBase):
 
 class NotificationUpdate(BaseModel):
     template_id: UUID | None = None
+    subscriber_id: UUID | None = None
     channel: NotificationChannel | None = None
+    event_type: str | None = Field(default=None, max_length=120)
+    category: str | None = Field(default=None, max_length=40)
     recipient: str | None = Field(default=None, max_length=255)
     subject: str | None = Field(default=None, max_length=200)
     body: str | None = None
@@ -87,6 +93,8 @@ class NotificationBulkCreateRequest(BaseModel):
     template_id: UUID | None = None
     channel: NotificationChannel
     recipients: list[str]
+    event_type: str | None = Field(default=None, max_length=120)
+    category: str | None = Field(default=None, max_length=40)
     subject: str | None = Field(default=None, max_length=200)
     body: str | None = None
     status: NotificationStatus = NotificationStatus.queued

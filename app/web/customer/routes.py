@@ -1076,6 +1076,8 @@ def customer_update_profile(
     name: str = Form(...),
     email: str = Form(...),
     phone: str = Form(None),
+    billing_notifications: bool = Form(False),
+    sms_updates: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> Response:
     """Update customer profile."""
@@ -1087,7 +1089,13 @@ def customer_update_profile(
         from app.services.web_customer_actions import update_customer_profile
 
         update_customer_profile(
-            db, subscriber_id=subscriber_id, name=name, email=email, phone=phone
+            db,
+            subscriber_id=subscriber_id,
+            name=name,
+            email=email,
+            phone=phone,
+            billing_notifications=billing_notifications,
+            sms_updates=sms_updates,
         )
 
     # POST-Redirect-GET: bounce to the profile page with a success flag so a

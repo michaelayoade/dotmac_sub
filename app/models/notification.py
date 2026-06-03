@@ -87,9 +87,16 @@ class Notification(Base):
     connector_config_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("connector_configs.id")
     )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="SET NULL"),
+        index=True,
+    )
     channel: Mapped[NotificationChannel] = mapped_column(
         Enum(NotificationChannel), nullable=False
     )
+    event_type: Mapped[str | None] = mapped_column(String(120), index=True)
+    category: Mapped[str | None] = mapped_column(String(40), index=True)
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(200))
     body: Mapped[str | None] = mapped_column(Text)
@@ -113,6 +120,7 @@ class Notification(Base):
 
     template = relationship("NotificationTemplate", back_populates="notifications")
     deliveries = relationship("NotificationDelivery", back_populates="notification")
+    subscriber = relationship("Subscriber")
 
 
 class NotificationDelivery(Base):

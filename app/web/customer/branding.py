@@ -85,8 +85,15 @@ def customer_branding_context(request: Request) -> dict[str, object]:
 
     # Check restricted status per-request (user-specific, cannot be cached globally)
     restricted = False
+    notification_preview: dict[str, object] = {
+        "recent_notifications": [],
+        "recent_notifications_total": 0,
+        "unread_notifications_count": 0,
+        "has_recent_notifications": False,
+    }
     try:
         from app.services.customer_portal_context import is_subscriber_restricted
+        from app.services.customer_portal_notifications import get_notifications_preview
         from app.web.customer.auth import get_current_customer_from_request
 
         db = db_session_adapter.create_session()
@@ -96,16 +103,18 @@ def customer_branding_context(request: Request) -> dict[str, object]:
                 subscriber_id = customer.get("subscriber_id")
                 if subscriber_id and is_subscriber_restricted(db, subscriber_id):
                     restricted = True
+                notification_preview = get_notifications_preview(db, customer)
         finally:
             db.close()
     except Exception:
-        logger.debug("Failed to check restricted status for branding context")
+        logger.debug("Failed to load customer portal request context")
 
     return {
         "sidebar_stats": stats,
         "branding_favicon_url": favicon,
         "portal_name": portal_name,
         "restricted": restricted,
+        **notification_preview,
     }
 
 

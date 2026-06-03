@@ -7,8 +7,10 @@ from sqlalchemy import or_
 
 from app.celery_app import celery_app
 from app.models.notification import (
+    DeliveryStatus,
     Notification,
     NotificationChannel,
+    NotificationDelivery,
     NotificationStatus,
 )
 from app.services import email as email_service
@@ -82,6 +84,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     body_text=None,
                     track=False,
                     activity="notification_queue",
+                    notification_id=str(notification.id),
                 )
             elif notification.channel == NotificationChannel.sms:
                 success = sms_service.send_sms(
@@ -89,6 +92,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     to_phone=notification.recipient,
                     body=body,
                     track=False,
+                    notification_id=str(notification.id),
                 )
             elif notification.channel == NotificationChannel.whatsapp:
                 result = whatsapp_service.send_text_message(
@@ -98,6 +102,23 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     dry_run=False,
                 )
                 success = bool(result.get("ok"))
+                db.add(
+                    NotificationDelivery(
+                        notification_id=notification.id,
+                        provider=str(result.get("provider") or "whatsapp"),
+                        provider_message_id=None,
+                        status=DeliveryStatus.delivered
+                        if success
+                        else DeliveryStatus.failed,
+                        response_code=str(result.get("status_code") or ""),
+                        response_body=str(
+                            result.get("response")
+                            or result.get("message")
+                            or ""
+                        )
+                        or None,
+                    )
+                )
                 if not success:
                     notification.last_error = str(
                         result.get("response") or "whatsapp_send_failed"

@@ -29,6 +29,7 @@ from app.models.notification import (
     NotificationStatus,
     NotificationTemplate,
 )
+from app.services.customer_identity_normalization import normalize_phone_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -56,20 +57,7 @@ def _get_setting(
 
 def _normalize_phone(phone: str) -> str:
     """Normalize phone number to E.164 format."""
-    # Remove common formatting characters
-    normalized = (
-        phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    )
-
-    # Ensure it starts with +
-    if not normalized.startswith("+"):
-        # Assume Nigerian number if no country code
-        if normalized.startswith("0"):
-            normalized = "+234" + normalized[1:]
-        else:
-            normalized = "+" + normalized
-
-    return normalized
+    return normalize_phone_identifier(phone) or phone
 
 
 def _send_via_twilio(
@@ -223,6 +211,7 @@ def send_sms(
     to_phone: str,
     body: str,
     track: bool = True,
+    notification_id: str | None = None,
 ) -> bool:
     """Send an SMS message.
 
@@ -251,7 +240,9 @@ def send_sms(
 
     # Create notification record if tracking
     notification = None
-    if track:
+    if notification_id:
+        notification = db.get(Notification, notification_id)
+    if notification is None and track:
         notification = Notification(
             channel=NotificationChannel.sms,
             recipient=normalized_phone,
@@ -259,6 +250,13 @@ def send_sms(
             status=NotificationStatus.sending,
         )
         db.add(notification)
+        db.flush()
+    elif notification is not None:
+        notification.channel = NotificationChannel.sms
+        notification.recipient = normalized_phone
+        notification.body = body
+        notification.status = NotificationStatus.sending
+        notification.last_error = None
         db.flush()
 
     # Send based on provider
@@ -307,16 +305,17 @@ def send_sms(
             NotificationStatus.delivered if success else NotificationStatus.failed
         )
         notification.sent_at = datetime.now(UTC) if success else None
+        notification.last_error = None if success else error_message
 
         # Create delivery record
         delivery = NotificationDelivery(
             notification_id=notification.id,
-            channel=NotificationChannel.sms,
-            recipient=normalized_phone,
+            provider=str(provider or "sms"),
+            provider_message_id=external_id,
             status=DeliveryStatus.delivered if success else DeliveryStatus.failed,
             occurred_at=datetime.now(UTC),
-            external_id=external_id,
-            error_message=error_message,
+            response_code="sent" if success else "error",
+            response_body=error_message if error_message else body[:2000],
         )
         db.add(delivery)
         db.commit()

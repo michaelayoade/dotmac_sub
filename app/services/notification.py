@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network_monitoring import AlertSeverity, AlertStatus
@@ -43,6 +43,11 @@ from app.services.common import (
     apply_ordering,
     apply_pagination,
     validate_enum,
+)
+from app.services.customer_notification_policy import (
+    is_notification_enabled_for_subscriber,
+    resolve_notification_category,
+    resolve_subscriber_id_for_recipient,
 )
 from app.services.response import ListResponseMixin
 
@@ -218,7 +223,28 @@ class Notifications(ListResponseMixin):
             template = db.get(NotificationTemplate, payload.template_id)
             if not template:
                 raise HTTPException(status_code=404, detail="Template not found")
-        notification = Notification(**payload.model_dump())
+        data = payload.model_dump()
+        subscriber_id = data.get(
+            "subscriber_id"
+        ) or resolve_subscriber_id_for_recipient(
+            db,
+            data.get("recipient"),
+        )
+        data["subscriber_id"] = subscriber_id
+        category = data.get("category") or resolve_notification_category(
+            data.get("event_type")
+        )
+        data["category"] = category
+        if not is_notification_enabled_for_subscriber(
+            db,
+            subscriber_id=subscriber_id,
+            channel=data["channel"],
+            category=category,
+            recipient=data.get("recipient"),
+        ):
+            data["status"] = NotificationStatus.canceled
+            data["last_error"] = "Suppressed by customer notification preferences"
+        notification = Notification(**data)
         db.add(notification)
         db.commit()
         db.refresh(notification)
@@ -237,14 +263,33 @@ class Notifications(ListResponseMixin):
                 raise HTTPException(status_code=404, detail="Template not found")
         notifications: list[Notification] = []
         for recipient in payload.recipients:
+            subscriber_id = resolve_subscriber_id_for_recipient(db, recipient)
+            category = payload.category or resolve_notification_category(
+                payload.event_type
+            )
+            status = payload.status
+            last_error = None
+            if not is_notification_enabled_for_subscriber(
+                db,
+                subscriber_id=subscriber_id,
+                channel=payload.channel,
+                category=category,
+                recipient=recipient,
+            ):
+                status = NotificationStatus.canceled
+                last_error = "Suppressed by customer notification preferences"
             notification = Notification(
                 template_id=payload.template_id,
+                subscriber_id=subscriber_id,
                 channel=payload.channel,
+                event_type=payload.event_type,
+                category=category,
                 recipient=recipient,
                 subject=payload.subject or (template.subject if template else None),
                 body=payload.body or (template.body if template else None),
-                status=payload.status,
+                status=status,
                 send_at=payload.send_at,
+                last_error=last_error,
             )
             db.add(notification)
             notifications.append(notification)
@@ -393,7 +438,9 @@ class Deliveries(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(NotificationDelivery)
+        query = db.query(NotificationDelivery).options(
+            selectinload(NotificationDelivery.notification)
+        )
         if notification_id:
             query = query.filter(
                 NotificationDelivery.notification_id == notification_id
