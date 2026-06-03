@@ -1,0 +1,117 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, ambient_background %}
+
+{% block title %}{{ billing_account.name }} — Consolidated Billing{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "teal") }}
+
+<div class="relative space-y-6">
+  {% call(content) page_header(
+      billing_account.name,
+      subtitle="Reseller: " ~ reseller_name ~ (" (House)" if is_house else ""),
+      icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5"/></svg>',
+      color="cyan",
+      color2="teal",
+      breadcrumbs=[
+        {"label": "Billing", "href": "/admin/billing"},
+        {"label": "Consolidated", "href": "/admin/billing/consolidated-accounts"},
+        {"label": billing_account.name}
+      ]
+  ) %}{% endcall %}
+
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total outstanding</p>
+      <p class="mt-2 text-3xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">{{ billing_account.currency }} {{ "{:,.2f}".format(total_outstanding) }}</p>
+      <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Sum of all open invoices across subscribers in this account.</p>
+    </div>
+    <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unallocated balance</p>
+      <p class="mt-2 text-3xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">{{ billing_account.currency }} {{ "{:,.2f}".format(unallocated_balance) }}</p>
+      <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Credit held against future invoices.</p>
+    </div>
+    <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+      <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscribers with open balance</p>
+      <p class="mt-2 text-3xl font-semibold tabular-nums text-slate-900 dark:text-slate-100">{{ subscribers | length }}</p>
+    </div>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+    <h3 class="text-base font-semibold text-slate-900 dark:text-slate-100">Record bulk payment</h3>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Enter the verified lump sum. It will be auto-allocated FIFO across open invoices; any remainder credits the unallocated balance.</p>
+    <form method="post" action="/admin/billing/consolidated-accounts/{{ billing_account.id }}/record-payment" class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+      {% include "components/forms/csrf_input.html" %}
+      <div>
+        <label for="amount" class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Amount</label>
+        <input type="number" step="0.01" min="0.01" name="amount" id="amount" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </div>
+      <div>
+        <label for="currency" class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Currency</label>
+        <input type="text" name="currency" id="currency" value="{{ billing_account.currency }}" maxlength="3" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm uppercase dark:border-slate-600 dark:bg-slate-900"/>
+      </div>
+      <div>
+        <label for="memo" class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Memo</label>
+        <input type="text" name="memo" id="memo" placeholder="Bank ref / note" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900"/>
+      </div>
+      <div class="md:col-span-3 flex justify-end">
+        <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">Record & distribute</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+    <h3 class="border-b border-slate-200 px-5 py-3 text-base font-semibold text-slate-900 dark:border-slate-700 dark:text-slate-100">Subscribers with open invoices</h3>
+    <table class="w-full text-sm">
+      <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        <tr>
+          <th class="px-5 py-3">Subscriber</th>
+          <th class="px-5 py-3 text-right">Open invoices</th>
+          <th class="px-5 py-3 text-right tabular-nums">Balance due</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+        {% for s in subscribers %}
+        <tr>
+          <td class="px-5 py-2.5">
+            <a href="/admin/customers/{{ s.subscriber_id }}" class="font-medium text-cyan-700 hover:underline dark:text-cyan-300">{{ s.subscriber_name }}</a>
+          </td>
+          <td class="px-5 py-2.5 text-right tabular-nums">{{ s.open_invoice_count }}</td>
+          <td class="px-5 py-2.5 text-right tabular-nums">{{ billing_account.currency }} {{ "{:,.2f}".format(s.open_balance) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" class="px-5 py-6 text-center text-slate-500 dark:text-slate-400">No open invoices.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+    <h3 class="border-b border-slate-200 px-5 py-3 text-base font-semibold text-slate-900 dark:border-slate-700 dark:text-slate-100">Recent consolidated payments</h3>
+    <table class="w-full text-sm">
+      <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        <tr>
+          <th class="px-5 py-3">Paid at</th>
+          <th class="px-5 py-3">Memo</th>
+          <th class="px-5 py-3 text-right tabular-nums">Amount</th>
+          <th class="px-5 py-3 text-right tabular-nums">Allocated</th>
+          <th class="px-5 py-3 text-right tabular-nums">Unallocated</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+        {% for p in recent_payments %}
+        <tr>
+          <td class="px-5 py-2.5 text-slate-700 dark:text-slate-200">{{ p.paid_at.strftime("%Y-%m-%d %H:%M") if p.paid_at else "—" }}</td>
+          <td class="px-5 py-2.5 text-slate-700 dark:text-slate-200">{{ p.memo or "" }}</td>
+          <td class="px-5 py-2.5 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.amount) }}</td>
+          <td class="px-5 py-2.5 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.allocated_total) }}</td>
+          <td class="px-5 py-2.5 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.unallocated_amount) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="px-5 py-6 text-center text-slate-500 dark:text-slate-400">No consolidated payments yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

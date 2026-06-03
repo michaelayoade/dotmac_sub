@@ -1,15 +1,26 @@
 """Online payment provider flows for customer portal."""
 
 import logging
+import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus, Payment, PaymentStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentAllocation,
+    PaymentStatus,
+    TopupIntent,
+)
 from app.models.domain_settings import SettingDomain
 from app.services import billing as billing_service
 from app.services.billing_adapter import PaymentIntent, billing_adapter
+from app.services.collections import get_available_balance, restore_account_services
+from app.services.common import round_money, to_decimal
 from app.services.customer_portal_context import (
     get_allowed_account_ids,
     get_invoice_billing_contact,
@@ -18,6 +29,7 @@ from app.services.payment_gateway_adapter import payment_gateway_adapter
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
+_TOPUP_INTENT_TTL = timedelta(minutes=30)
 
 
 def _resolve_payment_provider(db: Session) -> str:
@@ -26,6 +38,201 @@ def _resolve_payment_provider(db: Session) -> str:
     if val and str(val) == "flutterwave":
         return "flutterwave"
     return "paystack"
+
+
+def _resolve_topup_limits(db: Session) -> tuple[int, int]:
+    """Return minimum and maximum allowed top-up amounts."""
+    min_amount = resolve_value(db, SettingDomain.billing, "topup_min_amount")
+    max_amount = resolve_value(db, SettingDomain.billing, "topup_max_amount")
+    min_amount_value = (
+        int(min_amount) if isinstance(min_amount, (str, int, float)) else 1000
+    )
+    max_amount_value = (
+        int(max_amount) if isinstance(max_amount, (str, int, float)) else 500000
+    )
+    return min_amount_value, max_amount_value
+
+
+def _format_naira(amount: Decimal | int | float) -> str:
+    rounded = round_money(to_decimal(amount))
+    return f"₦{rounded:,.2f}"
+
+
+def _customer_account_uuid(customer: dict) -> uuid.UUID:
+    raw_account_id = customer.get("account_id")
+    if not raw_account_id:
+        raise ValueError("Customer account is missing")
+    return uuid.UUID(str(raw_account_id))
+
+
+def _topup_policy_warnings(intent: TopupIntent) -> list[str]:
+    metadata = dict(intent.metadata_ or {})
+    violations = list(metadata.get("policy_violations") or [])
+    requested_amount = round_money(to_decimal(metadata.get("requested_amount") or 0))
+    actual_amount = round_money(
+        to_decimal(metadata.get("actual_amount") or requested_amount or 0)
+    )
+    warnings: list[str] = []
+    if "amount_mismatch" in violations:
+        warnings.append(
+            "The amount confirmed by the payment provider differed from the amount requested at checkout."
+        )
+    if "amount_below_min" in violations:
+        warnings.append(
+            f"The confirmed amount was below the usual minimum add-funds amount of {_format_naira(metadata.get('min_amount') or 0)}."
+        )
+    if "amount_above_max" in violations:
+        warnings.append(
+            f"The confirmed amount was above the usual maximum add-funds amount of {_format_naira(metadata.get('max_amount') or 0)}."
+        )
+    if "intent_expired" in violations:
+        warnings.append(
+            "The payment completed after the original checkout session had expired."
+        )
+    if warnings and requested_amount and actual_amount:
+        warnings.insert(
+            0,
+            f"Requested {_format_naira(requested_amount)} but the provider confirmed {_format_naira(actual_amount)}.",
+        )
+    return warnings
+
+
+def _build_topup_policy_violations(
+    *,
+    requested_amount: Decimal,
+    actual_amount: Decimal,
+    min_amount: int,
+    max_amount: int,
+    expires_at: datetime | None,
+) -> list[str]:
+    violations: list[str] = []
+    if actual_amount != requested_amount:
+        violations.append("amount_mismatch")
+    if actual_amount < Decimal(str(min_amount)):
+        violations.append("amount_below_min")
+    if actual_amount > Decimal(str(max_amount)):
+        violations.append("amount_above_max")
+    normalized_expires_at = expires_at
+    if normalized_expires_at and normalized_expires_at.tzinfo is None:
+        normalized_expires_at = normalized_expires_at.replace(tzinfo=UTC)
+    if normalized_expires_at and normalized_expires_at < datetime.now(UTC):
+        violations.append("intent_expired")
+    return violations
+
+
+def _finalize_topup_intent(
+    db: Session,
+    intent: TopupIntent,
+    *,
+    payment: Payment,
+    external_id: str,
+    actual_amount: Decimal,
+    policy_violations: list[str],
+    min_amount: int,
+    max_amount: int,
+) -> None:
+    metadata = dict(intent.metadata_ or {})
+    metadata.update(
+        {
+            "requested_amount": str(intent.requested_amount),
+            "actual_amount": str(actual_amount),
+            "min_amount": min_amount,
+            "max_amount": max_amount,
+            "policy_violations": policy_violations,
+        }
+    )
+    intent.completed_payment_id = payment.id
+    intent.external_id = external_id
+    intent.actual_amount = actual_amount
+    intent.status = "completed"
+    intent.completed_at = datetime.now(UTC)
+    intent.metadata_ = metadata
+    db.add(intent)
+    db.commit()
+    db.refresh(intent)
+
+
+def _retry_topup_restore(db: Session, account_id: uuid.UUID) -> None:
+    try:
+        restore_account_services(db, str(account_id))
+    except Exception as exc:
+        logger.warning(
+            "Best-effort service restore retry failed for account %s: %s",
+            account_id,
+            exc,
+        )
+
+
+def _build_topup_result(
+    db: Session,
+    *,
+    payment: Payment,
+    intent: TopupIntent,
+    amount: Decimal,
+    reference: str,
+    already_recorded: bool,
+) -> dict:
+    return {
+        "payment": payment,
+        "amount": amount,
+        "reference": reference,
+        "already_recorded": already_recorded,
+        "policy_warnings": _topup_policy_warnings(intent),
+        **_build_topup_summary(db, payment),
+    }
+
+
+def _build_topup_summary(db: Session, payment: Payment) -> dict:
+    """Describe how a top-up was allocated and what credit remains."""
+    allocations = db.scalars(
+        select(PaymentAllocation).where(
+            PaymentAllocation.payment_id == payment.id,
+            PaymentAllocation.is_active.is_(True),
+        )
+    ).all()
+
+    invoice_ids = [allocation.invoice_id for allocation in allocations]
+    invoices_by_id: dict[str, Invoice] = {}
+    if invoice_ids:
+        invoices = db.scalars(select(Invoice).where(Invoice.id.in_(invoice_ids))).all()
+        invoices_by_id = {str(invoice.id): invoice for invoice in invoices}
+
+    allocated_to_invoices: list[dict[str, object]] = []
+    total_allocated = Decimal("0.00")
+    for allocation in allocations:
+        amount = round_money(to_decimal(getattr(allocation, "amount", 0) or 0))
+        total_allocated += amount
+        invoice = invoices_by_id.get(str(allocation.invoice_id))
+        allocated_to_invoices.append(
+            {
+                "invoice_id": str(allocation.invoice_id),
+                "invoice_number": getattr(invoice, "invoice_number", None),
+                "amount": amount,
+            }
+        )
+
+    total_allocated = round_money(total_allocated)
+    payment_amount = round_money(to_decimal(getattr(payment, "amount", 0) or 0))
+    credit_added = round_money(max(Decimal("0.00"), payment_amount - total_allocated))
+
+    available_balance: Decimal | None = None
+    try:
+        available_balance = round_money(
+            get_available_balance(db, str(payment.account_id))
+        )
+    except Exception:
+        logger.warning(
+            "Failed to resolve available balance after top-up for account %s",
+            payment.account_id,
+            exc_info=True,
+        )
+
+    return {
+        "allocated_to_invoices": allocated_to_invoices,
+        "allocated_total": total_allocated,
+        "credit_added": credit_added,
+        "available_balance": available_balance,
+    }
 
 
 def get_payment_page(
@@ -85,7 +292,7 @@ def verify_and_record_payment(
         reference=reference,
     )
     invoice_id = tx.metadata.get("invoice_id")
-    amount_naira = tx.amount
+    amount_naira = round_money(tx.amount)
 
     if not invoice_id:
         raise ValueError("Payment metadata missing invoice_id")
@@ -96,11 +303,14 @@ def verify_and_record_payment(
     ).first()
     if existing_payment:
         invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+        summary = _build_topup_summary(db, existing_payment)
         return {
             "payment": existing_payment,
             "invoice": invoice,
             "amount": getattr(existing_payment, "amount", amount_naira),
             "reference": reference,
+            "already_recorded": True,
+            **summary,
         }
 
     allowed_account_ids = get_allowed_account_ids(customer, db)
@@ -115,6 +325,12 @@ def verify_and_record_payment(
 
     from app.schemas.billing import PaymentAllocationApply
 
+    invoice_balance_due = round_money(
+        to_decimal(getattr(invoice, "balance_due", amount_naira) or amount_naira)
+    )
+    if invoice_balance_due <= Decimal("0.00"):
+        raise ValueError("Invoice no longer has an outstanding balance")
+    allocated_amount = min(amount_naira, invoice_balance_due)
     payment = billing_adapter.record_payment(
         db,
         PaymentIntent(
@@ -127,17 +343,21 @@ def verify_and_record_payment(
             allocations=[
                 PaymentAllocationApply(
                     invoice_id=_UUID(str(invoice_id)),
-                    amount=amount_naira,
+                    amount=allocated_amount,
                 )
             ],
         ),
     )
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    summary = _build_topup_summary(db, payment)
 
     return {
         "payment": payment,
         "invoice": invoice,
         "amount": amount_naira,
         "reference": reference,
+        "already_recorded": False,
+        **summary,
     }
 
 
@@ -145,16 +365,14 @@ def get_topup_page(
     db: Session,
     customer: dict,
 ) -> dict:
-    """Build context for the prepaid top-up page."""
+    """Build context for the customer top-up page."""
     account_id = customer.get("account_id")
     provider_type = _resolve_payment_provider(db)
 
     # Resolve current balance
-    prepaid_balance = Decimal("0.00")
+    prepaid_balance: Decimal | None = None
     try:
-        from app.services.collections._core import _resolve_prepaid_available_balance
-
-        prepaid_balance = _resolve_prepaid_available_balance(db, str(account_id))
+        prepaid_balance = round_money(get_available_balance(db, str(account_id)))
     except Exception:
         logger.warning(
             "Failed to resolve prepaid balance for account %s",
@@ -162,22 +380,14 @@ def get_topup_page(
             exc_info=True,
         )
 
-    # Top-up limits from settings
-    min_amount = resolve_value(db, SettingDomain.billing, "topup_min_amount")
-    max_amount = resolve_value(db, SettingDomain.billing, "topup_max_amount")
-    min_amount_value = (
-        int(min_amount) if isinstance(min_amount, (str, int, float)) else 1000
-    )
-    max_amount_value = (
-        int(max_amount) if isinstance(max_amount, (str, int, float)) else 500000
-    )
+    min_amount_value, max_amount_value = _resolve_topup_limits(db)
 
     email = customer.get("username", "")
 
     context = {
         "provider_type": provider_type,
         "customer_email": email,
-        "prepaid_balance": float(prepaid_balance),
+        "prepaid_balance": prepaid_balance,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
         "preset_amounts": [1000, 2000, 5000, 10000, 20000, 50000],
@@ -194,6 +404,64 @@ def get_topup_page(
     return context
 
 
+def create_topup_intent(
+    db: Session,
+    customer: dict,
+    amount: Decimal | int | float | str,
+    *,
+    provider: str | None = None,
+) -> dict:
+    """Create a server-owned top-up intent for checkout."""
+    account_id = _customer_account_uuid(customer)
+    requested_amount = round_money(to_decimal(amount))
+    if requested_amount <= Decimal("0.00"):
+        raise ValueError("Top-up amount must be greater than ₦0.00")
+
+    min_amount_value, max_amount_value = _resolve_topup_limits(db)
+    if requested_amount < Decimal(str(min_amount_value)):
+        raise ValueError(
+            f"Top-up amount must be at least {_format_naira(min_amount_value)}"
+        )
+    if requested_amount > Decimal(str(max_amount_value)):
+        raise ValueError(
+            f"Top-up amount must not exceed {_format_naira(max_amount_value)}"
+        )
+
+    provider_type = provider or _resolve_payment_provider(db)
+    gateway_context = payment_gateway_adapter.build_context(
+        db,
+        provider_type=provider_type,
+    )
+
+    intent = TopupIntent(
+        account_id=account_id,
+        reference=gateway_context.reference,
+        provider_type=gateway_context.provider_type,
+        currency="NGN",
+        requested_amount=requested_amount,
+        status="pending",
+        expires_at=datetime.now(UTC) + _TOPUP_INTENT_TTL,
+        metadata_={"payment_flow": "account_topup"},
+    )
+    db.add(intent)
+    db.commit()
+    db.refresh(intent)
+
+    return {
+        "intent_id": str(intent.id),
+        "provider_type": gateway_context.provider_type,
+        "provider_public_key": gateway_context.public_key,
+        "reference": gateway_context.reference,
+        "requested_amount": requested_amount,
+        "currency": intent.currency,
+        "checkout_metadata": {
+            "payment_flow": "account_topup",
+            "topup_intent_id": str(intent.id),
+            "account_id": str(account_id),
+        },
+    }
+
+
 def verify_and_record_topup(
     db: Session,
     customer: dict,
@@ -202,45 +470,86 @@ def verify_and_record_topup(
     provider: str | None = None,
 ) -> dict:
     """Verify a top-up payment and add credit to account balance."""
-    provider_type = provider or _resolve_payment_provider(db)
+    account_id = _customer_account_uuid(customer)
+    intent = db.scalars(
+        select(TopupIntent).where(TopupIntent.reference == reference)
+    ).first()
+    if not intent:
+        raise ValueError("Payment reference was not issued for this add-funds flow")
+    if intent.account_id != account_id:
+        raise ValueError("Payment reference does not belong to this account")
+
+    if intent.completed_payment_id:
+        completed_payment = db.get(Payment, intent.completed_payment_id)
+        if not completed_payment:
+            raise ValueError("Recorded top-up payment could not be found")
+        if completed_payment.account_id != intent.account_id:
+            raise ValueError("Recorded top-up belongs to a different account")
+        _retry_topup_restore(db, intent.account_id)
+        return _build_topup_result(
+            db,
+            payment=completed_payment,
+            intent=intent,
+            amount=round_money(to_decimal(completed_payment.amount or 0)),
+            reference=reference,
+            already_recorded=True,
+        )
+
+    provider_type = intent.provider_type or provider or _resolve_payment_provider(db)
 
     tx = payment_gateway_adapter.verify(
         db,
         provider_type=provider_type,
         reference=reference,
     )
-    amount_naira = tx.amount
+    amount_naira = round_money(tx.amount)
     external_id = tx.external_id
+    metadata = dict(tx.metadata or {})
+    metadata_intent_id = str(metadata.get("topup_intent_id") or "")
+    if metadata_intent_id and metadata_intent_id != str(intent.id):
+        raise ValueError("Verified payment did not match the original checkout session")
+
+    min_amount_value, max_amount_value = _resolve_topup_limits(db)
+    policy_violations = _build_topup_policy_violations(
+        requested_amount=round_money(intent.requested_amount),
+        actual_amount=amount_naira,
+        min_amount=min_amount_value,
+        max_amount=max_amount_value,
+        expires_at=intent.expires_at,
+    )
 
     # Idempotency check
     existing = db.scalars(
         select(Payment).where(Payment.external_id == external_id)
     ).first()
     if existing:
-        # Payment already recorded — still attempt service restore in case
-        # the prior run failed at the restore step
-        account_id = customer.get("account_id")
-        try:
-            from app.services import collections as collections_service
-
-            collections_service.restore_account_services(db, str(account_id))
-        except Exception as exc:
-            logger.warning(
-                "Best-effort service restore retry failed for account %s: %s",
-                account_id,
-                exc,
+        if existing.account_id != intent.account_id:
+            raise ValueError(
+                "Payment reference is already linked to a different account"
             )
-        return {
-            "payment": existing,
-            "amount": getattr(existing, "amount", amount_naira),
-            "reference": reference,
-            "already_recorded": True,
-        }
+        _finalize_topup_intent(
+            db,
+            intent,
+            payment=existing,
+            external_id=external_id,
+            actual_amount=amount_naira,
+            policy_violations=policy_violations,
+            min_amount=min_amount_value,
+            max_amount=max_amount_value,
+        )
+        _retry_topup_restore(db, intent.account_id)
+        return _build_topup_result(
+            db,
+            payment=existing,
+            intent=intent,
+            amount=round_money(to_decimal(existing.amount or amount_naira)),
+            reference=reference,
+            already_recorded=True,
+        )
 
     # Create unallocated payment (credit to account balance)
     from uuid import UUID as _UUID
 
-    account_id = customer.get("account_id")
     # No explicit allocations — auto-allocation pays outstanding invoices
     # first, then remaining amount goes to account credit. This is
     # intentional: a subscriber who owes money should settle debts before
@@ -248,7 +557,7 @@ def verify_and_record_topup(
     payment = billing_adapter.record_payment(
         db,
         PaymentIntent(
-            account_id=_UUID(str(account_id)),
+            account_id=_UUID(str(intent.account_id)),
             amount=amount_naira,
             currency=tx.currency,
             status=PaymentStatus.succeeded,
@@ -256,6 +565,16 @@ def verify_and_record_topup(
             memo=f"{tx.memo_prefix} prepaid top-up ref: {reference}",
             allocations=[],  # No invoice allocation — goes to account credit
         ),
+    )
+    _finalize_topup_intent(
+        db,
+        intent,
+        payment=payment,
+        external_id=external_id,
+        actual_amount=amount_naira,
+        policy_violations=policy_violations,
+        min_amount=min_amount_value,
+        max_amount=max_amount_value,
     )
 
     # Emit usage_topped_up event (triggers notification + potential service restore)
@@ -266,41 +585,42 @@ def verify_and_record_topup(
         db,
         EventType.usage_topped_up,
         {
-            "account_id": str(account_id),
+            "account_id": str(intent.account_id),
             "amount": str(amount_naira),
             "reference": reference,
         },
-        account_id=account_id,
+        account_id=intent.account_id,
     )
 
     # Attempt to restore suspended prepaid subscriptions
     try:
-        from app.services import collections as collections_service
-
-        restored = collections_service.restore_account_services(db, str(account_id))
+        restored = restore_account_services(db, str(intent.account_id))
         if restored:
             logger.info(
                 "Restored %d subscription(s) after prepaid top-up for account %s",
                 restored,
-                account_id,
+                intent.account_id,
             )
     except Exception as exc:
         logger.warning(
             "Failed to auto-restore after top-up for account %s: %s",
-            account_id,
+            intent.account_id,
             exc,
         )
 
-    return {
-        "payment": payment,
-        "amount": amount_naira,
-        "reference": reference,
-        "already_recorded": False,
-    }
+    return _build_topup_result(
+        db,
+        payment=payment,
+        intent=intent,
+        amount=amount_naira,
+        reference=reference,
+        already_recorded=False,
+    )
 
 
 __all__ = [
     "_resolve_payment_provider",
+    "create_topup_intent",
     "get_payment_page",
     "get_topup_page",
     "verify_and_record_payment",

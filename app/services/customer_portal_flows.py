@@ -17,6 +17,7 @@ from app.services.customer_portal_flow_changes import (
     get_change_plan_error_context,
     get_change_plan_page,
     get_change_requests_page,
+    request_plan_migration,
     submit_change_plan,
 )
 from app.services.customer_portal_flow_common import (
@@ -25,8 +26,11 @@ from app.services.customer_portal_flow_common import (
 )
 from app.services.customer_portal_flow_payments import (
     _resolve_payment_provider,
+    create_topup_intent,
     get_payment_page,
+    get_topup_page,
     verify_and_record_payment,
+    verify_and_record_topup,
 )
 from app.services.customer_portal_flow_services import (
     get_installation_detail,
@@ -60,8 +64,12 @@ __all__ = [
     "get_payment_arrangement_detail",
     "get_invoice_detail",
     "_resolve_payment_provider",
+    "create_topup_intent",
     "get_payment_page",
+    "get_topup_page",
     "verify_and_record_payment",
+    "verify_and_record_topup",
     "_get_offer_recurring_price",
     "apply_instant_plan_change",
+    "request_plan_migration",
 ]

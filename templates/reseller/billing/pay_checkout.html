@@ -1,0 +1,33 @@
+{% extends "layouts/reseller.html" %}
+
+{% block page_header %}
+<h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Confirm payment</h1>
+<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">You will be redirected to {{ intent.provider_type|capitalize }} to complete this {{ intent.currency }} {{ "{:,.2f}".format(intent.requested_amount) }} payment.</p>
+{% endblock %}
+
+{% block content %}
+<div class="mt-6 max-w-xl rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
+  <dl class="space-y-3 text-sm">
+    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Amount</dt><dd class="tabular-nums font-semibold">{{ intent.currency }} {{ "{:,.2f}".format(intent.requested_amount) }}</dd></div>
+    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Reference</dt><dd class="font-mono text-xs">{{ intent.reference }}</dd></div>
+    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Provider</dt><dd>{{ intent.provider_type|capitalize }}</dd></div>
+  </dl>
+
+  <div class="mt-6 flex items-center justify-between">
+    <a href="/reseller/billing" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</a>
+    <button id="pay-button" type="button" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">Continue to {{ intent.provider_type|capitalize }}</button>
+  </div>
+
+  <p class="mt-4 text-xs text-slate-500 dark:text-slate-400">After paying, you will be redirected back to this portal to confirm allocation across your subscribers' open invoices.</p>
+</div>
+
+{# Provider-specific JS bootstrap is added by the reseller portal layout when integrated; for now this provides a server-side fallback link. #}
+<script>
+  // Minimal placeholder: real gateway JS (Paystack/Flutterwave inline) wires up
+  // window.PaystackPop or FlutterwaveCheckout with the public key + reference,
+  // then redirects to /reseller/billing/pay/verify?reference={{ intent.reference }}
+  document.getElementById('pay-button').addEventListener('click', function () {
+    window.location.href = "/reseller/billing/pay/verify?reference={{ intent.reference }}";
+  });
+</script>
+{% endblock %}

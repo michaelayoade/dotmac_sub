@@ -1,0 +1,22 @@
+{% extends "layouts/reseller.html" %}
+
+{% block page_header %}
+<h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Payment recorded</h1>
+{% endblock %}
+
+{% block content %}
+<div class="mt-6 max-w-xl rounded-2xl border border-emerald-200/60 bg-emerald-50/60 p-6 dark:border-emerald-700/60 dark:bg-emerald-900/30">
+  {% if result.already_recorded %}
+  <p class="text-sm text-emerald-700 dark:text-emerald-200">This payment was previously recorded. No duplicate was created.</p>
+  {% else %}
+  <p class="text-sm text-emerald-700 dark:text-emerald-200">Your payment was confirmed and distributed across your subscribers' open invoices.</p>
+  {% endif %}
+  <dl class="mt-4 space-y-2 text-sm">
+    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Amount</dt><dd class="tabular-nums font-semibold">{{ result.currency }} {{ "{:,.2f}".format(result.amount|float) }}</dd></div>
+    <div class="flex justify-between"><dt class="text-slate-500 dark:text-slate-400">Payment ID</dt><dd class="font-mono text-xs">{{ result.payment_id }}</dd></div>
+  </dl>
+  <div class="mt-6">
+    <a href="/reseller/billing" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Back to billing</a>
+  </div>
+</div>
+{% endblock %}

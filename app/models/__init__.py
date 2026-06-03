@@ -1,3 +1,4 @@
+from app.models.admin_whats_new import AdminWhatsNewItem  # noqa: F401
 from app.models.analytics import (  # noqa: F401
     KPIAggregate,
     KPIConfig,
@@ -10,6 +11,7 @@ from app.models.billing import (  # noqa: F401
     BankAccountType,
     BankReconciliationItem,
     BankReconciliationRun,
+    BillingAccount,
     BillingRun,
     BillingRunSchedule,
     BillingRunStatus,
@@ -36,6 +38,7 @@ from app.models.billing import (  # noqa: F401
     PaymentStatus,
     TaxApplication,
     TaxRate,
+    TopupIntent,
 )
 from app.models.catalog import (  # noqa: F401
     AccessCredential,
@@ -112,6 +115,7 @@ from app.models.connector import (  # noqa: F401
     ConnectorType,
 )
 from app.models.contracts import ContractSignature  # noqa: F401
+from app.models.customer_identity import CustomerIdentityIndex  # noqa: F401
 from app.models.domain_settings import (  # noqa: F401
     DomainSetting,
     SettingDomain,

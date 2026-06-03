@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_reseller_billing as web_reseller_billing_service
 from app.services import web_reseller_routes as web_reseller_routes_service
 
 router = APIRouter(prefix="/reseller", tags=["web-reseller"])
@@ -120,3 +121,26 @@ def reseller_account_tickets(
 @router.get("/fiber-map", response_class=HTMLResponse)
 def reseller_fiber_map(request: Request, db: Session = Depends(get_db)):
     return web_reseller_routes_service.reseller_fiber_map(request, db)
+
+
+@router.get("/billing", response_class=HTMLResponse)
+def reseller_billing(request: Request, db: Session = Depends(get_db)):
+    return web_reseller_billing_service.billing_overview(request, db)
+
+
+@router.post("/billing/pay/intent", response_class=HTMLResponse)
+def reseller_billing_pay_intent(
+    request: Request,
+    amount: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.billing_pay_intent(request, db, amount)
+
+
+@router.get("/billing/pay/verify", response_class=HTMLResponse)
+def reseller_billing_pay_verify(
+    request: Request,
+    reference: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.billing_pay_verify(request, db, reference)

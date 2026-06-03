@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
@@ -6,6 +8,11 @@ from app.schemas.billing import (
     BankAccountCreate,
     BankAccountRead,
     BankAccountUpdate,
+    BillingAccountConsolidatedPaymentCreate,
+    BillingAccountCreate,
+    BillingAccountRead,
+    BillingAccountStatement,
+    BillingAccountUpdate,
     BillingRunRead,
     CollectionAccountCreate,
     CollectionAccountRead,
@@ -1276,3 +1283,122 @@ def update_tax_rate(
 )
 def delete_tax_rate(rate_id: str, db: Session = Depends(get_db)):
     billing_service.tax_rates.delete(db, rate_id)
+
+
+# --- Billing accounts (consolidated reseller billing) ---
+
+
+@router.get(
+    "/billing-accounts",
+    response_model=ListResponse[BillingAccountRead],
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:read"))],
+)
+def list_billing_accounts(
+    reseller_id: str | None = None,
+    is_active: bool | None = True,
+    order_by: str = Query(default="created_at"),
+    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    items = billing_service.billing_accounts.list(
+        db,
+        reseller_id=reseller_id,
+        is_active=is_active,
+        order_by=order_by,
+        order_dir=order_dir,
+        limit=limit,
+        offset=offset,
+    )
+    return ListResponse[BillingAccountRead](
+        items=[BillingAccountRead.model_validate(i) for i in items],
+        count=len(items),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/billing-accounts",
+    response_model=BillingAccountRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:write"))],
+)
+def create_billing_account(
+    payload: BillingAccountCreate, db: Session = Depends(get_db)
+):
+    return billing_service.billing_accounts.create(db, payload)
+
+
+@router.get(
+    "/billing-accounts/{billing_account_id}",
+    response_model=BillingAccountRead,
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:read"))],
+)
+def get_billing_account(billing_account_id: str, db: Session = Depends(get_db)):
+    return billing_service.billing_accounts.get(db, billing_account_id)
+
+
+@router.patch(
+    "/billing-accounts/{billing_account_id}",
+    response_model=BillingAccountRead,
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:write"))],
+)
+def update_billing_account(
+    billing_account_id: str,
+    payload: BillingAccountUpdate,
+    db: Session = Depends(get_db),
+):
+    return billing_service.billing_accounts.update(db, billing_account_id, payload)
+
+
+@router.get(
+    "/billing-accounts/{billing_account_id}/statement",
+    response_model=BillingAccountStatement,
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:read"))],
+)
+def get_billing_account_statement(
+    billing_account_id: str, db: Session = Depends(get_db)
+):
+    return billing_service.billing_accounts.statement(db, billing_account_id)
+
+
+@router.post(
+    "/billing-accounts/{billing_account_id}/payments",
+    response_model=PaymentRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:distribute"))],
+)
+def create_billing_account_payment(
+    billing_account_id: str,
+    payload: BillingAccountConsolidatedPaymentCreate,
+    db: Session = Depends(get_db),
+):
+    """Record a verified bulk payment against a billing account.
+
+    If ``allocations`` is empty, the payment is auto-allocated FIFO across the
+    billing account's subscribers' open invoices. Any remainder lands on
+    ``BillingAccount.balance``.
+    """
+    billing_service.billing_accounts.get(db, billing_account_id)
+    payment_create = PaymentCreate(
+        billing_account_id=UUID(billing_account_id),
+        amount=payload.amount,
+        currency=payload.currency,
+        paid_at=payload.paid_at,
+        memo=payload.memo,
+        payment_method_id=payload.payment_method_id,
+        payment_channel_id=payload.payment_channel_id,
+        collection_account_id=payload.collection_account_id,
+        provider_id=payload.provider_id,
+        external_id=payload.external_id,
+        allocations=payload.allocations,
+    )
+    return billing_service.payments.create(db, payment_create)

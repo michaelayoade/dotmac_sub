@@ -1,0 +1,288 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Add Funds - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="topupPage()">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+            <a href="/portal/billing" class="hover:text-[var(--color-brand-600)]">Billing</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-stone-900 dark:text-white">Add Funds</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-stone-900 dark:text-white">Add Funds</h1>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+            Add money to your account online. Any overdue invoices are settled first, and any remainder is kept as account credit.
+        </p>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-[1.5fr,1fr]">
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Choose amount</h2>
+                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
+                        Minimum &#8358;{{ "{:,.2f}".format(min_amount) }}. Maximum &#8358;{{ "{:,.2f}".format(max_amount) }}.
+                    </p>
+                </div>
+                <div class="rounded-xl bg-stone-50 px-4 py-3 text-right dark:bg-stone-900/50">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">Available balance</p>
+                    {% if prepaid_balance is not none %}
+                    <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(prepaid_balance) }}</p>
+                    {% else %}
+                    <p class="mt-1 text-sm font-semibold text-stone-700 dark:text-stone-200">Unavailable right now</p>
+                    <p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Refresh later if you need your latest balance.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="mt-6 grid gap-3 sm:grid-cols-3">
+                {% for amount in preset_amounts %}
+                <button
+                    type="button"
+                    @click="setAmount({{ amount }})"
+                    :class="currentAmount() === {{ amount }} ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300 hover:bg-stone-50 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700/50'"
+                    class="rounded-xl border px-4 py-3 text-left text-sm font-semibold transition-all">
+                    &#8358;{{ "{:,.0f}".format(amount) }}
+                </button>
+                {% endfor %}
+            </div>
+
+            <div class="mt-6 rounded-2xl border border-dashed border-stone-300 bg-stone-50/70 p-5 dark:border-stone-600 dark:bg-stone-900/20">
+                <label for="custom_amount" class="block text-sm font-semibold text-stone-900 dark:text-white">Custom amount</label>
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Enter any amount within the configured limits.</p>
+                <div class="mt-4 flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 dark:border-stone-700 dark:bg-stone-800">
+                    <span class="text-lg font-semibold text-stone-500 dark:text-stone-400">&#8358;</span>
+                    <input
+                        id="custom_amount"
+                        x-model="customAmount"
+                        @input="syncCustomAmount()"
+                        type="number"
+                        inputmode="numeric"
+                        min="{{ min_amount }}"
+                        max="{{ max_amount }}"
+                        step="100"
+                        placeholder="Enter amount"
+                        class="w-full border-0 bg-transparent p-0 text-lg font-semibold text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-0 dark:text-white"
+                    >
+                </div>
+                <p class="mt-3 text-sm" :class="validationError ? 'text-red-600 dark:text-red-400' : 'text-stone-500 dark:text-stone-400'" x-text="validationMessage()"></p>
+            </div>
+
+            <div class="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/40 dark:bg-amber-900/20">
+                <div class="flex gap-3">
+                    <svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0"/>
+                    </svg>
+                    <div>
+                        <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">How funds are applied</p>
+                        <p class="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                            If you have unpaid invoices, this payment will be applied to those first. Any remaining amount stays on your account as credit.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button
+                    @click="startPayment()"
+                    :disabled="processing || !canPay()"
+                    class="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-8 py-3.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-700 hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0">
+                    <svg x-show="!processing" class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+                    </svg>
+                    <svg x-show="processing" class="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span x-text="buttonLabel()"></span>
+                </button>
+                <a href="/portal/billing" class="text-sm font-medium text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200">
+                    Back to billing
+                </a>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Secure checkout</h2>
+                <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">
+                    {% if provider_type == "flutterwave" %}
+                    Payments are processed securely by Flutterwave.
+                    {% else %}
+                    Payments are processed securely by Paystack.
+                    {% endif %}
+                </p>
+                <dl class="mt-5 space-y-4 text-sm">
+                    <div class="flex items-center justify-between">
+                        <dt class="text-stone-500 dark:text-stone-400">Email</dt>
+                        <dd class="font-medium text-stone-900 dark:text-white">{{ customer_email }}</dd>
+                    </div>
+                    <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                        <dt class="text-stone-500 dark:text-stone-400">Reference</dt>
+                        <dd class="font-mono text-stone-900 dark:text-white" x-text="liveReference || 'Generated when payment starts'"></dd>
+                    </div>
+                </dl>
+            </div>
+
+            <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+                <h2 class="text-lg font-semibold text-stone-900 dark:text-white">What happens next</h2>
+                <ol class="mt-4 space-y-3 text-sm text-stone-600 dark:text-stone-300">
+                    <li>1. Pay the amount you choose.</li>
+                    <li>2. We verify the payment when you return from the gateway.</li>
+                    <li>3. Any overdue invoices are paid first, then the remainder becomes account credit.</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function topupPage() {
+    return {
+        processing: false,
+        liveReference: '',
+        customAmount: '',
+        validationError: '',
+        minAmount: {{ min_amount | int }},
+        maxAmount: {{ max_amount | int }},
+        setAmount(amount) {
+            this.customAmount = String(amount);
+            this.validationError = '';
+        },
+        syncCustomAmount() {
+            this.validationError = '';
+        },
+        currentAmount() {
+            const parsed = parseInt(this.customAmount, 10);
+            return Number.isFinite(parsed) ? parsed : null;
+        },
+        canPay() {
+            const amount = this.currentAmount();
+            if (!amount) {
+                return false;
+            }
+            return amount >= this.minAmount && amount <= this.maxAmount;
+        },
+        validationMessage() {
+            if (this.validationError) {
+                return this.validationError;
+            }
+            const amount = this.currentAmount();
+            if (!amount) {
+                return 'Choose a preset amount or enter a custom amount.';
+            }
+            if (amount < this.minAmount) {
+                return 'Amount must be at least ' + this.formatCurrency(this.minAmount) + '.';
+            }
+            if (amount > this.maxAmount) {
+                return 'Amount must not exceed ' + this.formatCurrency(this.maxAmount) + '.';
+            }
+            return 'You are adding ' + this.formatCurrency(amount) + ' to your account.';
+        },
+        formatCurrency(amount) {
+            return new Intl.NumberFormat('en-NG', {
+                style: 'currency',
+                currency: 'NGN',
+                minimumFractionDigits: 2,
+            }).format(amount);
+        },
+        buttonLabel() {
+            if (this.processing) {
+                return 'Processing...';
+            }
+            const amount = this.currentAmount();
+            return amount ? 'Add ' + this.formatCurrency(amount) : 'Enter an amount';
+        },
+        async startPayment() {
+            const amount = this.currentAmount();
+            if (!amount) {
+                this.validationError = 'Enter a valid amount before continuing.';
+                return;
+            }
+            if (amount < this.minAmount) {
+                this.validationError = 'Amount must be at least ' + this.formatCurrency(this.minAmount) + '.';
+                return;
+            }
+            if (amount > this.maxAmount) {
+                this.validationError = 'Amount must not exceed ' + this.formatCurrency(this.maxAmount) + '.';
+                return;
+            }
+
+            this.processing = true;
+            this.validationError = '';
+            const self = this;
+            let intent;
+
+            try {
+                const response = await fetch('/portal/billing/topup/intent', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        amount: amount,
+                        provider: '{{ provider_type }}',
+                    }),
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || 'Unable to start payment.');
+                }
+                intent = payload;
+                this.liveReference = intent.reference || '';
+            } catch (error) {
+                this.processing = false;
+                this.validationError = error.message || 'Unable to start payment.';
+                return;
+            }
+
+            {% if provider_type == "flutterwave" %}
+            FlutterwaveCheckout({
+                public_key: intent.provider_public_key || '{{ provider_public_key }}',
+                tx_ref: intent.reference,
+                amount: amount,
+                currency: intent.currency || 'NGN',
+                customer: {
+                    email: '{{ customer_email }}'
+                },
+                meta: intent.checkout_metadata || {},
+                callback: function(response) {
+                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(response.tx_ref) + '&provider=flutterwave';
+                },
+                onclose: function() {
+                    self.processing = false;
+                },
+                customizations: {
+                    title: 'Add Funds',
+                    description: 'Add funds to your account balance'
+                }
+            });
+            {% else %}
+            const handler = PaystackPop.setup({
+                key: intent.provider_public_key || '{{ provider_public_key or paystack_public_key }}',
+                email: '{{ customer_email }}',
+                amount: amount * 100,
+                currency: intent.currency || 'NGN',
+                ref: intent.reference,
+                metadata: intent.checkout_metadata || {},
+                callback: function(response) {
+                    window.location.href = '/portal/billing/topup/verify?reference=' + encodeURIComponent(response.reference) + '&provider=paystack';
+                },
+                onClose: function() {
+                    self.processing = false;
+                }
+            });
+            handler.openIframe();
+            {% endif %}
+        }
+    };
+}
+</script>
+
+{% if provider_type == "flutterwave" %}
+<script src="https://checkout.flutterwave.com/v3.js"></script>
+{% else %}
+<script src="https://js.paystack.co/v1/inline.js"></script>
+{% endif %}
+{% endblock %}

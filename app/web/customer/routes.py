@@ -6,7 +6,7 @@ from urllib.parse import quote_plus
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
@@ -1309,6 +1309,114 @@ def customer_verify_payment(
                 "invoice": result["invoice"],
                 "amount": result["amount"],
                 "reference": result["reference"],
+                "allocated_total": result.get("allocated_total"),
+                "credit_added": result.get("credit_added"),
+                "available_balance": result.get("available_balance"),
+                "already_recorded": result.get("already_recorded", False),
+                "was_restricted": was_restricted,
+                "service_restored": service_restored,
+                "active_page": "billing",
+            },
+        )
+    except (ValueError, HTTPException) as exc:
+        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
+        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return templates.TemplateResponse(
+            "customer/errors/400.html",
+            {"request": request, "message": str(message)},
+            status_code=status_code,
+        )
+
+
+@router.get("/billing/topup", response_class=HTMLResponse)
+def customer_billing_topup(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show add-funds page for a customer account."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    page_data = customer_portal.get_topup_page(db, customer)
+    return templates.TemplateResponse(
+        "customer/billing/topup.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "active_page": "billing",
+        },
+    )
+
+
+@router.post("/billing/topup/intent")
+def customer_create_topup_intent(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Create a server-owned top-up intent for checkout."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    amount_value = payload.get("amount")
+    if amount_value is None:
+        return JSONResponse({"detail": "amount is required"}, status_code=400)
+    try:
+        result = customer_portal.create_topup_intent(
+            db,
+            customer,
+            amount_value,
+            provider=payload.get("provider"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    return JSONResponse(content=jsonable_encoder(result))
+
+
+@router.get("/billing/topup/verify", response_class=HTMLResponse)
+def customer_verify_topup(
+    request: Request,
+    reference: str = Query(...),
+    provider: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Verify a top-up payment and show allocation results."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    try:
+        subscriber_id = customer.get("subscriber_id")
+        was_restricted = bool(
+            subscriber_id and is_subscriber_restricted(db, subscriber_id)
+        )
+
+        result = customer_portal.verify_and_record_topup(
+            db, customer, reference, provider=provider
+        )
+        service_restored = bool(
+            was_restricted
+            and subscriber_id
+            and not is_subscriber_restricted(db, subscriber_id)
+        )
+        return templates.TemplateResponse(
+            "customer/billing/topup_success.html",
+            {
+                "request": request,
+                "customer": customer,
+                "payment": result["payment"],
+                "amount": result["amount"],
+                "reference": result["reference"],
+                "already_recorded": result["already_recorded"],
+                "allocated_to_invoices": result["allocated_to_invoices"],
+                "allocated_total": result["allocated_total"],
+                "credit_added": result["credit_added"],
+                "available_balance": result["available_balance"],
+                "policy_warnings": result["policy_warnings"],
                 "was_restricted": was_restricted,
                 "service_restored": service_restored,
                 "active_page": "billing",
@@ -1316,7 +1424,7 @@ def customer_verify_payment(
         )
     except ValueError as exc:
         return templates.TemplateResponse(
-            "customer/errors/404.html",
+            "customer/errors/400.html",
             {"request": request, "message": str(exc)},
             status_code=400,
         )

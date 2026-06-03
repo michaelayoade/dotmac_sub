@@ -288,7 +288,8 @@ class BankAccountRead(BankAccountBase):
 
 
 class PaymentBase(BaseModel):
-    account_id: UUID
+    account_id: UUID | None = None
+    billing_account_id: UUID | None = None
     payment_method_id: UUID | None = None
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
@@ -301,6 +302,14 @@ class PaymentBase(BaseModel):
     memo: str | None = None
     is_active: bool = True
 
+    @model_validator(mode="after")
+    def _exactly_one_account_scope(self) -> PaymentBase:
+        if (self.account_id is None) == (self.billing_account_id is None):
+            raise ValueError(
+                "exactly one of account_id or billing_account_id must be set"
+            )
+        return self
+
 
 class PaymentCreate(PaymentBase):
     allocations: list[PaymentAllocationApply] | None = None
@@ -308,6 +317,7 @@ class PaymentCreate(PaymentBase):
 
 class PaymentUpdate(BaseModel):
     account_id: UUID | None = None
+    billing_account_id: UUID | None = None
     payment_method_id: UUID | None = None
     payment_channel_id: UUID | None = None
     collection_account_id: UUID | None = None
@@ -652,3 +662,69 @@ class PaymentChannelAccountRead(PaymentChannelAccountBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class BillingAccountBase(BaseModel):
+    reseller_id: UUID
+    name: str = Field(min_length=1, max_length=160)
+    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    status: str = Field(default="active", max_length=20)
+    is_active: bool = True
+
+
+class BillingAccountCreate(BillingAccountBase):
+    pass
+
+
+class BillingAccountUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    status: str | None = Field(default=None, max_length=20)
+    is_active: bool | None = None
+
+
+class BillingAccountRead(BillingAccountBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    balance: Decimal
+    created_at: datetime
+    updated_at: datetime
+
+
+class BillingAccountConsolidatedPaymentCreate(BaseModel):
+    amount: Decimal = Field(gt=0)
+    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    paid_at: datetime | None = None
+    memo: str | None = None
+    payment_method_id: UUID | None = None
+    payment_channel_id: UUID | None = None
+    collection_account_id: UUID | None = None
+    provider_id: UUID | None = None
+    external_id: str | None = Field(default=None, max_length=120)
+    allocations: list[PaymentAllocationApply] | None = None
+
+
+class BillingAccountStatementSubscriberLine(BaseModel):
+    subscriber_id: UUID
+    subscriber_name: str
+    open_invoice_count: int
+    open_balance: Decimal
+
+
+class BillingAccountStatementPayment(BaseModel):
+    payment_id: UUID
+    amount: Decimal
+    currency: str
+    paid_at: datetime | None
+    memo: str | None
+    allocated_total: Decimal
+    unallocated_amount: Decimal
+
+
+class BillingAccountStatement(BaseModel):
+    billing_account: BillingAccountRead
+    subscribers: list[BillingAccountStatementSubscriberLine]
+    recent_payments: list[BillingAccountStatementPayment]
+    total_outstanding: Decimal
+    unallocated_balance: Decimal

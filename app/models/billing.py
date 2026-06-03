@@ -140,6 +140,45 @@ class CollectionAccountType(enum.Enum):
     other = "other"
 
 
+class BillingAccount(Base):
+    """Consolidated billing parent for a Reseller.
+
+    One BillingAccount per Reseller. Owns consolidated payments that can be
+    allocated across any invoice belonging to a Subscriber under that Reseller.
+    Unallocated payment surplus is held in `balance`.
+    """
+
+    __tablename__ = "billing_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    reseller_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("resellers.id"),
+        nullable=False,
+        unique=True,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="NGN")
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    reseller = relationship("Reseller", back_populates="billing_account")
+    payments = relationship("Payment", back_populates="billing_account")
+
+
 class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = (
@@ -489,8 +528,8 @@ class Payment(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     payment_method_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_methods.id")
@@ -503,6 +542,9 @@ class Payment(Base):
     )
     provider_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payment_providers.id")
+    )
+    billing_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id")
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
@@ -530,10 +572,58 @@ class Payment(Base):
     payment_channel = relationship("PaymentChannel", back_populates="payments")
     collection_account = relationship("CollectionAccount", back_populates="payments")
     provider = relationship("PaymentProvider", back_populates="payments")
+    billing_account = relationship("BillingAccount", back_populates="payments")
     provider_events = relationship("PaymentProviderEvent", back_populates="payment")
     ledger_entries = relationship("LedgerEntry", back_populates="payment")
     dunning_actions = relationship("DunningActionLog", back_populates="payment")
     allocations = relationship("PaymentAllocation", back_populates="payment")
+    topup_intents = relationship("TopupIntent", back_populates="completed_payment")
+
+
+class TopupIntent(Base):
+    __tablename__ = "topup_intents"
+    __table_args__ = (
+        Index("ix_topup_intents_account_id", "account_id"),
+        Index("uq_topup_intents_reference", "reference", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    billing_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id")
+    )
+    completed_payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payments.id")
+    )
+    reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    provider_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="NGN")
+    requested_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00")
+    )
+    actual_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    external_id: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    account = relationship("Subscriber")
+    billing_account = relationship("BillingAccount")
+    completed_payment = relationship("Payment", back_populates="topup_intents")
 
 
 class PaymentAllocation(Base):

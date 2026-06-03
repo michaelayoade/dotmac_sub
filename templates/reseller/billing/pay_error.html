@@ -1,0 +1,14 @@
+{% extends "layouts/reseller.html" %}
+
+{% block page_header %}
+<h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Payment failed</h1>
+{% endblock %}
+
+{% block content %}
+<div class="mt-6 max-w-xl rounded-2xl border border-rose-200/60 bg-rose-50/60 p-6 dark:border-rose-700/60 dark:bg-rose-900/30">
+  <p class="text-sm text-rose-700 dark:text-rose-200">{{ error }}</p>
+  <div class="mt-6">
+    <a href="/reseller/billing" class="rounded-lg bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">Back to billing</a>
+  </div>
+</div>
+{% endblock %}

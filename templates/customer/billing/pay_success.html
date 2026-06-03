@@ -21,7 +21,13 @@
         </div>
 
         <h1 class="mt-6 text-2xl font-bold text-stone-900 dark:text-white">Payment Successful!</h1>
-        <p class="mt-2 text-stone-500 dark:text-stone-400">Your payment has been processed and applied to your invoice.</p>
+        <p class="mt-2 text-stone-500 dark:text-stone-400">
+            {% if credit_added and credit_added > 0 %}
+            Your payment has been processed. The invoice was settled and the remainder was added to your account balance.
+            {% else %}
+            Your payment has been processed and applied to your invoice.
+            {% endif %}
+        </p>
 
         {% if service_restored %}
         <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left dark:border-emerald-800 dark:bg-emerald-900/20">
@@ -48,6 +54,24 @@
                     <span class="text-sm text-stone-500 dark:text-stone-400">Invoice</span>
                     <span class="text-sm font-medium text-stone-900 dark:text-white">#{{ invoice.invoice_number or invoice.id[:8] }}</span>
                 </div>
+                {% if allocated_total is not none %}
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Applied to Invoice</span>
+                    <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(allocated_total) }}</span>
+                </div>
+                {% endif %}
+                {% if credit_added and credit_added > 0 %}
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Added to Account Balance</span>
+                    <span class="text-sm font-semibold text-emerald-600 dark:text-emerald-400">&#8358;{{ "{:,.2f}".format(credit_added) }}</span>
+                </div>
+                {% endif %}
+                {% if available_balance is not none %}
+                <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
+                    <span class="text-sm text-stone-500 dark:text-stone-400">Current Balance</span>
+                    <span class="text-sm font-semibold text-stone-900 dark:text-white">&#8358;{{ "{:,.2f}".format(available_balance) }}</span>
+                </div>
+                {% endif %}
                 <div class="flex items-center justify-between border-t border-stone-100 pt-4 dark:border-stone-700">
                     <span class="text-sm text-stone-500 dark:text-stone-400">Reference</span>
                     <span class="text-sm font-mono text-stone-900 dark:text-white">{{ reference }}</span>

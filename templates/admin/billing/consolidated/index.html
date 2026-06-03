@@ -1,0 +1,68 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, ambient_background %}
+
+{% block title %}Consolidated Billing Accounts - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "teal") }}
+
+<div class="relative space-y-6">
+  {% call(content) page_header(
+      "Consolidated Billing Accounts",
+      subtitle="One billing account per reseller. Records bulk payments and distributes them across child subscriber invoices.",
+      icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>',
+      color="cyan",
+      color2="teal",
+      breadcrumbs=[{"label": "Billing", "href": "/admin/billing"}, {"label": "Consolidated"}]
+  ) %}{% endcall %}
+
+  <form method="get" action="/admin/billing/consolidated-accounts" class="rounded-2xl border border-slate-200/60 bg-white/80 p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+    <label for="reseller_id" class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Filter by reseller</label>
+    <div class="flex gap-3">
+      <select id="reseller_id" name="reseller_id" class="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">
+        <option value="">All resellers</option>
+        {% for r in resellers %}
+          <option value="{{ r.id }}" {% if selected_reseller_id == r.id %}selected{% endif %}>{{ r.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">Apply</button>
+    </div>
+  </form>
+
+  <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+    <table class="w-full text-sm">
+      <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+        <tr>
+          <th class="px-4 py-3">Reseller</th>
+          <th class="px-4 py-3">Account name</th>
+          <th class="px-4 py-3">Currency</th>
+          <th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3 text-right tabular-nums">Unallocated balance</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+        {% for row in rows %}
+        <tr class="hover:bg-slate-50 dark:hover:bg-slate-900/40">
+          <td class="px-4 py-2.5">
+            <a href="/admin/billing/consolidated-accounts/{{ row.id }}" class="font-medium text-cyan-700 hover:underline dark:text-cyan-300">{{ row.reseller_name }}</a>
+            {% if row.is_house %}<span class="ml-2 rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-200">House</span>{% endif %}
+          </td>
+          <td class="px-4 py-2.5 text-slate-700 dark:text-slate-200">{{ row.name }}</td>
+          <td class="px-4 py-2.5 text-slate-600 dark:text-slate-300">{{ row.currency }}</td>
+          <td class="px-4 py-2.5"><span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200">{{ row.status }}</span></td>
+          <td class="px-4 py-2.5 text-right tabular-nums">{{ row.currency }} {{ "{:,.2f}".format(row.balance) }}</td>
+          <td class="px-4 py-2.5 text-right">
+            <a href="/admin/billing/consolidated-accounts/{{ row.id }}" class="text-sm font-medium text-cyan-700 hover:underline dark:text-cyan-300">Open</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="px-4 py-8 text-center text-slate-500 dark:text-slate-400">No billing accounts found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

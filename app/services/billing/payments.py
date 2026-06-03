@@ -297,15 +297,17 @@ def _create_payment_ledger_entry(
 ) -> LedgerEntry | None:
     """Create a ledger entry for a payment or allocation.
 
-    Args:
-        db: Database session
-        payment: The payment record
-        invoice: Optional invoice (for allocation entries)
-        allocation_amount: Amount allocated to the invoice (if different from payment amount)
-
-    Returns:
-        The created ledger entry, or None if entry already exists
+    The ledger entry's ``account_id`` follows the invoice's subscriber when
+    allocating to a specific invoice (correct for consolidated payments, where
+    the payment itself has no single account). Unallocated-credit entries are
+    only written for account-scoped payments; consolidated-payment surplus is
+    held on ``BillingAccount.balance`` instead.
     """
+    if invoice is None and payment.account_id is None:
+        # Consolidated payment remainder goes to BillingAccount.balance,
+        # not to a per-subscriber ledger entry.
+        return None
+
     # Idempotency check: skip if ledger entry already exists for this payment/invoice
     existing_entry = (
         db.query(LedgerEntry)
@@ -322,8 +324,10 @@ def _create_payment_ledger_entry(
     if invoice:
         memo = f"Payment {payment.id} applied to Invoice {invoice.invoice_number or invoice.id}"
 
+    account_id = invoice.account_id if invoice is not None else payment.account_id
+
     entry = LedgerEntry(
-        account_id=payment.account_id,
+        account_id=account_id,
         invoice_id=invoice.id if invoice else None,
         payment_id=payment.id,
         entry_type=LedgerEntryType.credit,
@@ -386,10 +390,23 @@ def _record_unallocated_payment_credit(
     payment: Payment,
     remaining: Decimal,
 ) -> None:
-    """Create the unallocated account-credit ledger entry for payment remainder."""
+    """Record the unallocated payment surplus.
+
+    For an account-scoped payment, this writes a ledger entry against the
+    payer's subscriber account. For a consolidated (billing-account-scoped)
+    payment, the surplus increments ``BillingAccount.balance`` instead.
+    """
     remaining = round_money(to_decimal(remaining))
-    if remaining > 0:
-        _create_payment_ledger_entry(db, payment, None, remaining)
+    if remaining <= 0:
+        return
+    if payment.billing_account_id is not None:
+        from app.services.billing.billing_accounts import BillingAccounts
+
+        BillingAccounts.credit_balance(
+            db, str(payment.billing_account_id), remaining
+        )
+        return
+    _create_payment_ledger_entry(db, payment, None, remaining)
 
 
 def _create_refund_ledger_entry(
@@ -432,10 +449,64 @@ def _primary_allocation_invoice_id(payment: Payment) -> str | None:
     return str(allocation.invoice_id)
 
 
+def _emit_consolidated_payment_events(
+    db: Session, payment: Payment, allocations: list[PaymentAllocation]
+) -> None:
+    """Emit per-subscriber payment.received events plus one aggregate event.
+
+    Per-subscriber events keep existing handlers (notifications, dunning, etc.)
+    working without changes. The aggregate event is for handlers that need the
+    consolidated view.
+    """
+    breakdown: list[dict[str, str]] = []
+    for allocation in allocations:
+        invoice = get_by_id(db, Invoice, allocation.invoice_id)
+        if invoice is None:
+            continue
+        breakdown.append(
+            {
+                "account_id": str(invoice.account_id),
+                "invoice_id": str(invoice.id),
+                "amount": str(allocation.amount),
+            }
+        )
+        emit_event(
+            db,
+            EventType.payment_received,
+            {
+                "payment_id": str(payment.id),
+                "amount": str(allocation.amount),
+                "currency": payment.currency,
+                "invoice_id": str(invoice.id),
+                "status": payment.status.value if payment.status else None,
+                "billing_account_id": str(payment.billing_account_id),
+            },
+            account_id=invoice.account_id,
+            invoice_id=invoice.id,
+        )
+
+    emit_event(
+        db,
+        EventType.billing_account_payment_received,
+        {
+            "payment_id": str(payment.id),
+            "billing_account_id": str(payment.billing_account_id),
+            "total": str(payment.amount) if payment.amount else None,
+            "currency": payment.currency,
+            "status": payment.status.value if payment.status else None,
+            "allocations": breakdown,
+        },
+    )
+
+
 class Payments(ListResponseMixin):
     @staticmethod
     def _auto_allocate(db: Session, payment: Payment) -> list[PaymentAllocation]:
         """Auto-allocate payment to oldest unpaid invoices.
+
+        For account-scoped payments, only the payer's own invoices are
+        candidates. For consolidated (billing-account-scoped) payments,
+        candidates span every subscriber under the billing account's reseller.
 
         Returns:
             List of created allocations
@@ -443,9 +514,8 @@ class Payments(ListResponseMixin):
         remaining = round_money(to_decimal(payment.amount))
         if remaining <= 0:
             return []
-        invoices = (
+        invoice_query = (
             db.query(Invoice)
-            .filter(Invoice.account_id == payment.account_id)
             .filter(Invoice.is_active.is_(True))
             .filter(
                 Invoice.status.in_(
@@ -457,9 +527,26 @@ class Payments(ListResponseMixin):
                 )
             )
             .filter(Invoice.balance_due > 0)
-            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
-            .all()
         )
+        if payment.billing_account_id is not None:
+            from app.models.billing import BillingAccount
+            from app.models.subscriber import Subscriber
+
+            invoice_query = invoice_query.join(
+                Subscriber, Invoice.account_id == Subscriber.id
+            ).filter(
+                Subscriber.reseller_id
+                == db.query(BillingAccount.reseller_id)
+                .filter(BillingAccount.id == payment.billing_account_id)
+                .scalar_subquery()
+            )
+        else:
+            invoice_query = invoice_query.filter(
+                Invoice.account_id == payment.account_id
+            )
+        invoices = invoice_query.order_by(
+            Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc()
+        ).all()
         allocations: list[PaymentAllocation] = []
         for invoice in invoices:
             if invoice.currency != payment.currency:
@@ -502,6 +589,16 @@ class Payments(ListResponseMixin):
         """
         created = []
         remaining = round_money(to_decimal(payment.amount))
+        member_reseller_id: str | None = None
+        if payment.billing_account_id is not None:
+            from app.models.billing import BillingAccount
+
+            ba = get_by_id(db, BillingAccount, payment.billing_account_id)
+            if not ba:
+                raise HTTPException(
+                    status_code=404, detail="Billing account not found"
+                )
+            member_reseller_id = str(ba.reseller_id)
         for allocation in allocations:
             if allocation.amount > remaining:
                 raise HTTPException(
@@ -510,7 +607,19 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if not invoice:
                 raise HTTPException(status_code=404, detail="Invoice not found")
-            if str(invoice.account_id) != str(payment.account_id):
+            if payment.billing_account_id is not None:
+                from app.models.subscriber import Subscriber
+
+                subscriber = get_by_id(db, Subscriber, invoice.account_id)
+                if (
+                    subscriber is None
+                    or str(subscriber.reseller_id) != member_reseller_id
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invoice does not belong to a subscriber of this billing account's reseller",
+                    )
+            elif str(invoice.account_id) != str(payment.account_id):
                 raise HTTPException(
                     status_code=400, detail="Invoice does not belong to account"
                 )
@@ -551,12 +660,19 @@ class Payments(ListResponseMixin):
             )
             if default_status:
                 data["status"] = validate_enum(default_status, PaymentStatus, "status")
-        _validate_payment_linkages(
-            db,
-            str(payload.account_id),
-            None,
-            str(payload.payment_method_id) if payload.payment_method_id else None,
-        )
+        if payload.account_id is not None:
+            _validate_payment_linkages(
+                db,
+                str(payload.account_id),
+                None,
+                str(payload.payment_method_id)
+                if payload.payment_method_id
+                else None,
+            )
+        elif payload.billing_account_id is not None:
+            from app.services.billing.billing_accounts import BillingAccounts
+
+            BillingAccounts.get(db, str(payload.billing_account_id))
         _validate_payment_provider(
             db, str(payload.provider_id) if payload.provider_id else None
         )
@@ -626,21 +742,24 @@ class Payments(ListResponseMixin):
         db.commit()
         db.refresh(payment)
 
-        # Emit payment.received event
-        allocation_invoice_id = _primary_allocation_invoice_id(payment)
-        emit_event(
-            db,
-            EventType.payment_received,
-            {
-                "payment_id": str(payment.id),
-                "amount": str(payment.amount) if payment.amount else None,
-                "currency": payment.currency,
-                "invoice_id": allocation_invoice_id,
-                "status": payment.status.value if payment.status else None,
-            },
-            account_id=payment.account_id,
-            invoice_id=allocation_invoice_id,
-        )
+        # Emit payment.received event(s)
+        if payment.billing_account_id is not None:
+            _emit_consolidated_payment_events(db, payment, allocations)
+        else:
+            allocation_invoice_id = _primary_allocation_invoice_id(payment)
+            emit_event(
+                db,
+                EventType.payment_received,
+                {
+                    "payment_id": str(payment.id),
+                    "amount": str(payment.amount) if payment.amount else None,
+                    "currency": payment.currency,
+                    "invoice_id": allocation_invoice_id,
+                    "status": payment.status.value if payment.status else None,
+                },
+                account_id=payment.account_id,
+                invoice_id=allocation_invoice_id,
+            )
 
         return payment
 

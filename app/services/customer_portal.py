@@ -21,6 +21,7 @@ from app.services.customer_portal_flows import (
     _resolve_next_billing_date,
     _resolve_payment_provider,
     apply_instant_plan_change,
+    create_topup_intent,
     get_arrangement_error_context,
     get_billing_page,
     get_change_plan_error_context,
@@ -36,10 +37,13 @@ from app.services.customer_portal_flows import (
     get_service_order_detail,
     get_service_orders_page,
     get_services_page,
+    get_topup_page,
     get_usage_page,
+    request_plan_migration,
     submit_change_plan,
     submit_payment_arrangement,
     verify_and_record_payment,
+    verify_and_record_topup,
 )
 from app.services.customer_portal_notifications import get_notifications_page
 from app.services.customer_portal_session import (
@@ -107,8 +111,12 @@ __all__ = [
     "get_invoice_detail",
     "get_notifications_page",
     "_resolve_payment_provider",
+    "create_topup_intent",
     "get_payment_page",
+    "get_topup_page",
     "verify_and_record_payment",
+    "verify_and_record_topup",
     "_get_offer_recurring_price",
     "apply_instant_plan_change",
+    "request_plan_migration",
 ]

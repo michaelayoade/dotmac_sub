@@ -13,6 +13,7 @@ from app.web.admin.billing_channels import router as billing_channels_router
 from app.web.admin.billing_collection_accounts import (
     router as billing_collection_accounts_router,
 )
+from app.web.admin.billing_consolidated import router as billing_consolidated_router
 from app.web.admin.billing_credits import router as billing_credits_router
 from app.web.admin.billing_dunning import router as billing_dunning_router
 from app.web.admin.billing_invoice_actions import (
@@ -164,6 +165,10 @@ router.include_router(
 )
 router.include_router(
     billing_accounts_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
+    billing_consolidated_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(
