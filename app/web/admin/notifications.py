@@ -47,6 +47,31 @@ def notifications_menu(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/setup",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
+def notification_bulk_setup(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Show channel readiness and template setup for bulk notifications."""
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/notifications/setup.html",
+        {
+            "request": request,
+            **web_notifications_service.bulk_notification_setup_context(db),
+            "active_page": "notification-setup",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.get(
     "/templates",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:read"))],

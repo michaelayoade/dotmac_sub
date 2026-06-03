@@ -1,0 +1,81 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Bulk Notification Setup - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/system" class="hover:text-primary-600">System</a>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <span class="text-slate-900 dark:text-white">Bulk Notification Setup</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Bulk Notification Setup</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review channel readiness, manage templates, and confirm which channels are ready for customer-list mass sends.</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/admin/notifications/templates" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                Templates
+            </a>
+            <a href="/admin/notifications/history" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>
+                History
+            </a>
+        </div>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-3">
+        {% for channel in bulk_notification_channels %}
+        <div class="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-gradient-to-br from-amber-400/10 to-slate-400/10 blur-2xl"></div>
+            <div class="relative">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">{{ channel.label }}</p>
+                        <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ channel.template_count }}</p>
+                        <p class="text-sm text-slate-500 dark:text-slate-400">Active templates</p>
+                    </div>
+                    <span class="rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide {% if channel.ready %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% endif %}">
+                        {{ 'Ready' if channel.ready else 'Needs setup' }}
+                    </span>
+                </div>
+                <p class="mt-4 text-sm text-slate-600 dark:text-slate-300">{{ channel.message }}</p>
+                <div class="mt-5 flex flex-wrap gap-2">
+                    <a href="/admin/notifications/templates?channel={{ channel.id }}" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                        View templates
+                    </a>
+                    {% if channel.settings_url %}
+                    <a href="{{ channel.settings_url }}" class="inline-flex items-center rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white">
+                        Open settings
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="grid gap-4 xl:grid-cols-[1.4fr,1fr]">
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">How It Works</h2>
+            <div class="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
+                <p>Bulk sends are launched directly from the customer list. If rows are selected, only those customers are targeted. If nothing is selected, the current filtered result set becomes the target.</p>
+                <p>Operators choose a channel and a template in the customer-page modal. The system resolves the contact details for each customer, renders the template per customer, and queues notifications into the standard notification queue.</p>
+                <p>Email is the lowest-friction channel if SMTP sender profiles are already configured. SMS and WhatsApp depend on provider configuration before those sends will work in production.</p>
+            </div>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Operator Checklist</h2>
+            <ul class="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
+                <li>1. Confirm the channel shows as ready.</li>
+                <li>2. Ensure at least one active template exists for that channel.</li>
+                <li>3. Filter or select customers from the customer page.</li>
+                <li>4. Use `Actions` → `Send message` and choose the template.</li>
+                <li>5. Review queue and delivery history after the send is queued.</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

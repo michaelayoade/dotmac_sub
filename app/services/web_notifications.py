@@ -16,8 +16,11 @@ from app.schemas.notification import (
     NotificationTemplateCreate,
     NotificationTemplateUpdate,
 )
+from app.services import email as email_service
 from app.services import notification as notification_service
 from app.services import notification_template_renderer as template_renderer
+from app.services import sms as sms_service
+from app.services.integrations.connectors import whatsapp as whatsapp_connector
 
 
 def channels() -> list[str]:
@@ -227,6 +230,113 @@ def send_template_test(
         return f"Test WhatsApp message sent to {test_recipient}"
 
     return f"Test notification queued for {template.channel.value}"
+
+
+def _email_channel_ready(db: Session) -> tuple[bool, str]:
+    senders = email_service.list_smtp_senders(db)
+    if senders:
+        return True, "SMTP sender profiles configured"
+    return False, "No SMTP sender profile configured"
+
+
+def _sms_channel_ready(db: Session) -> tuple[bool, str]:
+    enabled = sms_service._get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
+    if enabled.strip().lower() in {"false", "0", "no", "disabled"}:
+        return False, "SMS is disabled"
+
+    provider = sms_service._get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook") or "webhook"
+    if provider == "twilio":
+        account_sid = sms_service._get_setting(db, "sms_api_key", "SMS_API_KEY")
+        auth_token = sms_service._get_setting(db, "sms_api_secret", "SMS_API_SECRET")
+        from_number = sms_service._get_setting(
+            db, "sms_from_number", "SMS_FROM_NUMBER"
+        )
+        if account_sid and auth_token and from_number:
+            return True, "Twilio credentials configured"
+        return False, "Twilio credentials are incomplete"
+    if provider == "africastalking":
+        api_key = sms_service._get_setting(db, "sms_api_key", "SMS_API_KEY")
+        if api_key:
+            return True, "Africa's Talking API key configured"
+        return False, "Africa's Talking API key is missing"
+    if provider == "webhook":
+        webhook_url = sms_service._get_setting(
+            db, "sms_webhook_url", "SMS_WEBHOOK_URL"
+        )
+        if webhook_url:
+            return True, "Webhook endpoint configured"
+        return False, "Webhook URL is missing"
+    return False, "SMS provider is not recognized"
+
+
+def _whatsapp_channel_ready(db: Session) -> tuple[bool, str]:
+    config = whatsapp_connector.load_whatsapp_config(db)
+    if not str(config.get("api_key") or "").strip():
+        return False, "WhatsApp API key is missing"
+    if not str(config.get("phone_number") or "").strip():
+        return False, "WhatsApp phone number is missing"
+    provider = str(config.get("provider") or "").strip() or "provider"
+    return True, f"{provider.replace('_', ' ').title()} is configured"
+
+
+def bulk_notification_setup_context(db: Session) -> dict[str, object]:
+    template_list = notification_service.templates.list(
+        db=db,
+        channel=None,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+    channel_checks = {
+        NotificationChannel.email.value: _email_channel_ready(db),
+        NotificationChannel.sms.value: _sms_channel_ready(db),
+        NotificationChannel.whatsapp.value: _whatsapp_channel_ready(db),
+    }
+    channels_state = [
+        {
+            "id": channel.value,
+            "label": channel.value.capitalize(),
+            "enabled": channel.value in {
+                NotificationChannel.email.value,
+                NotificationChannel.sms.value,
+                NotificationChannel.whatsapp.value,
+            },
+            "ready": channel_checks.get(channel.value, (False, "Unsupported"))[0],
+            "message": channel_checks.get(channel.value, (False, "Unsupported"))[1],
+            "template_count": sum(
+                1 for template in template_list if template.channel == channel
+            ),
+            "settings_url": (
+                "/admin/system/email"
+                if channel == NotificationChannel.email
+                else "/admin/integrations/whatsapp/config"
+                if channel == NotificationChannel.whatsapp
+                else None
+            ),
+        }
+        for channel in (
+            NotificationChannel.email,
+            NotificationChannel.sms,
+            NotificationChannel.whatsapp,
+        )
+    ]
+    templates_state = [
+        {
+            "id": str(template.id),
+            "name": template.name,
+            "code": template.code,
+            "channel": template.channel.value,
+            "subject": template.subject or "",
+            "is_active": bool(template.is_active),
+        }
+        for template in template_list
+    ]
+    return {
+        "bulk_notification_channels": channels_state,
+        "bulk_notification_templates": templates_state,
+    }
 
 
 def queue_context(
