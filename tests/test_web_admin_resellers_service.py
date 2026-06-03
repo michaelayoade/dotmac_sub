@@ -145,3 +145,78 @@ def test_link_existing_subscriber_to_reseller_links_customer(db_session, subscri
     assert linked is True
     db_session.refresh(subscriber)
     assert subscriber.reseller_id == reseller.id
+
+
+def test_create_and_link_reseller_user_rejects_existing_email_case_insensitive(
+    db_session, subscriber
+):
+    reseller = _create_reseller(db_session, "Reseller Existing Email")
+    subscriber.email = "existing-user@example.com"
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Email already exists"):
+        web_admin_resellers_service.create_and_link_reseller_user(
+            db_session,
+            reseller_id=str(reseller.id),
+            first_name="New",
+            last_name="Reseller",
+            email=" Existing-User@Example.com ",
+            username="new-reseller-user",
+            password="Secret123!",
+        )
+
+
+def test_create_and_link_reseller_user_rejects_existing_username_case_insensitive(
+    db_session, subscriber
+):
+    reseller = _create_reseller(db_session, "Reseller Existing Username")
+    credential = UserCredential(
+        subscriber_id=subscriber.id,
+        provider=AuthProvider.local,
+        username="existing-login",
+        password_hash="hash",
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Username already exists"):
+        web_admin_resellers_service.create_and_link_reseller_user(
+            db_session,
+            reseller_id=str(reseller.id),
+            first_name="New",
+            last_name="Reseller",
+            email="new-reseller-user@example.com",
+            username=" Existing-Login ",
+            password="Secret123!",
+        )
+
+
+def test_create_subscriber_credential_does_not_leave_orphan_on_auth_failure(
+    db_session, monkeypatch
+):
+    def _raise_auth_failure(*_args, **_kwargs):
+        raise RuntimeError("credential write failed")
+
+    monkeypatch.setattr(
+        web_admin_resellers_service.auth_service.user_credentials,
+        "create",
+        _raise_auth_failure,
+    )
+
+    with pytest.raises(RuntimeError, match="credential write failed"):
+        web_admin_resellers_service.create_subscriber_credential(
+            db_session,
+            first_name="Auth",
+            last_name="Failure",
+            email="auth-failure@example.com",
+            username="auth-failure",
+            password="Secret123!",
+        )
+
+    remaining = (
+        db_session.query(Subscriber)
+        .filter(Subscriber.email == "auth-failure@example.com")
+        .all()
+    )
+    assert remaining == []

@@ -14,13 +14,13 @@ from pydantic import ValidationError
 from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.auth import AuthProvider
+from app.models.auth import AuthProvider, UserCredential
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.offer_availability import OfferResellerAvailability
 from app.models.rbac import Role
 from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
-from app.models.support import Ticket, TicketStatus
+from app.models.support import Ticket
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.rbac import SubscriberRoleCreate
 from app.schemas.subscriber import ResellerCreate, ResellerUpdate, SubscriberCreate
@@ -34,11 +34,44 @@ from app.services.common import coerce_uuid
 logger = logging.getLogger(__name__)
 
 RESOLVED_TICKET_STATUSES = {
-    TicketStatus.resolved,
-    TicketStatus.closed,
-    TicketStatus.canceled,
-    TicketStatus.merged,
+    "resolved",
+    "closed",
+    "canceled",
+    "merged",
 }
+
+
+def _normalize_identity(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _ensure_reseller_user_identity_available(
+    db: Session,
+    *,
+    email: str,
+    username: str | None,
+) -> None:
+    normalized_email = _normalize_identity(email)
+    normalized_username = _normalize_identity(username or email)
+
+    existing_subscriber = (
+        db.query(Subscriber)
+        .filter(func.lower(Subscriber.email) == normalized_email)
+        .first()
+    )
+    if existing_subscriber:
+        raise ValueError("Email already exists. Use a different email address.")
+
+    existing_credential = (
+        db.query(UserCredential)
+        .filter(UserCredential.provider == AuthProvider.local)
+        .filter(func.lower(UserCredential.username) == normalized_username)
+        .first()
+    )
+    if existing_credential:
+        raise ValueError(
+            "Username already exists. This email is already used by another login."
+        )
 
 
 def _roles_for_form(db: Session) -> list[Role]:
@@ -249,6 +282,11 @@ def create_subscriber_credential(
     require_password_change: bool = True,
 ) -> Subscriber:
     """Create a subscriber with local auth credentials."""
+    _ensure_reseller_user_identity_available(
+        db,
+        email=email,
+        username=username,
+    )
     subscriber = cast(
         Subscriber,
         subscriber_service.subscribers.create(
@@ -270,7 +308,16 @@ def create_subscriber_credential(
         password_updated_at=datetime.now(UTC),
         is_active=True,
     )
-    auth_service.user_credentials.create(db=db, payload=credential_payload)
+    subscriber_id = subscriber.id
+    try:
+        auth_service.user_credentials.create(db=db, payload=credential_payload)
+    except Exception:
+        db.rollback()
+        orphaned = db.get(Subscriber, subscriber_id)
+        if orphaned is not None:
+            db.delete(orphaned)
+            db.commit()
+        raise
     return subscriber
 
 
