@@ -34,6 +34,59 @@ GENIEACS_IDENTITY_RECOVERY_EVENTS = Counter(
     ["event", "result"],
 )
 
+APP_CACHE_LOOKUPS = Counter(
+    "app_cache_lookups_total",
+    "Application cache lookups",
+    ["cache", "result"],
+)
+
+APP_CACHE_REFRESH_DURATION = Histogram(
+    "app_cache_refresh_duration_seconds",
+    "Application cache refresh duration",
+    ["cache", "status"],
+)
+
+APP_CACHE_FALLBACKS = Counter(
+    "app_cache_fallbacks_total",
+    "Application cache fallbacks to synchronous computation or live fetch",
+    ["cache", "reason"],
+)
+
+CUSTOMER_IDENTITY_RESOLUTION_TOTAL = Counter(
+    "customer_identity_resolution_total",
+    "Inbound customer identity resolution outcomes",
+    ["result", "identity_type", "match_source", "confidence", "inbound_channel"],
+)
+
 
 def observe_job(task_name: str, status: str, duration: float) -> None:
     JOB_DURATION.labels(task=task_name, status=status).observe(duration)
+
+
+def record_cache_lookup(cache_name: str, result: str) -> None:
+    APP_CACHE_LOOKUPS.labels(cache=cache_name, result=result).inc()
+
+
+def observe_cache_refresh(cache_name: str, status: str, duration: float) -> None:
+    APP_CACHE_REFRESH_DURATION.labels(cache=cache_name, status=status).observe(duration)
+
+
+def record_cache_fallback(cache_name: str, reason: str) -> None:
+    APP_CACHE_FALLBACKS.labels(cache=cache_name, reason=reason).inc()
+
+
+def record_customer_identity_resolution(
+    *,
+    result: str | None,
+    identity_type: str | None,
+    match_source: str | None,
+    confidence: str | None,
+    inbound_channel: str | None,
+) -> None:
+    CUSTOMER_IDENTITY_RESOLUTION_TOTAL.labels(
+        result=str(result or "unknown"),
+        identity_type=str(identity_type or "unknown"),
+        match_source=str(match_source or "none"),
+        confidence=str(confidence or "NONE"),
+        inbound_channel=str(inbound_channel or "unknown"),
+    ).inc()
