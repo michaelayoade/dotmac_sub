@@ -1,6 +1,7 @@
 """Service for managing payment arrangements."""
 
 import logging
+from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
@@ -21,6 +22,20 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
+def _add_month_clamped(current_date: date, anchor_day: int | None = None) -> date:
+    """Advance one calendar month, clamping to the month's last valid day."""
+    if current_date.month == 12:
+        next_year = current_date.year + 1
+        next_month = 1
+    else:
+        next_year = current_date.year
+        next_month = current_date.month + 1
+
+    target_day = anchor_day or current_date.day
+    last_day = monthrange(next_year, next_month)[1]
+    return date(next_year, next_month, min(target_day, last_day))
+
+
 def _calculate_end_date(
     start_date: date, frequency: PaymentFrequency, installments: int
 ) -> date:
@@ -30,28 +45,22 @@ def _calculate_end_date(
     elif frequency == PaymentFrequency.biweekly:
         return start_date + timedelta(weeks=(installments - 1) * 2)
     else:  # monthly
-        # Add months
         end_date = start_date
         for _ in range(installments - 1):
-            # Move to next month
-            if end_date.month == 12:
-                end_date = end_date.replace(year=end_date.year + 1, month=1)
-            else:
-                end_date = end_date.replace(month=end_date.month + 1)
+            end_date = _add_month_clamped(end_date, anchor_day=start_date.day)
         return end_date
 
 
-def _calculate_next_due_date(current_date: date, frequency: PaymentFrequency) -> date:
+def _calculate_next_due_date(
+    current_date: date, frequency: PaymentFrequency, anchor_day: int | None = None
+) -> date:
     """Calculate the next due date based on frequency."""
     if frequency == PaymentFrequency.weekly:
         return current_date + timedelta(weeks=1)
     elif frequency == PaymentFrequency.biweekly:
         return current_date + timedelta(weeks=2)
     else:  # monthly
-        if current_date.month == 12:
-            return current_date.replace(year=current_date.year + 1, month=1)
-        else:
-            return current_date.replace(month=current_date.month + 1)
+        return _add_month_clamped(current_date, anchor_day=anchor_day)
 
 
 class PaymentArrangements(ListResponseMixin):
@@ -60,26 +69,26 @@ class PaymentArrangements(ListResponseMixin):
     @staticmethod
     def create(
         db: Session,
-        account_id: str,
+        subscriber_id: str,
         total_amount: Decimal,
         installments: int,
         frequency: str,
         start_date: date,
         invoice_id: str | None = None,
-        requested_by_person_id: str | None = None,
+        requested_by_subscriber_id: str | None = None,
         notes: str | None = None,
     ) -> PaymentArrangement:
         """Create a new payment arrangement with installments.
 
         Args:
             db: Database session
-            account_id: The account requesting the arrangement
+            subscriber_id: The subscriber requesting the arrangement
             total_amount: Total amount to be paid
             installments: Number of installments
             frequency: Payment frequency (weekly, biweekly, monthly)
             start_date: First payment date
             invoice_id: Optional specific invoice
-            requested_by_person_id: Person making the request
+            requested_by_subscriber_id: Subscriber making the request
             notes: Optional notes
 
         Returns:
@@ -88,9 +97,9 @@ class PaymentArrangements(ListResponseMixin):
         # Validate account
         from app.models.subscriber import Subscriber
 
-        account = db.get(Subscriber, coerce_uuid(account_id))
-        if not account:
-            raise HTTPException(status_code=404, detail="Account not found")
+        subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
 
         # Validate frequency
         try:
@@ -108,9 +117,9 @@ class PaymentArrangements(ListResponseMixin):
             invoice = db.get(Invoice, coerce_uuid(invoice_id))
             if not invoice:
                 raise HTTPException(status_code=404, detail="Invoice not found")
-            if str(invoice.account_id) != account_id:
+            if str(invoice.account_id) != subscriber_id:
                 raise HTTPException(
-                    status_code=400, detail="Invoice does not belong to this account"
+                    status_code=400, detail="Invoice does not belong to this subscriber"
                 )
 
         # Validate installments
@@ -121,6 +130,10 @@ class PaymentArrangements(ListResponseMixin):
         if installments > 24:
             raise HTTPException(
                 status_code=400, detail="Maximum 24 installments allowed"
+            )
+        if total_amount <= 0:
+            raise HTTPException(
+                status_code=400, detail="Arrangement amount must be greater than 0"
             )
 
         # Calculate installment amount
@@ -136,7 +149,7 @@ class PaymentArrangements(ListResponseMixin):
         end_date = _calculate_end_date(start_date, freq, installments)
 
         arrangement = PaymentArrangement(
-            account_id=coerce_uuid(account_id),
+            subscriber_id=coerce_uuid(subscriber_id),
             invoice_id=coerce_uuid(invoice_id) if invoice_id else None,
             total_amount=total_amount,
             installment_amount=installment_amount,
@@ -147,8 +160,8 @@ class PaymentArrangements(ListResponseMixin):
             end_date=end_date,
             next_due_date=start_date,
             status=ArrangementStatus.pending,
-            requested_by_person_id=coerce_uuid(requested_by_person_id)
-            if requested_by_person_id
+            requested_by_subscriber_id=coerce_uuid(requested_by_subscriber_id)
+            if requested_by_subscriber_id
             else None,
             notes=notes,
         )
@@ -172,13 +185,15 @@ class PaymentArrangements(ListResponseMixin):
             )
             db.add(installment)
 
-            current_date = _calculate_next_due_date(current_date, freq)
+            current_date = _calculate_next_due_date(
+                current_date, freq, anchor_day=start_date.day
+            )
 
         db.commit()
         db.refresh(arrangement)
 
         logger.info(
-            f"Created payment arrangement {arrangement.id} for account {account_id}, "
+            f"Created payment arrangement {arrangement.id} for subscriber {subscriber_id}, "
             f"{installments} installments of {installment_amount}"
         )
         return arrangement

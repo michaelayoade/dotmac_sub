@@ -1540,13 +1540,38 @@ def customer_submit_change_plan(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     try:
-        customer_portal.apply_instant_plan_change(
+        result = customer_portal.apply_instant_plan_change(
             db=db,
             customer=customer,
             subscription_id=str(subscription_id),
             offer_id=offer_id,
             notes=notes,
         )
+        if not result.get("success", False):
+            error_ctx = customer_portal.get_change_plan_error_context(
+                db,
+                str(subscription_id),
+                selected_offer_id=str(result.get("selected_offer_id") or offer_id),
+                insufficient_balance={
+                    "required_amount": result.get("required_amount"),
+                    "current_balance": result.get("current_balance"),
+                    "shortfall": result.get("shortfall"),
+                    "quote": result.get("plan_change_quote"),
+                },
+            )
+            return templates.TemplateResponse(
+                "customer/services/change_plan.html",
+                {
+                    "request": request,
+                    "customer": customer,
+                    **error_ctx,
+                    "error": (
+                        "You need additional wallet balance before this upgrade can be applied."
+                    ),
+                    "active_page": "services",
+                },
+                status_code=400,
+            )
         return RedirectResponse(
             url=f"/portal/services/{subscription_id}?plan_changed=true",
             status_code=303,
@@ -1573,6 +1598,61 @@ def customer_submit_change_plan(
             "Plan change error for %s", subscription_id
         )
         raise
+
+
+@router.post(
+    "/services/{subscription_id}/migration-request",
+    response_class=HTMLResponse,
+)
+def customer_request_plan_migration(
+    request: Request,
+    subscription_id: UUID,
+    target_family: str = Form(...),
+    requested_offer_id: str | None = Form(None),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Create a support ticket for a cross-family plan migration."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    try:
+        result = customer_portal.request_plan_migration(
+            db=db,
+            customer=customer,
+            subscription_id=str(subscription_id),
+            target_family=target_family,
+            requested_offer_id=requested_offer_id,
+            notes=notes,
+        )
+        ticket = result.get("ticket") or {}
+        ticket_id = str(ticket.get("id") or "")
+        if ticket_id:
+            emit_customer_event(
+                db,
+                "customer_ticket_created",
+                {
+                    "ticket_id": ticket_id,
+                    "subscriber_id": str(customer.get("subscriber_id") or ""),
+                },
+            )
+            return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
+        return RedirectResponse(url="/portal/support", status_code=303)
+    except ValueError as exc:
+        error_ctx = customer_portal.get_change_plan_error_context(
+            db, str(subscription_id)
+        )
+        return templates.TemplateResponse(
+            "customer/services/change_plan.html",
+            {
+                "request": request,
+                "customer": customer,
+                **error_ctx,
+                "error": str(exc),
+                "active_page": "services",
+            },
+            status_code=400,
+        )
 
 
 # =============================================================================
@@ -1873,26 +1953,23 @@ def customer_submit_payment_arrangement(
             url="/portal/billing/arrangements?submitted=true",
             status_code=303,
         )
-    except ValueError as exc:
+    except (ValueError, HTTPException) as exc:
         account_id = customer.get("account_id")
         account_id_str = str(account_id) if account_id else None
         error_ctx = customer_portal.get_arrangement_error_context(db, account_id_str)
+        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
+        message = exc.detail if isinstance(exc, HTTPException) else str(exc)
         return templates.TemplateResponse(
             "customer/billing/arrangement_form.html",
             {
                 "request": request,
                 "customer": customer,
                 **error_ctx,
-                "error": str(exc),
+                "error": str(message),
                 "active_page": "billing",
             },
-            status_code=400,
+            status_code=status_code,
         )
-    except Exception:
-        import logging as _logging
-
-        _logging.getLogger(__name__).exception("Payment arrangement error")
-        raise
 
 
 @router.post(

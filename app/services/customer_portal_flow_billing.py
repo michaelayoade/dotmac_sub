@@ -12,6 +12,7 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
+from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
 from app.services.customer_portal_context import (
@@ -45,6 +46,7 @@ def get_billing_page(
         "per_page": per_page,
         "total": 0,
         "total_pages": 1,
+        "prepaid_balance": None,
     }
     if not account_id_str:
         return empty_result
@@ -70,6 +72,15 @@ def get_billing_page(
             Invoice.status == _validate_enum(status, InvoiceStatus, "status")
         )
     total = db.scalar(stmt) or 0
+    prepaid_balance: Decimal | None = None
+    try:
+        prepaid_balance = get_available_balance(db, account_id_str)
+    except Exception:
+        logger.warning(
+            "Failed to resolve prepaid balance for billing page account %s",
+            account_id_str,
+            exc_info=True,
+        )
 
     return {
         "invoices": invoices,
@@ -78,6 +89,7 @@ def get_billing_page(
         "per_page": per_page,
         "total": total,
         "total_pages": _compute_total_pages(total, per_page),
+        "prepaid_balance": prepaid_balance,
     }
 
 
@@ -156,8 +168,19 @@ def get_new_arrangement_page(
         outstanding_balance = balance_data["outstanding_balance"]
 
     selected_invoice = None
+    allowed_account_ids = get_allowed_account_ids(customer, db)
     if invoice_id:
-        selected_invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+        try:
+            candidate_invoice = billing_service.invoices.get(
+                db=db, invoice_id=invoice_id
+            )
+        except Exception:
+            candidate_invoice = None
+        if candidate_invoice and (
+            not allowed_account_ids
+            or str(getattr(candidate_invoice, "account_id", "")) in allowed_account_ids
+        ):
+            selected_invoice = candidate_invoice
 
     return {
         "invoices": invoices,
@@ -192,13 +215,13 @@ def submit_payment_arrangement(
 
     arrangement_service.payment_arrangements.create(
         db=db,
-        account_id=account_id_str,
+        subscriber_id=account_id_str,
         total_amount=amount,
         installments=installments,
         frequency=frequency,
         start_date=start,
         invoice_id=invoice_id if invoice_id else None,
-        requested_by_person_id=str(subscriber.id) if subscriber else None,
+        requested_by_subscriber_id=str(subscriber.id) if subscriber else None,
         notes=notes,
     )
     return {"success": True}

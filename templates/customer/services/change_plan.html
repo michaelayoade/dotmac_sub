@@ -26,6 +26,39 @@
     </div>
     {% endif %}
 
+    {% if insufficient_balance %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-900/20">
+        <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Additional Wallet Balance Required</h2>
+        {% set quote = insufficient_balance.quote or {} %}
+        <p class="mt-2 text-sm text-amber-800 dark:text-amber-200">
+            Your current plan has {{ current_offer_summary.currency }} {{ '{:,.2f}'.format((quote.current_remaining_value if quote else 0) or 0) }} remaining value.
+            To upgrade today, an additional {{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.shortfall or 0) or 0) }} is required.
+        </p>
+        <div class="mt-4 grid gap-3 sm:grid-cols-3">
+            <div class="rounded-lg bg-white/80 px-4 py-3 dark:bg-slate-900/30">
+                <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Required</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.required_amount or 0) or 0) }}</p>
+            </div>
+            <div class="rounded-lg bg-white/80 px-4 py-3 dark:bg-slate-900/30">
+                <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Wallet Balance</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.current_balance or 0) or 0) }}</p>
+            </div>
+            <div class="rounded-lg bg-white/80 px-4 py-3 dark:bg-slate-900/30">
+                <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Shortfall</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.shortfall or 0) or 0) }}</p>
+            </div>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-3">
+            <a href="/portal/billing/topup" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
+                Top Up Wallet
+            </a>
+            <a href="/portal/billing" class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-900/30">
+                View Billing
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Current Plan -->
     {% if current_offer %}
     <div class="rounded-xl border border-primary-200 bg-primary-50 p-6 shadow-sm dark:border-primary-900 dark:bg-primary-900/20">
@@ -58,7 +91,8 @@
                 {% set offer_summary = available_offer_summaries[offer.id | string] %}
                 <label class="relative cursor-pointer">
                     <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required
-                           @change="selectOffer('{{ offer.name }}', {{ offer_summary.amount }}, '{{ offer_summary.currency }}', '{{ offer_summary.period_label }}')">
+                           {% if selected_offer_id and selected_offer_id == offer.id|string %}checked{% endif %}
+                           @change="selectOffer('{{ offer.id }}', '{{ offer.name }}', {{ offer_summary.amount }}, '{{ offer_summary.currency }}', '{{ offer_summary.period_label }}')">
                     <div class="rounded-xl border-2 border-slate-200 bg-white p-6 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600 dark:peer-checked:border-primary-400">
                         <div class="flex items-start justify-between">
                             <div>
@@ -96,9 +130,55 @@
             </div>
             {% if selectable_offers.count == 0 %}
             <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-                No other plans are currently available for this subscription. Please contact support if you need help.
+                No instant self-service plan changes are currently available for this subscription. Use the migration request option below if you need a different plan family.
             </div>
             {% endif %}
+        </div>
+
+        <div x-show="selectedOfferId && changeQuote" x-cloak class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Upgrade Summary</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        Review the remaining value on your current plan and the prorated amount required for the selected plan.
+                    </p>
+                </div>
+                <div class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-700 dark:text-slate-200" x-show="changeQuote && changeQuote.is_upgrade">
+                    Prepaid Upgrade
+                </div>
+            </div>
+            <div class="mt-5 grid gap-3 md:grid-cols-4">
+                <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Remaining Value</p>
+                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.current_remaining_value)"></span></p>
+                </div>
+                <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Required Today</p>
+                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.required_amount)"></span></p>
+                </div>
+                <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Wallet Balance</p>
+                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.current_balance)"></span></p>
+                </div>
+                <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Shortfall</p>
+                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.shortfall)"></span></p>
+                </div>
+            </div>
+            <p class="mt-4 text-sm text-slate-600 dark:text-slate-300" x-show="changeQuote">
+                Your current plan has <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span> remaining value.
+                <span x-show="changeQuote.required_amount > 0">
+                    To upgrade today, an additional <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span> is required.
+                </span>
+                <span x-show="changeQuote.required_amount <= 0">
+                    This selection does not require an additional wallet charge today.
+                </span>
+            </p>
+            <div class="mt-4" x-show="changeQuote && changeQuote.shortfall > 0">
+                <a href="/portal/billing/topup" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
+                    Top Up Wallet
+                </a>
+            </div>
         </div>
 
         <!-- Notes -->
@@ -120,6 +200,29 @@
         </div>
     </form>
 
+    {% if migration_options %}
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Need a Different Plan Family?</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Cross-family migrations are reviewed by support before they are applied.</p>
+            </div>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-3">
+            {% for option in migration_options %}
+            <form action="/portal/services/{{ subscription.id }}/migration-request" method="POST">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="target_family" value="{{ option.family }}">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-primary-400 hover:text-primary-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-500 dark:hover:text-primary-300">
+                    Request Plan Migration
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">to {{ option.label }}</span>
+                </button>
+            </form>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Confirmation Modal -->
     <div x-show="showConfirm" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @keydown.escape.window="showConfirm = false">
         <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800" @click.away="showConfirm = false">
@@ -136,6 +239,12 @@
                     <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + selectedOfferPrice.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>
                     <span x-text="selectedOfferPeriodLabel"></span>.
                 </p>
+                <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40" x-show="changeQuote">
+                    <p class="text-sm text-slate-700 dark:text-slate-200">Remaining value: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span></p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Required today: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span></p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Wallet balance: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_balance)"></span></p>
+                    <p class="mt-1 text-sm text-amber-700 dark:text-amber-300" x-show="changeQuote.shortfall > 0">Shortfall: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.shortfall)"></span></p>
+                </div>
                 <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">{{ billing_message }}</p>
                 <template x-if="priceDifference > 0">
                     <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">
@@ -170,13 +279,21 @@ function changePlanPage() {
         selectedOfferPeriodLabel: '/month',
         priceDifference: 0,
         currentPrice: {{ current_offer_summary.amount if current_offer_summary else 0 }},
+        selectedOfferId: {{ ('"' ~ selected_offer_id ~ '"') if selected_offer_id else 'null' }},
+        quotes: {{ available_offer_change_quotes | tojson }},
+        changeQuote: null,
         pendingForm: null,
-        selectOffer(name, price, currency, periodLabel) {
+        formatMoney(value) {
+            return Number(value || 0).toLocaleString('en-NG', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        },
+        selectOffer(id, name, price, currency, periodLabel) {
+            this.selectedOfferId = id;
             this.selectedOfferName = name;
             this.selectedOfferPrice = price;
             this.selectedOfferCurrency = currency;
             this.selectedOfferPeriodLabel = periodLabel;
             this.priceDifference = price - this.currentPrice;
+            this.changeQuote = this.quotes[id] || null;
         },
         confirmAndSubmit(event) {
             if (!this.selectedOfferName) return;
@@ -187,6 +304,14 @@ function changePlanPage() {
             if (this.pendingForm) {
                 this.showConfirm = false;
                 this.pendingForm.submit();
+            }
+        },
+        init() {
+            if (!this.selectedOfferId) return;
+            const selectedInput = this.$root.querySelector(`input[name="offer_id"][value="${this.selectedOfferId}"]`);
+            if (selectedInput) {
+                selectedInput.checked = true;
+                selectedInput.dispatchEvent(new Event('change'));
             }
         }
     };

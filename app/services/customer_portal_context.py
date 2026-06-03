@@ -30,6 +30,23 @@ from app.services.common import coerce_uuid
 logger = logging.getLogger(__name__)
 
 
+def _parse_allowed_change_plan_ids(raw_value: str | None) -> set[str]:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return set()
+    normalized = raw.replace("\n", ",").replace("\r", ",").replace(" ", ",")
+    return {item.strip() for item in normalized.split(",") if item.strip()}
+
+
+def _same_region_compatibility(
+    current_offer: CatalogOffer,
+    candidate_offer: CatalogOffer,
+) -> bool:
+    return str(current_offer.region_zone_id or "") == str(
+        candidate_offer.region_zone_id or ""
+    )
+
+
 def emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
     """Emit a customer portal event without letting telemetry break the request."""
     try:
@@ -620,23 +637,58 @@ def get_customer_appointments(
     return {"appointments": appointments, "total": total, "total_pages": total_pages}
 
 
-def get_available_portal_offers(db: Session) -> list[CatalogOffer]:
+def get_available_portal_offers(
+    db: Session,
+    subscription: Subscription | None = None,
+) -> list[CatalogOffer]:
     """Get catalog offers available on the customer portal.
 
     Args:
         db: Database session
+        subscription: Optional current subscription used to scope compatible offers
 
     Returns:
         List of CatalogOffer instances
     """
-    return cast(
+    if not subscription or not subscription.offer_id:
+        return cast(
+            list[CatalogOffer],
+            db.scalars(
+                select(CatalogOffer)
+                .where(CatalogOffer.is_active.is_(True))
+                .where(CatalogOffer.show_on_customer_portal.is_(True))
+                .order_by(CatalogOffer.name.asc())
+            ).all(),
+        )
+
+    current_offer = db.get(CatalogOffer, subscription.offer_id)
+    if not current_offer:
+        return []
+
+    offers = cast(
         list[CatalogOffer],
         db.scalars(
             select(CatalogOffer)
             .where(CatalogOffer.is_active.is_(True))
             .where(CatalogOffer.show_on_customer_portal.is_(True))
+            .where(CatalogOffer.service_type == current_offer.service_type)
+            .where(CatalogOffer.billing_mode == current_offer.billing_mode)
             .order_by(CatalogOffer.name.asc())
         ).all(),
+    )
+
+    allowed_ids = _parse_allowed_change_plan_ids(current_offer.allowed_change_plan_ids)
+
+    return cast(
+        list[CatalogOffer],
+        [
+            offer
+            for offer in offers
+            if _same_region_compatibility(current_offer, offer)
+            and str(offer.plan_family or "").strip()
+            == str(current_offer.plan_family or "").strip()
+            and (not allowed_ids or str(offer.id) in allowed_ids)
+        ],
     )
 
 
