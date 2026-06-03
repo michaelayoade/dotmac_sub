@@ -1,0 +1,123 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ "Edit" if item else "New" }} What's New Slide - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/system/settings-hub" class="hover:text-amber-600">Settings Hub</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <a href="/admin/system/whats-new" class="hover:text-amber-600">What's New</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <span class="text-slate-900 dark:text-white">{{ "Edit Slide" if item else "New Slide" }}</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ "Edit Slide" if item else "Add Slide" }}</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage the content shown in the admin dashboard carousel.</p>
+    </div>
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Slide Content</h2>
+            </div>
+            <div class="space-y-6 p-6">
+                {% if error %}
+                <div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <div class="grid gap-6 sm:grid-cols-2">
+                    <div class="sm:col-span-2">
+                        <label for="title" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Title</label>
+                        <input id="title" name="title" type="text" maxlength="200" required
+                               value="{{ form_values.title if form_values else (item.title if item else '') }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label for="message" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Short Message</label>
+                        <textarea id="message" name="message" rows="3" required
+                                  class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ form_values.message if form_values else (item.message if item else '') }}</textarea>
+                    </div>
+                    <div>
+                        <label for="benefit_one" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Benefit 1</label>
+                        <input id="benefit_one" name="benefit_one" type="text" maxlength="255"
+                               value="{{ form_values.benefit_one if form_values else (item.benefit_one if item else '') }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label for="benefit_two" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Benefit 2</label>
+                        <input id="benefit_two" name="benefit_two" type="text" maxlength="255"
+                               value="{{ form_values.benefit_two if form_values else (item.benefit_two if item else '') }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="sm:col-span-2">
+                        <label for="benefit_three" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Benefit 3</label>
+                        <input id="benefit_three" name="benefit_three" type="text" maxlength="255"
+                               value="{{ form_values.benefit_three if form_values else (item.benefit_three if item else '') }}"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Action and Visibility</h2>
+            </div>
+            <div class="grid gap-6 p-6 sm:grid-cols-2">
+                <div>
+                    <label for="button_text" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Button Text</label>
+                    <input id="button_text" name="button_text" type="text" maxlength="80" required
+                           value="{{ form_values.button_text if form_values else (item.button_text if item else '') }}"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="button_link" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Button Link</label>
+                    <input id="button_link" name="button_link" type="text" maxlength="500" required
+                           value="{{ form_values.button_link if form_values else (item.button_link if item else '') }}"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
+                    {% set current_status = form_values.status if form_values else (item.status if item else 'draft') %}
+                    <select id="status" name="status"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for status in statuses %}
+                        <option value="{{ status }}" {% if current_status == status %}selected{% endif %}>{{ status | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="starts_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start Date</label>
+                    {% set start_value = form_values.starts_at if form_values and form_values.starts_at else (item.starts_at if item and item.starts_at else None) %}
+                    <input id="starts_at" name="starts_at" type="datetime-local"
+                           value="{{ start_value if start_value is string else (start_value.strftime('%Y-%m-%dT%H:%M') if start_value else '') }}"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="sm:col-span-2">
+                    <label for="ends_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">End Date</label>
+                    {% set end_value = form_values.ends_at if form_values and form_values.ends_at else (item.ends_at if item and item.ends_at else None) %}
+                    <input id="ends_at" name="ends_at" type="datetime-local"
+                           value="{{ end_value if end_value is string else (end_value.strftime('%Y-%m-%dT%H:%M') if end_value else '') }}"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+        </div>
+
+        <div class="flex flex-col gap-3 sm:flex-row sm:justify-end">
+            <a href="/admin/system/whats-new" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
+                {{ "Save Changes" if item else "Create Slide" }}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

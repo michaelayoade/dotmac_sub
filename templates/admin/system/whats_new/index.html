@@ -1,0 +1,131 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, animation_styles %}
+
+{% block title %}What's New - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "amber") }}
+
+<div class="relative space-y-8">
+    {% call(content) page_header(
+        title="What's New",
+        subtitle="Manage the admin dashboard feature carousel",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+        color="slate",
+        color2="amber",
+        breadcrumbs=[
+            {"label": "System", "href": "/admin/system"},
+            {"label": "Settings Hub", "href": "/admin/system/settings-hub"},
+            {"label": "What's New"}
+        ]
+    ) %}
+        <form method="GET" action="/admin/system/whats-new" class="contents">
+            <select name="status"
+                    onchange="this.form.submit()"
+                    class="block appearance-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 pr-10 text-sm text-slate-900 transition focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+                {% for status in statuses %}
+                <option value="{{ status }}" {% if status_filter == status %}selected{% endif %}>{{ status | title }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <a href="/admin/system/whats-new/new" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-amber-500/30">
+            <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            New Slide
+        </a>
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {{ stats_card("Total", stats.total, icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5v14"/></svg>', color="slate", color2="gray") }}
+        {{ stats_card("Featured", stats.featured, icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.176 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.719c-.783-.57-.38-1.81.588-1.81H7.03a1 1 0 00.951-.69l1.07-3.292z"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card("Active", stats.active, icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>', color="emerald", color2="green") }}
+        {{ stats_card("Inactive", stats.inactive, icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', color="blue", color2="cyan") }}
+        {{ stats_card("Archived", stats.archived, icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8l2-3h10l2 3M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z"/></svg>', color="rose", color2="pink") }}
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <div>
+                <h2 class="font-display text-lg font-bold text-slate-900 dark:text-white">Slides</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Featured and active slides can appear on the admin dashboard.</p>
+            </div>
+        </div>
+
+        {% if items %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-left text-sm">
+                <thead>
+                    <tr class="border-b border-slate-100 dark:border-slate-700/60">
+                        <th class="px-6 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Slide</th>
+                        <th class="px-6 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Schedule</th>
+                        <th class="px-6 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Button</th>
+                        <th class="px-6 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
+                    {% for item in items %}
+                    <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/20">
+                        <td class="px-6 py-4 align-top">
+                            <div class="max-w-xl">
+                                <p class="font-semibold text-slate-900 dark:text-white">{{ item.title }}</p>
+                                <p class="mt-1 text-slate-600 dark:text-slate-300">{{ item.message }}</p>
+                                {% set benefits = [item.benefit_one, item.benefit_two, item.benefit_three] | select | list %}
+                                {% if benefits %}
+                                <div class="mt-2 flex flex-wrap gap-2">
+                                    {% for benefit in benefits %}
+                                    <span class="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ benefit }}</span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 align-top">
+                            <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold
+                                {% if item.status == 'featured' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
+                                {% elif item.status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
+                                {% elif item.status == 'inactive' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300
+                                {% elif item.status == 'archived' %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300
+                                {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                {{ item.status | title }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 align-top text-slate-600 dark:text-slate-300">
+                            <p>{{ item.starts_at.strftime('%b %d, %Y %H:%M') if item.starts_at else 'Starts immediately' }}</p>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ item.ends_at.strftime('%b %d, %Y %H:%M') if item.ends_at else 'No end date' }}</p>
+                        </td>
+                        <td class="px-6 py-4 align-top">
+                            <a href="{{ item.button_link }}" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">{{ item.button_text }}</a>
+                        </td>
+                        <td class="px-6 py-4 align-top">
+                            <div class="flex flex-col items-end gap-2">
+                                <form method="POST" action="/admin/system/whats-new/{{ item.id }}/status" class="flex items-center gap-2">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <select name="status" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                                        {% for status in statuses %}
+                                        <option value="{{ status }}" {% if item.status == status %}selected{% endif %}>{{ status | title }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button type="submit" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600">Save</button>
+                                </form>
+                                <a href="/admin/system/whats-new/{{ item.id }}/edit" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300">Edit</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="px-6 py-12 text-center">
+            <p class="text-base font-medium text-slate-900 dark:text-white">No slides yet</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create your first dashboard slide to start highlighting new admin features.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
