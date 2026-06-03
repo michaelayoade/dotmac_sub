@@ -25,6 +25,9 @@ def build_list_context(
     per_page: int = 25,
 ) -> dict:
     offset = max(0, (page - 1) * per_page)
+    total = billing_service.billing_accounts.count(
+        db, reseller_id=reseller_id, is_active=True
+    )
     items = billing_service.billing_accounts.list(
         db,
         reseller_id=reseller_id,
@@ -64,10 +67,15 @@ def build_list_context(
     resellers = db.execute(
         select(Reseller.id, Reseller.name, Reseller.is_house).order_by(Reseller.name)
     ).all()
+    total_pages = max(1, (total + per_page - 1) // per_page)
     return {
         "rows": rows,
         "page": page,
         "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
         "selected_reseller_id": reseller_id,
         "resellers": [
             {
@@ -81,14 +89,49 @@ def build_list_context(
     }
 
 
-def build_detail_context(db: Session, billing_account_id: str) -> dict:
-    statement = billing_service.billing_accounts.statement(db, billing_account_id)
+def build_detail_context(
+    db: Session,
+    billing_account_id: str,
+    *,
+    subscribers_page: int = 1,
+    payments_page: int = 1,
+    subscribers_per_page: int = 25,
+    payments_per_page: int = 25,
+) -> dict:
+    statement = billing_service.billing_accounts.statement(
+        db,
+        billing_account_id,
+        subscribers_limit=subscribers_per_page,
+        subscribers_offset=max(0, (subscribers_page - 1) * subscribers_per_page),
+        payments_limit=payments_per_page,
+        payments_offset=max(0, (payments_page - 1) * payments_per_page),
+    )
     ba = billing_service.billing_accounts.get(db, billing_account_id)
     reseller = db.get(Reseller, ba.reseller_id)
+    subscribers_total_pages = max(
+        1,
+        (statement.subscribers_total + subscribers_per_page - 1) // subscribers_per_page,
+    )
+    payments_total_pages = max(
+        1,
+        (statement.recent_payments_total + payments_per_page - 1) // payments_per_page,
+    )
     return {
         "billing_account": statement.billing_account,
         "subscribers": statement.subscribers,
+        "subscribers_total": statement.subscribers_total,
+        "subscribers_page": subscribers_page,
+        "subscribers_per_page": subscribers_per_page,
+        "subscribers_total_pages": subscribers_total_pages,
+        "subscribers_has_prev": subscribers_page > 1,
+        "subscribers_has_next": subscribers_page < subscribers_total_pages,
         "recent_payments": statement.recent_payments,
+        "recent_payments_total": statement.recent_payments_total,
+        "payments_page": payments_page,
+        "payments_per_page": payments_per_page,
+        "payments_total_pages": payments_total_pages,
+        "payments_has_prev": payments_page > 1,
+        "payments_has_next": payments_page < payments_total_pages,
         "total_outstanding": statement.total_outstanding,
         "unallocated_balance": statement.unallocated_balance,
         "reseller_name": reseller.name if reseller else "",

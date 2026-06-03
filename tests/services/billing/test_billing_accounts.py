@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.subscriber import Reseller
-from app.schemas.billing import BillingAccountCreate, BillingAccountUpdate
+from app.schemas.billing import BillingAccountCreate, BillingAccountUpdate, PaymentCreate
 from app.services import billing as billing_service
 
 
@@ -155,3 +155,81 @@ def test_statement_aggregates_open_invoices(db_session, subscriber):
     assert len(statement.subscribers) == 1
     assert statement.subscribers[0].open_invoice_count == 1
     assert statement.subscribers[0].open_balance == Decimal("500.00")
+
+
+def test_statement_returns_paginated_subscribers_and_payments_with_totals(db_session):
+    """Statement totals should reflect all rows while page data stays paginated."""
+    from app.models.billing import Invoice, InvoiceStatus
+    from app.models.subscriber import Subscriber
+
+    reseller = _make_reseller(db_session, name="PagedStatement")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+
+    sub_a = Subscriber(
+        first_name="Alpha",
+        last_name="Customer",
+        email="alpha@example.com",
+        reseller_id=reseller.id,
+    )
+    sub_b = Subscriber(
+        first_name="Beta",
+        last_name="Customer",
+        email="beta@example.com",
+        reseller_id=reseller.id,
+    )
+    db_session.add_all([sub_a, sub_b])
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            Invoice(
+                account_id=sub_a.id,
+                status=InvoiceStatus.issued,
+                currency="NGN",
+                total=Decimal("200.00"),
+                balance_due=Decimal("200.00"),
+            ),
+            Invoice(
+                account_id=sub_b.id,
+                status=InvoiceStatus.issued,
+                currency="NGN",
+                total=Decimal("300.00"),
+                balance_due=Decimal("300.00"),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("50.00"),
+            currency="NGN",
+        ),
+    )
+    billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("75.00"),
+            currency="NGN",
+        ),
+    )
+
+    statement = billing_service.billing_accounts.statement(
+        db_session,
+        str(ba.id),
+        subscribers_limit=1,
+        subscribers_offset=1,
+        payments_limit=1,
+        payments_offset=1,
+    )
+
+    assert statement.subscribers_total == 2
+    assert len(statement.subscribers) == 1
+    assert statement.recent_payments_total == 2
+    assert len(statement.recent_payments) == 1
+    assert statement.total_outstanding == Decimal("500.00")

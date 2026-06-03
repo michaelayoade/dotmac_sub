@@ -725,6 +725,8 @@ class BillingAccountStatementPayment(BaseModel):
 class BillingAccountStatement(BaseModel):
     billing_account: BillingAccountRead
     subscribers: list[BillingAccountStatementSubscriberLine]
+    subscribers_total: int = 0
     recent_payments: list[BillingAccountStatementPayment]
+    recent_payments_total: int = 0
     total_outstanding: Decimal
     unallocated_balance: Decimal

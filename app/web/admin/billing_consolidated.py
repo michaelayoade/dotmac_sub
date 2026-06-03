@@ -24,7 +24,7 @@ def consolidated_accounts_list(
     request: Request,
     reseller_id: str | None = Query(None),
     page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
+    per_page: int = Query(25, ge=10, le=200),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -51,12 +51,21 @@ def consolidated_accounts_list(
 def consolidated_account_detail(
     request: Request,
     billing_account_id: str,
+    subscribers_page: int = Query(1, ge=1, alias="subs_page"),
+    payments_page: int = Query(1, ge=1, alias="pay_page"),
+    subscribers_per_page: int = Query(25, ge=10, le=200, alias="subs_per_page"),
+    payments_per_page: int = Query(25, ge=10, le=200, alias="pay_per_page"),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     context = web_consolidated_billing_service.build_detail_context(
-        db, billing_account_id
+        db,
+        billing_account_id,
+        subscribers_page=subscribers_page,
+        payments_page=payments_page,
+        subscribers_per_page=subscribers_per_page,
+        payments_per_page=payments_per_page,
     )
     return templates.TemplateResponse(
         "admin/billing/consolidated/detail.html",

@@ -84,6 +84,19 @@
         {% endfor %}
       </tbody>
     </table>
+    {% with base_path="/admin/billing/consolidated-accounts/" ~ billing_account.id,
+            preserved_params=[("pay_page", payments_page), ("pay_per_page", payments_per_page)],
+            page_param="subs_page",
+            per_page_param="subs_per_page",
+            page=subscribers_page,
+            total_pages=subscribers_total_pages,
+            total=subscribers_total,
+            per_page=subscribers_per_page,
+            has_prev=subscribers_has_prev,
+            has_next=subscribers_has_next,
+            label="subscribers" %}
+      {% include "admin/billing/consolidated/_pagination.html" %}
+    {% endwith %}
   </div>
 
   <div class="rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
@@ -112,6 +125,19 @@
         {% endfor %}
       </tbody>
     </table>
+    {% with base_path="/admin/billing/consolidated-accounts/" ~ billing_account.id,
+            preserved_params=[("subs_page", subscribers_page), ("subs_per_page", subscribers_per_page)],
+            page_param="pay_page",
+            per_page_param="pay_per_page",
+            page=payments_page,
+            total_pages=payments_total_pages,
+            total=recent_payments_total,
+            per_page=payments_per_page,
+            has_prev=payments_has_prev,
+            has_next=payments_has_next,
+            label="payments" %}
+      {% include "admin/billing/consolidated/_pagination.html" %}
+    {% endwith %}
   </div>
 </div>
 {% endblock %}

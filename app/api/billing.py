@@ -1364,9 +1364,21 @@ def update_billing_account(
     dependencies=[Depends(require_permission("billing_account:read"))],
 )
 def get_billing_account_statement(
-    billing_account_id: str, db: Session = Depends(get_db)
+    billing_account_id: str,
+    subscribers_limit: int = Query(default=25, ge=1, le=200),
+    subscribers_offset: int = Query(default=0, ge=0),
+    payments_limit: int = Query(default=25, ge=1, le=200),
+    payments_offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
 ):
-    return billing_service.billing_accounts.statement(db, billing_account_id)
+    return billing_service.billing_accounts.statement(
+        db,
+        billing_account_id,
+        subscribers_limit=subscribers_limit,
+        subscribers_offset=subscribers_offset,
+        payments_limit=payments_limit,
+        payments_offset=payments_offset,
+    )
 
 
 @router.post(

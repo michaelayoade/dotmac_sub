@@ -63,6 +63,13 @@
         {% endfor %}
       </tbody>
     </table>
+    {% with base_path="/admin/billing/consolidated-accounts",
+            preserved_params=[("reseller_id", selected_reseller_id)],
+            per_page_param="per_page",
+            page_param="page",
+            label="billing accounts" %}
+      {% include "admin/billing/consolidated/_pagination.html" %}
+    {% endwith %}
   </div>
 </div>
 {% endblock %}

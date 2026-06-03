@@ -81,6 +81,22 @@ class BillingAccounts(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def count(
+        db: Session,
+        *,
+        reseller_id: str | None = None,
+        is_active: bool | None = True,
+    ) -> int:
+        query = db.query(func.count(BillingAccount.id))
+        if reseller_id:
+            query = query.filter(BillingAccount.reseller_id == coerce_uuid(reseller_id))
+        if is_active is True:
+            query = query.filter(BillingAccount.is_active.is_(True))
+        elif is_active is False:
+            query = query.filter(BillingAccount.is_active.is_(False))
+        return int(query.scalar() or 0)
+
+    @staticmethod
     def get(db: Session, billing_account_id: str) -> BillingAccount:
         ba = get_by_id(db, BillingAccount, billing_account_id)
         if not ba:
@@ -163,11 +179,42 @@ class BillingAccounts(ListResponseMixin):
 
     @staticmethod
     def statement(
-        db: Session, billing_account_id: str, *, recent_payment_limit: int = 25
+        db: Session,
+        billing_account_id: str,
+        *,
+        subscribers_limit: int = 25,
+        subscribers_offset: int = 0,
+        payments_limit: int = 25,
+        payments_offset: int = 0,
     ) -> BillingAccountStatement:
         ba = BillingAccounts.get(db, billing_account_id)
 
-        # Per-subscriber open balance
+        # Aggregates: do these in SQL so they don't depend on the page being
+        # rendered. The per-subscriber rows below are then a pure page-of-data.
+        open_invoice_filter = (
+            db.query(Invoice)
+            .join(Subscriber, Invoice.account_id == Subscriber.id)
+            .filter(Subscriber.reseller_id == ba.reseller_id)
+            .filter(Invoice.is_active.is_(True))
+            .filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
+            .filter(Invoice.balance_due > 0)
+        )
+        total_outstanding = round_money(
+            to_decimal(
+                open_invoice_filter.with_entities(
+                    func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00"))
+                ).scalar()
+                or Decimal("0.00")
+            )
+        )
+        subscribers_total = int(
+            open_invoice_filter.with_entities(
+                func.count(func.distinct(Subscriber.id))
+            ).scalar()
+            or 0
+        )
+
+        # Per-subscriber open balance (paginated page)
         rows = (
             db.query(
                 Subscriber.id,
@@ -192,10 +239,12 @@ class BillingAccounts(ListResponseMixin):
                 Subscriber.display_name,
                 Subscriber.company_name,
             )
+            .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+            .limit(subscribers_limit)
+            .offset(subscribers_offset)
             .all()
         )
         subscribers: builtins.list[BillingAccountStatementSubscriberLine] = []
-        total_outstanding = Decimal("0.00")
         for row in rows:
             name = (
                 row.display_name
@@ -204,7 +253,6 @@ class BillingAccounts(ListResponseMixin):
                 or str(row.id)
             )
             open_balance = round_money(to_decimal(row.open_balance))
-            total_outstanding += open_balance
             subscribers.append(
                 BillingAccountStatementSubscriberLine(
                     subscriber_id=row.id,
@@ -214,7 +262,14 @@ class BillingAccounts(ListResponseMixin):
                 )
             )
 
-        # Recent consolidated payments for this billing account
+        # Recent consolidated payments for this billing account (paginated page)
+        payments_total = int(
+            db.query(func.count(Payment.id))
+            .filter(Payment.billing_account_id == ba.id)
+            .filter(Payment.is_active.is_(True))
+            .scalar()
+            or 0
+        )
         payment_rows = (
             db.query(
                 Payment.id,
@@ -231,7 +286,8 @@ class BillingAccounts(ListResponseMixin):
             .filter(Payment.is_active.is_(True))
             .group_by(Payment.id)
             .order_by(Payment.created_at.desc())
-            .limit(recent_payment_limit)
+            .limit(payments_limit)
+            .offset(payments_offset)
             .all()
         )
         recent_payments: builtins.list[BillingAccountStatementPayment] = []
@@ -255,8 +311,10 @@ class BillingAccounts(ListResponseMixin):
         return BillingAccountStatement(
             billing_account=BillingAccountRead.model_validate(ba),
             subscribers=subscribers,
+            subscribers_total=subscribers_total,
             recent_payments=recent_payments,
-            total_outstanding=round_money(total_outstanding),
+            recent_payments_total=payments_total,
+            total_outstanding=total_outstanding,
             unallocated_balance=round_money(to_decimal(ba.balance)),
         )
 
