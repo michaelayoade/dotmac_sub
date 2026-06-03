@@ -70,6 +70,16 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "url": "/admin/system/about",
                 "description": "Version, environment, diagnostics",
             },
+            {
+                "name": "What's New",
+                "url": "/admin/system/whats-new",
+                "description": "Manage admin dashboard feature slides",
+            },
+            {
+                "name": "Ticket Settings",
+                "url": "/admin/system/ticket-settings",
+                "description": "Support ticket statuses, priorities, and types",
+            },
         ],
     },
     {
@@ -196,6 +206,11 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "name": "Notification Templates",
                 "url": "/admin/system/config/templates",
                 "description": "Email and SMS templates with variables",
+            },
+            {
+                "name": "Bulk Notification Setup",
+                "url": "/admin/notifications/setup",
+                "description": "Channel readiness and bulk notification setup",
             },
             {
                 "name": "Billing Notifications",
