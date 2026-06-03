@@ -1,6 +1,7 @@
 """Service and usage flows for customer portal."""
 
 import logging
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, TypedDict
@@ -22,7 +23,7 @@ from app.models.bandwidth import BandwidthSample
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.network import OntAssignment, OntUnit
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
-from app.models.usage import UsageRecord
+from app.models.usage import RadiusAccountingSession, UsageRecord
 from app.services import catalog as catalog_service
 from app.services import customer_portal_context
 from app.services import provisioning as provisioning_service
@@ -190,6 +191,76 @@ def _daily_usage_records(
     return result
 
 
+def _daily_usage_breakdown_records(
+    db: Session,
+    *,
+    subscription_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> dict[Any, tuple[float, float, float]]:
+    bucket = func.date_trunc("day", UsageRecord.recorded_at)
+    rows = (
+        db.query(
+            bucket.label("bucket_start"),
+            func.coalesce(func.sum(UsageRecord.input_gb), 0).label("download_gb"),
+            func.coalesce(func.sum(UsageRecord.output_gb), 0).label("upload_gb"),
+            func.coalesce(func.sum(UsageRecord.total_gb), 0).label("total_gb"),
+        )
+        .filter(
+            UsageRecord.subscription_id == coerce_uuid(subscription_id),
+            UsageRecord.recorded_at >= start_at,
+            UsageRecord.recorded_at <= end_at,
+        )
+        .group_by(bucket)
+        .all()
+    )
+    result: dict[Any, tuple[float, float, float]] = {}
+    for row in rows:
+        bucket_start = _as_utc(row.bucket_start)
+        if bucket_start is None:
+            continue
+        result[bucket_start.date()] = (
+            float(row.download_gb or 0),
+            float(row.upload_gb or 0),
+            float(row.total_gb or 0),
+        )
+    return result
+
+
+def _daily_bandwidth_averages(
+    db: Session,
+    *,
+    subscription_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> dict[Any, tuple[float, float]]:
+    bucket = func.date_trunc("day", BandwidthSample.sample_at)
+    rows = (
+        db.query(
+            bucket.label("bucket_start"),
+            func.avg(BandwidthSample.rx_bps).label("rx_bps"),
+            func.avg(BandwidthSample.tx_bps).label("tx_bps"),
+        )
+        .filter(
+            BandwidthSample.subscription_id == coerce_uuid(subscription_id),
+            BandwidthSample.sample_at >= start_at,
+            BandwidthSample.sample_at <= end_at,
+        )
+        .group_by(bucket)
+        .all()
+    )
+    result: dict[Any, tuple[float, float]] = {}
+    for row in rows:
+        bucket_start = _as_utc(row.bucket_start)
+        if bucket_start is None:
+            continue
+        result[bucket_start.date()] = (
+            float(row.rx_bps or 0),
+            float(row.tx_bps or 0),
+        )
+    return result
+
+
 def _get_pppoe_credentials(db: Session, subscriber_id: str | None) -> dict | None:
     """Get PPPoE credentials for a subscriber, if any exist."""
     if not subscriber_id:
@@ -270,7 +341,28 @@ def _daily_bandwidth_usage(
     page: int,
     per_page: int,
 ) -> tuple[list[Any], int]:
-    by_day_usage = _daily_usage_records(
+    daily_records = _daily_bandwidth_usage_records(
+        db,
+        subscription_id=subscription_id,
+        start_at=start_at,
+        end_at=end_at,
+    )
+    total = len(daily_records)
+    page_start = (page - 1) * per_page
+    page_end = page_start + per_page
+    records = daily_records[page_start:page_end]
+
+    return records, int(total)
+
+
+def _daily_bandwidth_usage_records(
+    db: Session,
+    *,
+    subscription_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> list[Any]:
+    by_day_usage = _daily_usage_breakdown_records(
         db,
         subscription_id=subscription_id,
         start_at=start_at,
@@ -281,6 +373,27 @@ def _daily_bandwidth_usage(
     end_day_dt = _as_utc(end_at) or end_at
     start_day = start_day_dt.date()
     end_day = end_day_dt.date()
+    total_days = max(1, (end_day - start_day).days + 1)
+    radius_by_day = (
+        _daily_radius_accounting_usage(
+            db,
+            subscription_id=subscription_id,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        if len(by_day_usage) < total_days
+        else {}
+    )
+    bandwidth_by_day = (
+        _daily_bandwidth_averages(
+            db,
+            subscription_id=subscription_id,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        if len(by_day_usage) < total_days
+        else {}
+    )
 
     daily_records: list[Any] = []
     day = end_day
@@ -291,24 +404,23 @@ def _daily_bandwidth_usage(
         effective_end = min(end_at, day_end)
         span_seconds = max(0.0, (effective_end - effective_start).total_seconds())
 
-        total_gb = by_day_usage.get(day)
-        if total_gb is None:
-            rows = (
-                db.query(
-                    func.avg(BandwidthSample.rx_bps).label("rx_bps"),
-                    func.avg(BandwidthSample.tx_bps).label("tx_bps"),
+        usage_breakdown = by_day_usage.get(day)
+        if usage_breakdown is not None:
+            download_gb, upload_gb, total_gb = usage_breakdown
+        else:
+            if day in bandwidth_by_day:
+                rx_bps, tx_bps = bandwidth_by_day[day]
+                download_gb = ((rx_bps / 8.0) * span_seconds) / (1024**3)
+                upload_gb = ((tx_bps / 8.0) * span_seconds) / (1024**3)
+                total_gb = download_gb + upload_gb
+            else:
+                # Fallback for days with no sampled bandwidth history. RADIUS
+                # accounting is coarser, but it preserves real historical
+                # usage instead of rendering prior active days as empty.
+                download_gb, upload_gb, total_gb = radius_by_day.get(
+                    day,
+                    (0.0, 0.0, 0.0),
                 )
-                .filter(
-                    BandwidthSample.subscription_id == coerce_uuid(subscription_id),
-                    BandwidthSample.sample_at >= effective_start,
-                    BandwidthSample.sample_at <= effective_end,
-                )
-                .first()
-            )
-            rx_bps = float(rows.rx_bps or 0) if rows else 0.0
-            tx_bps = float(rows.tx_bps or 0) if rows else 0.0
-            total_bytes = ((rx_bps + tx_bps) / 8.0) * span_seconds
-            total_gb = total_bytes / (1024**3)
 
         daily_records.append(
             SimpleNamespace(
@@ -316,18 +428,127 @@ def _daily_bandwidth_usage(
                 usage_type="Daily Usage",
                 amount=total_gb,
                 usage_amount=total_gb,
+                download_amount=download_gb,
+                upload_amount=upload_gb,
                 unit="GB",
                 description=f"Total usage for {day.isoformat()}",
             )
         )
         day -= timedelta(days=1)
 
-    total = len(daily_records)
-    page_start = (page - 1) * per_page
-    page_end = page_start + per_page
-    records = daily_records[page_start:page_end]
+    return daily_records
 
-    return records, int(total)
+
+def _daily_radius_accounting_usage(
+    db: Session,
+    *,
+    subscription_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> dict[Any, tuple[float, float, float]]:
+    accounting_day = func.date_trunc(
+        "day",
+        func.coalesce(
+            RadiusAccountingSession.session_end,
+            RadiusAccountingSession.session_start,
+        ),
+    )
+    accounting_time = func.coalesce(
+        RadiusAccountingSession.session_end,
+        RadiusAccountingSession.session_start,
+    )
+
+    rows = (
+        db.query(
+            accounting_day.label("bucket_start"),
+            func.sum(func.coalesce(RadiusAccountingSession.input_octets, 0)).label(
+                "download_octets"
+            ),
+            func.sum(func.coalesce(RadiusAccountingSession.output_octets, 0)).label(
+                "upload_octets"
+            ),
+        )
+        .filter(RadiusAccountingSession.subscription_id == coerce_uuid(subscription_id))
+        .filter(accounting_time >= start_at)
+        .filter(accounting_time <= end_at)
+        .group_by(accounting_day)
+        .all()
+    )
+
+    usage_by_day: dict[Any, tuple[float, float, float]] = {}
+    for row in rows:
+        bucket_start = _as_utc(getattr(row, "bucket_start", None))
+        if bucket_start is None:
+            continue
+        download_gb = float(getattr(row, "download_octets", 0) or 0) / (1024**3)
+        upload_gb = float(getattr(row, "upload_octets", 0) or 0) / (1024**3)
+        usage_by_day[bucket_start.date()] = (
+            download_gb,
+            upload_gb,
+            download_gb + upload_gb,
+        )
+    return usage_by_day
+
+
+def _zabbix_usage_records(graph: list[dict[str, Any]]) -> list[Any]:
+    by_day: dict[datetime, dict[str, float]] = defaultdict(
+        lambda: {"download_bytes": 0.0, "upload_bytes": 0.0}
+    )
+    for point in graph:
+        day = datetime.fromtimestamp(int(point.get("timestamp") or 0), tz=UTC).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        by_day[day]["download_bytes"] += float(point.get("download_bytes") or 0)
+        by_day[day]["upload_bytes"] += float(point.get("upload_bytes") or 0)
+
+    return [
+        SimpleNamespace(
+            recorded_at=day,
+            usage_type="Zabbix Bandwidth",
+            amount=(totals["download_bytes"] + totals["upload_bytes"]) / (1024**3),
+            usage_amount=(totals["download_bytes"] + totals["upload_bytes"]) / (1024**3),
+            download_amount=totals["download_bytes"] / (1024**3),
+            upload_amount=totals["upload_bytes"] / (1024**3),
+            unit="GB",
+            description=f"Counter-derived usage for {day.date().isoformat()}",
+        )
+        for day, totals in sorted(by_day.items(), reverse=True)
+    ]
+
+
+def _serialize_usage_chart_records(records: list[Any]) -> list[dict[str, Any]]:
+    ordered_records = sorted(
+        records,
+        key=lambda record: _as_utc(getattr(record, "recorded_at", None))
+        or datetime.min.replace(tzinfo=UTC),
+    )
+
+    chart_records: list[dict[str, Any]] = []
+    for record in ordered_records:
+        recorded_at = _as_utc(getattr(record, "recorded_at", None))
+        if recorded_at is None:
+            continue
+        amount = float(getattr(record, "amount", None) or getattr(record, "usage_amount", 0) or 0)
+        chart_records.append(
+            {
+                "label": recorded_at.strftime("%b %d"),
+                "full_label": recorded_at.strftime("%b %d, %Y"),
+                "value": round(amount, 2),
+                "download_value": round(
+                    float(getattr(record, "download_amount", 0) or 0),
+                    2,
+                ),
+                "upload_value": round(
+                    float(getattr(record, "upload_amount", 0) or 0),
+                    2,
+                ),
+                "unit": str(getattr(record, "unit", None) or "GB"),
+            }
+        )
+    return chart_records
 
 
 def _usage_summary_stats(
@@ -406,12 +627,14 @@ def get_usage_page(
     period: str = "current",
     page: int = 1,
     per_page: int = 25,
+    allow_postgres_fallback: bool = True,
 ) -> dict:
     """Get usage page data for the customer portal."""
     subscription_id_str = _resolve_usage_subscription_id(db, customer)
 
     empty_result: dict[str, Any] = {
         "usage_records": [],
+        "chart_records": [],
         "period": period,
         "page": page,
         "per_page": per_page,
@@ -423,6 +646,9 @@ def get_usage_page(
             "average_download_mbps": 0.0,
             "average_upload_mbps": 0.0,
         },
+        "fup_status": None,
+        "usage_source": "none",
+        "has_subscription": False,
     }
     if not subscription_id_str:
         return empty_result
@@ -437,6 +663,7 @@ def get_usage_page(
 
     usage_source = "postgres"
     zabbix_usage = None
+    chart_source_records: list[Any] = []
     if subscription:
         try:
             from app.services.zabbix_engine import get_zabbix_engine
@@ -459,15 +686,27 @@ def get_usage_page(
         total = int(zabbix_usage["total"])
         usage_summary = zabbix_usage["usage_summary"]
         usage_source = "zabbix"
+        chart_source_records = _zabbix_usage_records(zabbix_usage.get("graph") or [])
+    elif not allow_postgres_fallback:
+        return {
+            **empty_result,
+            "period": period,
+            "page": page,
+            "per_page": per_page,
+            "usage_source": "unavailable",
+            "has_subscription": True,
+        }
     else:
-        usage_records, total = _daily_bandwidth_usage(
+        chart_source_records = _daily_bandwidth_usage_records(
             db,
             subscription_id=subscription_id_str,
             start_at=start_at,
             end_at=end_at,
-            page=page,
-            per_page=per_page,
         )
+        total = len(chart_source_records)
+        page_start = (page - 1) * per_page
+        page_end = page_start + per_page
+        usage_records = chart_source_records[page_start:page_end]
         usage_summary = _usage_summary_stats(
             db,
             subscription_id=subscription_id_str,
@@ -477,7 +716,7 @@ def get_usage_page(
 
     # Resolve FUP status from subscriber's primary subscription offer
     fup_status = None
-    if subscription:
+    if subscription and allow_postgres_fallback:
         fup_status = _get_fup_status(
             db,
             str(subscription.offer_id) if subscription.offer_id else None,
@@ -486,6 +725,7 @@ def get_usage_page(
 
     return {
         "usage_records": usage_records,
+        "chart_records": _serialize_usage_chart_records(chart_source_records),
         "period": period,
         "page": page,
         "per_page": per_page,
@@ -494,6 +734,7 @@ def get_usage_page(
         "usage_summary": usage_summary,
         "fup_status": fup_status,
         "usage_source": usage_source,
+        "has_subscription": True,
     }
 
 

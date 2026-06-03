@@ -35,6 +35,51 @@ logger = logging.getLogger(__name__)
 _emit_customer_event = emit_customer_event
 
 
+def _format_bps(value: float | int | None) -> str:
+    amount = float(value or 0)
+    if amount <= 0:
+        return "0 bps"
+    units = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"]
+    unit_index = 0
+    while amount >= 1000 and unit_index < len(units) - 1:
+        amount /= 1000
+        unit_index += 1
+    precision = 0 if unit_index == 0 else (2 if amount < 10 else 1)
+    return f"{amount:.{precision}f} {units[unit_index]}"
+
+
+def _load_initial_bandwidth_stats(
+    db: Session, subscription_id: str | UUID | None
+) -> dict[str, object] | None:
+    if not subscription_id:
+        return None
+    try:
+        stats = anyio.from_thread.run(
+            bandwidth_samples.get_bandwidth_stats,
+            db,
+            subscription_id,
+            "24h",
+        )
+    except Exception:
+        logger.debug(
+            "portal_initial_bandwidth_stats_failed",
+            extra={
+                "event": "portal_initial_bandwidth_stats_failed",
+                "subscription_id": str(subscription_id),
+            },
+            exc_info=True,
+        )
+        return None
+
+    return {
+        **stats,
+        "current_rx_formatted": _format_bps(stats.get("current_rx_bps")),
+        "current_tx_formatted": _format_bps(stats.get("current_tx_bps")),
+        "peak_rx_formatted": _format_bps(stats.get("peak_rx_bps")),
+        "peak_tx_formatted": _format_bps(stats.get("peak_tx_bps")),
+    }
+
+
 def _render_dashboard(
     request: Request, db: Session, customer: dict, next_url: str
 ) -> Response:
@@ -399,6 +444,7 @@ def customer_usage(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/usage", status_code=303
         )
+    subscription = resolve_customer_subscription(db, customer)
     usage_data = customer_portal.get_usage_page(
         db, customer, period=period, page=page, per_page=per_page
     )
@@ -409,7 +455,16 @@ def customer_usage(
             "request": request,
             "customer": customer,
             **usage_data,
+            "usage_chart_records": usage_data.get("chart_records", []),
             "active_page": "usage",
+            "bandwidth_chart_initial_stats": _load_initial_bandwidth_stats(
+                db,
+                subscription.id if subscription else None,
+            ),
+            "usage_enable_records_chart": True,
+            "usage_records_default_view": "chart",
+            "usage_records_chart_id": "portal-usage-records-chart",
+            "usage_records_chart_label": "Daily Usage (GB)",
         },
     )
 

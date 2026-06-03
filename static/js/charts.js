@@ -349,6 +349,150 @@ function createAreaChart(ctx, data, options = {}) {
     }, options);
 }
 
+function createUsageRecordsPanel(config = {}) {
+    return {
+        recordsView: config.defaultView === 'table' ? 'table' : 'chart',
+        chartRecords: Array.isArray(config.chartRecords) ? config.chartRecords : [],
+        chartId: config.chartId || 'usage-records-chart',
+        chartLabel: config.chartLabel || 'Usage (GB)',
+
+        init() {
+            if (this.recordsView === 'chart') {
+                this.$nextTick(() => this.renderChart());
+            }
+        },
+
+        setRecordsView(view) {
+            if (view !== 'chart' && view !== 'table') {
+                return;
+            }
+            this.recordsView = view;
+            if (view === 'chart') {
+                this.$nextTick(() => this.renderChart());
+            }
+        },
+
+        renderChart() {
+            if (!this.$refs.recordsChartCanvas || !window.Chart || !window.DotmacCharts) {
+                return;
+            }
+
+            const existing = window.Chart.getChart(this.$refs.recordsChartCanvas);
+            if (existing) {
+                existing.destroy();
+            }
+
+            if (!this.chartRecords.length) {
+                return;
+            }
+
+            const usesSplitSeries = this.chartRecords.some(
+                (record) => record.download_value !== undefined || record.upload_value !== undefined
+            );
+            const chartUnit = this.chartRecords[0]?.unit || 'GB';
+            const sharedOptions = {
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => this.chartRecords[items[0]?.dataIndex || 0]?.full_label || items[0]?.label || '',
+                            label: (context) => {
+                                const unit = this.chartRecords[context.dataIndex]?.unit || chartUnit;
+                                return `${context.dataset.label}: ${Number(context.parsed.y || 0).toFixed(2)} ${unit}`;
+                            },
+                            footer: (items) => {
+                                if (!usesSplitSeries || !items.length) {
+                                    return '';
+                                }
+                                const total = items.reduce(
+                                    (sum, item) => sum + Number(item.parsed.y || 0),
+                                    0,
+                                );
+                                const unit = this.chartRecords[items[0]?.dataIndex || 0]?.unit || chartUnit;
+                                return `Total: ${total.toFixed(2)} ${unit}`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        ...getDefaultOptions('bar').scales.x,
+                        grid: { display: false },
+                        ticks: {
+                            ...getDefaultOptions('bar').scales.x.ticks,
+                            maxRotation: 0,
+                            minRotation: 0,
+                            autoSkip: true,
+                            maxTicksLimit: 12,
+                        },
+                    },
+                    y: {
+                        ...getDefaultOptions('bar').scales.y,
+                        ticks: {
+                            ...getDefaultOptions('bar').scales.y.ticks,
+                            callback: (value) => `${Number(value).toFixed(1)} ${chartUnit}`,
+                        },
+                    },
+                },
+            };
+
+            const chart = usesSplitSeries
+                ? createStackedBarChart(this.$refs.recordsChartCanvas, {
+                    labels: this.chartRecords.map((record) => record.label),
+                    datasets: [
+                        {
+                            label: 'Download',
+                            data: this.chartRecords.map((record) => Number(record.download_value || 0)),
+                            backgroundColor: ChartColors.primary[500],
+                            hoverBackgroundColor: ChartColors.primary[600],
+                            maxBarThickness: 28,
+                        },
+                        {
+                            label: 'Upload',
+                            data: this.chartRecords.map((record) => Number(record.upload_value || 0)),
+                            backgroundColor: ChartColors.accent[500],
+                            hoverBackgroundColor: ChartColors.accent[600],
+                            maxBarThickness: 28,
+                        },
+                    ],
+                }, {
+                    ...sharedOptions,
+                    plugins: {
+                        ...sharedOptions.plugins,
+                        legend: { display: true },
+                    },
+                    scales: {
+                        x: {
+                            ...sharedOptions.scales.x,
+                            stacked: true,
+                        },
+                        y: {
+                            ...sharedOptions.scales.y,
+                            stacked: true,
+                        },
+                    },
+                })
+                : createBarChart(this.$refs.recordsChartCanvas, {
+                    labels: this.chartRecords.map((record) => record.label),
+                    datasets: [{
+                        label: this.chartLabel,
+                        data: this.chartRecords.map((record) => Number(record.value || 0)),
+                        backgroundColor: this.chartRecords.map(() => ChartColors.accent[500]),
+                        hoverBackgroundColor: this.chartRecords.map(() => ChartColors.accent[600]),
+                        maxBarThickness: 28,
+                    }],
+                }, {
+                    ...sharedOptions,
+                    plugins: {
+                        ...sharedOptions.plugins,
+                        legend: { display: false },
+                    },
+                });
+
+            registerChart(this.chartId, chart);
+        },
+    };
+}
+
 // Update chart colors on theme change
 function updateChartTheme(chart) {
     const theme = getThemeColors();
@@ -453,6 +597,7 @@ window.DotmacCharts = {
     createStackedBarChart,
     createSparkline,
     createAreaChart,
+    createUsageRecordsPanel,
     registerChart,
     unregisterChart,
     updateChartTheme,

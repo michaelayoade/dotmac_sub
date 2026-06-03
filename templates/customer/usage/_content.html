@@ -1,0 +1,381 @@
+{% set totals = namespace(amount=0) %}
+{% for record in usage_records %}
+    {% set totals.amount = totals.amount + (record.amount or record.usage_amount or 0) %}
+{% endfor %}
+{% set usage_theme = usage_theme | default('customer') %}
+{% set usage_navigation_base_url = usage_navigation_base_url | default('/portal/usage') %}
+{% set usage_period_query_key = usage_period_query_key | default('period') %}
+{% set usage_page_query_key = usage_page_query_key | default('page') %}
+{% set usage_per_page_query_key = usage_per_page_query_key | default('per_page') %}
+{% set usage_anchor = usage_anchor | default('') %}
+{% set bandwidth_chart_api_base = bandwidth_chart_api_base | default('/portal/bandwidth') %}
+{% set bandwidth_chart_use_my_endpoints = bandwidth_chart_use_my_endpoints if bandwidth_chart_use_my_endpoints is defined else true %}
+{% set usage_page_title = usage_page_title | default('Usage') %}
+{% set usage_records_title = usage_records_title | default('Usage Records') %}
+{% set usage_chart_records = usage_chart_records | default(chart_records | default([])) %}
+{% set usage_enable_records_chart = usage_enable_records_chart | default(false) %}
+{% set usage_records_default_view = usage_records_default_view | default('table') %}
+{% set usage_records_chart_id = usage_records_chart_id | default('usage-records-chart') %}
+{% set usage_records_chart_label = usage_records_chart_label | default('Usage (GB)') %}
+{% set show_fup_panel = show_fup_panel if show_fup_panel is defined else usage_theme == 'admin' %}
+{% set bandwidth_chart_initial_stats = bandwidth_chart_initial_stats | default(None) %}
+{% if usage_theme == 'admin' %}
+    {% set usage_muted_text = 'text-slate-500 dark:text-slate-400' %}
+    {% set usage_primary_text = 'text-slate-900 dark:text-white' %}
+    {% set usage_period_active_class = 'border-amber-600 bg-amber-600 text-white dark:border-amber-500 dark:bg-amber-500 dark:text-slate-950' %}
+    {% set usage_period_inactive_class = 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300' %}
+    {% set usage_panel_class = 'overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800' %}
+    {% set usage_card_class = 'group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800' %}
+    {% set usage_table_header_bg = 'bg-slate-50/80 dark:bg-slate-800/50' %}
+    {% set usage_row_hover = 'hover:bg-amber-50/50 dark:hover:bg-amber-900/10' %}
+    {% set usage_empty_state_bg = 'bg-gradient-to-br from-amber-100 to-amber-50 dark:from-amber-900/30 dark:to-amber-800/20' %}
+    {% set usage_accent_icon = 'text-amber-500' %}
+{% else %}
+    {% set usage_muted_text = 'text-stone-500 dark:text-stone-400' %}
+    {% set usage_primary_text = 'text-stone-900 dark:text-white' %}
+    {% set usage_period_active_class = 'border-brand-500 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-900/30 dark:text-brand-300' %}
+    {% set usage_period_inactive_class = 'border-stone-300 bg-white text-stone-700 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300' %}
+    {% set usage_panel_class = 'overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80' %}
+    {% set usage_card_class = 'group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg dark:border-stone-700/60 dark:bg-stone-800/80' %}
+    {% set usage_table_header_bg = 'bg-stone-50/80 dark:bg-stone-800/50' %}
+    {% set usage_row_hover = 'hover:bg-brand-50/50 dark:hover:bg-brand-900/10' %}
+    {% set usage_empty_state_bg = 'bg-gradient-to-br from-brand-100 to-brand-50 dark:from-brand-900/30 dark:to-brand-800/20' %}
+    {% set usage_accent_icon = 'text-brand-500' %}
+{% endif %}
+
+<div class="space-y-6 stagger-children">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold {{ usage_primary_text }}" style="font-family: var(--font-display);">{{ usage_page_title }}</h1>
+            <p class="mt-1 text-sm {{ usage_muted_text }}">Monitor data usage and historical activity</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="{{ usage_navigation_base_url }}?{{ usage_period_query_key }}=current{{ usage_anchor }}" class="rounded-xl border px-4 py-2 text-sm font-semibold transition-all duration-200
+                {% if period == 'current' or not period %}{{ usage_period_active_class }}
+                {% else %}{{ usage_period_inactive_class }}{% endif %}">
+                Current
+            </a>
+            <a href="{{ usage_navigation_base_url }}?{{ usage_period_query_key }}=last{{ usage_anchor }}" class="rounded-xl border px-4 py-2 text-sm font-semibold transition-all duration-200
+                {% if period == 'last' %}{{ usage_period_active_class }}
+                {% else %}{{ usage_period_inactive_class }}{% endif %}">
+                Last Period
+            </a>
+        </div>
+    </div>
+
+    <div class="{{ usage_panel_class }}"
+         {% if has_subscription %}
+         x-data='window.BandwidthChart && typeof window.BandwidthChart.bandwidthChart === "function" ? BandwidthChart.bandwidthChart({ apiBasePath: "{{ bandwidth_chart_api_base }}", useMyEndpoints: {{ "true" if bandwidth_chart_use_my_endpoints else "false" }}{% if bandwidth_chart_subscription_id %}, subscriptionId: "{{ bandwidth_chart_subscription_id }}"{% endif %} }) : {}'
+         x-init="if (typeof init === 'function') init()"
+         x-on:destroy.window="if (typeof destroy === 'function') destroy()"
+         {% endif %}>
+        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="flex items-center gap-2 text-lg font-semibold {{ usage_primary_text }}" style="font-family: var(--font-display);">
+                <svg class="h-5 w-5 {{ usage_accent_icon }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                Real-Time Bandwidth
+            </h2>
+            <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-700">
+                <template x-for="range in timeRanges" :key="range.value">
+                    <button @click="setTimeRange(range.value)"
+                            :class="timeRange === range.value ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
+                            class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
+                            x-text="range.label">
+                    </button>
+                </template>
+            </div>
+        </div>
+        <div class="p-6">
+            <div x-show="loading" x-cloak class="flex items-center justify-center h-48">
+                <svg class="animate-spin h-8 w-8 {{ usage_accent_icon }}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+
+            <div x-show="error && !loading" x-cloak class="flex flex-col items-center justify-center h-48 text-center">
+                <svg class="h-12 w-12 text-slate-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                <p class="text-sm {{ usage_muted_text }}">No bandwidth data available</p>
+            </div>
+
+            <div x-show="!loading && !error">
+                <div class="h-48 mb-4">
+                    <canvas x-ref="canvas"></canvas>
+                </div>
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Download</p>
+                        <p class="mt-1 text-xl font-bold text-brand-600 dark:text-brand-400" x-text="currentRxFormatted">{{ bandwidth_chart_initial_stats.current_rx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Current Upload</p>
+                        <p class="mt-1 text-xl font-bold text-purple-600 dark:text-purple-400" x-text="currentTxFormatted">{{ bandwidth_chart_initial_stats.current_tx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Peak Download</p>
+                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakRxFormatted">{{ bandwidth_chart_initial_stats.peak_rx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Peak Upload</p>
+                        <p class="mt-1 text-xl font-bold text-stone-900 dark:text-white" x-text="peakTxFormatted">{{ bandwidth_chart_initial_stats.peak_tx_formatted if bandwidth_chart_initial_stats else '0 bps' }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-3">
+        <div class="{{ usage_card_class }}">
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+            <div class="relative">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-100 text-brand-600 dark:bg-brand-900/30 dark:text-brand-400">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Total Usage</p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:.2f}".format(totals.amount) }} <span class="text-sm font-semibold text-stone-500">GB</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="{{ usage_card_class }}">
+            <div class="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+            <div class="relative">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Period</p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ period | default('Current') | title }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="{{ usage_card_class }}">
+            <div class="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+            <div class="relative">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Records</p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ usage_records | length }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if show_fup_panel and fup_status and fup_status.allowance_gb %}
+    <div class="{{ usage_card_class }}">
+        <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-3">
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl
+                    {% if fup_status.status_level == 'exceeded' %}bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400
+                    {% elif fup_status.status_level == 'warning' %}bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400
+                    {% else %}bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400{% endif %}">
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                </div>
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Fair Usage Policy</p>
+                    <p class="mt-1 text-lg font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
+                        {{ fup_status.usage_gb }} / {{ fup_status.allowance_gb }} GB
+                    </p>
+                </div>
+            </div>
+            <span class="text-2xl font-bold
+                {% if fup_status.status_level == 'exceeded' %}text-rose-600 dark:text-rose-400
+                {% elif fup_status.status_level == 'warning' %}text-amber-600 dark:text-amber-400
+                {% else %}text-emerald-600 dark:text-emerald-400{% endif %}">
+                {{ fup_status.usage_pct }}%
+            </span>
+        </div>
+        <div class="h-3 w-full overflow-hidden rounded-full bg-stone-100 dark:bg-stone-700">
+            <div class="h-full rounded-full transition-all duration-500
+                {% if fup_status.status_level == 'exceeded' %}bg-gradient-to-r from-rose-500 to-rose-600
+                {% elif fup_status.status_level == 'warning' %}bg-gradient-to-r from-amber-500 to-amber-600
+                {% else %}bg-gradient-to-r from-emerald-500 to-teal-500{% endif %}"
+                 style="width: {{ fup_status.usage_pct }}%"></div>
+        </div>
+        {% if fup_status.status_level == 'exceeded' %}
+        <p class="mt-2 text-sm font-medium text-rose-600 dark:text-rose-400">Data allowance exceeded — speed may be reduced until next billing cycle</p>
+        {% elif fup_status.status_level == 'warning' %}
+        <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">Approaching your data allowance — {{ fup_status.allowance_gb - fup_status.usage_gb }} GB remaining</p>
+        {% else %}
+        <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">{{ fup_status.allowance_gb - fup_status.usage_gb }} GB remaining in this billing period</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="{{ usage_card_class }}">
+        <div class="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
+        <div class="relative">
+            <div class="mb-4 flex items-center gap-3">
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400">
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Subscription Averages</p>
+                    <p class="mt-1 text-lg font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Current Usage Averages</p>
+                </div>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Daily Usage</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_daily_usage_gb or 0) }} GB</p>
+                </div>
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Speed</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_speed_mbps or 0) }} Mbps</p>
+                </div>
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Download</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_download_mbps or 0) }} Mbps</p>
+                </div>
+                <div class="rounded-xl bg-stone-50 p-4 dark:bg-stone-700/30">
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Average Upload</p>
+                    <p class="mt-1 text-lg font-semibold text-stone-900 dark:text-white">{{ "{:.2f}".format(usage_summary.average_upload_mbps or 0) }} Mbps</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="{{ usage_panel_class }}"
+         {% if usage_enable_records_chart %}
+         x-data='window.DotmacCharts && typeof window.DotmacCharts.createUsageRecordsPanel === "function" ? DotmacCharts.createUsageRecordsPanel({
+             defaultView: {{ usage_records_default_view | tojson }},
+             chartRecords: {{ usage_chart_records | tojson }},
+             chartId: {{ usage_records_chart_id | tojson }},
+             chartLabel: {{ usage_records_chart_label | tojson }}
+         }) : {
+             recordsView: {{ usage_records_default_view | tojson }},
+             setRecordsView(view) { this.recordsView = view; },
+             init() {},
+         }'
+         x-init="if (typeof init === 'function') init()"
+         {% endif %}>
+        <div class="flex items-center justify-between gap-4 border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="flex items-center gap-2 text-lg font-semibold {{ usage_primary_text }}" style="font-family: var(--font-display);">
+                <svg class="h-5 w-5 {{ usage_muted_text }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                {{ usage_records_title }}
+            </h2>
+            {% if usage_enable_records_chart %}
+            <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-700">
+                <button type="button"
+                        @click="setRecordsView('chart')"
+                        :class="recordsView === 'chart' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
+                        class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors">
+                    Chart
+                </button>
+                <button type="button"
+                        @click="setRecordsView('table')"
+                        :class="recordsView === 'table' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-600 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'"
+                        class="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors">
+                    Table
+                </button>
+            </div>
+            {% endif %}
+        </div>
+        {% if usage_enable_records_chart %}
+        <div x-show="recordsView === 'chart'" class="p-6" x-cloak>
+            {% if usage_chart_records %}
+            <div class="h-80">
+                <canvas x-ref="recordsChartCanvas"></canvas>
+            </div>
+            {% else %}
+            <div class="flex min-h-[18rem] flex-col items-center justify-center text-center">
+                <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl {{ usage_empty_state_bg }}">
+                    <svg class="h-8 w-8 {{ usage_empty_icon | default(usage_accent_icon) }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                </div>
+                <h3 class="text-lg font-semibold {{ usage_primary_text }}" style="font-family: var(--font-display);">No usage data</h3>
+                <p class="mt-1 max-w-sm text-sm {{ usage_muted_text }}">Usage records will show as data is collected.</p>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        <div class="overflow-x-auto"
+             {% if usage_enable_records_chart %}
+             x-show="recordsView === 'table'"
+             {% endif %}>
+            <table class="min-w-full divide-y divide-stone-200/60 dark:divide-stone-700/60">
+                <thead>
+                    <tr class="{{ usage_table_header_bg }}">
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Date</th>
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Type</th>
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Usage</th>
+                        <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Notes</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-stone-100 dark:divide-stone-700/50">
+                    {% if usage_records %}
+                    {% for record in usage_records %}
+                    <tr class="transition-colors duration-200 {{ usage_row_hover }}">
+                        <td class="px-6 py-4">
+                            <div class="flex items-center gap-2">
+                                <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                <span class="text-sm text-stone-600 dark:text-stone-300">{{ record.recorded_at.strftime('%b %d, %Y %H:%M') if record.recorded_at else 'N/A' }}</span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="inline-flex items-center rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-400">
+                                {{ record.usage_type | default('Data') }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="text-sm font-bold text-stone-900 dark:text-white">{{ "{:.2f}".format(record.amount or record.usage_amount or 0) }}</span>
+                            <span class="text-sm text-stone-500 dark:text-stone-400">{{ record.unit | default('GB') }}</span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="text-sm text-stone-500 dark:text-stone-400">{{ record.description | default('—') }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="px-6 py-16">
+                            <div class="flex flex-col items-center justify-center text-center">
+                                <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl {{ usage_empty_state_bg }}">
+                                    <svg class="h-8 w-8 {{ usage_empty_icon | default(usage_accent_icon) }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                                </div>
+                                <h3 class="text-lg font-semibold {{ usage_primary_text }}" style="font-family: var(--font-display);">No usage data</h3>
+                                <p class="mt-1 max-w-sm text-sm {{ usage_muted_text }}">Usage records will show as data is collected.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+        {% if total_pages and total_pages > 1 %}
+        <div class="flex flex-col items-center justify-between gap-4 border-t border-stone-200/60 px-6 py-4 dark:border-stone-700/60 sm:flex-row"
+             {% if usage_enable_records_chart %}
+             x-show="recordsView === 'table'"
+             {% endif %}>
+            <p class="text-sm font-medium text-stone-500 dark:text-stone-400">Page <span class="text-stone-900 dark:text-white">{{ page }}</span> of <span class="text-stone-900 dark:text-white">{{ total_pages }}</span></p>
+            <div class="flex items-center gap-2">
+                {% if page > 1 %}
+                <a href="{{ usage_navigation_base_url }}?{{ usage_page_query_key }}={{ page - 1 }}&{{ usage_per_page_query_key }}={{ per_page }}&{{ usage_period_query_key }}={{ period }}{{ usage_anchor }}" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition-all duration-200 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    Previous
+                </a>
+                {% endif %}
+                {% if page < total_pages %}
+                <a href="{{ usage_navigation_base_url }}?{{ usage_page_query_key }}={{ page + 1 }}&{{ usage_per_page_query_key }}={{ per_page }}&{{ usage_period_query_key }}={{ period }}{{ usage_anchor }}" class="inline-flex items-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition-all duration-200 hover:bg-stone-50 hover:border-stone-400 dark:border-stone-600 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600">
+                    Next
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
