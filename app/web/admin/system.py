@@ -49,6 +49,7 @@ from app.services import (
     scheduler as scheduler_service,
 )
 from app.services import settings_spec
+from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
 from app.services import (
@@ -3363,6 +3364,86 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
                 **data,
             },
         ),
+    )
+
+
+@router.get(
+    "/ticket-settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/system/ticket_settings.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "ticket-settings",
+                "status_options": support_ticket_settings_service.list_status_options(
+                    db
+                ),
+                "priority_options": support_ticket_settings_service.list_priority_options(
+                    db
+                ),
+                "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
+                    db
+                ),
+                "saved": request.query_params.get("saved") == "1",
+                "errors": [],
+            },
+        ),
+    )
+
+
+@router.post(
+    "/ticket-settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def ticket_settings_update(
+    request: Request,
+    form=Depends(parse_form_data),
+    db: Session = Depends(get_db),
+):
+    statuses = form.getlist("status_values")
+    priorities = form.getlist("priority_values")
+    ticket_types = form.getlist("ticket_type_values")
+    errors: list[str] = []
+    try:
+        support_ticket_settings_service.update_options(
+            db,
+            statuses=statuses,
+            priorities=priorities,
+            ticket_types=ticket_types,
+        )
+        return RedirectResponse(
+            url="/admin/system/ticket-settings?saved=1", status_code=303
+        )
+    except Exception as exc:
+        db.rollback()
+        errors.append(str(exc) or "Could not save ticket settings.")
+    return templates.TemplateResponse(
+        "admin/system/ticket_settings.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "ticket-settings",
+                "status_options": support_ticket_settings_service.list_status_options(
+                    db
+                ),
+                "priority_options": support_ticket_settings_service.list_priority_options(
+                    db
+                ),
+                "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
+                    db
+                ),
+                "saved": False,
+                "errors": errors,
+            },
+        ),
+        status_code=400,
     )
 
 

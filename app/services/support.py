@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -82,7 +83,10 @@ def _coerce_subscriber_uuid(db: Session, value: str | UUID | None) -> UUID | Non
 
 
 def _ensure_not_merged_source(ticket: Ticket) -> None:
-    if ticket.merged_into_ticket_id is not None or support_ticket_settings_service.status_is_merged(ticket.status):
+    if (
+        ticket.merged_into_ticket_id is not None
+        or support_ticket_settings_service.status_is_merged(ticket.status)
+    ):
         raise HTTPException(
             status_code=409, detail="Cannot modify a merged source ticket"
         )
@@ -789,8 +793,12 @@ class Tickets:
         db: Session, payload: TicketCreate, actor_id: str | None = None, request=None
     ) -> Ticket:
         data = payload.model_dump()
-        data["status"] = data.get("status") or support_ticket_settings_service.default_status(db)
-        data["priority"] = data.get("priority") or support_ticket_settings_service.default_priority(db)
+        data["status"] = data.get(
+            "status"
+        ) or support_ticket_settings_service.default_status(db)
+        data["priority"] = data.get(
+            "priority"
+        ) or support_ticket_settings_service.default_priority(db)
         data["created_by_person_id"] = _coerce_subscriber_uuid(
             db, data.get("created_by_person_id")
         )
@@ -1442,7 +1450,7 @@ def _system_user_option(row) -> dict[str, str]:
 def _append_included_options(
     options: list[dict[str, str]],
     *,
-    include_ids: list[str | UUID] | None,
+    include_ids: Sequence[str | UUID] | None,
     resolver,
 ) -> list[dict[str, str]]:
     if not include_ids:
@@ -1461,7 +1469,9 @@ def _append_included_options(
     return merged
 
 
-def person_option(db: Session, subscriber_id: str | UUID | None) -> dict[str, str] | None:
+def person_option(
+    db: Session, subscriber_id: str | UUID | None
+) -> dict[str, str] | None:
     """Return one subscriber formatted for support form selectors."""
     from app.models.subscriber import Subscriber
 
@@ -1478,7 +1488,7 @@ def list_people(
     db: Session,
     *,
     limit: int = 500,
-    include_ids: list[str | UUID] | None = None,
+    include_ids: Sequence[str | UUID] | None = None,
 ) -> list[dict[str, str]]:
     """Return active subscribers formatted for ticket people selectors."""
     from app.models.subscriber import Subscriber
@@ -1521,7 +1531,7 @@ def list_staff(
     db: Session,
     *,
     limit: int = 500,
-    include_ids: list[str | UUID] | None = None,
+    include_ids: Sequence[str | UUID] | None = None,
 ) -> list[dict[str, str]]:
     """Return active internal users for support assignment controls."""
     from app.models.system_user import SystemUser
@@ -1544,7 +1554,7 @@ def list_assignment_people(
     db: Session,
     *,
     limit: int = 500,
-    include_ids: list[str | UUID] | None = None,
+    include_ids: Sequence[str | UUID] | None = None,
 ) -> list[dict[str, str]]:
     """Return assignment options with legacy subscriber fallback for existing tickets."""
     return _append_included_options(
@@ -1558,9 +1568,7 @@ def status_totals(db: Session) -> dict[str, int]:
     """Return ticket counts grouped by status."""
     from sqlalchemy import func
 
-    counts = {
-        item: 0 for item in support_ticket_settings_service.list_status_options(db)
-    }
+    counts = dict.fromkeys(support_ticket_settings_service.list_status_options(db), 0)
     rows = (
         db.query(Ticket.status, func.count(Ticket.id))
         .filter(Ticket.is_active.is_(True))

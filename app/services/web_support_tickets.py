@@ -126,21 +126,40 @@ def _append_missing_option(options: list[str], value: str | None) -> list[str]:
 
 def _status_summary_cards(db: Session) -> list[dict[str, str | int]]:
     totals = support_service.status_totals(db)
+    closed_count = int(totals.get("closed", 0))
+    canceled_count = int(totals.get("canceled", 0))
+    open_count = sum(
+        int(count)
+        for status, count in totals.items()
+        if str(status).strip() not in {"closed", "canceled"}
+    )
+
     return [
         {
-            "value": status,
-            "label": support_ticket_settings_service.display_label(status),
-            "count": int(totals.get(status, 0)),
-            "href": f"/admin/support/tickets?status={status}",
-            "color": support_ticket_settings_service.status_color(status),
-        }
-        for status in support_ticket_settings_service.list_status_options(db)
+            "value": "open",
+            "label": "Open",
+            "count": open_count,
+            "href": "/admin/support/tickets?status=open",
+            "color": "emerald",
+        },
+        {
+            "value": "closed",
+            "label": "Closed",
+            "count": closed_count,
+            "href": "/admin/support/tickets?status=closed",
+            "color": "slate",
+        },
+        {
+            "value": "canceled",
+            "label": "Cancelled",
+            "count": canceled_count,
+            "href": "/admin/support/tickets?status=canceled",
+            "color": "red",
+        },
     ]
 
 
-def _resolve_uploaded_by_subscriber_id(
-    db: Session, actor_id: str | None
-) -> str | None:
+def _resolve_uploaded_by_subscriber_id(db: Session, actor_id: str | None) -> str | None:
     uid = parse_uuid_or_none(actor_id)
     if not uid:
         return None
@@ -288,17 +307,25 @@ def build_ticket_form_context(
         else "",
         "assignee_person_ids": current_assignees,
     }
-    customer_person = support_service.person_option(db, prefill["customer_person_id"])
-    subscriber_person = support_service.person_option(db, prefill["subscriber_id"])
+    customer_person_id = str(prefill["customer_person_id"] or "")
+    subscriber_id_value = str(prefill["subscriber_id"] or "")
+    customer_person = support_service.person_option(db, customer_person_id)
+    subscriber_person = support_service.person_option(db, subscriber_id_value)
     selected_person = subscriber_person or customer_person or {}
     prefill["customer_person_label"] = (
         customer_person["label"] if customer_person else ""
     )
-    prefill["subscriber_label"] = subscriber_person["label"] if subscriber_person else ""
-    status_options = _append_missing_option(status_options, prefill["status"])
-    priority_options = _append_missing_option(priority_options, prefill["priority"])
+    prefill["subscriber_label"] = (
+        subscriber_person["label"] if subscriber_person else ""
+    )
+    status_options = _append_missing_option(
+        status_options, str(prefill["status"] or "")
+    )
+    priority_options = _append_missing_option(
+        priority_options, str(prefill["priority"] or "")
+    )
     ticket_type_options = _append_missing_option(
-        ticket_type_options, prefill["ticket_type"]
+        ticket_type_options, str(prefill["ticket_type"] or "")
     )
     return {
         "all_statuses": status_options,
@@ -709,11 +736,18 @@ def build_tickets_list_context(
             ]
         )
         subscriber_ids.extend(
-            [ticket.customer_person_id, ticket.customer_account_id, ticket.subscriber_id]
+            [
+                ticket.customer_person_id,
+                ticket.customer_account_id,
+                ticket.subscriber_id,
+            ]
         )
     staff = support_service.list_assignment_people(
         db,
-        include_ids=_non_empty_ids(assignment_ids + [project_manager_person_id, site_coordinator_person_id, actor_id]),
+        include_ids=_non_empty_ids(
+            assignment_ids
+            + [project_manager_person_id, site_coordinator_person_id, actor_id]
+        ),
     )
     subscribers = support_service.list_people(
         db,
@@ -769,7 +803,11 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
     subscribers = support_service.list_people(
         db,
         include_ids=_non_empty_ids(
-            [ticket.customer_person_id, ticket.customer_account_id, ticket.subscriber_id]
+            [
+                ticket.customer_person_id,
+                ticket.customer_account_id,
+                ticket.subscriber_id,
+            ]
         ),
     )
     return {
