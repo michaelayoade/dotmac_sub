@@ -114,6 +114,31 @@ class TestAccountDetail:
         assert len(result["subscriptions"]) == 1
         assert result["subscriptions"][0]["offer_name"] == "Basic 10Mbps"
 
+    def test_get_account_detail_returns_none_for_reseller_login_user(
+        self, db_session
+    ) -> None:
+        from app.models.subscriber import Reseller, Subscriber, UserType
+
+        reseller = Reseller(name="Portal Reseller", is_active=True)
+        db_session.add(reseller)
+        db_session.commit()
+
+        login_user = Subscriber(
+            first_name="Mimi",
+            last_name="David",
+            email="mimi@example.com",
+            reseller_id=reseller.id,
+            user_type=UserType.reseller,
+        )
+        db_session.add(login_user)
+        db_session.commit()
+
+        from app.services.reseller_portal import get_account_detail
+
+        assert (
+            get_account_detail(db_session, str(reseller.id), str(login_user.id)) is None
+        )
+
 
 # ---------------------------------------------------------------------------
 # 3. Invoice visibility
@@ -246,6 +271,38 @@ class TestAccountSearch:
         results = list_accounts(db_session, str(reseller.id), 50, 0, search="unique@")
         assert len(results) == 1
 
+    def test_list_accounts_excludes_reseller_login_users(self, db_session) -> None:
+        from app.models.subscriber import Reseller, Subscriber, UserType
+
+        reseller = Reseller(name="Filter Reseller", is_active=True)
+        db_session.add(reseller)
+        db_session.commit()
+
+        db_session.add(
+            Subscriber(
+                first_name="Managed",
+                last_name="Customer",
+                email="managed@example.com",
+                reseller_id=reseller.id,
+            )
+        )
+        db_session.add(
+            Subscriber(
+                first_name="Portal",
+                last_name="User",
+                email="portal@example.com",
+                reseller_id=reseller.id,
+                user_type=UserType.reseller,
+            )
+        )
+        db_session.commit()
+
+        from app.services.reseller_portal import list_accounts
+
+        accounts = list_accounts(db_session, str(reseller.id), 50, 0)
+        assert len(accounts) == 1
+        assert accounts[0]["subscriber_name"] == "Managed Customer"
+
 
 # ---------------------------------------------------------------------------
 # 5. Revenue summary
@@ -267,6 +324,37 @@ class TestRevenueSummary:
         assert summary["total_outstanding"] == 0
         assert summary["account_count"] == 0
         assert summary["monthly"] == []
+
+    def test_revenue_summary_excludes_reseller_login_users(self, db_session) -> None:
+        from app.models.subscriber import Reseller, Subscriber, UserType
+
+        reseller = Reseller(name="Revenue Filter", is_active=True)
+        db_session.add(reseller)
+        db_session.commit()
+
+        db_session.add(
+            Subscriber(
+                first_name="Managed",
+                last_name="Customer",
+                email="managed2@example.com",
+                reseller_id=reseller.id,
+            )
+        )
+        db_session.add(
+            Subscriber(
+                first_name="Portal",
+                last_name="User",
+                email="portal2@example.com",
+                reseller_id=reseller.id,
+                user_type=UserType.reseller,
+            )
+        )
+        db_session.commit()
+
+        from app.services.reseller_portal import get_revenue_summary
+
+        summary = get_revenue_summary(db_session, str(reseller.id))
+        assert summary["account_count"] == 1
 
 
 # ---------------------------------------------------------------------------

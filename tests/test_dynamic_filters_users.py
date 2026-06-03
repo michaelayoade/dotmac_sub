@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from app.models.auth import UserCredential
 from app.models.rbac import Role, SystemUserRole
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.services.dynamic_filters import (
     FilterValidationError,
@@ -116,3 +116,43 @@ def test_users_list_rejects_invalid_dynamic_field(db_session):
         )
 
     assert exc.value.status_code == 400
+
+
+def test_users_list_includes_reseller_users(db_session):
+    reseller_user = Subscriber(
+        first_name="Mimi",
+        last_name="David",
+        email=f"reseller-{uuid.uuid4().hex}@example.com",
+        user_type=UserType.reseller,
+        is_active=True,
+    )
+    db_session.add(reseller_user)
+    db_session.flush()
+    db_session.add(
+        UserCredential(
+            subscriber_id=reseller_user.id,
+            username=f"reseller-{uuid.uuid4().hex}",
+            password_hash="hash",
+            is_active=True,
+            must_change_password=False,
+        )
+    )
+    db_session.commit()
+
+    users, total = list_users(
+        db_session,
+        search="Mimi",
+        role_id=None,
+        status=None,
+        filters=None,
+        order_by="last_name",
+        order_dir="asc",
+        offset=0,
+        limit=25,
+    )
+
+    assert total == 1
+    assert len(users) == 1
+    assert users[0]["source_type"] == "reseller"
+    assert users[0]["user_type"] == UserType.reseller.value
+    assert users[0]["is_bulk_actionable"] is False
