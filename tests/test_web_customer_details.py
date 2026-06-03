@@ -2,12 +2,16 @@ import json
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscriber import Address, SubscriberCategory
+from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
 from app.models.subscription_engine import SettingValueType
 from app.web.admin import customers as customer_routes
 from app.services.web_customer_details import (
     build_business_detail_snapshot,
+    build_customer_detail_snapshot,
     build_person_detail_snapshot,
 )
 
@@ -25,6 +29,7 @@ def _billing_setting(key: str, value: str) -> DomainSetting:
 def test_person_detail_includes_billing_policy_override_snapshot(
     db_session, subscriber
 ):
+    subscriber.user_type = UserType.customer
     db_session.add_all(
         [
             _billing_setting("billing_enabled", "true"),
@@ -51,6 +56,7 @@ def test_person_detail_includes_billing_policy_override_snapshot(
 
 
 def test_business_detail_marks_mixed_billing_policy(db_session, subscriber):
+    subscriber.user_type = UserType.customer
     db_session.add_all(
         [
             _billing_setting("billing_enabled", "true"),
@@ -76,6 +82,7 @@ def test_business_detail_marks_mixed_billing_policy(db_session, subscriber):
 
 
 def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber):
+    subscriber.user_type = UserType.customer
     address = Address(
         subscriber_id=subscriber.id,
         address_line1="123 Sample Street",
@@ -97,6 +104,23 @@ def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber
         json.loads(context["geocode_target"]["payload_json"])
         == context["geocode_target"]["payload"]
     )
+
+
+def test_customer_detail_rejects_reseller_users(db_session):
+    reseller_user = Subscriber(
+        first_name="Mimi",
+        last_name="David",
+        email="reseller-detail@example.com",
+        user_type=UserType.reseller,
+        is_active=True,
+    )
+    db_session.add(reseller_user)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        build_customer_detail_snapshot(db_session, str(reseller_user.id))
+
+    assert exc.value.status_code == 404
 
 
 def test_normalize_usage_period_tolerates_trailing_punctuation():

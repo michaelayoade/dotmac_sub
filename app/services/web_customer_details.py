@@ -29,6 +29,7 @@ from app.models.subscriber import (
     SubscriberCategory,
     SubscriberChannel,
     SubscriberNINVerification,
+    UserType,
 )
 from app.models.support import Ticket, TicketStatus
 from app.schemas.geocoding import GeocodePreviewRequest
@@ -980,6 +981,8 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     company identity directly on the subscriber row.
     """
     customer = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
     customer_name = (
         customer.company_name
         or customer.display_name
