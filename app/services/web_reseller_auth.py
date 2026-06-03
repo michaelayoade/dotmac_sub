@@ -1,11 +1,16 @@
 """Service helpers for reseller auth routes."""
 
 import logging
+from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.auth import AuthProvider, UserCredential
+from app.models.subscriber import Subscriber
+from app.services import auth_flow as auth_flow_service
 from app.services import reseller_portal
 from app.services.db_session_adapter import db_session_adapter
 from app.web.reseller.branding import get_reseller_templates
@@ -13,6 +18,24 @@ from app.web.reseller.branding import get_reseller_templates
 logger = logging.getLogger(__name__)
 
 templates = get_reseller_templates()
+_RESELLER_RESET_LOGIN_PATH = "/reseller/auth/login?next=/reseller/dashboard"
+
+
+def _password_reset_email_for_identifier(db: Session, identifier: str) -> str:
+    normalized_identifier = identifier.strip().lower()
+    email = (
+        db.query(Subscriber.email)
+        .join(UserCredential, Subscriber.id == UserCredential.subscriber_id)
+        .filter(UserCredential.provider == AuthProvider.local)
+        .filter(UserCredential.is_active.is_(True))
+        .filter(
+            (func.lower(UserCredential.username) == normalized_identifier)
+            | (func.lower(Subscriber.email) == normalized_identifier)
+        )
+        .order_by(UserCredential.created_at.desc())
+        .scalar()
+    )
+    return email or identifier
 
 
 def reseller_login_page(request: Request, error: str | None = None):
@@ -89,6 +112,27 @@ def reseller_login_submit(
             status_code=503,
         )
     except Exception as exc:
+        if hasattr(exc, "detail"):
+            detail = exc.detail
+            if (
+                isinstance(detail, dict)
+                and detail.get("code") == "PASSWORD_RESET_REQUIRED"
+            ):
+                reset_email = _password_reset_email_for_identifier(db, username)
+                reset = auth_flow_service.request_password_reset(
+                    db=db, email=reset_email
+                )
+                if reset and reset.get("token"):
+                    query = urlencode(
+                        {
+                            "token": str(reset["token"]),
+                            "next_login": _RESELLER_RESET_LOGIN_PATH,
+                        }
+                    )
+                    return RedirectResponse(
+                        url=f"/auth/reset-password?{query}",
+                        status_code=303,
+                    )
         error_msg = str(exc) if str(exc) else "Invalid credentials"
         return templates.TemplateResponse(
             "reseller/auth/login.html",

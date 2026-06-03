@@ -33,6 +33,19 @@
         </div>
         {% endif %}
 
+        {% if request.query_params.get('reset') == 'success' %}
+        <div class="mb-6 rounded-xl border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-900/20">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/40">
+                    <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <p class="text-sm font-medium text-green-700 dark:text-green-200">Password reset successful. Please sign in with your new password.</p>
+            </div>
+        </div>
+        {% endif %}
+
         <form action="/reseller/auth/login"
               method="post"
               x-data="{ loading: false }"
