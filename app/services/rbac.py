@@ -26,6 +26,7 @@ from app.schemas.rbac import (
     SubscriberRoleCreate,
     SubscriberRoleUpdate,
 )
+from app.services import auth_cache
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
 
@@ -39,6 +40,7 @@ class Roles(ListResponseMixin):
         db.add(role)
         db.commit()
         db.refresh(role)
+        auth_cache.invalidate_all_auth_cache()
         return role
 
     @staticmethod
@@ -79,6 +81,7 @@ class Roles(ListResponseMixin):
             setattr(role, key, value)
         db.commit()
         db.refresh(role)
+        auth_cache.invalidate_all_auth_cache()
         return role
 
     @staticmethod
@@ -88,6 +91,7 @@ class Roles(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Role not found")
         role.is_active = False
         db.commit()
+        auth_cache.invalidate_all_auth_cache()
 
 
 class Permissions(ListResponseMixin):
@@ -97,6 +101,7 @@ class Permissions(ListResponseMixin):
         db.add(permission)
         db.commit()
         db.refresh(permission)
+        auth_cache.invalidate_all_auth_cache()
         return permission
 
     @staticmethod
@@ -137,6 +142,7 @@ class Permissions(ListResponseMixin):
             setattr(permission, key, value)
         db.commit()
         db.refresh(permission)
+        auth_cache.invalidate_all_auth_cache()
         return permission
 
     @staticmethod
@@ -146,6 +152,7 @@ class Permissions(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Permission not found")
         permission.is_active = False
         db.commit()
+        auth_cache.invalidate_all_auth_cache()
 
 
 class RolePermissions(ListResponseMixin):
@@ -161,6 +168,7 @@ class RolePermissions(ListResponseMixin):
         db.add(link)
         db.commit()
         db.refresh(link)
+        auth_cache.invalidate_all_auth_cache()
         return link
 
     @staticmethod
@@ -211,6 +219,7 @@ class RolePermissions(ListResponseMixin):
             setattr(link, key, value)
         db.commit()
         db.refresh(link)
+        auth_cache.invalidate_all_auth_cache()
         return link
 
     @staticmethod
@@ -220,6 +229,7 @@ class RolePermissions(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Role permission not found")
         db.delete(link)
         db.commit()
+        auth_cache.invalidate_all_auth_cache()
 
 
 class SubscriberRoles(ListResponseMixin):
@@ -235,6 +245,7 @@ class SubscriberRoles(ListResponseMixin):
         db.add(link)
         db.commit()
         db.refresh(link)
+        auth_cache.invalidate_principal("subscriber", str(payload.subscriber_id))
         return link
 
     @staticmethod
@@ -272,6 +283,7 @@ class SubscriberRoles(ListResponseMixin):
         link = db.get(SubscriberRole, coerce_uuid(link_id))
         if not link:
             raise HTTPException(status_code=404, detail="Subscriber role not found")
+        original_subscriber_id = str(link.subscriber_id)
         data = payload.model_dump(exclude_unset=True)
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
@@ -285,6 +297,8 @@ class SubscriberRoles(ListResponseMixin):
             setattr(link, key, value)
         db.commit()
         db.refresh(link)
+        auth_cache.invalidate_principal("subscriber", original_subscriber_id)
+        auth_cache.invalidate_principal("subscriber", str(link.subscriber_id))
         return link
 
     @staticmethod
@@ -292,8 +306,10 @@ class SubscriberRoles(ListResponseMixin):
         link = db.get(SubscriberRole, coerce_uuid(link_id))
         if not link:
             raise HTTPException(status_code=404, detail="Subscriber role not found")
+        subscriber_id = str(link.subscriber_id)
         db.delete(link)
         db.commit()
+        auth_cache.invalidate_principal("subscriber", subscriber_id)
 
 
 class SubscriberPermissions(ListResponseMixin):
@@ -317,6 +333,7 @@ class SubscriberPermissions(ListResponseMixin):
         db.add(link)
         db.commit()
         db.refresh(link)
+        auth_cache.invalidate_principal("subscriber", str(payload.subscriber_id))
         return link
 
     @staticmethod
@@ -373,6 +390,7 @@ class SubscriberPermissions(ListResponseMixin):
             raise HTTPException(
                 status_code=404, detail="Subscriber permission not found"
             )
+        original_subscriber_id = str(link.subscriber_id)
         data = payload.model_dump(exclude_unset=True)
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
@@ -386,6 +404,8 @@ class SubscriberPermissions(ListResponseMixin):
             setattr(link, key, value)
         db.commit()
         db.refresh(link)
+        auth_cache.invalidate_principal("subscriber", original_subscriber_id)
+        auth_cache.invalidate_principal("subscriber", str(link.subscriber_id))
         return link
 
     @staticmethod
@@ -395,8 +415,10 @@ class SubscriberPermissions(ListResponseMixin):
             raise HTTPException(
                 status_code=404, detail="Subscriber permission not found"
             )
+        subscriber_id = str(link.subscriber_id)
         db.delete(link)
         db.commit()
+        auth_cache.invalidate_principal("subscriber", subscriber_id)
 
     @staticmethod
     def sync_for_person(
@@ -433,6 +455,7 @@ class SubscriberPermissions(ListResponseMixin):
                 )
 
         db.commit()
+        auth_cache.invalidate_principal("subscriber", subscriber_id)
 
 
 roles = Roles()

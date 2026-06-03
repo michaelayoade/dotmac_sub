@@ -162,6 +162,11 @@ def require_user_auth(
     request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(_get_db),
 ):
+    if request is not None:
+        existing = getattr(request.state, "auth", None)
+        if isinstance(existing, dict) and existing.get("principal_id"):
+            return existing
+
     token = _extract_bearer_token(authorization)
     if not token and request is not None:
         token = request.cookies.get("session_token")

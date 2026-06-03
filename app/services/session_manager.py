@@ -17,6 +17,7 @@ from app.schemas.auth_flow import (
     SessionListResponse,
     SessionRevokeResponse,
 )
+from app.services import auth_cache
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +75,16 @@ def revoke_session(
         raise HTTPException(status_code=400, detail="Session already revoked")
 
     now = datetime.now(UTC)
+    principal_type = "system_user" if session.system_user_id else "subscriber"
+    principal_id = str(session.system_user_id or session.subscriber_id)
     session.status = SessionStatus.revoked
     session.revoked_at = now
     db.flush()
+    auth_cache.invalidate_session_context(
+        str(session.id),
+        principal_type=principal_type,
+        principal_id=principal_id,
+    )
 
     return SessionRevokeResponse(revoked_at=now)
 
@@ -98,8 +106,15 @@ def revoke_all_other_sessions(
 
     now = datetime.now(UTC)
     for s in sessions:
+        principal_type = "system_user" if s.system_user_id else "subscriber"
+        principal_id = str(s.system_user_id or s.subscriber_id)
         s.status = SessionStatus.revoked
         s.revoked_at = now
+        auth_cache.invalidate_session_context(
+            str(s.id),
+            principal_type=principal_type,
+            principal_id=principal_id,
+        )
 
     db.flush()
 

@@ -1,11 +1,13 @@
 """Web authentication dependencies for cookie-based auth with redirects."""
 
+import time
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
+from app.services import auth_cache
 from app.services.auth_flow import (
     _load_rbac_claims,
     decode_access_token,
@@ -90,11 +92,36 @@ def validate_session_token(
 
     result = validate_active_session(db, session_id, principal_id)
     if not result:
+        auth_cache.invalidate_session_context(
+            str(session_id),
+            principal_type=str(principal_type),
+            principal_id=str(principal_id),
+        )
         return None
     _session, principal, resolved_type = result
 
     roles = payload.get("roles", [])
     scopes = payload.get("scopes", [])
+    cached = auth_cache.get_session_context(str(session_id))
+    if (
+        (not isinstance(roles, list) or not roles)
+        or (not isinstance(scopes, list) or not scopes)
+    ) and isinstance(cached, dict):
+        cached_principal_id = str(cached.get("principal_id") or "")
+        cached_principal_type = str(cached.get("principal_type") or principal_type)
+        cached_roles = cached.get("roles")
+        cached_scopes = cached.get("scopes")
+        if cached_principal_id == str(principal_id) and cached_principal_type == str(
+            resolved_type or principal_type
+        ):
+            if (not isinstance(roles, list) or not roles) and isinstance(
+                cached_roles, list
+            ):
+                roles = list(cached_roles)
+            if (not isinstance(scopes, list) or not scopes) and isinstance(
+                cached_scopes, list
+            ):
+                scopes = list(cached_scopes)
     if (
         not isinstance(roles, list)
         or not isinstance(scopes, list)
@@ -105,6 +132,20 @@ def validate_session_token(
         )
         roles = list(resolved_roles)
         scopes = list(resolved_scopes)
+
+    exp = payload.get("exp")
+    ttl_seconds: int | None = None
+    if isinstance(exp, int):
+        ttl_seconds = max(30, exp - int(time.time()))
+    auth_cache.set_session_context(
+        session_id=str(session_id),
+        principal_type=str(resolved_type or principal_type),
+        principal_id=str(principal_id),
+        roles=roles if isinstance(roles, list) else [],
+        scopes=scopes if isinstance(scopes, list) else [],
+        principal=principal,
+        ttl_seconds=ttl_seconds,
+    )
 
     return {
         "subscriber_id": str(principal_id),
@@ -126,6 +167,10 @@ def require_web_auth(
     Raises AuthenticationRequired if not authenticated.
     The exception handler should redirect to login with next URL.
     """
+    existing = getattr(request.state, "auth", None)
+    if isinstance(existing, dict) and existing.get("principal_id"):
+        return existing
+
     auth_info = validate_session_token(request, db)
     if not auth_info:
         # For expired POST-backed form submits, bounce the user back to the form

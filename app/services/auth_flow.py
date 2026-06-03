@@ -40,6 +40,7 @@ from app.models.rbac import (
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
+from app.services import auth_cache
 from app.services import radius_auth as radius_auth_service
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
@@ -394,6 +395,9 @@ def _load_rbac_claims(
     else:
         principal_type = principal_type_or_principal_id
         resolved_principal_id = principal_id
+    cached = auth_cache.get_claims(principal_type, str(resolved_principal_id))
+    if cached is not None:
+        return cached
     principal_uuid = coerce_uuid(resolved_principal_id)
     if principal_type == "system_user":
         roles = (
@@ -444,6 +448,12 @@ def _load_rbac_claims(
         direct_permissions = []
     role_names = [role.name for role in roles]
     permission_keys = list({perm.key for perm in [*permissions, *direct_permissions]})
+    auth_cache.set_claims(
+        principal_type,
+        str(resolved_principal_id),
+        role_names,
+        permission_keys,
+    )
     return role_names, permission_keys
 
 
@@ -858,9 +868,16 @@ class AuthFlow(ListResponseMixin):
         )
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        principal_type = "system_user" if session.system_user_id else "subscriber"
+        principal_id = str(session.system_user_id or session.subscriber_id)
         session.status = SessionStatus.revoked
         session.revoked_at = _now()
         db.commit()
+        auth_cache.invalidate_session_context(
+            str(session.id),
+            principal_type=principal_type,
+            principal_id=principal_id,
+        )
         return {"revoked_at": session.revoked_at}
 
     @staticmethod

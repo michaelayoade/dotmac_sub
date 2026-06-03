@@ -16,6 +16,7 @@ from app.models.rbac import (
 from app.models.rbac import SystemUserRole as SystemUserRoleModel
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
+from app.services import auth_cache
 from app.services import rbac as rbac_service
 from app.services import web_system_users as web_system_users_service
 from app.services.auth_flow import hash_password
@@ -38,6 +39,7 @@ def set_user_active(db: Session, *, user_id: str, is_active: bool) -> SystemUser
         UserCredential.system_user_id == system_user.id
     ).update({"is_active": is_active})
     db.commit()
+    auth_cache.invalidate_principal("system_user", str(system_user.id))
     return system_user
 
 
@@ -50,6 +52,7 @@ def disable_user_mfa(db: Session, *, user_id: str) -> None:
         {"enabled": False, "is_active": False}
     )
     db.commit()
+    auth_cache.invalidate_principal("system_user", str(system_user.id))
 
 
 def reset_user_password(db: Session, *, user_id: str) -> str:
@@ -69,6 +72,7 @@ def reset_user_password(db: Session, *, user_id: str) -> str:
         }
     )
     db.commit()
+    auth_cache.invalidate_principal("system_user", str(system_user.id))
     return temp_password
 
 

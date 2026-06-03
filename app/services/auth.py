@@ -35,7 +35,7 @@ from app.schemas.auth import (
     UserCredentialCreate,
     UserCredentialUpdate,
 )
-from app.services import settings_spec
+from app.services import auth_cache, settings_spec
 from app.services.common import (
     apply_ordering,
     apply_pagination,
@@ -391,9 +391,16 @@ class Sessions(ListResponseMixin):
         session = db.get(AuthSession, coerce_uuid(session_id))
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        principal_type = "system_user" if session.system_user_id else "subscriber"
+        principal_id = str(session.system_user_id or session.subscriber_id)
         session.status = SessionStatus.revoked
         session.revoked_at = datetime.now(UTC)
         db.commit()
+        auth_cache.invalidate_session_context(
+            str(session.id),
+            principal_type=principal_type,
+            principal_id=principal_id,
+        )
 
 
 class ApiKeys(ListResponseMixin):

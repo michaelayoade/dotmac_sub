@@ -13,6 +13,7 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
+from app.services import auth_cache
 from app.services import web_system_profiles as web_system_profiles_service
 from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
@@ -168,3 +169,4 @@ def apply_user_edit(
             )
 
     db.commit()
+    auth_cache.invalidate_principal("system_user", str(subscriber.id))

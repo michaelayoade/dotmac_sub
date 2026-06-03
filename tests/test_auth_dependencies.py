@@ -18,6 +18,7 @@ from app.models.rbac import (
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.services import auth_dependencies as auth_dep
+from app.services import session_manager as session_manager_service
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_audit_auth, require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
@@ -196,6 +197,82 @@ def test_validate_session_token_accepts_system_user_cookie(db_session, monkeypat
     assert auth is not None
     assert auth["principal_type"] == "system_user"
     assert auth["principal_id"] == str(user.id)
+
+
+def test_validate_session_token_ignores_stale_cached_session(monkeypatch, db_session):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    session_id = str(uuid.uuid4())
+    token = _make_access_token("subscriber-1", session_id)
+    request = _make_request()
+    request._cookies = {"session_token": token}
+    invalidations = []
+
+    monkeypatch.setattr(
+        "app.web.auth.dependencies.validate_active_session",
+        lambda db, resolved_session_id, principal_id: None,
+    )
+    monkeypatch.setattr(
+        "app.web.auth.dependencies.auth_cache.get_session_context",
+        lambda resolved_session_id: {
+            "principal_id": "subscriber-1",
+            "principal_type": "subscriber",
+            "roles": ["cached-role"],
+            "scopes": ["cached:scope"],
+            "user": {
+                "id": "subscriber-1",
+                "first_name": "Cached",
+                "last_name": "User",
+                "email": "cached@example.com",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.web.auth.dependencies.auth_cache.invalidate_session_context",
+        lambda *args, **kwargs: invalidations.append((args, kwargs)),
+    )
+
+    assert validate_session_token(request, db_session) is None
+    assert invalidations == [
+        (
+            (session_id,),
+            {
+                "principal_type": "subscriber",
+                "principal_id": "subscriber-1",
+            },
+        )
+    ]
+
+
+def test_revoke_session_invalidates_cached_session_context(
+    db_session, person, monkeypatch
+):
+    session = AuthSession(
+        subscriber_id=person.id,
+        status=SessionStatus.active,
+        token_hash="hash",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+    invalidations = []
+
+    monkeypatch.setattr(
+        session_manager_service.auth_cache,
+        "invalidate_session_context",
+        lambda *args, **kwargs: invalidations.append((args, kwargs)),
+    )
+
+    session_manager_service.revoke_session(db_session, str(session.id), person.id)
+
+    assert invalidations == [
+        (
+            (str(session.id),),
+            {
+                "principal_type": "subscriber",
+                "principal_id": str(person.id),
+            },
+        )
+    ]
 
 
 def test_require_web_auth_redirects_unsafe_requests_to_referer(monkeypatch, db_session):
