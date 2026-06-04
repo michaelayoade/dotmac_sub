@@ -1,12 +1,14 @@
 {% from "components/ui/macros.html" import status_badge %}
 {% for user in users %}
 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-    <td class="px-3 py-4 whitespace-nowrap" data-bulk-id="{{ user.id }}">
+    <td class="px-3 py-4 whitespace-nowrap"{% if user.is_bulk_actionable %} data-bulk-id="{{ user.id }}"{% endif %}>
+        {% if user.is_bulk_actionable %}
         <input type="checkbox"
                class="h-4 w-4 rounded border-slate-300 text-slate-600 focus:ring-slate-500 dark:border-slate-600 dark:bg-slate-700"
                :checked="isSelected('{{ user.id }}')"
                @change="toggleRow('{{ user.id }}', $event.target.checked)"
                aria-label="Select user">
+        {% endif %}
     </td>
     <td class="px-6 py-4 whitespace-nowrap">
         <div class="flex items-center gap-3">
@@ -18,9 +20,13 @@
                 {% endif %}
             </div>
             <div>
-                <a href="/admin/system/users/{{ user.id }}" class="text-sm font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">
+                {% if user.manage_url %}
+                <a href="{{ user.manage_url }}" class="text-sm font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">
                     {{ user.name }}
                 </a>
+                {% else %}
+                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ user.name }}</p>
+                {% endif %}
                 <p class="text-sm text-slate-500 dark:text-slate-400">{{ user.email }}</p>
             </div>
         </div>
@@ -38,7 +44,13 @@
                 </span>
                 {% endfor %}
             {% else %}
+                {% if user.source_type == 'reseller' %}
+                <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                    Reseller Portal
+                </span>
+                {% else %}
                 <span class="text-xs text-slate-400 dark:text-slate-500">No roles</span>
+                {% endif %}
             {% endif %}
         </div>
     </td>
@@ -68,6 +80,7 @@
         {{ user.last_login.strftime('%b %d, %Y %H:%M') if user.last_login else 'Never' }}
     </td>
     <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
+        {% if user.is_bulk_actionable %}
         <div x-data="{ open: false }" class="relative">
             <button x-on:click="open = !open" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -117,6 +130,14 @@
                 {% endif %}
             </div>
         </div>
+        {% elif user.reseller_detail_url %}
+        <a href="{{ user.reseller_detail_url }}"
+           class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+            View Reseller
+        </a>
+        {% else %}
+        <span class="text-xs text-slate-400 dark:text-slate-500">No actions</span>
+        {% endif %}
     </td>
 </tr>
 {% else %}

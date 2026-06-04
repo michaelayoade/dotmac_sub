@@ -50,11 +50,11 @@ def blocked_delete_response(request, linked: list[str], detail: str | None = Non
 def humanize_integrity_error(exc: IntegrityError) -> str:
     raw = str(getattr(exc, "orig", exc) or "").lower()
     if "user_credentials" in raw and "username" in raw and "already exists" in raw:
-        return "Username already exists. Choose a different username or email."
+        return "Username already exists. This email is already used by another login."
     if "people" in raw and "email" in raw and "already exists" in raw:
         return "Email already exists. Use a different email address."
     if "unique" in raw and "username" in raw:
-        return "Username already exists. Choose a different username or email."
+        return "Username already exists. This email is already used by another login."
     if "unique" in raw and "email" in raw:
         return "Email already exists. Use a different email address."
     return "Could not save this user because the record already exists."

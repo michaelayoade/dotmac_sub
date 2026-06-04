@@ -99,7 +99,6 @@
     {% call card(color="slate") %}
         <div
             x-data="usersFilterBuilder()"
-            x-init="init($el)"
             data-filter-schema='{{ filter_schema | tojson | e }}'
             data-initial-filters='{{ filters | tojson | e }}'
             data-initial-search='{{ (search or "") | e }}'
@@ -367,7 +366,8 @@ function usersFilterBuilder() {
         storageKey: '',
         hydrating: false,
 
-        init(el) {
+        init() {
+            const el = this.$el;
             this.hydrating = true;
             this.schema = this.parseJsonAttribute(el.getAttribute('data-filter-schema'), []);
             this.doctype = el.getAttribute('data-doctype') || 'User';

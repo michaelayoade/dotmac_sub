@@ -99,7 +99,7 @@ def get_uploaded_by_subscriber_id(request: object, db: Session) -> str | None:
     return str(subscriber_id) if db.get(Subscriber, subscriber_id) else None
 
 
-_SIDEBAR_STATS_TTL_SECONDS = 10.0
+_SIDEBAR_STATS_TTL_SECONDS = 60.0
 _sidebar_stats_lock = Lock()
 _sidebar_stats_cached_at = 0.0
 _sidebar_stats_cache: dict[str, object] | None = None

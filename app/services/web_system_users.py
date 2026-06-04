@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -11,15 +13,19 @@ from sqlalchemy.orm import Session
 
 from app.models.auth import MFAMethod, UserCredential
 from app.models.rbac import Role, SystemUserRole
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
+    NULL_TOKENS,
     OPERATOR_LABELS,
     FilterCondition,
     FilterFieldSpec,
     FilterQuery,
     FilterValidationError,
+    _coerce_list,
+    _coerce_scalar,
+    _parse_bool,
     build_filter_expression,
     build_sort_clause,
     parse_filter_payload,
@@ -28,7 +34,11 @@ from app.services.dynamic_filters import (
 logger = logging.getLogger(__name__)
 
 USER_TYPE_OPTIONS = [("system_user", "System User")]
-USER_TYPE_LABELS = {key: label for key, label in USER_TYPE_OPTIONS}
+USER_LIST_TYPE_OPTIONS = [
+    ("system_user", "System User"),
+    ("reseller", "Reseller User"),
+]
+USER_TYPE_LABELS = {key: label for key, label in USER_LIST_TYPE_OPTIONS}
 USER_DOCTYPE = "User"
 
 
@@ -41,6 +51,21 @@ def _pending_credential_expression():
     pending_credential = exists(
         select(UserCredential.id)
         .where(UserCredential.system_user_id == SystemUser.id)
+        .where(UserCredential.is_active.is_(True))
+        .where(UserCredential.must_change_password.is_(True))
+    )
+    return or_(~active_credential, pending_credential)
+
+
+def _pending_reseller_credential_expression():
+    active_credential = exists(
+        select(UserCredential.id)
+        .where(UserCredential.subscriber_id == Subscriber.id)
+        .where(UserCredential.is_active.is_(True))
+    )
+    pending_credential = exists(
+        select(UserCredential.id)
+        .where(UserCredential.subscriber_id == Subscriber.id)
         .where(UserCredential.is_active.is_(True))
         .where(UserCredential.must_change_password.is_(True))
     )
@@ -174,6 +199,151 @@ def _last_login_expression():
     )
 
 
+def _normalize_field_value(value: Any) -> Any:
+    if isinstance(value, UserType):
+        return value.value
+    return value
+
+
+def _row_matches_condition(row: dict[str, Any], condition: FilterCondition) -> bool:
+    spec = USER_FILTER_SPECS.get(condition.field)
+    if spec is None:
+        return False
+
+    field = condition.field
+    operator = condition.operator
+    field_type = spec.field_type
+
+    if field == "role_id":
+        role_ids = [item["id"] for item in row.get("roles", [])]
+        if operator == "is":
+            token = (
+                str(condition.value).strip().lower()
+                if condition.value is not None
+                else ""
+            )
+            return token in NULL_TOKENS and not role_ids
+        if operator == "is not":
+            token = (
+                str(condition.value).strip().lower()
+                if condition.value is not None
+                else ""
+            )
+            return token in NULL_TOKENS and bool(role_ids)
+        if operator in {"=", "!="}:
+            role_id = str(_parse_uuid_value(condition.value))
+            matched = role_id in role_ids
+            return matched if operator == "=" else not matched
+        if operator in {"in", "not in"}:
+            wanted = {str(item) for item in _parse_uuid_list(condition.value)}
+            matched = any(role_id in wanted for role_id in role_ids)
+            return matched if operator == "in" else not matched
+        return False
+
+    if field == "status":
+        current_value = (
+            "pending"
+            if row.get("is_pending")
+            else ("active" if row.get("is_active") else "inactive")
+        )
+        expected = str(condition.value).strip().lower()
+        if operator == "=":
+            return current_value == expected
+        if operator == "!=":
+            return current_value != expected
+        return False
+
+    current_value = _normalize_field_value(row.get(field))
+
+    if operator in {"like", "not like"}:
+        pattern = str(_coerce_scalar(condition.value, "text")).lower()
+        haystack = str(current_value or "").lower()
+        matched = pattern in haystack
+        return matched if operator == "like" else not matched
+
+    if operator in {"in", "not in"}:
+        expected_values = [
+            _normalize_field_value(item)
+            for item in _coerce_list(condition.value, field_type)
+        ]
+        matched = current_value in expected_values
+        return matched if operator == "in" else not matched
+
+    if operator == "between":
+        if not isinstance(condition.value, (list, tuple)) or len(condition.value) != 2:
+            raise FilterValidationError("Between expects [from, to]")
+        start = _coerce_scalar(condition.value[0], field_type)
+        end = _coerce_scalar(condition.value[1], field_type)
+        return current_value is not None and start <= current_value <= end
+
+    if operator in {"is", "is not"}:
+        token = (
+            str(condition.value).strip().lower()
+            if condition.value is not None
+            else None
+        )
+        if token in NULL_TOKENS:
+            matched = current_value is None
+            return matched if operator == "is" else not matched
+        if field_type == "boolean":
+            expected = _parse_bool(condition.value)
+            matched = bool(current_value) is expected
+            return matched if operator == "is" else not matched
+        return False
+
+    expected = _normalize_field_value(_coerce_scalar(condition.value, field_type))
+    if operator == "=":
+        return current_value == expected
+    if operator == "!=":
+        return current_value != expected
+    if operator == ">":
+        return current_value is not None and current_value > expected
+    if operator == "<":
+        return current_value is not None and current_value < expected
+    if operator == ">=":
+        return current_value is not None and current_value >= expected
+    if operator == "<=":
+        return current_value is not None and current_value <= expected
+    return False
+
+
+def _row_matches_filter_query(row: dict[str, Any], filter_query: FilterQuery) -> bool:
+    and_match = all(
+        _row_matches_condition(row, condition) for condition in filter_query.and_filters
+    )
+    or_match = True
+    if filter_query.or_filters:
+        or_match = any(
+            _row_matches_condition(row, condition)
+            for condition in filter_query.or_filters
+        )
+    return and_match and or_match
+
+
+def _sort_field_name(order_by: str | None) -> str:
+    return (order_by or "last_name").strip()
+
+
+def _sort_direction(order_dir: str | None) -> str:
+    return (order_dir or "asc").strip().lower()
+
+
+def _sort_value(value: Any) -> Any:
+    normalized = _normalize_field_value(value)
+    if isinstance(normalized, str):
+        return normalized.lower()
+    if isinstance(normalized, datetime):
+        return normalized
+    return normalized
+
+
+def _user_sort_key(row: dict[str, Any], sort_field: str) -> tuple[Any, Any, Any]:
+    primary = _sort_value(row.get(sort_field))
+    secondary = _sort_value(row.get("last_name"))
+    tertiary = _sort_value(row.get("first_name"))
+    return (primary is None, primary, secondary, tertiary)
+
+
 USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {
     "first_name": FilterFieldSpec(
         field="first_name", expression=SystemUser.first_name, field_type="text"
@@ -191,7 +361,7 @@ USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {
         field="user_type",
         expression=SystemUser.user_type,
         field_type="select",
-        options={item[0] for item in USER_TYPE_OPTIONS},
+        options={item[0] for item in USER_LIST_TYPE_OPTIONS},
     ),
     "is_active": FilterFieldSpec(
         field="is_active", expression=SystemUser.is_active, field_type="boolean"
@@ -253,12 +423,27 @@ def user_type_label(value: UserType | str | None) -> str:
 
 
 def get_user_stats(db: Session) -> dict[str, int]:
-    total = db.scalar(select(func.count()).select_from(SystemUser)) or 0
+    total = (db.scalar(select(func.count()).select_from(SystemUser)) or 0) + (
+        db.scalar(
+            select(func.count())
+            .select_from(Subscriber)
+            .where(Subscriber.user_type == UserType.reseller)
+        )
+        or 0
+    )
     active = (
         db.scalar(
             select(func.count())
             .select_from(SystemUser)
             .where(SystemUser.is_active.is_(True))
+        )
+        or 0
+    ) + (
+        db.scalar(
+            select(func.count())
+            .select_from(Subscriber)
+            .where(Subscriber.user_type == UserType.reseller)
+            .where(Subscriber.is_active.is_(True))
         )
         or 0
     )
@@ -285,6 +470,14 @@ def get_user_stats(db: Session) -> dict[str, int]:
             select(func.count())
             .select_from(SystemUser)
             .where(_pending_credential_expression())
+        )
+        or 0
+    ) + (
+        db.scalar(
+            select(func.count())
+            .select_from(Subscriber)
+            .where(Subscriber.user_type == UserType.reseller)
+            .where(_pending_reseller_credential_expression())
         )
         or 0
     )
@@ -333,7 +526,7 @@ def _serialize_filter_schema(db: Session) -> list[dict[str, object]]:
 
     options_map: dict[str, list[dict[str, str]]] = {
         "user_type": [
-            {"value": value, "label": label} for value, label in USER_TYPE_OPTIONS
+            {"value": value, "label": label} for value, label in USER_LIST_TYPE_OPTIONS
         ],
         "status": [
             {"value": "active", "label": "Active"},
@@ -419,7 +612,7 @@ def list_users(
         if where_clause is not None:
             stmt = stmt.where(where_clause)
 
-        sort_clause = build_sort_clause(
+        _ = build_sort_clause(
             order_by=order_by,
             order_dir=order_dir,
             allowed_sort_fields=USER_SORT_FIELDS,
@@ -429,34 +622,39 @@ def list_users(
     except FilterValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    sort_field = _sort_field_name(order_by)
+    reverse = _sort_direction(order_dir) == "desc"
 
-    users_rows = (
-        db.execute(
-            stmt.order_by(sort_clause, SystemUser.first_name.asc())
-            .offset(offset)
-            .limit(limit)
-        )
+    system_users_rows = db.execute(stmt).scalars().all()
+    system_user_ids = [row.id for row in system_users_rows]
+
+    reseller_rows = (
+        db.execute(select(Subscriber).where(Subscriber.user_type == UserType.reseller))
         .scalars()
         .all()
     )
-
-    user_ids = [row.id for row in users_rows]
-    if not user_ids:
-        return [], total
+    reseller_ids = [row.id for row in reseller_rows]
 
     credentials = (
         db.execute(
-            select(UserCredential).where(UserCredential.system_user_id.in_(user_ids))
+            select(UserCredential).where(
+                or_(
+                    UserCredential.system_user_id.in_(system_user_ids or [UUID(int=0)]),
+                    UserCredential.subscriber_id.in_(reseller_ids or [UUID(int=0)]),
+                )
+            )
         )
         .scalars()
         .all()
     )
 
-    credential_info: dict = {}
+    credential_info: dict[Any, dict[str, Any]] = {}
     for credential in credentials:
+        principal_id = credential.system_user_id or credential.subscriber_id
+        if principal_id is None:
+            continue
         info = credential_info.setdefault(
-            credential.system_user_id,
+            principal_id,
             {"last_login": None, "has_active": False, "must_change_password": False},  # nosec
         )
         if credential.is_active:
@@ -468,10 +666,20 @@ def list_users(
         ):
             info["last_login"] = credential.last_login_at
 
-    mfa_enabled = set(
+    mfa_enabled_system = set(
         db.execute(
             select(MFAMethod.system_user_id)
-            .where(MFAMethod.system_user_id.in_(user_ids))
+            .where(MFAMethod.system_user_id.in_(system_user_ids or [UUID(int=0)]))
+            .where(MFAMethod.enabled.is_(True))
+            .where(MFAMethod.is_active.is_(True))
+        )
+        .scalars()
+        .all()
+    )
+    mfa_enabled_reseller = set(
+        db.execute(
+            select(MFAMethod.subscriber_id)
+            .where(MFAMethod.subscriber_id.in_(reseller_ids or [UUID(int=0)]))
             .where(MFAMethod.enabled.is_(True))
             .where(MFAMethod.is_active.is_(True))
         )
@@ -479,12 +687,14 @@ def list_users(
         .all()
     )
 
-    roles_rows = db.execute(
-        select(SystemUserRole, Role)
-        .join(Role, Role.id == SystemUserRole.role_id)
-        .where(SystemUserRole.system_user_id.in_(user_ids))
-        .order_by(SystemUserRole.assigned_at.desc())
-    ).all()
+    roles_rows = []
+    if system_user_ids:
+        roles_rows = db.execute(
+            select(SystemUserRole, Role)
+            .join(Role, Role.id == SystemUserRole.role_id)
+            .where(SystemUserRole.system_user_id.in_(system_user_ids))
+            .order_by(SystemUserRole.assigned_at.desc())
+        ).all()
     role_map: dict = {}
     for user_role, role in roles_rows:
         role_map.setdefault(user_role.system_user_id, []).append(
@@ -495,14 +705,18 @@ def list_users(
             }
         )
 
-    users: list[dict] = []
-    for row in users_rows:
+    users: list[dict[str, Any]] = []
+    for row in system_users_rows:
         name = row.display_name or f"{row.first_name} {row.last_name}".strip()
         info = credential_info.get(row.id, {})
         users.append(
             {
                 "id": str(row.id),
+                "source_type": "system_user",
                 "name": name,
+                "first_name": row.first_name,
+                "last_name": row.last_name,
+                "display_name": row.display_name,
                 "email": row.email,
                 "roles": role_map.get(row.id, []),
                 "user_type": row.user_type.value
@@ -510,12 +724,58 @@ def list_users(
                 else UserType.system_user.value,
                 "user_type_label": user_type_label(row.user_type),
                 "is_active": bool(row.is_active),
-                "mfa_enabled": row.id in mfa_enabled,
+                "is_pending": not info.get("has_active")
+                or bool(info.get("must_change_password")),
+                "mfa_enabled": row.id in mfa_enabled_system,
                 "last_login": info.get("last_login"),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "is_bulk_actionable": True,
+                "manage_url": f"/admin/system/users/{row.id}",
+                "edit_url": f"/admin/system/users/{row.id}/edit",
             }
         )
 
-    return users, total
+    reseller_users: list[dict[str, Any]] = []
+    for row in reseller_rows:
+        name = row.display_name or f"{row.first_name} {row.last_name}".strip()
+        info = credential_info.get(row.id, {})
+        reseller_user = {
+            "id": str(row.id),
+            "source_type": "reseller",
+            "name": name or row.email,
+            "first_name": row.first_name,
+            "last_name": row.last_name,
+            "display_name": row.display_name,
+            "email": row.email,
+            "roles": [],
+            "user_type": UserType.reseller.value,
+            "user_type_label": user_type_label(UserType.reseller),
+            "is_active": bool(row.is_active),
+            "is_pending": not info.get("has_active")
+            or bool(info.get("must_change_password")),
+            "mfa_enabled": row.id in mfa_enabled_reseller,
+            "last_login": info.get("last_login"),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "is_bulk_actionable": False,
+            "manage_url": None,
+            "edit_url": None,
+            "reseller_id": str(row.reseller_id) if row.reseller_id else None,
+            "reseller_detail_url": (
+                f"/admin/resellers/{row.reseller_id}" if row.reseller_id else None
+            ),
+        }
+        if _row_matches_filter_query(reseller_user, merged_query):
+            reseller_users.append(reseller_user)
+
+    combined_users = users + reseller_users
+    combined_users.sort(
+        key=lambda item: _user_sort_key(item, sort_field), reverse=reverse
+    )
+    total = len(combined_users)
+    paged_users = combined_users[offset : offset + limit]
+    return paged_users, total
 
 
 def list_active_roles(db: Session) -> list[Role]:
