@@ -14,6 +14,7 @@ import logging
 import re
 import socket
 from dataclasses import asdict, replace
+from typing import Any, cast
 
 from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
@@ -318,8 +319,9 @@ def _replace_policy_prompt_regex(
     try:
         return replace(policy, prompt_regex=prompt_regex)
     except TypeError:
-        policy.prompt_regex = prompt_regex
-        return policy
+        mutable_policy = cast(Any, policy)
+        mutable_policy.prompt_regex = prompt_regex
+        return mutable_policy
 
 
 def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
