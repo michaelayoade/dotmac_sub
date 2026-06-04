@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import BillingRun, BillingRunStatus
@@ -34,15 +35,15 @@ class BillingRuns(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(BillingRun)
+        stmt = select(BillingRun)
         if status:
-            query = query.filter(
+            stmt = stmt.where(
                 BillingRun.status == validate_enum(status, BillingRunStatus, "status")
             )
-        query = apply_ordering(
-            query,
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": BillingRun.created_at, "run_at": BillingRun.run_at},
         )
-        return apply_pagination(query, limit, offset).all()
+        return list(db.scalars(apply_pagination(stmt, limit, offset)).all())

@@ -11,6 +11,7 @@ Create Date: 2026-05-23
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "102_add_splynx_credit_note_id"

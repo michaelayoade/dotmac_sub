@@ -322,10 +322,8 @@
                         <div class="flex items-center justify-between rounded-lg border border-slate-200 p-4 dark:border-slate-700">
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">
-                                    {% if sub.account and sub.account.subscriber and sub.account.subscriber.person %}
-                                        {{ sub.account.first_name }} {{ sub.account.last_name }}
-                                    {% elif sub.account and sub.account.subscriber and sub.account.subscriber.is_business %}
-                                        {{ sub.account.subscriber.name }}
+                                    {% if sub.subscriber %}
+                                        {{ sub.subscriber.name }}
                                     {% else %}
                                         Subscription #{{ sub.id | string | truncate(8, True, '') }}
                                     {% endif %}

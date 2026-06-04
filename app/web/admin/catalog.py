@@ -74,7 +74,12 @@ def catalog_overview(
     context = _base_context(request, db, active_page="catalog")
     context.update(page_data)
     context["catalog_stats"] = catalog_stats
-    return templates.TemplateResponse("admin/catalog/index.html", context)
+    template_name = (
+        "admin/catalog/_grid.html"
+        if request.headers.get("HX-Request") == "true"
+        else "admin/catalog/index.html"
+    )
+    return templates.TemplateResponse(template_name, context)
 
 
 @router.get("/products", response_class=HTMLResponse)

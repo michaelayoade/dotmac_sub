@@ -815,7 +815,12 @@ class Payments(ListResponseMixin):
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         data = payload.model_dump(exclude_unset=True)
-        account_id = str(data.get("account_id", payment.account_id))
+        if "account_id" in data or "billing_account_id" in data:
+            raise HTTPException(
+                status_code=400,
+                detail="Payment scope (account_id / billing_account_id) cannot be changed after creation",
+            )
+        effective_account_id = data.get("account_id", payment.account_id)
         payment_method_id = data.get("payment_method_id", payment.payment_method_id)
         explicit_channel = "payment_channel_id" in data
         payment_channel_id = (
@@ -825,12 +830,13 @@ class Payments(ListResponseMixin):
             "collection_account_id", payment.collection_account_id
         )
         provider_id = data.get("provider_id", payment.provider_id)
-        _validate_payment_linkages(
-            db,
-            account_id,
-            None,
-            str(payment_method_id) if payment_method_id else None,
-        )
+        if effective_account_id is not None:
+            _validate_payment_linkages(
+                db,
+                str(effective_account_id),
+                None,
+                str(payment_method_id) if payment_method_id else None,
+            )
         _validate_payment_provider(db, str(provider_id) if provider_id else None)
         channel = _resolve_payment_channel(
             db,

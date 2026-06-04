@@ -33,7 +33,13 @@ from app.schemas.catalog import (
     SubscriptionUpdate,
 )
 from app.services import settings_spec
-from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    round_money,
+    to_decimal,
+    validate_enum,
+)
 from app.services.crud import CRUDManager
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -507,6 +513,17 @@ def _validate_plan_change(
         raise HTTPException(status_code=404, detail="Target offer not found")
 
     old_offer = db.get(CatalogOffer, subscription.offer_id)
+    old_family = str(getattr(old_offer, "plan_family", "") or "").strip().lower()
+    new_family = str(getattr(new_offer, "plan_family", "") or "").strip().lower()
+
+    if not old_family or not new_family or old_family != new_family:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This plan migration requires support. Instant self-service changes "
+                "are only available within the same plan family."
+            ),
+        )
 
     # Service type check: don't allow residential → business cross-change
     if old_offer and new_offer:
@@ -550,21 +567,16 @@ def _validate_plan_change(
                 )
 
 
-def _billing_cycle_days(db: Session, offer_id) -> int:
-    """Resolve the number of days in a billing cycle for an offer."""
-    price = (
-        db.query(OfferPrice)
-        .filter(
-            OfferPrice.offer_id == offer_id,
-            OfferPrice.price_type == PriceType.recurring,
-            OfferPrice.is_active.is_(True),
-        )
-        .first()
-    )
-    cycle = price.billing_cycle.value if price and price.billing_cycle else "monthly"
-    return {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90, "annual": 365}.get(
-        cycle, 30
-    )
+def _billing_cycle_start(next_billing_at: datetime, cycle: BillingCycle) -> datetime:
+    if cycle == BillingCycle.daily:
+        return next_billing_at - timedelta(days=1)
+    if cycle == BillingCycle.weekly:
+        return next_billing_at - timedelta(weeks=1)
+    if cycle == BillingCycle.quarterly:
+        return _add_months(next_billing_at, -3)
+    if cycle == BillingCycle.annual:
+        return _add_months(next_billing_at, -12)
+    return _add_months(next_billing_at, -1)
 
 
 def _offer_recurring_price_amount(db: Session, offer_id) -> Decimal:
@@ -653,7 +665,7 @@ def _calculate_proration(
 ) -> dict:
     """Calculate proration amounts for a mid-cycle plan change.
 
-    Supports daily, weekly, monthly, and annual billing cycles.
+    Uses exact remaining and total cycle seconds with Decimal arithmetic.
 
     Returns dict with:
     - credit_amount: unused portion of current plan to refund
@@ -662,34 +674,47 @@ def _calculate_proration(
     - days_remaining: days left in current billing cycle
     - days_in_cycle: total days in billing cycle
     """
-    from decimal import Decimal
-
     now = datetime.now(UTC)
     next_billing = subscription.next_billing_at
     if not next_billing:
         return {
-            "credit_amount": Decimal("0"),
-            "charge_amount": Decimal("0"),
-            "net_amount": Decimal("0"),
+            "credit_amount": Decimal("0.00"),
+            "charge_amount": Decimal("0.00"),
+            "net_amount": Decimal("0.00"),
             "days_remaining": 0,
-            "days_in_cycle": 30,
+            "days_in_cycle": 0,
+            "remaining_cycle_seconds": 0,
+            "total_cycle_seconds": 0,
+            "remaining_ratio": Decimal("0"),
         }
 
-    # Resolve cycle length from the current offer's billing cycle
-    cycle_days = _billing_cycle_days(db, subscription.offer_id)
     if next_billing.tzinfo is None:
         next_billing = next_billing.replace(tzinfo=UTC)
-    cycle_start = next_billing - timedelta(days=cycle_days)
-    days_elapsed = max(0, (now - cycle_start).days)
-    days_remaining = max(0, cycle_days - days_elapsed)
+    cycle = _resolve_billing_cycle(
+        db,
+        str(subscription.offer_id),
+        str(subscription.offer_version_id) if subscription.offer_version_id else None,
+    )
+    cycle_start = _billing_cycle_start(next_billing, cycle)
+    total_cycle_seconds = max(
+        int((next_billing - cycle_start).total_seconds()),
+        1,
+    )
+    remaining_cycle_seconds = max(
+        int((next_billing - now).total_seconds()),
+        0,
+    )
 
-    if days_remaining == 0:
+    if remaining_cycle_seconds <= 0:
         return {
-            "credit_amount": Decimal("0"),
-            "charge_amount": Decimal("0"),
-            "net_amount": Decimal("0"),
+            "credit_amount": Decimal("0.00"),
+            "charge_amount": Decimal("0.00"),
+            "net_amount": Decimal("0.00"),
             "days_remaining": 0,
-            "days_in_cycle": cycle_days,
+            "days_in_cycle": max(total_cycle_seconds // 86400, 0),
+            "remaining_cycle_seconds": 0,
+            "total_cycle_seconds": total_cycle_seconds,
+            "remaining_ratio": Decimal("0"),
         }
 
     # Get old and new recurring prices
@@ -714,23 +739,26 @@ def _calculate_proration(
 
     old_price = Decimal(str(old_price_row[0])) if old_price_row else Decimal("0")
     new_price = Decimal(str(new_price_row[0])) if new_price_row else Decimal("0")
-
-    daily_old = old_price / Decimal(str(cycle_days))
-    daily_new = new_price / Decimal(str(cycle_days))
-    remaining = Decimal(str(days_remaining))
-
-    credit_amount = (daily_old * remaining).quantize(Decimal("0.01"))
-    charge_amount = (daily_new * remaining).quantize(Decimal("0.01"))
-    net_amount = (charge_amount - credit_amount).quantize(Decimal("0.01"))
+    remaining_ratio = Decimal(str(remaining_cycle_seconds)) / Decimal(
+        str(total_cycle_seconds)
+    )
+    credit_amount = round_money(old_price * remaining_ratio)
+    charge_amount = round_money(new_price * remaining_ratio)
+    net_amount = round_money(charge_amount - credit_amount)
+    days_remaining = max(remaining_cycle_seconds // 86400, 0)
+    days_in_cycle = max(total_cycle_seconds // 86400, 0)
 
     return {
         "credit_amount": credit_amount,
         "charge_amount": charge_amount,
         "net_amount": net_amount,
         "days_remaining": days_remaining,
-        "days_in_cycle": cycle_days,
-        "old_daily_rate": daily_old.quantize(Decimal("0.01")),
-        "new_daily_rate": daily_new.quantize(Decimal("0.01")),
+        "days_in_cycle": days_in_cycle,
+        "remaining_cycle_seconds": remaining_cycle_seconds,
+        "total_cycle_seconds": total_cycle_seconds,
+        "remaining_ratio": remaining_ratio,
+        "old_price": round_money(old_price),
+        "new_price": round_money(new_price),
     }
 
 
@@ -854,6 +882,40 @@ def _generate_proration_invoice(
             old_offer_name,
             new_offer_name,
         )
+
+
+def _create_prepaid_plan_change_debit(
+    db: Session,
+    subscription: Subscription,
+    amount: Decimal,
+    *,
+    currency: str = "NGN",
+    old_offer_name: str,
+    new_offer_name: str,
+):
+    """Record a debit against account credit for a prepaid mid-cycle upgrade."""
+    from app.models.billing import (
+        LedgerCategory,
+        LedgerEntry,
+        LedgerEntryType,
+        LedgerSource,
+    )
+
+    debit_amount = round_money(to_decimal(amount))
+    if debit_amount <= Decimal("0.00"):
+        return None
+
+    entry = LedgerEntry(
+        account_id=subscription.subscriber_id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.adjustment,
+        category=LedgerCategory.internet_service,
+        amount=debit_amount,
+        currency=currency,
+        memo=(f"Prepaid plan change charge: {old_offer_name} -> {new_offer_name}"),
+    )
+    db.add(entry)
+    return entry
 
 
 def _emit_offer_change_event(
@@ -1155,6 +1217,7 @@ class Subscriptions(ListResponseMixin):
     ):
         query = db.query(Subscription).options(
             selectinload(Subscription.offer),
+            selectinload(Subscription.subscriber),
             selectinload(Subscription.add_ons).selectinload(SubscriptionAddOn.add_on),
         )
         query = apply_optional_equals(
@@ -1183,7 +1246,13 @@ class Subscriptions(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, subscription_id: str, payload: SubscriptionUpdate):
+    def update(
+        db: Session,
+        subscription_id: str,
+        payload: SubscriptionUpdate,
+        *,
+        skip_proration_artifacts: bool = False,
+    ):
         subscription = db.get(Subscription, subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
@@ -1271,7 +1340,15 @@ class Subscriptions(ListResponseMixin):
             # 3. The existing value is more than 60 days in the past (stale migration data)
             stale = existing_next and (now - existing_next).days > 60
             resuming = previous_status == SubscriptionStatus.suspended
-            if "next_billing_at" not in data or resuming or stale:
+            if (
+                offer_changing
+                and previous_status == SubscriptionStatus.active
+                and existing_next
+                and "next_billing_at" not in data
+                and not stale
+            ):
+                data["next_billing_at"] = existing_next
+            elif "next_billing_at" not in data or resuming or stale:
                 billing_anchor = now if (resuming or stale) else start_at
                 data["next_billing_at"] = _compute_next_billing_at(
                     billing_anchor, cycle
@@ -1345,7 +1422,8 @@ class Subscriptions(ListResponseMixin):
 
             # Generate proration invoice/credit for the plan change
             if (
-                proration_result
+                not skip_proration_artifacts
+                and proration_result
                 and proration_result.get("net_amount")
                 and proration_result.get("generate_now")
             ):

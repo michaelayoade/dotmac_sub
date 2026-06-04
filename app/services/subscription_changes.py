@@ -237,7 +237,12 @@ class SubscriptionChangeRequests(ListResponseMixin):
         return request
 
     @staticmethod
-    def apply(db: Session, request_id: str) -> SubscriptionChangeRequest:
+    def apply(
+        db: Session,
+        request_id: str,
+        *,
+        skip_proration_artifacts: bool = False,
+    ) -> SubscriptionChangeRequest:
         """Apply an approved subscription change request.
 
         Updates the subscription to the new offer.
@@ -272,6 +277,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
             db,
             str(subscription.id),
             SubscriptionUpdate(offer_id=request.requested_offer_id),
+            skip_proration_artifacts=skip_proration_artifacts,
         )
         subscription = db.get(Subscription, request.subscription_id)
         if subscription is None:

@@ -8,6 +8,7 @@ be modified. To correct an entry, create a reversing entry using the
 import logging
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
@@ -75,29 +76,29 @@ class LedgerEntries(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(LedgerEntry)
+        stmt = select(LedgerEntry)
         if account_id:
-            query = query.filter(LedgerEntry.account_id == account_id)
+            stmt = stmt.where(LedgerEntry.account_id == account_id)
         if entry_type:
-            query = query.filter(
+            stmt = stmt.where(
                 LedgerEntry.entry_type
                 == validate_enum(entry_type, LedgerEntryType, "entry_type")
             )
         if source:
-            query = query.filter(
+            stmt = stmt.where(
                 LedgerEntry.source == validate_enum(source, LedgerSource, "source")
             )
         if is_active is None:
-            query = query.filter(LedgerEntry.is_active.is_(True))
+            stmt = stmt.where(LedgerEntry.is_active.is_(True))
         else:
-            query = query.filter(LedgerEntry.is_active == is_active)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(LedgerEntry.is_active == is_active)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": LedgerEntry.created_at, "amount": LedgerEntry.amount},
         )
-        return apply_pagination(query, limit, offset).all()
+        return list(db.scalars(apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
     def reverse(db: Session, entry_id: str, memo: str | None = None) -> LedgerEntry:

@@ -154,11 +154,7 @@
                 <div class="space-y-3">
                     <div>
                         <a href="/admin/billing/accounts/{{ account.id }}" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
-                            {% if account.subscriber and account.subscriber.person %}
-                                {{ account.display_name or account.first_name }}
-                            {% else %}
-                                {{ account.account_number or (account.id | string | truncate(12, True, '')) }}
-                            {% endif %}
+                            {{ account.name }}
                         </a>
                     </div>
                     {% if account.account_number %}
@@ -176,7 +172,7 @@
                         } %}
                         {{ status_badge(acct_status | capitalize, variant=acct_variants.get(acct_status, 'default')) }}
                     </div>
-                    {% if account.subscriber and account.subscriber.person %}
+                    {% if account and not account.is_business %}
                     <div class="pt-2 border-t border-slate-200 dark:border-slate-700">
                         {% if account.email %}
                         <p class="text-sm text-slate-500 dark:text-slate-400">{{ account.email }}</p>

@@ -7,10 +7,11 @@ import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from starlette.datastructures import FormData
 
 from app.models.billing import InvoiceStatus, TaxRate
@@ -1327,6 +1328,27 @@ def _password_sync_evidence(credential: AccessCredential | None) -> dict[str, st
     }
 
 
+def _subscription_ip_pool(db: Session, subscription: Subscription) -> IpPool | None:
+    """Return the IpPool that the subscription's current IPv4 address belongs to.
+
+    Surfaced on the detail page so operators can jump from a sub's IP back to
+    its source pool without having to reason about radius_pool tag chains.
+    """
+    address = (subscription.ipv4_address or "").strip()
+    if not address:
+        return None
+    try:
+        row = (
+            db.query(IPv4Address)
+            .options(joinedload(IPv4Address.pool))
+            .filter(IPv4Address.address == address)
+            .first()
+        )
+    except Exception:
+        return None
+    return row.pool if row else None
+
+
 def _ip_assignment_mode(db: Session, subscription: Subscription) -> tuple[str, str]:
     mode = str(subscription.service_status_raw or "").strip().lower()
     if mode == "dynamic":
@@ -1678,6 +1700,7 @@ def subscription_detail_context(
         reverse=True,
     )
     ip_assignment_mode, ip_assignment_detail = _ip_assignment_mode(db, subscription)
+    ip_pool = _subscription_ip_pool(db, subscription)
     has_service_orders = bool(subscription.service_orders)
     domain_events = _subscription_domain_events(db, subscription)
     notification_evidence = _subscription_notifications(db, subscription)
@@ -1696,6 +1719,7 @@ def subscription_detail_context(
         "lifecycle_events": lifecycle_events,
         "ip_assignment_mode": ip_assignment_mode,
         "ip_assignment_detail": ip_assignment_detail,
+        "ip_pool": ip_pool,
         "direct_active_workflow": subscription.status == SubscriptionStatus.active
         and not has_service_orders,
         "commercial_policy": commercial_policy,
@@ -2019,7 +2043,7 @@ def bulk_update_status(
         try:
             sub = catalog_service.subscriptions.get(db, sub_id)
             if sub and sub.status in allowed_from:
-                payload_kwargs: dict[str, object] = {"status": target_status}
+                payload_kwargs: dict[str, Any] = {"status": target_status}
                 if target_status == SubscriptionStatus.canceled:
                     payload_kwargs["canceled_at"] = datetime.now(UTC)
                 payload = SubscriptionUpdate(**payload_kwargs)

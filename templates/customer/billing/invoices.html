@@ -16,7 +16,7 @@
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
             </svg>
-            Pay Now (₦{{ "%.2f" | format(account.balance | abs) }})
+            Pay Now (₦{{ account.balance | abs | currency_amount }})
         </a>
         {% endif %}
     </div>
@@ -26,18 +26,18 @@
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Current Balance</p>
             <p class="mt-1 text-2xl font-bold {% if account.balance < 0 %}text-red-600 dark:text-red-400{% else %}text-green-600 dark:text-green-400{% endif %}">
-                ₦{{ "%.2f" | format(account.balance | abs) }}
+                ₦{{ account.balance | abs | currency_amount }}
                 {% if account.balance >= 0 %}<span class="text-sm font-normal text-slate-500"> credit</span>{% endif %}
             </p>
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Payment</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "%.2f" | format(last_payment.amount) if last_payment else '0.00' }}</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">₦{{ (last_payment.amount if last_payment else 0) | currency_amount }}</p>
             <p class="text-sm text-slate-500 dark:text-slate-400">{{ last_payment.date.strftime('%b %d, %Y') if last_payment else 'No payments' }}</p>
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Next Invoice</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">₦{{ "%.2f" | format(account.next_bill_amount) }}</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">₦{{ account.next_bill_amount | currency_amount }}</p>
             <p class="text-sm text-slate-500 dark:text-slate-400">Due {{ account.next_bill_date.strftime('%b %d, %Y') }}</p>
         </div>
     </div>
@@ -78,7 +78,7 @@
                 </div>
                 <div class="flex items-center gap-4">
                     <div class="text-right">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">₦{{ "%.2f" | format(invoice.total) }}</p>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">₦{{ invoice.total | currency_amount }}</p>
                         <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium
                             {% if invoice.status == 'paid' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400
                             {% elif invoice.status == 'overdue' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400

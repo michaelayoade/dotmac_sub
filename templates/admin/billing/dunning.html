@@ -138,14 +138,14 @@
                         </td>
                         <td class="px-6 py-4">
                             <a href="/admin/billing/accounts/{{ case.account_id }}" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
-                                {% if case.account and case.account.subscriber and case.account.subscriber.person %}
-                                    {{ case.account.display_name or case.account.first_name }}
+                                {% if case.subscriber %}
+                                    {{ case.subscriber.name }}
                                 {% else %}
                                     {{ case.account_id | string | truncate(12, True, '') }}
                                 {% endif %}
                             </a>
-                            {% if case.account and case.account.account_number %}
-                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ case.account.account_number }}</p>
+                            {% if case.subscriber and case.subscriber.account_number %}
+                            <p class="text-xs text-slate-500 dark:text-slate-400">{{ case.subscriber.account_number }}</p>
                             {% endif %}
                         </td>
                         <td class="px-6 py-4">

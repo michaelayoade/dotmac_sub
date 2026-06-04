@@ -1,0 +1,68 @@
+{# Pagination footer with prev/next and a rows-per-page selector.
+
+  Args:
+    page (int): current page (1-based)
+    total_pages (int): total page count
+    total (int): total row count
+    per_page (int): current page size
+    has_prev (bool), has_next (bool)
+    base_path (str): URL path the form/links target
+    preserved_params (list[tuple[str, str]]): query params to keep across nav.
+        Both the prev/next links and the per-page selector form propagate these.
+        Do NOT include the page param or this table's per_page param here —
+        the partial supplies them itself.
+    page_param (str, default "page"): query key for this table's page index
+    per_page_param (str, optional): query key for this table's page size.
+        If set, the selector is rendered; otherwise hidden.
+    per_page_options (list[int], default [25, 50, 100, 200]): selector choices.
+    label (str, default "rows"): noun used in "Showing X–Y of Z {label}".
+#}
+{% set _page_param = page_param if page_param is defined else "page" %}
+{% set _per_page_param = per_page_param if per_page_param is defined else None %}
+{% set _per_page_options = per_page_options if per_page_options is defined else [25, 50, 100, 200] %}
+{% set _preserved = preserved_params if preserved_params is defined else [] %}
+{% set _label = label if label is defined else "rows" %}
+{% set _from = ((page - 1) * per_page) + 1 if total > 0 else 0 %}
+{% set _to = (page * per_page) if (page * per_page) < total else total %}
+{# Build the query string shared by prev/next links: preserved params + current per_page. #}
+{% set _link_qs_parts = [] %}
+{% for k, v in _preserved %}{% if v is not none and v|string != "" %}{% set _ = _link_qs_parts.append(k ~ "=" ~ (v|string)) %}{% endif %}{% endfor %}
+{% if _per_page_param %}{% set _ = _link_qs_parts.append(_per_page_param ~ "=" ~ (per_page|string)) %}{% endif %}
+{% set _link_qs = ("&" ~ _link_qs_parts|join("&")) if _link_qs_parts else "" %}
+<div class="flex flex-col items-start justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300 sm:flex-row sm:items-center">
+  <div class="tabular-nums">
+    {% if total > 0 %}
+      Showing <span class="font-semibold">{{ "{:,}".format(_from) }}–{{ "{:,}".format(_to) }}</span> of <span class="font-semibold">{{ "{:,}".format(total) }}</span> {{ _label }}
+    {% else %}
+      No {{ _label }}
+    {% endif %}
+  </div>
+  <div class="flex flex-wrap items-center gap-3">
+    {% if _per_page_param %}
+      <form method="get" action="{{ base_path }}" class="flex items-center gap-2">
+        {% for k, v in _preserved %}{% if v is not none and v|string != "" %}
+          <input type="hidden" name="{{ k }}" value="{{ v }}">
+        {% endif %}{% endfor %}
+        <label for="{{ _per_page_param }}_select" class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">Rows per page</label>
+        <select id="{{ _per_page_param }}_select" name="{{ _per_page_param }}" onchange="this.form.submit()" class="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-medium dark:border-slate-600 dark:bg-slate-800">
+          {% for opt in _per_page_options %}
+            <option value="{{ opt }}" {% if opt == per_page %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    {% endif %}
+    <div class="flex items-center gap-2">
+      {% if has_prev %}
+        <a href="{{ base_path }}?{{ _page_param }}={{ page - 1 }}{{ _link_qs }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:hover:bg-slate-700">Previous</a>
+      {% else %}
+        <span class="rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500">Previous</span>
+      {% endif %}
+      <span class="tabular-nums">Page {{ page }} of {{ total_pages }}</span>
+      {% if has_next %}
+        <a href="{{ base_path }}?{{ _page_param }}={{ page + 1 }}{{ _link_qs }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:hover:bg-slate-700">Next</a>
+      {% else %}
+        <span class="rounded-lg border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-500">Next</span>
+      {% endif %}
+    </div>
+  </div>
+</div>

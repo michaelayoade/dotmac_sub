@@ -3,7 +3,7 @@
 {% block title %}{{ 'Edit' if subscription.id else 'New' }} Subscription - Admin{% endblock %}
 
 {% block content %}
-{% set has_subscriber_context = subscription.subscriber_id or subscription.account_id %}
+{% set has_subscriber_context = subscription.subscriber_id %}
 {% set is_new = not subscription.id %}
 
 <div class="mx-auto max-w-2xl space-y-6">
@@ -114,7 +114,7 @@
                             {% for account in accounts or [] %}
                                 {% set account_label = account.subscriber.name if account.subscriber else 'Account' %}
                                 {% if account.account_number %}{% set account_label = account_label ~ ' (' ~ account.account_number ~ ')' %}{% endif %}
-                                <option value="{{ account.id }}" {% if subscription.account_id == account.id|string %}selected{% endif %}>{{ account_label }}</option>
+                                <option value="{{ account.id }}" {% if subscription.subscriber_id == account.id|string %}selected{% endif %}>{{ account_label }}</option>
                             {% endfor %}
                         </select>
                     </div>

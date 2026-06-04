@@ -208,21 +208,15 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if invoice.account and invoice.account.subscriber %}
-                            <div>
-                                <p class="text-sm font-medium text-slate-900 dark:text-white">
-                                    {% if invoice.account.subscriber.person %}
-                                        {{ invoice.account.first_name }} {{ invoice.account.last_name }}
-                                    {% elif invoice.account.subscriber.is_business %}
-                                        {{ invoice.account.subscriber.name }}
-                                    {% else %}
-                                        Customer
-                                    {% endif %}
+                            {% if invoice.account %}
+                            <a href="/admin/customers/person/{{ invoice.account.id }}" class="block">
+                                <p class="text-sm font-medium text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400 transition-colors">
+                                    {{ invoice.account.name }}
                                 </p>
                                 {% if invoice.account.account_number %}
                                 <p class="text-xs text-slate-500 dark:text-slate-400 font-mono">{{ invoice.account.account_number }}</p>
                                 {% endif %}
-                            </div>
+                            </a>
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">No customer</span>
                             {% endif %}

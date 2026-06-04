@@ -373,6 +373,13 @@
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IP Assignment</p>
                         <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ ip_assignment_mode }}</p>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ip_assignment_detail }}</p>
+                        {% if ip_pool %}
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            Pool:
+                            <a href="/admin/network/ip-management/pools/{{ ip_pool.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ ip_pool.name }}</a>
+                            <span class="font-mono">({{ ip_pool.cidr }})</span>
+                        </p>
+                        {% endif %}
                     </div>
                     <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Live Session</p>

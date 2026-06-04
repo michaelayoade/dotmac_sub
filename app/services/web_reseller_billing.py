@@ -85,14 +85,16 @@ def billing_pay_intent(
     )
 
 
-def billing_pay_verify(request: Request, db: Session, reference: str):
+def billing_pay_verify(
+    request: Request, db: Session, reference: str, provider: str | None = None
+):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
     reseller_id = str(context["reseller"].id)
     try:
         result = reseller_portal_billing.verify_and_record_consolidated_payment(
-            db, reseller_id, reference
+            db, reseller_id, reference, provider=provider
         )
     except ValueError as exc:
         return templates.TemplateResponse(

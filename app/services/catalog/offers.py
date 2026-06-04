@@ -17,6 +17,7 @@ from app.models.catalog import (
     ContractTerm,
     OfferAddOn,
     OfferPrice,
+    OfferRadiusProfile,
     OfferStatus,
     OfferVersion,
     OfferVersionPrice,
@@ -175,6 +176,9 @@ class Offers(CRUDManager[CatalogOffer]):
                 selectinload(CatalogOffer.policy_set),
                 selectinload(CatalogOffer.prices),
                 selectinload(CatalogOffer.add_on_links).selectinload(OfferAddOn.add_on),
+                selectinload(CatalogOffer.radius_profiles).selectinload(
+                    OfferRadiusProfile.profile
+                ),
             ],
         )
         if not offer:
@@ -200,6 +204,9 @@ class Offers(CRUDManager[CatalogOffer]):
             selectinload(CatalogOffer.policy_set),
             selectinload(CatalogOffer.prices),
             selectinload(CatalogOffer.add_on_links).selectinload(OfferAddOn.add_on),
+            selectinload(CatalogOffer.radius_profiles).selectinload(
+                OfferRadiusProfile.profile
+            ),
         )
         if service_type:
             query = query.filter(

@@ -29,7 +29,7 @@ def _actor_id(request: Request) -> str | None:
 
 
 @router.post(
-    "/invoices/{invoice_id}/convert-proforma",
+    "/invoices/{invoice_id:uuid}/convert-proforma",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
@@ -50,7 +50,7 @@ def invoice_convert_proforma(
 
 
 @router.get(
-    "/invoices/{invoice_id}",
+    "/invoices/{invoice_id:uuid}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
@@ -86,7 +86,7 @@ def invoice_detail(
 
 
 @router.post(
-    "/invoices/{invoice_id}/lines",
+    "/invoices/{invoice_id:uuid}/lines",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
@@ -132,7 +132,7 @@ def invoice_line_create(
 
 
 @router.post(
-    "/invoices/{invoice_id}/apply-credit",
+    "/invoices/{invoice_id:uuid}/apply-credit",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
@@ -178,7 +178,7 @@ def invoice_apply_credit(
 
 
 @router.get(
-    "/invoices/{invoice_id}/pdf",
+    "/invoices/{invoice_id:uuid}/pdf",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
@@ -221,7 +221,7 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
 
 
 @router.get(
-    "/invoices/{invoice_id}/pdf/download",
+    "/invoices/{invoice_id:uuid}/pdf/download",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
@@ -245,7 +245,7 @@ def invoice_pdf_download(
 
 
 @router.post(
-    "/invoices/{invoice_id}/pdf/regenerate",
+    "/invoices/{invoice_id:uuid}/pdf/regenerate",
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def invoice_pdf_regenerate(
@@ -265,7 +265,7 @@ def invoice_pdf_regenerate(
 
 
 @router.post(
-    "/invoices/{invoice_id}/send",
+    "/invoices/{invoice_id:uuid}/send",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
@@ -280,7 +280,7 @@ def invoice_send(request: Request, invoice_id: UUID, db: Session = Depends(get_d
 
 
 @router.post(
-    "/invoices/{invoice_id}/send-and-return",
+    "/invoices/{invoice_id:uuid}/send-and-return",
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def invoice_send_and_return(
@@ -294,7 +294,7 @@ def invoice_send_and_return(
 
 
 @router.post(
-    "/invoices/{invoice_id}/void",
+    "/invoices/{invoice_id:uuid}/void",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:delete"))],
 )

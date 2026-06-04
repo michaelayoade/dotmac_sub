@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -208,6 +209,29 @@ class OfferPriceRead(BaseModel):
     updated_at: datetime
 
 
+class RadiusProfileSummary(BaseModel):
+    """Minimal RADIUS profile fields surfaced when nested under an Offer."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    code: str | None = None
+    download_speed: int | None = None
+    upload_speed: int | None = None
+    mikrotik_rate_limit: str | None = None
+
+
+class OfferRadiusProfileLinkRead(BaseModel):
+    """Offer ↔ RADIUS profile binding with the nested profile summary."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    profile_id: UUID
+    profile: RadiusProfileSummary | None = None
+
+
 class OfferPriceCreate(BaseModel):
     offer_id: UUID
     price_type: PriceType = PriceType.recurring
@@ -267,6 +291,9 @@ class AddOnPriceUpdate(BaseModel):
     is_active: bool | None = None
 
 
+PlanFamilyValue = Literal["unlimited", "dedicated", "home_flex"]
+
+
 class CatalogOfferBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     code: str | None = Field(default=None, max_length=60)
@@ -299,6 +326,7 @@ class CatalogOfferBase(BaseModel):
     service_description: str | None = None
     burst_profile: str | None = Field(default=None, max_length=120)
     prepaid_period: str | None = Field(default=None, max_length=40)
+    plan_family: PlanFamilyValue | None = None
     allowed_change_plan_ids: str | None = None
     status: OfferStatus = OfferStatus.active
     description: str | None = None
@@ -341,6 +369,7 @@ class CatalogOfferUpdate(BaseModel):
     service_description: str | None = None
     burst_profile: str | None = Field(default=None, max_length=120)
     prepaid_period: str | None = Field(default=None, max_length=40)
+    plan_family: PlanFamilyValue | None = None
     allowed_change_plan_ids: str | None = None
     status: OfferStatus | None = None
     description: str | None = None
@@ -359,6 +388,7 @@ class CatalogOfferRead(CatalogOfferBase):
     policy_set: PolicySetRead | None = None
     prices: list[OfferPriceRead] = Field(default_factory=list)
     add_on_links: list[OfferAddOnRead] = Field(default_factory=list)
+    radius_profiles: list[OfferRadiusProfileLinkRead] = Field(default_factory=list)
 
 
 class OfferSummary(BaseModel):

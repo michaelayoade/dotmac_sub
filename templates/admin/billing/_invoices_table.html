@@ -23,14 +23,8 @@
                     <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ invoice.invoice_number | default('Invoice') }}</a>
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                    {% if invoice.account and invoice.account.subscriber %}
-                        {% if invoice.account.subscriber.person %}
-                            {{ invoice.account.first_name }} {{ invoice.account.last_name }}
-                        {% elif invoice.account.subscriber.is_business %}
-                            {{ invoice.account.subscriber.name }}
-                        {% else %}
-                            Account
-                        {% endif %}
+                    {% if invoice.account %}
+                        {{ invoice.account.name }}
                     {% else %}
                         Account
                     {% endif %}

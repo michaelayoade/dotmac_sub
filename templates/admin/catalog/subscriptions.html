@@ -105,14 +105,10 @@
                                    class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">
-                            {% if subscription.account and subscription.account.subscriber and subscription.account.subscriber.person %}
-                                {{ subscription.account.first_name }} {{ subscription.account.last_name }}
-                            {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.is_business %}
-                                {{ subscription.account.subscriber.name }}
-                            {% elif subscription.account and subscription.account.account_number %}
-                                {{ subscription.account.account_number }}
+                            {% if subscription.subscriber %}
+                                {{ subscription.subscriber.name }}
                             {% else %}
-                                {{ subscription.account_id|string|truncate(8, True, '') }}
+                                {{ subscription.subscriber_id|string|truncate(8, True, '') }}
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
@@ -173,9 +169,8 @@
         </div>
         {% endif %}
     </div>
-</div>
 
-{# Bulk Change Plan Modal #}
+{# Bulk Change Plan Modal — kept inside subscriptionBulkActions() x-data scope #}
 <div x-show="showChangePlanModal" x-transition.opacity x-cloak
      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
      @keydown.escape.window="showChangePlanModal = false">
@@ -208,6 +203,7 @@
             </button>
         </div>
     </div>
+</div>
 </div>
 
 <script>

@@ -155,7 +155,9 @@ def handle_subscription_update_form(
 ) -> dict[str, object]:
     """Validate and update a subscription from the admin form."""
     subscription = core.parse_subscription_form(form, subscription_id=subscription_id)
-    error = core.validate_subscription_form(subscription, for_create=False)
+    error = core.resolve_account_id(db, subscription)
+    if not error:
+        error = core.validate_subscription_form(subscription, for_create=False)
     if error:
         context = core.subscription_form_context(db, subscription, error)
         context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"

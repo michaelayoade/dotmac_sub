@@ -25,6 +25,7 @@ from app.services.billing._common import (
     _validate_payment_linkages,
     _validate_payment_provider,
 )
+from app.services.billing.billing_accounts import BillingAccounts
 from app.services.billing.credit_notes import (
     CreditNoteApplications,
     CreditNoteLines,
@@ -64,9 +65,11 @@ tax_rates = TaxRates()
 billing_runs = BillingRuns()
 payment_providers = PaymentProviders()
 payment_provider_events = PaymentProviderEvents()
+billing_accounts = BillingAccounts()
 
 __all__ = [
     # Classes
+    "BillingAccounts",
     "Invoices",
     "InvoiceLines",
     "CreditNotes",
@@ -103,6 +106,7 @@ __all__ = [
     "billing_runs",
     "payment_providers",
     "payment_provider_events",
+    "billing_accounts",
     "billing_reporting",
     # Helper functions (for billing_automation compatibility)
     "_validate_account",

@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import TaxRate
@@ -38,13 +39,13 @@ class TaxRates(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(TaxRate)
+        stmt = select(TaxRate)
         if is_active is None:
-            query = query.filter(TaxRate.is_active.is_(True))
+            stmt = stmt.where(TaxRate.is_active.is_(True))
         else:
-            query = query.filter(TaxRate.is_active == is_active)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(TaxRate.is_active == is_active)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {
@@ -53,7 +54,7 @@ class TaxRates(ListResponseMixin):
                 "rate": TaxRate.rate,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        return list(db.scalars(apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
     def update(db: Session, rate_id: str, payload: TaxRateUpdate):

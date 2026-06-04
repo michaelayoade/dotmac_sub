@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.catalog import (
+    PLAN_FAMILY_VALUES,
     AccessType,
     BillingCycle,
     BillingMode,
@@ -183,6 +184,7 @@ def default_offer_form() -> dict[str, object]:
         "service_description": "",
         "burst_profile": "",
         "prepaid_period": "",
+        "plan_family": "",
         "allowed_change_plan_ids": "",
         "status": "active",
         "description": "",
@@ -243,6 +245,7 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
         "service_description": _form_str(form, "service_description").strip(),
         "burst_profile": _form_str(form, "burst_profile").strip(),
         "prepaid_period": _form_str(form, "prepaid_period").strip(),
+        "plan_family": _form_str(form, "plan_family").strip(),
         "allowed_change_plan_ids": _form_str(form, "allowed_change_plan_ids").strip(),
         "status": _form_str(form, "status").strip(),
         "description": _form_str(form, "description").strip(),
@@ -320,6 +323,7 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         "service_description",
         "burst_profile",
         "prepaid_period",
+        "plan_family",
         "allowed_change_plan_ids",
         "status",
     ]
@@ -702,7 +706,7 @@ def offer_detail_context(db: Session, offer_id: str) -> dict[str, object] | None
         status=None,
         order_by="created_at",
         order_dir="desc",
-        limit=50,
+        limit=25,
         offset=0,
     )
     plan_meta, cleaned_description = parse_offer_description_metadata(offer.description)
@@ -898,6 +902,7 @@ def offer_form_context(
         "billing_cycles": supported_billing_cycles(),
         "billing_modes": [item.value for item in BillingMode],
         "contract_terms": [item.value for item in ContractTerm],
+        "plan_families": list(PLAN_FAMILY_VALUES),
         "offer_statuses": [item.value for item in OfferStatus],
         "price_units": [item.value for item in PriceUnit],
         "price_types": ["recurring", "one_time"],

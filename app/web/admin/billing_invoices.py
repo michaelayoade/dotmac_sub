@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_invoice_cache as web_billing_invoice_cache_service
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
@@ -27,6 +28,28 @@ def _actor_id(request: Request) -> str | None:
         return None
     value = current_user.get("actor_id") or current_user.get("subscriber_id")
     return str(value) if value else None
+
+
+def _resolve_invoice_new_account_id(
+    db: Session,
+    *,
+    account_id: str | None,
+    account: str | None,
+    customer_id: str | None,
+    customer_type: str | None,
+) -> str | None:
+    resolved_account_id = account_id or account
+    if resolved_account_id or not customer_id:
+        return resolved_account_id
+
+    kind = (customer_type or "person").strip().lower() or "person"
+    customer_ref = f"{kind}:{customer_id}"
+    customer_accounts = web_billing_customers_service.accounts_for_customer(
+        db, customer_ref
+    )
+    if len(customer_accounts) == 1:
+        return str(customer_accounts[0]["id"])
+    return None
 
 
 @router.get(
@@ -244,11 +267,20 @@ def invoice_new(
     request: Request,
     account_id: str | None = Query(None),
     account: str | None = Query(None),
+    customer_id: str | None = Query(None),
+    customer_type: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
+    resolved_account_id = _resolve_invoice_new_account_id(
+        db,
+        account_id=account_id,
+        account=account,
+        customer_id=customer_id,
+        customer_type=customer_type,
+    )
     state = web_billing_invoice_forms_service.new_form_state(
         db,
-        account_id=account_id or account,
+        account_id=resolved_account_id,
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
