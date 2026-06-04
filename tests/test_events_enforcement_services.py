@@ -32,6 +32,7 @@ from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler
 from app.services.events.handlers.notification import (
+    EVENT_NOTIFICATION_SPECS,
     EVENT_TYPE_TO_TEMPLATE,
     NotificationHandler,
 )
@@ -903,10 +904,18 @@ class TestLifecycleHandler:
 
 class TestNotificationHandler:
     def test_event_type_to_template_mapping_exists(self):
-        assert EventType.subscription_created in EVENT_TYPE_TO_TEMPLATE
-        assert EventType.invoice_created in EVENT_TYPE_TO_TEMPLATE
-        assert EventType.payment_received in EVENT_TYPE_TO_TEMPLATE
-        assert EventType.usage_warning in EVENT_TYPE_TO_TEMPLATE
+        expected = {
+            EventType.subscriber_updated,
+            EventType.subscription_upgraded,
+            EventType.subscription_downgraded,
+            EventType.subscription_expired,
+            EventType.invoice_paid,
+            EventType.payment_refunded,
+            EventType.service_order_created,
+            EventType.service_order_assigned,
+            EventType.service_order_completed,
+        }
+        assert expected.issubset(set(EVENT_TYPE_TO_TEMPLATE))
 
     def test_notification_handler_ignores_unmapped_events(self, db_session):
         handler = NotificationHandler()
@@ -917,62 +926,62 @@ class TestNotificationHandler:
         # Should not raise
         handler.handle(db_session, event)
 
-    def test_notification_handler_ignores_when_no_template(self, db_session):
+    def test_notification_handler_uses_fallback_copy_when_no_template(
+        self, db_session, subscriber
+    ):
+        subscriber.phone = "+2348000000099"
+        db_session.commit()
         handler = NotificationHandler()
         event = Event(
-            event_type=EventType.subscription_created,
-            payload={},
+            event_type=EventType.subscription_upgraded,
+            payload={"old_offer_name": "Basic", "new_offer_name": "Pro"},
+            subscriber_id=subscriber.id,
         )
-        # No template in DB, should silently return
         handler.handle(db_session, event)
+        db_session.commit()
+
+        notifications = db_session.query(Notification).all()
+        assert len(notifications) == 2
+        assert {row.channel for row in notifications} == {
+            NotificationChannel.email,
+            NotificationChannel.sms,
+        }
+        assert all(row.subscriber_id == subscriber.id for row in notifications)
+        assert all(row.event_type == "subscription_upgraded" for row in notifications)
+        assert all(row.category == "service" for row in notifications)
+        assert any("upgraded" in (row.subject or "").lower() for row in notifications)
 
     def test_render_subject_with_template(self):
         handler = NotificationHandler()
         template = MagicMock()
         template.subject = "Your {plan_name} subscription is ready"
-        event = Event(
-            event_type=EventType.subscription_activated,
-            payload={"plan_name": "Gold"},
-        )
+        spec = EVENT_NOTIFICATION_SPECS[EventType.subscription_activated]
         context = {"plan_name": "Gold", "subscriber_name": "Test"}
-        result = handler._render_subject(template, event, context)
+        result = handler._render_subject(template, spec, context)
         assert result == "Your Gold subscription is ready"
 
     def test_render_subject_without_template(self):
         handler = NotificationHandler()
-        template = MagicMock()
-        template.subject = None
-        event = Event(
-            event_type=EventType.subscription_activated,
-            payload={},
-        )
+        spec = EVENT_NOTIFICATION_SPECS[EventType.subscription_activated]
         context = {"subscriber_name": "Test"}
-        result = handler._render_subject(template, event, context)
-        assert "subscription.activated" in result
+        result = handler._render_subject(None, spec, context)
+        assert "service is now active" in result.lower()
 
     def test_render_body_with_template(self):
         handler = NotificationHandler()
         template = MagicMock()
         template.body = "Dear customer, your invoice #{invoice_number} is ready."
-        event = Event(
-            event_type=EventType.invoice_created,
-            payload={"invoice_number": "INV-001"},
-        )
+        spec = EVENT_NOTIFICATION_SPECS[EventType.invoice_created]
         context = {"invoice_number": "INV-001", "subscriber_name": "Test"}
-        result = handler._render_body(template, event, context)
+        result = handler._render_body(template, spec, context)
         assert "INV-001" in result
 
     def test_render_body_without_template(self):
         handler = NotificationHandler()
-        template = MagicMock()
-        template.body = None
-        event = Event(
-            event_type=EventType.invoice_created,
-            payload={"amount": 100},
-        )
+        spec = EVENT_NOTIFICATION_SPECS[EventType.invoice_created]
         context = {"amount": "100", "subscriber_name": "Test"}
-        result = handler._render_body(template, event, context)
-        assert "invoice.created" in result
+        result = handler._render_body(None, spec, context)
+        assert "invoice" in result.lower()
 
     def test_resolve_recipient_uses_phone_for_sms_channel(self, db_session, subscriber):
         subscriber.phone = "+2348000000001"
@@ -1034,6 +1043,87 @@ class TestNotificationHandler:
         assert channels == {NotificationChannel.email, NotificationChannel.sms}
         assert recipients[NotificationChannel.email] == subscriber.email
         assert recipients[NotificationChannel.sms] == subscriber.phone
+        assert all(row.subscriber_id == subscriber.id for row in notifications)
+        assert all(row.category == "billing" for row in notifications)
+
+    def test_handle_service_order_notifications(self, db_session, subscriber):
+        subscriber.phone = "+2348000000003"
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.service_order_completed,
+            payload={"service_order_id": "SO-100"},
+            account_id=subscriber.id,
+            service_order_id=uuid.uuid4(),
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        notifications = db_session.query(Notification).all()
+        assert len(notifications) == 2
+        assert {row.event_type for row in notifications} == {"service_order_completed"}
+        assert {row.category for row in notifications} == {"service"}
+
+    def test_handle_respects_billing_notification_preference(
+        self, db_session, subscriber
+    ):
+        subscriber.metadata_ = {"billing_notifications": False}
+        db_session.commit()
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.invoice_paid,
+            payload={"invoice_number": "INV-200"},
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        assert db_session.query(Notification).count() == 0
+
+    def test_handle_respects_sms_updates_preference(self, db_session, subscriber):
+        subscriber.phone = "+2348000000013"
+        subscriber.metadata_ = {"sms_updates": False}
+        db_session.commit()
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.service_order_assigned,
+            payload={"service_order_id": "SO-2"},
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        notifications = db_session.query(Notification).all()
+        assert len(notifications) == 1
+        assert notifications[0].channel == NotificationChannel.email
+
+    def test_handle_respects_contact_receives_notifications(
+        self, db_session, subscriber
+    ):
+        from app.models.subscriber import SubscriberContact
+
+        contact = SubscriberContact(
+            subscriber_id=subscriber.id,
+            email="contact@example.com",
+            receives_notifications=False,
+        )
+        db_session.add(contact)
+        db_session.commit()
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.service_order_created,
+            payload={"email": "contact@example.com", "service_order_id": "SO-1"},
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        assert db_session.query(Notification).count() == 0
 
     def test_handle_invoice_overdue_sends_warning_once_within_grace_period(
         self,

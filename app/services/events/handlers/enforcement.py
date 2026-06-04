@@ -73,9 +73,7 @@ class EnforcementHandler:
 
         Failures are logged and swallowed — the legacy block path is still
         authoritative until phase 7."""
-        if not _setting_bool(
-            db, SettingDomain.radius, "group_routing_enabled", False
-        ):
+        if not _setting_bool(db, SettingDomain.radius, "group_routing_enabled", False):
             return
         sub = db.get(Subscription, subscription_id)
         if not sub:
@@ -86,9 +84,7 @@ class EnforcementHandler:
         captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
         state = derive_access_state(sub.status, captive_redirect_enabled=captive)
         try:
-            result = set_subscription_access_state(
-                db, str(subscription_id), state
-            )
+            result = set_subscription_access_state(db, str(subscription_id), state)
             logger.info(
                 "shadow access_state: sub=%s state=%s %s",
                 subscription_id,

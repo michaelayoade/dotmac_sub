@@ -743,7 +743,9 @@ class TestRadiusAuthenticate:
 # =============================================================================
 
 
-def _write_full_radius_sqlite(db_path, *, radcheck=None, radreply=None, radusergroup=None):
+def _write_full_radius_sqlite(
+    db_path, *, radcheck=None, radreply=None, radusergroup=None
+):
     """Set up a sqlite stand-in for the external FreeRADIUS DB with all three
     tables `_external_sync_users` operates on."""
     conn = sqlite3.connect(db_path)
@@ -864,9 +866,7 @@ class TestBlockUnblockExternalRadiusCredentials:
             ("100099999", "Framed-IP-Address", ":=", "10.0.0.5")
         ]
 
-    def test_block_is_idempotent(
-        self, db_session, tmp_path, subscriber
-    ):
+    def test_block_is_idempotent(self, db_session, tmp_path, subscriber):
         cred, radius_db = self._seed(db_session, tmp_path, subscriber)
         config = _fake_external_config(radius_db)
 
@@ -879,14 +879,10 @@ class TestBlockUnblockExternalRadiusCredentials:
 
         # Exactly one Reject row, not two — the delete-then-insert pattern
         # in block() ensures idempotency.
-        reject_rows = [
-            r for r in _read_radcheck(radius_db) if r[1] == "Auth-Type"
-        ]
+        reject_rows = [r for r in _read_radcheck(radius_db) if r[1] == "Auth-Type"]
         assert len(reject_rows) == 1
 
-    def test_unblock_removes_only_reject_row(
-        self, db_session, tmp_path, subscriber
-    ):
+    def test_unblock_removes_only_reject_row(self, db_session, tmp_path, subscriber):
         cred, radius_db = self._seed(db_session, tmp_path, subscriber)
         config = _fake_external_config(radius_db)
 
@@ -908,9 +904,7 @@ class TestBlockUnblockExternalRadiusCredentials:
             ("100099999", "Framed-IP-Address", ":=", "10.0.0.5")
         ]
 
-    def test_unblock_is_noop_when_no_reject_row(
-        self, db_session, tmp_path, subscriber
-    ):
+    def test_unblock_is_noop_when_no_reject_row(self, db_session, tmp_path, subscriber):
         cred, radius_db = self._seed(db_session, tmp_path, subscriber)
         config = _fake_external_config(radius_db)
 

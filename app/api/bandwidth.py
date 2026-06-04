@@ -8,6 +8,8 @@ and usage statistics. Supports both admin and customer portal access.
 import asyncio
 import json
 import logging
+import os
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -21,6 +23,13 @@ from sse_starlette.sse import EventSourceResponse
 from app.api.deps import get_current_user, get_db
 from app.services.bandwidth import bandwidth_samples
 from app.services.metrics_store import get_metrics_store
+
+# The MikroTik poller skips devices with no live viewer when running in
+# on_demand mode. Each SSE tick refreshes this subscription's score so the
+# poller knows someone is watching.
+_ACTIVE_VIEWERS_KEY = os.getenv(
+    "BANDWIDTH_ACTIVE_VIEWERS_KEY", "active:bandwidth:viewers"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,53 +140,91 @@ def get_live_bandwidth(
 
     async def event_generator():
         metrics_store = get_metrics_store()
-
-        while True:
-            # Check if client disconnected
-            if await request.is_disconnected():
-                break
-
-            current = {"rx_bps": 0.0, "tx_bps": 0.0}
+        redis_client = None
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
             try:
-                # Primary source: VictoriaMetrics
-                current = await metrics_store.get_current_bandwidth(
-                    str(subscription_id)
-                )
-            except Exception as e:
-                logger.warning(
-                    "Live bandwidth metrics query failed for %s: %s", subscription_id, e
-                )
+                import redis.asyncio as aioredis
 
-            try:
-                # Fallback source: latest PostgreSQL sample (recent data only)
-                if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
-                    cutoff = datetime.now(UTC) - timedelta(minutes=2)
-                    latest_sample = bandwidth_samples.get_latest_recent_sample(
-                        db, subscription_id, cutoff
+                redis_client = aioredis.from_url(redis_url)
+            except Exception as exc:
+                logger.debug("active viewer redis init failed: %s", exc)
+                redis_client = None
+
+        try:
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    break
+
+                # Signal the bandwidth poller that this subscription has a live
+                # viewer. ZADD overwrites the score, so each tick refreshes the
+                # TTL window; the poller treats memberships older than its TTL
+                # as gone.
+                if redis_client is not None:
+                    try:
+                        await redis_client.zadd(
+                            _ACTIVE_VIEWERS_KEY,
+                            {str(subscription_id): time.time()},
+                        )
+                    except Exception as exc:
+                        logger.debug("active viewer heartbeat failed: %s", exc)
+
+                current = {"rx_bps": 0.0, "tx_bps": 0.0}
+                try:
+                    # Primary source: VictoriaMetrics
+                    current = await metrics_store.get_current_bandwidth(
+                        str(subscription_id)
                     )
-                    if latest_sample:
-                        current = {
-                            "rx_bps": float(latest_sample.rx_bps or 0),
-                            "tx_bps": float(latest_sample.tx_bps or 0),
+                except Exception as e:
+                    logger.warning(
+                        "Live bandwidth metrics query failed for %s: %s",
+                        subscription_id,
+                        e,
+                    )
+
+                try:
+                    # Fallback source: latest PostgreSQL sample (recent only)
+                    if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
+                        cutoff = datetime.now(UTC) - timedelta(minutes=2)
+                        latest_sample = bandwidth_samples.get_latest_recent_sample(
+                            db, subscription_id, cutoff
+                        )
+                        if latest_sample:
+                            current = {
+                                "rx_bps": float(latest_sample.rx_bps or 0),
+                                "tx_bps": float(latest_sample.tx_bps or 0),
+                            }
+                except Exception as e:
+                    logger.warning(
+                        "Live bandwidth DB fallback failed for %s: %s",
+                        subscription_id,
+                        e,
+                    )
+
+                now = datetime.now(UTC)
+                yield {
+                    "event": "bandwidth",
+                    "data": json.dumps(
+                        {
+                            "timestamp": now.isoformat(),
+                            "rx_bps": float(current.get("rx_bps", 0) or 0),
+                            "tx_bps": float(current.get("tx_bps", 0) or 0),
                         }
-            except Exception as e:
-                logger.warning(
-                    "Live bandwidth DB fallback failed for %s: %s", subscription_id, e
-                )
+                    ),
+                }
 
-            now = datetime.now(UTC)
-            yield {
-                "event": "bandwidth",
-                "data": json.dumps(
-                    {
-                        "timestamp": now.isoformat(),
-                        "rx_bps": float(current.get("rx_bps", 0) or 0),
-                        "tx_bps": float(current.get("tx_bps", 0) or 0),
-                    }
-                ),
-            }
-
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+        finally:
+            if redis_client is not None:
+                try:
+                    # Drop our viewer membership immediately on disconnect so
+                    # the poller stops within one cycle rather than waiting
+                    # for the TTL to expire.
+                    await redis_client.zrem(_ACTIVE_VIEWERS_KEY, str(subscription_id))
+                    await redis_client.aclose()
+                except Exception as exc:
+                    logger.debug("active viewer cleanup failed: %s", exc)
 
     return EventSourceResponse(event_generator())
 

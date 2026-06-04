@@ -359,9 +359,31 @@ class BandwidthSamples(ListResponseMixin):
                     }
                     for ts in all_timestamps
                 ]
+                if not data:
+                    pg_interval = "hour" if step == "1h" else "minute"
+                    rows = BandwidthSamples.series_with_defaults(
+                        db,
+                        subscription_id=str(subscription_id),
+                        device_id=None,
+                        interface_id=None,
+                        start_at=start_at,
+                        end_at=end_at,
+                        interval=pg_interval,
+                        agg="avg",
+                    )
+                    data = [
+                        {
+                            "timestamp": row["bucket_start"],
+                            "rx_bps": float(row["rx_bps"] or 0),
+                            "tx_bps": float(row["tx_bps"] or 0),
+                        }
+                        for row in rows
+                    ]
+                    source = "postgres"
             except Exception as e:
                 logger.error(f"VictoriaMetrics query failed: {e}")
                 # Fallback to PostgreSQL
+                pg_interval = "hour" if step == "1h" else "minute"
                 rows = BandwidthSamples.series_with_defaults(
                     db,
                     subscription_id=str(subscription_id),
@@ -369,7 +391,7 @@ class BandwidthSamples(ListResponseMixin):
                     interface_id=None,
                     start_at=start_at,
                     end_at=end_at,
-                    interval="hour",
+                    interval=pg_interval,
                     agg="avg",
                 )
                 data = [

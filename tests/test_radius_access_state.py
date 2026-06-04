@@ -97,9 +97,7 @@ class TestDeriveAccessStateUnprovisioned:
         ],
     )
     def test_unprovisioned_statuses_map_to_none(self, status):
-        assert (
-            derive_access_state(status, captive_redirect_enabled=False) is None
-        )
+        assert derive_access_state(status, captive_redirect_enabled=False) is None
 
     def test_unprovisioned_with_captive_flag_still_none(self):
         """Captive flag doesn't promote an unprovisioned sub to captive —

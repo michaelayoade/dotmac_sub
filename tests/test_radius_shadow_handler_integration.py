@@ -71,7 +71,11 @@ class TestShadowWriteFeatureFlagGate:
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state",
-                return_value={"credentials": 1, "external_rows_written": 1, "external_rows_deleted": 0},
+                return_value={
+                    "credentials": 1,
+                    "external_rows_written": 1,
+                    "external_rows_deleted": 0,
+                },
             ) as mock_set,
         ):
             handler._shadow_write_access_state(db, str(sub.id))
@@ -92,7 +96,11 @@ class TestShadowWriteFeatureFlagGate:
             ),
             patch(
                 "app.services.events.handlers.enforcement.set_subscription_access_state",
-                return_value={"credentials": 1, "external_rows_written": 1, "external_rows_deleted": 0},
+                return_value={
+                    "credentials": 1,
+                    "external_rows_written": 1,
+                    "external_rows_deleted": 0,
+                },
             ) as mock_set,
         ):
             handler._shadow_write_access_state(db, str(sub.id))
@@ -143,7 +151,9 @@ class TestBlockHandlerInvokesShadowWrite:
     """Confirms _enforce_subscription_block calls _shadow_write_access_state
     once at the end of its sequence."""
 
-    @patch("app.services.events.handlers.enforcement.apply_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.radius_service")
     @patch("app.services.events.handlers.enforcement.radius_reject_service")
@@ -169,7 +179,9 @@ class TestRestoreHandlerInvokesShadowWrite:
     """Confirms _handle_subscription_restore calls _shadow_write_access_state
     after the reconcile step."""
 
-    @patch("app.services.events.handlers.enforcement.remove_subscription_address_list_block")
+    @patch(
+        "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
+    )
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.events.handlers.enforcement.radius_service")
     @patch("app.services.events.handlers.enforcement.radius_reject_service")
@@ -195,9 +207,7 @@ class TestRestoreHandlerInvokesShadowWrite:
 
         with (
             patch.object(handler, "_shadow_write_access_state") as mock_shadow,
-            patch(
-                "app.services.account_lifecycle.compute_account_status"
-            ),
+            patch("app.services.account_lifecycle.compute_account_status"),
         ):
             handler._handle_subscription_restore(db, event)
 

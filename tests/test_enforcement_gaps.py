@@ -300,9 +300,11 @@ class TestCoaNegativeCache:
         mock_client.SendPacket.side_effect = Timeout()
         mock_client_cls.return_value = mock_client
 
-        with patch("app.services.enforcement._coa_enabled", return_value=True), \
-             patch("app.services.enforcement._coa_retries", return_value=0), \
-             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01):
+        with (
+            patch("app.services.enforcement._coa_enabled", return_value=True),
+            patch("app.services.enforcement._coa_retries", return_value=0),
+            patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
+        ):
             assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is False
 
         assert _coa_disabled_for_nas(nas_id) is True
@@ -341,9 +343,11 @@ class TestCoaNegativeCache:
         mock_client.SendPacket.return_value = None
         mock_client_cls.return_value = mock_client
 
-        with patch("app.services.enforcement._coa_enabled", return_value=True), \
-             patch("app.services.enforcement._coa_retries", return_value=0), \
-             patch("app.services.enforcement._radius_timeout_sec", return_value=0.01):
+        with (
+            patch("app.services.enforcement._coa_enabled", return_value=True),
+            patch("app.services.enforcement._coa_retries", return_value=0),
+            patch("app.services.enforcement._radius_timeout_sec", return_value=0.01),
+        ):
             assert _send_coa_disconnect(db, device, "u", "1.2.3.4", "sid") is True
 
         # Successful send must keep the cache clear.

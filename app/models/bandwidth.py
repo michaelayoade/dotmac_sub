@@ -1,7 +1,15 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +18,13 @@ from app.db import Base
 
 class BandwidthSample(Base):
     __tablename__ = "bandwidth_samples"
+    __table_args__ = (
+        Index(
+            "ix_bandwidth_samples_subscription_sample_at",
+            "subscription_id",
+            "sample_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

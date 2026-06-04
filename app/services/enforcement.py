@@ -306,9 +306,7 @@ def _send_coa_update(
     if not _coa_enabled(db):
         return False
     if _coa_disabled_for_nas(nas_device.id):
-        logger.debug(
-            "Skipping CoA update for NAS %s (negative-cached).", nas_device.id
-        )
+        logger.debug("Skipping CoA update for NAS %s (negative-cached).", nas_device.id)
         return False
     if not nas_device.shared_secret:
         logger.warning("Missing NAS shared secret for CoA update.")
@@ -506,9 +504,9 @@ def _apply_mikrotik_address_list(
         _run_ssh(
             nas_device,
             (
-                f':if ([:len [/ip firewall address-list find '
+                f":if ([:len [/ip firewall address-list find "
                 f'list="{safe_list}" address="{safe_addr}"]] = 0) '
-                f'do={{/ip firewall address-list add '
+                f"do={{/ip firewall address-list add "
                 f'list="{safe_list}" address="{safe_addr}"}}'
             ),
             ssh=ssh,
@@ -575,9 +573,7 @@ def disconnect_subscription_sessions(
         coa_ok: set[int] = set()
         needs_ssh_kick = False
         for idx, (_, username, session_id) in enumerate(entries):
-            if _send_coa_disconnect(
-                db, nas_device, username, framed_ip, session_id
-            ):
+            if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
                 coa_ok.add(idx)
                 count += 1
             else:
@@ -592,9 +588,7 @@ def disconnect_subscription_sessions(
                 for idx, (_, username, _session_id) in enumerate(entries):
                     if idx in coa_ok:
                         continue
-                    if _disconnect_mikrotik_session(
-                        db, nas_device, username, ssh=ssh
-                    ):
+                    if _disconnect_mikrotik_session(db, nas_device, username, ssh=ssh):
                         count += 1
                     elif _disconnect_mikrotik_hotspot_session(
                         db, nas_device, username, ssh=ssh

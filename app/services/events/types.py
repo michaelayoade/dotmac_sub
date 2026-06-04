@@ -51,6 +51,9 @@ class EventType(enum.Enum):
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
 
+    # Billing - Consolidated billing account payment (1)
+    billing_account_payment_received = "billing_account.payment_received"
+
     # Usage events (4)
     usage_recorded = "usage.recorded"
     usage_warning = "usage.warning"

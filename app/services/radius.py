@@ -468,9 +468,7 @@ def import_access_credentials_from_external_radius(
             subscriptions_by_login.setdefault(login, []).append(linked_subscriber)
 
     subscribers = list(
-        db.scalars(
-            select(Subscriber).where(Subscriber.is_active.is_(True))
-        ).all()
+        db.scalars(select(Subscriber).where(Subscriber.is_active.is_(True))).all()
     )
     subscribers_by_number: dict[str, list[Subscriber]] = {}
     subscribers_by_account_number: dict[str, list[Subscriber]] = {}
@@ -956,9 +954,7 @@ def ensure_radius_users_for_subscription(
     changed = 0
     for credential in credentials:
         existing_user = db.scalars(
-            select(RadiusUser).where(
-                RadiusUser.access_credential_id == credential.id
-            )
+            select(RadiusUser).where(RadiusUser.access_credential_id == credential.id)
         ).first()
         profile_id = credential.radius_profile_id or subscription.radius_profile_id
         if existing_user:
@@ -1169,14 +1165,10 @@ def _external_sync_users(
             # re-enable them. Active subs get the full rebuild.
             if subscription.status != SubscriptionStatus.active:
                 conn.execute(
-                    delete(radcheck_table).where(
-                        radcheck_table.c.username == username
-                    )
+                    delete(radcheck_table).where(radcheck_table.c.username == username)
                 )
                 conn.execute(
-                    delete(radreply_table).where(
-                        radreply_table.c.username == username
-                    )
+                    delete(radreply_table).where(radreply_table.c.username == username)
                 )
                 if use_group:
                     conn.execute(

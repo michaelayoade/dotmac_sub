@@ -6,6 +6,7 @@ Celery tasks for HTTP delivery.
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.webhook import (
@@ -94,11 +95,12 @@ class WebhookHandler:
             return
 
         # Find active subscriptions for this event type
-        subscriptions = (
-            db.query(WebhookSubscription)
-            .filter(WebhookSubscription.event_type == webhook_event_type)
-            .filter(WebhookSubscription.is_active.is_(True))
-            .all()
+        subscriptions = list(
+            db.scalars(
+                select(WebhookSubscription)
+                .where(WebhookSubscription.event_type == webhook_event_type)
+                .where(WebhookSubscription.is_active.is_(True))
+            ).all()
         )
 
         if not subscriptions:
