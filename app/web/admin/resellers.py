@@ -3,12 +3,14 @@
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
 from app.services import web_admin_resellers as reseller_svc
 from app.services.auth_dependencies import require_permission
+from app.services.web_system_common import humanize_integrity_error
 from app.web.request_parsing import parse_form_data
 
 templates = Jinja2Templates(directory="templates")
@@ -26,6 +28,12 @@ def _form_int(form: FormData, key: str, default: int) -> int:
         return int(raw)
     except Exception:
         return default
+
+
+def _error_message(exc: Exception, fallback: str) -> str:
+    if isinstance(exc, IntegrityError):
+        return humanize_integrity_error(exc)
+    return str(exc) or fallback
 
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
@@ -100,12 +108,13 @@ def reseller_create(
     try:
         reseller_svc.create_reseller_from_form(db, form)
     except Exception as exc:
+        db.rollback()
         context = _base_context(request, db, active_page="resellers")
         context.update(
             reseller_svc.create_form_error_context(
                 db,
                 payload=payload,
-                error=str(exc) or "Unable to create reseller.",
+                error=_error_message(exc, "Unable to create reseller."),
             )
         )
         return templates.TemplateResponse(
@@ -125,12 +134,13 @@ def reseller_update(
     try:
         reseller_svc.update_reseller_from_form(db, reseller_id=reseller_id, form=form)
     except Exception as exc:
+        db.rollback()
         context = _base_context(request, db, active_page="resellers")
         context.update(
             reseller_svc.update_form_error_context(
                 reseller_id=reseller_id,
                 payload=payload,
-                error=str(exc) or "Unable to update reseller.",
+                error=_error_message(exc, "Unable to update reseller."),
             )
         )
         return templates.TemplateResponse(
@@ -178,6 +188,7 @@ def reseller_user_link(
                 db, reseller_id=reseller_id, subscriber_id=subscriber_id
             )
         except Exception as exc:
+            db.rollback()
             detail = reseller_svc.get_reseller_detail_context(
                 db,
                 reseller_id,
@@ -186,7 +197,7 @@ def reseller_user_link(
             )
             context = _base_context(request, db, active_page="resellers")
             context.update(detail or {})
-            context["error"] = str(exc) or "Unable to link subscriber."
+            context["error"] = _error_message(exc, "Unable to link subscriber.")
             return templates.TemplateResponse(
                 "admin/resellers/detail.html", context, status_code=400
             )
@@ -234,6 +245,7 @@ def reseller_user_create(
             username=fields["username"],
         )
     except Exception as exc:
+        db.rollback()
         detail = reseller_svc.get_reseller_detail_context(
             db,
             reseller_id,
@@ -242,7 +254,7 @@ def reseller_user_create(
         )
         context = _base_context(request, db, active_page="resellers")
         context.update(detail or {})
-        context["error"] = str(exc) or "Unable to create reseller user."
+        context["error"] = _error_message(exc, "Unable to create reseller user.")
         return templates.TemplateResponse(
             "admin/resellers/detail.html", context, status_code=400
         )

@@ -141,6 +141,9 @@ def reseller_billing_pay_intent(
 def reseller_billing_pay_verify(
     request: Request,
     reference: str = Query(...),
+    provider: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_billing_service.billing_pay_verify(request, db, reference)
+    return web_reseller_billing_service.billing_pay_verify(
+        request, db, reference, provider=provider
+    )

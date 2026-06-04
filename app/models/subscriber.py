@@ -116,9 +116,22 @@ class NINVerificationStatus(enum.Enum):
 
 
 class Reseller(Base):
-    """Reseller/partner who manages subscribers."""
+    """Reseller/partner who manages subscribers.
+
+    A single row with `is_house=True` represents the main company itself, so
+    every Subscriber transitively belongs to a Reseller and a BillingAccount.
+    """
 
     __tablename__ = "resellers"
+    __table_args__ = (
+        Index(
+            "uq_resellers_one_house",
+            "is_house",
+            unique=True,
+            postgresql_where=text("is_house"),
+            sqlite_where=text("is_house"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -128,6 +141,7 @@ class Reseller(Base):
     contact_email: Mapped[str | None] = mapped_column(String(255))
     contact_phone: Mapped[str | None] = mapped_column(String(40))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_house: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -140,6 +154,9 @@ class Reseller(Base):
     )
 
     subscribers = relationship("Subscriber", back_populates="reseller")
+    billing_account = relationship(
+        "BillingAccount", back_populates="reseller", uselist=False
+    )
 
 
 class Subscriber(Base):
