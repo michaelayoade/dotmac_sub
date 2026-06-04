@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.orm import Session, aliased, joinedload
+from sqlalchemy.orm import Session, aliased, defer, joinedload
 
 from app.models.network import (
     OLTDevice,
@@ -25,11 +25,24 @@ from app.services.network._common import (
     encode_to_hex_serial,
 )
 from app.services.network.olt_crud_common import parse_canonical_pon_name
+from app.services.network.ont_desired_config import desired_config_column
 from app.services.query_builders import apply_active_state
 
 _ONT_STATUS_LOADS = (
     joinedload(OntUnit.tr069_acs_server),
     joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
+)
+
+# Wide JSON/TEXT columns on ont_units that the inventory list view never
+# renders. Deferring them shrinks each row from ~5KB to a few hundred bytes,
+# which dominates list-page load time over a WAN database.
+_ONT_LIST_DEFERRED_COLUMNS = (
+    OntUnit.tr069_last_snapshot,
+    OntUnit.olt_observed_snapshot,
+    desired_config_column(),
+    OntUnit.notes,
+    OntUnit.last_error,
+    OntUnit.address_or_comment,
 )
 
 
@@ -87,7 +100,10 @@ class OntUnits(CRUDManager[OntUnit]):
         """
         from app.services.network.signal_thresholds import get_signal_thresholds
 
-        stmt = select(OntUnit).options(*_ONT_STATUS_LOADS)
+        stmt = select(OntUnit).options(
+            *_ONT_STATUS_LOADS,
+            *(defer(col) for col in _ONT_LIST_DEFERRED_COLUMNS),
+        )
 
         if pon_port_id:
             pon_uuid = coerce_uuid(pon_port_id)

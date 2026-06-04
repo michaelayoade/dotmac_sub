@@ -116,6 +116,67 @@ def test_returned_inventory_ont_authorize_allows_active_candidate(
     assert captured["scoped_ont_id"] == str(ont.id)
 
 
+def test_returned_inventory_hex_ont_authorize_allows_ascii_candidate(
+    db_session, monkeypatch
+) -> None:
+    from app.web.admin import network_olts_inventory
+
+    olt = OLTDevice(name="Scope OLT", mgmt_ip="10.0.0.10", is_active=True)
+    ont = OntUnit(serial_number="48575443D7AC5310", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.flush()
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        ont_unit_id=ont.id,
+        fsp="0/2/1",
+        serial_number="HWTCD7AC5310",
+        serial_hex="48575443D7AC5310",
+        is_active=True,
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    captured: dict[str, object] = {}
+
+    def _fake_enqueue(*_args, **kwargs):
+        captured.update(kwargs.get("kwargs") or {})
+        return SimpleNamespace(queued=True)
+
+    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "_authorization_detail_redirect_url",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        network_olts_inventory.web_admin_service,
+        "get_current_user",
+        lambda _request: {"name": "Alice Admin"},
+    )
+
+    request = _request()
+    request.state.auth = {
+        "principal_id": str(uuid4()),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": ["network:write"],
+    }
+    response = network_olts_inventory.olt_authorize_ont(
+        request,
+        str(olt.id),
+        fsp="0/2/1",
+        serial_number="HWTCD7AC5310",
+        ont_id=str(ont.id),
+        return_to="/admin/network/onts?view=unconfigured",
+        preset_id="",
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert "Authorization+started" in response.headers["location"]
+    assert captured["scoped_ont_id"] == str(ont.id)
+
+
 def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
     from app.web.admin import network_olts_inventory
 

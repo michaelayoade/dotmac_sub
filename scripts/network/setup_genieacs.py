@@ -119,7 +119,7 @@ class GenieACSSetup:
     def deploy_provisions(self) -> dict[str, str]:
         """Deploy provision scripts to GenieACS."""
         logger.info("Deploying provisions from %s", PROVISIONS_DIR)
-        results = {}
+        results: dict[str, str] = {}
 
         if not PROVISIONS_DIR.exists():
             logger.warning("Provisions directory not found: %s", PROVISIONS_DIR)
@@ -145,7 +145,7 @@ class GenieACSSetup:
     def deploy_virtual_parameters(self) -> dict[str, str]:
         """Deploy virtual parameter scripts to GenieACS."""
         logger.info("Deploying virtual parameters from %s", VIRTUAL_PARAMS_DIR)
-        results = {}
+        results: dict[str, str] = {}
 
         if not VIRTUAL_PARAMS_DIR.exists():
             logger.warning(
@@ -173,7 +173,7 @@ class GenieACSSetup:
     def deploy_presets(self) -> dict[str, str]:
         """Deploy preset configurations to GenieACS."""
         logger.info("Deploying presets")
-        results = {}
+        results: dict[str, str] = {}
 
         for preset_name, config in PRESET_DEFINITIONS.items():
             preset_data = {
@@ -206,7 +206,7 @@ class GenieACSSetup:
     def deploy_config(self) -> dict[str, str]:
         """Deploy config entries to GenieACS."""
         logger.info("Deploying config entries")
-        results = {}
+        results: dict[str, str] = {}
 
         for key, value in CONFIG_ENTRIES.items():
             config_data = {"_id": key, "value": value}
@@ -225,7 +225,7 @@ class GenieACSSetup:
     def prune_legacy_objects(self) -> dict[str, str]:
         """Remove known stale GenieACS objects from older deployments."""
         logger.info("Pruning legacy GenieACS objects")
-        results = {}
+        results: dict[str, str] = {}
 
         for preset_id in sorted(LEGACY_PRESET_IDS):
             key = f"preset:{preset_id}"
@@ -267,7 +267,12 @@ class GenieACSSetup:
 
     def list_current_state(self) -> dict[str, list[str]]:
         """List current provisions, virtual parameters, and presets."""
-        state = {"provisions": [], "virtualParameters": [], "presets": [], "config": []}
+        state: dict[str, list[str]] = {
+            "provisions": [],
+            "virtualParameters": [],
+            "presets": [],
+            "config": [],
+        }
 
         try:
             response = self.client.get("/provisions/")
@@ -315,7 +320,7 @@ class GenieACSSetup:
         return results
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Deploy GenieACS provisions, virtual parameters, presets, and config."
     )

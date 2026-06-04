@@ -132,6 +132,11 @@ def test_set_pppoe_credentials_names_internet_ppp_slot(monkeypatch) -> None:
         lambda db, ont, client, device_id: "InternetGatewayDevice",
     )
     monkeypatch.setattr(ont_action_wan, "persist_data_model_root", lambda *a: None)
+    monkeypatch.setattr(
+        ont_action_wan,
+        "_ensure_igd_ppp_wan_service",
+        lambda **kwargs: (1, None),
+    )
 
     def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
         calls["params"] = params
@@ -156,6 +161,215 @@ def test_set_pppoe_credentials_names_internet_ppp_slot(monkeypatch) -> None:
     assert result.success is True
     assert calls["params"][name_path] == ont_action_wan.INTERNET_PPP_CONNECTION_NAME
     assert calls["expected"][name_path] == ont_action_wan.INTERNET_PPP_CONNECTION_NAME
+
+
+def test_set_pppoe_credentials_creates_missing_igd_ppp_object(monkeypatch) -> None:
+    from app.services.network import ont_action_wan
+
+    calls = {}
+    ont = SimpleNamespace(
+        serial_number="4857544306351E9C",
+        tr069_last_snapshot={},
+    )
+
+    initial_device = {
+        "InternetGatewayDevice": {
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        "2": {
+                            "WANPPPConnectionNumberOfEntries": {"_value": 0},
+                            "WANIPConnectionNumberOfEntries": {"_value": 0},
+                        }
+                    }
+                }
+            }
+        }
+    }
+    created_device = {
+        "InternetGatewayDevice": {
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        "2": {
+                            "WANPPPConnectionNumberOfEntries": {"_value": 1},
+                            "WANIPConnectionNumberOfEntries": {"_value": 0},
+                            "WANPPPConnection": {
+                                "3": {
+                                    "Username": {"_value": "old-user"},
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    class FakeClient:
+        def __init__(self):
+            self.object_added = False
+
+        def get_device(self, device_id):
+            assert device_id == "device-1"
+            return created_device if self.object_added else initial_device
+
+        def add_object(self, device_id, object_path):
+            assert device_id == "device-1"
+            calls["object_path"] = object_path
+            self.object_added = True
+            return {"_id": "task-add-1"}
+
+        def refresh_object(self, device_id, object_path, allow_when_pending=False):
+            assert device_id == "device-1"
+            calls.setdefault("refreshes", []).append((object_path, allow_when_pending))
+            return {"_id": "task-refresh-1"}
+
+        def extract_parameter_value(self, device, parameter_path):
+            current = device
+            for part in parameter_path.split("."):
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(part)
+                if current is None:
+                    return None
+            if isinstance(current, dict) and "_value" in current:
+                return current["_value"]
+            if isinstance(current, dict):
+                return None
+            return current
+
+    monkeypatch.setattr(
+        ont_action_wan,
+        "get_ont_client_or_error",
+        lambda db, ont_id: ((ont, FakeClient(), "device-1"), None),
+    )
+    monkeypatch.setattr(
+        ont_action_wan,
+        "detect_data_model_root",
+        lambda db, ont, client, device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_wan, "persist_data_model_root", lambda *a: None)
+    monkeypatch.setattr(
+        ont_action_wan, "_persist_runtime_capabilities", lambda *a: None
+    )
+    monkeypatch.setattr(ont_action_wan.time, "sleep", lambda *_: None)
+
+    def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
+        calls["params"] = params
+        calls["expected"] = expected
+        return {"_id": "task-1"}
+
+    monkeypatch.setattr(ont_action_wan, "set_and_verify", fake_set_and_verify)
+
+    result = ont_action_wan.set_pppoe_credentials(
+        object(),
+        "ont-1",
+        username="100025868",
+        password="secret",
+        instance_index=2,
+        wan_vlan=203,
+    )
+
+    username_path = (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+        "WANPPPConnection.3.Username"
+    )
+    assert result.success is True
+    assert calls["object_path"] == (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection."
+    )
+    assert calls["params"][username_path] == "100025868"
+    assert calls["expected"][username_path] == "100025868"
+
+
+def test_set_pppoe_credentials_prefers_existing_primary_igd_ppp_child(
+    monkeypatch,
+) -> None:
+    from app.services.network import ont_action_wan
+
+    calls = {}
+    ont = SimpleNamespace(serial_number="4857544306351E9C")
+    device = {
+        "InternetGatewayDevice": {
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        "2": {
+                            "WANPPPConnectionNumberOfEntries": {"_value": 2},
+                            "WANIPConnectionNumberOfEntries": {"_value": 0},
+                            "WANPPPConnection": {
+                                "1": {
+                                    "Username": {"_value": "live-user"},
+                                    "X_HW_VLAN": {"_value": "203"},
+                                },
+                                "3": {
+                                    "Username": {"_value": "stale-user"},
+                                    "X_HW_VLAN": {"_value": "203"},
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    class FakeClient:
+        def get_device(self, device_id):
+            assert device_id == "device-1"
+            return device
+
+        def extract_parameter_value(self, current, parameter_path):
+            node = current
+            for part in parameter_path.split("."):
+                if not isinstance(node, dict):
+                    return None
+                node = node.get(part)
+                if node is None:
+                    return None
+            if isinstance(node, dict) and "_value" in node:
+                return node["_value"]
+            return node if not isinstance(node, dict) else None
+
+    monkeypatch.setattr(
+        ont_action_wan,
+        "get_ont_client_or_error",
+        lambda db, ont_id: ((ont, FakeClient(), "device-1"), None),
+    )
+    monkeypatch.setattr(
+        ont_action_wan,
+        "detect_data_model_root",
+        lambda db, ont, client, device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_wan, "persist_data_model_root", lambda *a: None)
+    monkeypatch.setattr(
+        ont_action_wan, "_persist_runtime_capabilities", lambda *a: None
+    )
+
+    def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
+        calls["params"] = params
+        calls["expected"] = expected
+        return {"_id": "task-1"}
+
+    monkeypatch.setattr(ont_action_wan, "set_and_verify", fake_set_and_verify)
+
+    result = ont_action_wan.set_pppoe_credentials(
+        object(),
+        "ont-1",
+        username="100025868",
+        password="secret",
+        instance_index=2,
+        wan_vlan=203,
+    )
+
+    username_path = (
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+        "WANPPPConnection.1.Username"
+    )
+    assert result.success is True
+    assert calls["params"][username_path] == "100025868"
+    assert username_path in calls["expected"]
 
 
 def test_genieacs_service_delegates_wifi_config(monkeypatch) -> None:

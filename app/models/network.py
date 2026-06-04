@@ -1703,7 +1703,9 @@ class OntUnit(Base):
 
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
         Enum(
-            OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False
+            OntProvisioningStatus,
+            name="ontprovisioningstatus_v2",
+            create_constraint=False,
         ),
     )
     authorization_status: Mapped[OntAuthorizationStatus | None] = mapped_column(

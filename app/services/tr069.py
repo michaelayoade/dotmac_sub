@@ -428,6 +428,21 @@ def _find_matching_ont_for_serial(db: Session, serial: str | None):
     return ont
 
 
+def _link_unassigned_inform_device_to_matching_ont(
+    db: Session,
+    device: Tr069CpeDevice,
+    *,
+    serial: str | None,
+) -> None:
+    """Link an existing unassigned TR-069 device to a unique ONT serial match."""
+    if getattr(device, "ont_unit_id", None):
+        return
+    ont = _find_matching_ont_for_serial(db, serial or device.serial_number)
+    if ont is None:
+        return
+    link_tr069_device_to_ont(db, device, ont, acs_server_id=device.acs_server_id)
+
+
 def _resolve_device_for_inform(
     db: Session,
     *,
@@ -1129,7 +1144,14 @@ class CpeDevices(ListResponseMixin):
                     is_active=True,
                 )
                 db.add(new_device)
+                existing = new_device
                 created += 1
+
+            _link_unassigned_inform_device_to_matching_ont(
+                db,
+                existing,
+                serial=serial_number,
+            )
 
         db.commit()
 
@@ -1734,6 +1756,8 @@ def receive_inform(
     if not device:
         logger.debug("Inform received for unknown serial: %s", serial)
         return {"status": "ignored", "reason": "unknown device or ACS server"}
+
+    _link_unassigned_inform_device_to_matching_ont(db, device, serial=serial)
 
     now = datetime.now(UTC)
     previous_last_inform_at = device.last_inform_at

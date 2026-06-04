@@ -1368,14 +1368,17 @@ CREATE TYPE public.ontprofiletype AS ENUM (
 
 
 --
--- Name: ontprovisioningstatus; Type: TYPE; Schema: public; Owner: -
+-- Name: ontprovisioningstatus_v2; Type: TYPE; Schema: public; Owner: -
 --
 
-CREATE TYPE public.ontprovisioningstatus AS ENUM (
+CREATE TYPE public.ontprovisioningstatus_v2 AS ENUM (
     'unprovisioned',
+    'partial',
     'provisioned',
     'drift_detected',
-    'failed'
+    'failed',
+    'pending_acs_registration',
+    'pending_service_config'
 );
 
 
@@ -4931,7 +4934,7 @@ CREATE TABLE public.ont_units (
     mgmt_remote_access boolean NOT NULL,
     voip_enabled boolean NOT NULL,
     provisioning_profile_id uuid,
-    provisioning_status public.ontprovisioningstatus,
+    provisioning_status public.ontprovisioningstatus_v2,
     last_provisioned_at timestamp with time zone,
     tr069_data_model character varying(40),
     last_sync_source character varying(40),

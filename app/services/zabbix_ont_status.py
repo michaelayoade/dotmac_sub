@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.metrics import (
+    observe_cache_refresh,
+    record_cache_fallback,
+    record_cache_lookup,
+)
+from app.services import app_cache
 from app.services.zabbix import ZabbixClient, ZabbixClientError, zabbix_configured
 
 if TYPE_CHECKING:
@@ -29,6 +35,7 @@ _HUAWEI_IFINDEX_BASE = 4194304000
 _HUAWEI_IFINDEX_SLOT_STRIDE = 8192
 _HUAWEI_IFINDEX_PORT_STRIDE = 256
 _DEFAULT_WALK_CACHE_TTL_SECONDS = 30
+_DEFAULT_ONT_SNAPSHOT_CACHE_TTL_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -134,6 +141,84 @@ def _walk_cache_ttl_seconds() -> int:
         return max(0, int(raw))
     except ValueError:
         return _DEFAULT_WALK_CACHE_TTL_SECONDS
+
+
+def _ont_snapshot_cache_ttl_seconds() -> int:
+    raw = os.getenv("ZABBIX_ONT_SNAPSHOT_CACHE_TTL_SECONDS")
+    if raw is None:
+        return _DEFAULT_ONT_SNAPSHOT_CACHE_TTL_SECONDS
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return _DEFAULT_ONT_SNAPSHOT_CACHE_TTL_SECONDS
+
+
+def _snapshot_cache_key_for_olt(olt_id: object) -> str:
+    return app_cache.cache_key("ont-zabbix-snapshot", olt_id)
+
+
+def _serialize_snapshot(
+    snapshot: dict[str, OntSignalData],
+) -> dict[str, dict[str, object]]:
+    payload: dict[str, dict[str, object]] = {}
+    for ont_id, signal in snapshot.items():
+        payload[ont_id] = {
+            "online": signal.online,
+            "olt_rx_dbm": signal.olt_rx_dbm,
+            "onu_rx_dbm": signal.onu_rx_dbm,
+            "updated_at": signal.updated_at.isoformat() if signal.updated_at else None,
+            "error": signal.error,
+        }
+    return payload
+
+
+def _deserialize_snapshot(
+    payload: dict[str, dict[str, object]],
+) -> dict[str, OntSignalData]:
+    snapshot: dict[str, OntSignalData] = {}
+    for ont_id, raw in payload.items():
+        updated_at_raw = raw.get("updated_at")
+        updated_at = None
+        if isinstance(updated_at_raw, str) and updated_at_raw:
+            try:
+                updated_at = datetime.fromisoformat(updated_at_raw)
+            except ValueError:
+                updated_at = None
+        olt_rx_raw = raw.get("olt_rx_dbm")
+        olt_rx_dbm = float(olt_rx_raw) if isinstance(olt_rx_raw, (float, int)) else None
+        onu_rx_raw = raw.get("onu_rx_dbm")
+        onu_rx_dbm = float(onu_rx_raw) if isinstance(onu_rx_raw, (float, int)) else None
+        snapshot[ont_id] = OntSignalData(
+            online=bool(raw.get("online")),
+            olt_rx_dbm=olt_rx_dbm,
+            onu_rx_dbm=onu_rx_dbm,
+            updated_at=updated_at,
+            error=str(raw.get("error")) if raw.get("error") is not None else None,
+        )
+    return snapshot
+
+
+def get_cached_olt_snapshot(olt_id: object) -> dict[str, OntSignalData] | None:
+    payload = app_cache.get_json(_snapshot_cache_key_for_olt(olt_id))
+    if not isinstance(payload, dict):
+        return None
+    try:
+        normalized = {
+            str(ont_id): value
+            for ont_id, value in payload.items()
+            if isinstance(value, dict)
+        }
+        return _deserialize_snapshot(normalized)
+    except Exception:
+        return None
+
+
+def set_cached_olt_snapshot(olt_id: object, snapshot: dict[str, OntSignalData]) -> bool:
+    return app_cache.set_json(
+        _snapshot_cache_key_for_olt(olt_id),
+        _serialize_snapshot(snapshot),
+        _ont_snapshot_cache_ttl_seconds(),
+    )
 
 
 def _cache_key_for_olt_walk(host_id: object) -> str:
@@ -347,13 +432,24 @@ def get_ont_signal_from_zabbix(ont: OntUnit) -> OntSignalData:
 def get_ont_snapshots_from_zabbix(
     db: Session,
     onts: Sequence[OntUnit],
+    *,
+    cached_only: bool = False,
 ) -> dict[str, OntSignalData]:
-    """Return Zabbix snapshots for ONTs grouped by their OLT."""
+    """Return Zabbix snapshots for ONTs grouped by their OLT.
+
+    With ``cached_only=True``, skip live Zabbix walks on cache miss and return
+    only cached entries. Callers (e.g. inventory list rendering) use this to
+    avoid blocking the page on a fan-out of per-OLT Zabbix calls.
+    """
     from app.models.network import OLTDevice
 
-    result: dict[str, OntSignalData] = {
-        str(getattr(ont, "id", "")): _offline("OLT not linked to ONT") for ont in onts
-    }
+    if cached_only:
+        result: dict[str, OntSignalData] = {}
+    else:
+        result = {
+            str(getattr(ont, "id", "")): _offline("OLT not linked to ONT")
+            for ont in onts
+        }
     onts_by_olt_id: dict[object, list[OntUnit]] = {}
     for ont in onts:
         ont_id = str(getattr(ont, "id", ""))
@@ -365,11 +461,90 @@ def get_ont_snapshots_from_zabbix(
         onts_by_olt_id.setdefault(olt_id, []).append(ont)
 
     for olt_id, olt_onts in onts_by_olt_id.items():
+        cached = get_cached_olt_snapshot(olt_id)
+        if cached is not None:
+            record_cache_lookup("ont_zabbix_snapshot", "hit")
+            missing_onts: list[OntUnit] = []
+            for ont in olt_onts:
+                ont_key = str(getattr(ont, "id", ""))
+                if ont_key in cached:
+                    result[ont_key] = cached[ont_key]
+                else:
+                    missing_onts.append(ont)
+            if not missing_onts:
+                continue
+            if cached_only:
+                continue
+            record_cache_fallback("ont_zabbix_snapshot", "live_fetch")
+            olt = db.get(OLTDevice, olt_id)
+            if olt is None:
+                continue
+            snapshot = get_olt_ont_snapshot_from_zabbix(olt, missing_onts)
+            merged_snapshot = dict(cached)
+            merged_snapshot.update(snapshot)
+            set_cached_olt_snapshot(olt_id, merged_snapshot)
+            result.update(snapshot)
+            continue
+
+        record_cache_lookup("ont_zabbix_snapshot", "miss")
+        if cached_only:
+            continue
+        record_cache_fallback("ont_zabbix_snapshot", "live_fetch")
         olt = db.get(OLTDevice, olt_id)
         if olt is None:
             continue
-        result.update(get_olt_ont_snapshot_from_zabbix(olt, olt_onts))
+        snapshot = get_olt_ont_snapshot_from_zabbix(olt, olt_onts)
+        set_cached_olt_snapshot(olt_id, snapshot)
+        result.update(snapshot)
     return result
+
+
+def refresh_all_olt_snapshots_cache(db: Session) -> dict[str, int]:
+    from app.models.network import OLTDevice, OntUnit
+
+    started_at = datetime.now(UTC)
+    result = {"olts_cached": 0, "onts_cached": 0, "errors": 0}
+    olts = (
+        db.query(OLTDevice)
+        .filter(OLTDevice.is_active.is_(True))
+        .filter(OLTDevice.zabbix_host_id.isnot(None))
+        .all()
+    )
+    try:
+        for olt in olts:
+            onts = (
+                db.query(OntUnit)
+                .filter(OntUnit.is_active.is_(True))
+                .filter(OntUnit.olt_device_id == olt.id)
+                .all()
+            )
+            if not onts:
+                continue
+            try:
+                snapshot = get_olt_ont_snapshot_from_zabbix(olt, onts)
+                if set_cached_olt_snapshot(olt.id, snapshot):
+                    result["olts_cached"] += 1
+                    result["onts_cached"] += len(snapshot)
+            except Exception:
+                logger.debug(
+                    "ont_snapshot_cache_refresh_failed",
+                    extra={"olt_id": str(getattr(olt, "id", ""))},
+                    exc_info=True,
+                )
+                result["errors"] += 1
+        observe_cache_refresh(
+            "ont_zabbix_snapshot",
+            "success" if result["errors"] == 0 else "partial",
+            (datetime.now(UTC) - started_at).total_seconds(),
+        )
+        return result
+    except Exception:
+        observe_cache_refresh(
+            "ont_zabbix_snapshot",
+            "failure",
+            (datetime.now(UTC) - started_at).total_seconds(),
+        )
+        raise
 
 
 def get_olt_ont_summary_from_zabbix(

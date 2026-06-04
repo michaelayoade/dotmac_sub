@@ -34,6 +34,9 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models.network import OntUnit
 from app.services.genieacs_service import genieacs_service
 from app.services.network._common import NasTarget
+from app.services.network.config_pack_resolution import (
+    resolve_effective_config_pack_stage,
+)
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_provisioning.context import (
@@ -72,6 +75,7 @@ _TR069_TASK_READY_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_timeout_
 _TR069_TASK_READY_POLL_INTERVAL_SEC = (
     _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
 )
+_TR069_BINDING_READBACK_RETRY_DELAY_SEC = 2.0
 
 
 def _validate_olt_profile_dependencies(
@@ -134,6 +138,40 @@ def _commit_without_expiring(db: Session) -> None:
         db.commit()
     finally:
         db.expire_on_commit = previous
+
+
+def _set_domain_outcome(
+    domain_outcomes: dict[str, dict[str, Any]],
+    domain: str,
+    status: str,
+    message: str,
+    *,
+    details: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {"status": status, "message": message}
+    if details:
+        payload["details"] = details
+    domain_outcomes[domain] = payload
+
+
+def _with_domain_outcomes(
+    domain_outcomes: dict[str, dict[str, Any]],
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = dict(data or {})
+    payload["domain_outcomes"] = dict(sorted(domain_outcomes.items()))
+    return payload
+
+
+def _domain_outcome_status(
+    domain_outcomes: dict[str, dict[str, Any]],
+    domain: str,
+) -> str | None:
+    payload = domain_outcomes.get(domain)
+    if isinstance(payload, dict):
+        status = payload.get("status")
+        return str(status) if status is not None else None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +284,9 @@ def wait_tr069_bootstrap(
         This function blocks for up to 120 seconds (configurable).
         Progress is reported via the callback if provided.
     """
+    from app.models.network import OntProvisioningStatus
     from app.services.network.backoff import BOOTSTRAP_BACKOFF, ExponentialBackoff
+    from app.services.network.ont_status import set_provisioning_status
 
     t0 = time.monotonic()
     ont = db.get(OntUnit, ont_id)
@@ -355,6 +395,12 @@ def wait_tr069_bootstrap(
                 else f"Device not found in ACS after {bootstrap_timeout}s; last poll error: {last_poll_error}"
             ),
             ms,
+            critical=False,
+            waiting=True,
+            data={"failure_class": "acs_bootstrap_timeout"},
+        )
+        set_provisioning_status(
+            ont, OntProvisioningStatus.pending_acs_registration, strict=False
         )
         _record_step(db, ont, "wait_tr069_bootstrap", result)
         return result
@@ -740,10 +786,12 @@ def apply_saved_service_config(
         effective_config: Optional pre-resolved config to avoid redundant resolution.
     """
 
+    from app.models.network import OntProvisioningStatus
     from app.services.credential_crypto import decrypt_credential
     from app.services.network.ont_action_network import (
         probe_wan_capabilities,
     )
+    from app.services.network.ont_status import set_provisioning_status
 
     t0 = time.monotonic()
     ont = db.get(OntUnit, ont_id)
@@ -875,6 +923,8 @@ def apply_saved_service_config(
 
     ms = int((time.monotonic() - t0) * 1000)
     if hard_failures:
+        set_provisioning_status(ont, OntProvisioningStatus.failed, strict=False)
+        db.add(ont)
         return StepResult(
             "apply_saved_service_config",
             False,
@@ -886,6 +936,7 @@ def apply_saved_service_config(
         )
     if not steps and not needs_input:
         set_desired_config_values(ont, {"delivery.pending_apply": None})
+        set_provisioning_status(ont, OntProvisioningStatus.provisioned, strict=False)
         db.add(ont)
         return StepResult(
             "apply_saved_service_config",
@@ -901,7 +952,12 @@ def apply_saved_service_config(
         message = "Saved ONT service config is incomplete."
     if not needs_input:
         set_desired_config_values(ont, {"delivery.pending_apply": None})
-        db.add(ont)
+        set_provisioning_status(ont, OntProvisioningStatus.provisioned, strict=False)
+    else:
+        set_provisioning_status(
+            ont, OntProvisioningStatus.pending_service_config, strict=False
+        )
+    db.add(ont)
     return StepResult(
         "apply_saved_service_config",
         not needs_input,
@@ -1314,8 +1370,37 @@ def apply_authorization_baseline(
     if ont is None:
         return StepResult("authorization_baseline", False, "ONT not found")
 
-    if effective_config is None:
-        effective_config = resolve_effective_ont_config(db, ont)
+    effective_config, config_pack_result = resolve_effective_config_pack_stage(
+        db,
+        ont,
+        effective_config=effective_config,
+    )
+    baseline_domain_outcomes: dict[str, dict[str, Any]] = {}
+    _set_domain_outcome(
+        baseline_domain_outcomes,
+        "config_pack_resolution",
+        "succeeded" if config_pack_result.success else "terminal_failure",
+        config_pack_result.message,
+    )
+    if not dry_run:
+        _record_step(db, ont, config_pack_result.step_name, config_pack_result)
+        db.flush()
+    if not config_pack_result.success:
+        result = StepResult(
+            "authorization_baseline",
+            False,
+            config_pack_result.message,
+            duration_ms=int((time.monotonic() - t0) * 1000),
+            data={
+                "config_pack_resolution": config_pack_result.data,
+                "domain_outcomes": baseline_domain_outcomes,
+            },
+        )
+        if not dry_run:
+            set_provisioning_status(ont, OntProvisioningStatus.failed, strict=False)
+            db.flush()
+            _record_step(db, ont, "authorization_baseline", result)
+        return result
 
     if not dry_run:
         preflight = validate_prerequisites(
@@ -1339,6 +1424,8 @@ def apply_authorization_baseline(
                 message,
                 duration_ms=int((time.monotonic() - t0) * 1000),
                 data={
+                    "config_pack_resolution": config_pack_result.data,
+                    "domain_outcomes": baseline_domain_outcomes,
                     "checks": preflight.get("checks", []),
                     "failed_checks": failed_checks,
                 },
@@ -1367,8 +1454,28 @@ def apply_authorization_baseline(
         critical=result.critical,
         skipped=result.skipped,
         waiting=result.waiting,
-        data=result.data,
+        data={
+            **(result.data or {}),
+            "config_pack_resolution": config_pack_result.data,
+        },
     )
+    baseline_domain_outcomes.update(
+        dict((baseline_result.data or {}).get("domain_outcomes", {}))
+    )
+    if baseline_result.success:
+        _set_domain_outcome(
+            baseline_domain_outcomes,
+            "acs_bootstrap_verify",
+            "pending_verification",
+            "Waiting for ACS bootstrap verification after baseline apply.",
+        )
+        baseline_result.waiting = True
+        if not baseline_result.message:
+            baseline_result.message = "Authorization baseline applied; waiting for ACS bootstrap verification."
+    baseline_result.data = {
+        **(baseline_result.data or {}),
+        "domain_outcomes": dict(sorted(baseline_domain_outcomes.items())),
+    }
 
     if not dry_run and baseline_result.success:
         try:
@@ -1402,11 +1509,14 @@ def apply_authorization_baseline(
             _record_step(db, ont, "post_authorization_acs_link", link_result)
             if result.data:
                 baseline_result.data = {
-                    **result.data,
+                    **baseline_result.data,
                     "post_authorization_acs_link": link_result.data,
                 }
             else:
-                baseline_result.data = {"post_authorization_acs_link": link_result.data}
+                baseline_result.data = {
+                    **(baseline_result.data or {}),
+                    "post_authorization_acs_link": link_result.data,
+                }
         except Exception as exc:
             logger.warning(
                 "Post-authorization ACS reconciliation failed for ONT %s: %s",
@@ -1424,13 +1534,18 @@ def apply_authorization_baseline(
             _record_step(db, ont, "post_authorization_acs_link", link_result)
 
     if not dry_run:
+        final_status = OntProvisioningStatus.failed
+        if baseline_result.success:
+            if (
+                _domain_outcome_status(baseline_domain_outcomes, "acs_bootstrap_verify")
+                == "pending_verification"
+            ):
+                final_status = OntProvisioningStatus.pending_acs_registration
+            else:
+                final_status = OntProvisioningStatus.provisioned
         set_provisioning_status(
             ont,
-            (
-                OntProvisioningStatus.provisioned
-                if baseline_result.success
-                else OntProvisioningStatus.failed
-            ),
+            final_status,
             strict=False,
         )
         db.flush()
@@ -1564,6 +1679,7 @@ def provision_with_reconciliation(
     adapter = get_protocol_adapter(ctx.olt)
     steps_completed: list[str] = []
     created_port_indices: list[int] = []
+    domain_outcomes: dict[str, dict[str, Any]] = {}
 
     # 1. Create internet service port (adapter returns success on "already exists")
     _commit_without_expiring(db)
@@ -1581,6 +1697,14 @@ def provision_with_reconciliation(
                 False,
                 f"Internet service port failed: {result.message}",
                 ms,
+                data=_with_domain_outcomes(
+                    {
+                        "olt_l2_apply": {
+                            "status": "terminal_failure",
+                            "message": f"Internet service port failed: {result.message}",
+                        }
+                    }
+                ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
             _send_failure_notification(ctx, ont_id, step_result)
@@ -1608,12 +1732,34 @@ def provision_with_reconciliation(
                     False,
                     f"Bridge native VLAN failed: {native_result.message}",
                     ms,
-                    data={"rollback_performed": len(created_port_indices) > 0},
+                    data=_with_domain_outcomes(
+                        {
+                            "olt_l2_apply": {
+                                "status": "terminal_failure",
+                                "message": f"Bridge native VLAN failed: {native_result.message}",
+                            }
+                        },
+                        {"rollback_performed": len(created_port_indices) > 0},
+                    ),
                 )
                 _record_step(db, ctx.ont, "provision", step_result)
                 _send_failure_notification(ctx, ont_id, step_result)
                 return step_result
             steps_completed.append(f"native_vlan_{wan_vlan}_eth_1")
+        _set_domain_outcome(
+            domain_outcomes,
+            "olt_l2_apply",
+            "succeeded",
+            "Internet L2 apply completed.",
+            details={"wan_vlan": wan_vlan, "wan_gem_index": wan_gem},
+        )
+    else:
+        _set_domain_outcome(
+            domain_outcomes,
+            "olt_l2_apply",
+            "succeeded",
+            "No internet L2 apply required for this provisioning run.",
+        )
 
     # 2. Clear any stale WAN config before applying new configuration (best-effort)
     # Huawei OLTs retain ipconfig/internet-config/wan-config after deauthorization or from
@@ -1654,6 +1800,15 @@ def provision_with_reconciliation(
             False,
             "Management VLAN not resolved (config pack incomplete?)",
             ms,
+            data=_with_domain_outcomes(
+                {
+                    **domain_outcomes,
+                    "management_path_apply": {
+                        "status": "terminal_failure",
+                        "message": "Management VLAN not resolved (config pack incomplete?)",
+                    },
+                }
+            ),
         )
         _record_step(db, ctx.ont, "provision", step_result)
         _send_failure_notification(ctx, ont_id, step_result)
@@ -1666,7 +1821,21 @@ def provision_with_reconciliation(
         )
         if not ok:
             ms = int((time.monotonic() - t0) * 1000)
-            step_result = StepResult("provision", False, mgmt_message, ms)
+            step_result = StepResult(
+                "provision",
+                False,
+                mgmt_message,
+                ms,
+                data=_with_domain_outcomes(
+                    {
+                        **domain_outcomes,
+                        "management_path_apply": {
+                            "status": "terminal_failure",
+                            "message": mgmt_message,
+                        },
+                    }
+                ),
+            )
             _record_step(db, ctx.ont, "provision", step_result)
             _send_failure_notification(ctx, ont_id, step_result)
             return step_result
@@ -1689,6 +1858,15 @@ def provision_with_reconciliation(
                     False,
                     "OLT config pack not found after management IP allocation",
                     ms,
+                    data=_with_domain_outcomes(
+                        {
+                            **domain_outcomes,
+                            "management_path_apply": {
+                                "status": "terminal_failure",
+                                "message": "OLT config pack not found after management IP allocation",
+                            },
+                        }
+                    ),
                 )
                 _record_step(db, ctx.ont, "provision", step_result)
                 _send_failure_notification(ctx, ont_id, step_result)
@@ -1721,6 +1899,18 @@ def provision_with_reconciliation(
                     "imported OLT state"
                 ),
                 ms,
+                data=_with_domain_outcomes(
+                    {
+                        **domain_outcomes,
+                        "management_path_apply": {
+                            "status": "terminal_failure",
+                            "message": (
+                                "Management IPHOST priority could not be resolved from "
+                                "imported OLT state"
+                            ),
+                        },
+                    }
+                ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
             _send_failure_notification(ctx, ont_id, step_result)
@@ -1755,14 +1945,103 @@ def provision_with_reconciliation(
                 False,
                 f"Management config failed: {result.message}",
                 ms,
-                data={"rollback_performed": len(created_port_indices) > 0},
+                data=_with_domain_outcomes(
+                    {
+                        **domain_outcomes,
+                        "management_path_apply": {
+                            "status": "terminal_failure",
+                            "message": f"Management config failed: {result.message}",
+                        },
+                    },
+                    {"rollback_performed": len(created_port_indices) > 0},
+                ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
             _send_failure_notification(ctx, ont_id, step_result)
             return step_result
         steps_completed.extend(result.data.get("steps_completed", []))
+        completed_batch_steps = result.data.get("steps_completed", [])
+        failed_batch_steps = result.data.get("steps_failed", [])
+        if any(
+            str(step).startswith(("create_mgmt_service_port", "configure_iphost"))
+            for step in completed_batch_steps
+        ):
+            _set_domain_outcome(
+                domain_outcomes,
+                "management_path_apply",
+                "succeeded",
+                "Management path apply completed.",
+            )
+        if any(str(step).startswith("bind_tr069") for step in completed_batch_steps):
+            _set_domain_outcome(
+                domain_outcomes,
+                "tr069_bind_apply",
+                "succeeded",
+                "TR-069 profile bind apply completed.",
+            )
+        elif tr069_profile is not None:
+            _set_domain_outcome(
+                domain_outcomes,
+                "tr069_bind_apply",
+                "retryable_failure",
+                "TR-069 profile bind did not complete during management apply.",
+            )
+        else:
+            _set_domain_outcome(
+                domain_outcomes,
+                "tr069_bind_apply",
+                "succeeded",
+                "No TR-069 bind apply required for this provisioning run.",
+            )
+        if any(
+            str(step).startswith(("activate_internet_config", "configure_wan"))
+            for step in failed_batch_steps
+        ):
+            _set_domain_outcome(
+                domain_outcomes,
+                "omci_wan_apply",
+                "retryable_failure",
+                "One or more OMCI WAN apply steps failed after management-path apply.",
+            )
+        elif any(
+            str(step).startswith(("activate_internet_config", "configure_wan"))
+            for step in completed_batch_steps
+        ):
+            _set_domain_outcome(
+                domain_outcomes,
+                "omci_wan_apply",
+                "succeeded",
+                "OMCI WAN apply completed.",
+            )
+        else:
+            _set_domain_outcome(
+                domain_outcomes,
+                "omci_wan_apply",
+                "succeeded",
+                "No OMCI WAN apply required for this provisioning run.",
+            )
+    else:
+        _set_domain_outcome(
+            domain_outcomes,
+            "management_path_apply",
+            "succeeded",
+            "Bridge mode does not require management-path apply.",
+        )
+        _set_domain_outcome(
+            domain_outcomes,
+            "tr069_bind_apply",
+            "succeeded",
+            "No TR-069 bind apply required for this provisioning run.",
+        )
+        _set_domain_outcome(
+            domain_outcomes,
+            "omci_wan_apply",
+            "succeeded",
+            "No OMCI WAN apply required for this provisioning run.",
+        )
 
     readback_port_indices: list[int] = []
+    service_ports_result = None
     try:
         _commit_without_expiring(db)
         service_ports_result = adapter.get_service_ports_for_ont(
@@ -1801,6 +2080,13 @@ def provision_with_reconciliation(
             "Failed to import service-port readback after provisioning for ONT %s",
             ctx.ont.serial_number,
         )
+    if service_ports_result is not None and not service_ports_result.success:
+        _set_domain_outcome(
+            domain_outcomes,
+            "olt_or_omci_readback_verify",
+            "retryable_failure",
+            f"Service-port readback failed: {service_ports_result.message}",
+        )
 
     expected_tr069_profile = values.get("tr069_olt_profile_id")
     readback_tr069_profile_id: int | None = None
@@ -1816,11 +2102,23 @@ def provision_with_reconciliation(
                 False,
                 f"Invalid TR-069 profile id in config pack: {expected_tr069_profile}",
                 ms,
-                data={
-                    "steps_completed": steps_completed,
-                    "created_service_port_indices": created_port_indices,
-                    "readback_service_port_indices": readback_port_indices,
-                },
+                data=_with_domain_outcomes(
+                    {
+                        **domain_outcomes,
+                        "olt_or_omci_readback_verify": {
+                            "status": "terminal_failure",
+                            "message": (
+                                "Invalid TR-069 profile id in config pack: "
+                                f"{expected_tr069_profile}"
+                            ),
+                        },
+                    },
+                    {
+                        "steps_completed": steps_completed,
+                        "created_service_port_indices": created_port_indices,
+                        "readback_service_port_indices": readback_port_indices,
+                    },
+                ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
             _send_failure_notification(ctx, ont_id, step_result)
@@ -1856,6 +2154,52 @@ def provision_with_reconciliation(
             if tr069_binding_result is not None
             else False
         )
+        needs_tr069_reboot_retry = (
+            "bind_tr069" in steps_completed
+            and readback_tr069_profile_id != expected_tr069_profile_int
+        )
+        if needs_tr069_reboot_retry:
+            reboot_result = adapter.reboot_ont(ctx.fsp, ctx.olt_ont_id)
+            if reboot_result.success:
+                steps_completed.append("reset_after_tr069_bind")
+                time.sleep(_TR069_BINDING_READBACK_RETRY_DELAY_SEC)
+                try:
+                    _commit_without_expiring(db)
+                    tr069_binding_result = adapter.get_tr069_profile_binding(
+                        ctx.fsp, ctx.olt_ont_id
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to re-read TR-069 profile binding after reset for ONT %s",
+                        ctx.ont.serial_number,
+                    )
+                    tr069_binding_result = None
+
+                binding_data = (
+                    getattr(tr069_binding_result, "data", None)
+                    if tr069_binding_result is not None
+                    else None
+                )
+                if isinstance(binding_data, dict):
+                    raw_profile_id = binding_data.get("profile_id")
+                    try:
+                        readback_tr069_profile_id = (
+                            int(raw_profile_id) if raw_profile_id is not None else None
+                        )
+                    except (TypeError, ValueError):
+                        readback_tr069_profile_id = None
+                binding_success = bool(
+                    getattr(tr069_binding_result, "success", False)
+                    if tr069_binding_result is not None
+                    else False
+                )
+            else:
+                logger.warning(
+                    "TR-069 binding readback retry reset failed for ONT %s: %s",
+                    ctx.ont.serial_number,
+                    reboot_result.message,
+                )
+
         if (
             not binding_success
             or readback_tr069_profile_id != expected_tr069_profile_int
@@ -1865,28 +2209,74 @@ def provision_with_reconciliation(
                 if tr069_binding_result is not None
                 else "TR-069 binding readback failed"
             )
+            readback_message = (
+                "TR-069 profile binding readback failed: "
+                f"expected profile {expected_tr069_profile_int}, "
+                f"found {readback_tr069_profile_id}. {message}"
+            ).strip()
+            tr069_bind_applied = (
+                _domain_outcome_status(domain_outcomes, "tr069_bind_apply")
+                == "succeeded"
+            )
             ms = int((time.monotonic() - t0) * 1000)
+            verification_status = (
+                "pending_verification" if tr069_bind_applied else "retryable_failure"
+            )
             step_result = StepResult(
                 "provision",
-                False,
+                tr069_bind_applied,
                 (
-                    "TR-069 profile binding readback failed: "
-                    f"expected profile {expected_tr069_profile_int}, "
-                    f"found {readback_tr069_profile_id}. {message}"
-                ).strip(),
+                    "Provisioning apply completed; waiting for TR-069 binding verification. "
+                    f"{readback_message}"
+                    if tr069_bind_applied
+                    else readback_message
+                ),
                 ms,
-                data={
-                    "steps_completed": steps_completed,
-                    "created_service_port_indices": created_port_indices,
-                    "readback_service_port_indices": readback_port_indices,
-                    "expected_tr069_profile_id": expected_tr069_profile_int,
-                    "readback_tr069_profile_id": readback_tr069_profile_id,
-                },
+                critical=not tr069_bind_applied,
+                waiting=tr069_bind_applied,
+                data=_with_domain_outcomes(
+                    {
+                        **domain_outcomes,
+                        "olt_or_omci_readback_verify": {
+                            "status": verification_status,
+                            "message": readback_message,
+                        },
+                        "acs_bootstrap_verify": {
+                            "status": "pending_verification",
+                            "message": "Waiting for ACS bootstrap after TR-069 bind apply.",
+                        },
+                    }
+                    if tr069_bind_applied
+                    else {
+                        **domain_outcomes,
+                        "olt_or_omci_readback_verify": {
+                            "status": verification_status,
+                            "message": readback_message,
+                        },
+                    },
+                    {
+                        "failure_class": "tr069_binding_readback_miss",
+                        "steps_completed": steps_completed,
+                        "created_service_port_indices": created_port_indices,
+                        "readback_service_port_indices": readback_port_indices,
+                        "expected_tr069_profile_id": expected_tr069_profile_int,
+                        "readback_tr069_profile_id": readback_tr069_profile_id,
+                    },
+                ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
-            _send_failure_notification(ctx, ont_id, step_result)
+            if not tr069_bind_applied:
+                _send_failure_notification(ctx, ont_id, step_result)
             return step_result
         steps_completed.append(f"tr069_profile_{readback_tr069_profile_id}_verified")
+
+    if "olt_or_omci_readback_verify" not in domain_outcomes:
+        _set_domain_outcome(
+            domain_outcomes,
+            "olt_or_omci_readback_verify",
+            "succeeded",
+            "OLT/OMCI readback verification completed.",
+        )
 
     ms = int((time.monotonic() - t0) * 1000)
     step_result = StepResult(
@@ -1894,12 +2284,15 @@ def provision_with_reconciliation(
         True,
         f"Provisioned: {len(steps_completed)} step(s)",
         ms,
-        data={
-            "steps_completed": steps_completed,
-            "created_service_port_indices": created_port_indices,
-            "readback_service_port_indices": readback_port_indices,
-            "readback_tr069_profile_id": readback_tr069_profile_id,
-        },
+        data=_with_domain_outcomes(
+            domain_outcomes,
+            {
+                "steps_completed": steps_completed,
+                "created_service_port_indices": created_port_indices,
+                "readback_service_port_indices": readback_port_indices,
+                "readback_tr069_profile_id": readback_tr069_profile_id,
+            },
+        ),
     )
     _record_step(db, ctx.ont, "provision", step_result)
 

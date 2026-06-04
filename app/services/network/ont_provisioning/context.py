@@ -22,12 +22,17 @@ class OltContext:
     assignment: OntAssignment | None = None
 
 
-def _load_active_assignment_for_update(
+def _load_active_assignment(
     db: Session,
     *,
     ont_id: object,
 ) -> OntAssignment | None:
-    """Load and row-lock the active assignment used for OLT writes."""
+    """Load the active assignment used to resolve OLT write context.
+
+    Interactive OLT actions need a stable snapshot of assignment metadata, not
+    an exclusive lock on ``ont_assignments``. Avoiding ``FOR UPDATE`` here
+    prevents manual WAN applies from failing behind unrelated inventory work.
+    """
     stmt = (
         select(OntAssignment)
         .where(
@@ -38,7 +43,6 @@ def _load_active_assignment_for_update(
             OntAssignment.assigned_at.desc(),
             OntAssignment.created_at.desc(),
         )
-        .with_for_update()
     )
     return db.scalars(stmt).first()
 
@@ -49,7 +53,7 @@ def resolve_olt_context(db: Session, ont_id: str) -> tuple[OltContext | None, st
     if not ont:
         return None, "ONT not found"
 
-    assignment = _load_active_assignment_for_update(db, ont_id=ont.id)
+    assignment = _load_active_assignment(db, ont_id=ont.id)
     if not assignment:
         return None, "ONT has no active assignment"
     if not assignment.pon_port_id:

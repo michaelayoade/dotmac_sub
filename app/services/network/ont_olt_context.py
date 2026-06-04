@@ -36,12 +36,17 @@ def _scanned_fsp_from_ont(ont: OntUnit) -> str | None:
     return fsp if _FSP_RE.fullmatch(fsp) else None
 
 
-def _load_active_assignment_for_update(
+def _load_active_assignment(
     db: Session,
     *,
     ont_id: object,
 ) -> OntAssignment | None:
-    """Load and row-lock the active assignment used for OLT writes."""
+    """Load the active assignment used for strict OLT write context resolution.
+
+    The caller needs the latest active assignment metadata, not an exclusive
+    row lock. Using a plain read avoids lock-timeout failures when interactive
+    OLT actions race with inventory or sync jobs.
+    """
     stmt = (
         select(OntAssignment)
         .where(
@@ -52,7 +57,6 @@ def _load_active_assignment_for_update(
             OntAssignment.assigned_at.desc(),
             OntAssignment.created_at.desc(),
         )
-        .with_for_update()
     )
     return db.scalars(stmt).first()
 
@@ -70,7 +74,7 @@ def resolve_ont_olt_write_context(
     if ont is None:
         return None, "ONT not found."
 
-    assignment = _load_active_assignment_for_update(db, ont_id=ont.id)
+    assignment = _load_active_assignment(db, ont_id=ont.id)
     if assignment is None:
         return None, "ONT has no active assignment."
     if not assignment.pon_port_id:

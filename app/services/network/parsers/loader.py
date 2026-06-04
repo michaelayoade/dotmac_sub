@@ -462,7 +462,12 @@ def parse_ont_info_detail(output: str) -> OntInfoEntry | None:
         service_profile_id=get_int("service profile id"),
         line_profile_id=get_int("line profile id"),
         last_down_cause=kv.get("last down cause", ""),
-        tr069_profile_id=get_int("tr069 server profile", "tr-069 server profile"),
+        tr069_profile_id=get_int(
+            "tr069 server profile",
+            "tr069 server profile id",
+            "tr-069 server profile",
+            "tr-069 server profile id",
+        ),
     )
 
 

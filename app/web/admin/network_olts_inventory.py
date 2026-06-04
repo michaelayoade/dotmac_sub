@@ -12,9 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.network import (
-    OLTDevice,
-)
+from app.models.network import OLTDevice, PonPort
 from app.services import network as network_service
 from app.services import web_admin as web_admin_service
 from app.services import web_network_core_devices as web_network_core_devices_service
@@ -679,6 +677,88 @@ def olt_detail_preview(
         }
     )
     return templates.TemplateResponse("admin/network/olts/detail.html", context)
+
+
+@router.post(
+    "/olts/{olt_id}/pon-port-identifier",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_save_pon_port_identifier(
+    request: Request,
+    olt_id: str,
+    pon_port_id: str = Form(...),
+    alias: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        message = quote_plus("OLT not found")
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={message}",
+            status_code=303,
+        )
+
+    port = db.get(PonPort, pon_port_id)
+    if not port or str(port.olt_id) != str(olt.id):
+        message = quote_plus("PON port not found for this OLT")
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="update_pon_port_identifier",
+            ok=False,
+            message="PON port not found for this OLT.",
+            metadata={"pon_port_id": pon_port_id},
+        )
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={message}",
+            status_code=303,
+        )
+
+    try:
+        web_network_pon_interfaces_service.save_alias(
+            db,
+            olt_id=str(olt.id),
+            interface_name=str(port.name or ""),
+            alias=alias,
+            pon_port_id=str(port.id),
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail)
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="update_pon_port_identifier",
+            ok=False,
+            message=detail,
+            metadata={"pon_port_id": str(port.id), "interface_name": port.name},
+        )
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={quote_plus(detail)}",
+            status_code=303,
+        )
+
+    alias_text = (alias or "").strip()
+    message = (
+        f"Identifier updated for {port.name}."
+        if alias_text
+        else f"Identifier cleared for {port.name}."
+    )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="update_pon_port_identifier",
+        ok=True,
+        message=message,
+        metadata={
+            "pon_port_id": str(port.id),
+            "interface_name": port.name,
+            "alias": alias_text or None,
+        },
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status=success&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
 
 
 @router.post(

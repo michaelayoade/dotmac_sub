@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
+from threading import Lock
+from time import monotonic
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.services.network.olt_config_pack_live_audit import audit_olt_config_pack_live
+
+_SUCCESS_CACHE_TTL_SECONDS = 5 * 60
+_success_cache_lock = Lock()
+_success_cache: dict[str, tuple[float, OltDependencyPreflightResult]] = {}
 
 
 @dataclass
@@ -18,6 +25,35 @@ class OltDependencyPreflightResult:
     message: str
     audit: dict[str, Any] | None = None
     errors: list[str] = field(default_factory=list)
+
+
+def _clone_result(
+    result: OltDependencyPreflightResult,
+) -> OltDependencyPreflightResult:
+    return OltDependencyPreflightResult(
+        success=result.success,
+        message=result.message,
+        audit=deepcopy(result.audit),
+        errors=list(result.errors),
+    )
+
+
+def get_cached_olt_dependency_validation(
+    olt_id: str,
+    *,
+    max_age_sec: int = _SUCCESS_CACHE_TTL_SECONDS,
+) -> OltDependencyPreflightResult | None:
+    """Return a recent successful live audit result when available."""
+    cache_key = str(olt_id)
+    with _success_cache_lock:
+        cached = _success_cache.get(cache_key)
+        if cached is None:
+            return None
+        cached_at, result = cached
+        if monotonic() - cached_at > max_age_sec:
+            _success_cache.pop(cache_key, None)
+            return None
+        return _clone_result(result)
 
 
 def format_dependency_audit_errors(errors: list[str]) -> str:
@@ -32,13 +68,21 @@ def validate_olt_profile_dependencies(
     operation: str,
 ) -> OltDependencyPreflightResult:
     """Validate live OLT profile dependencies before any OLT write operation."""
+    cache_key = str(olt_id)
+    cached = get_cached_olt_dependency_validation(cache_key)
+    if cached is not None:
+        return cached
+
     audit = audit_olt_config_pack_live(db, olt_id)
     if audit.is_valid:
-        return OltDependencyPreflightResult(
+        result = OltDependencyPreflightResult(
             success=True,
             message="OLT profile dependencies are valid.",
             audit=audit.to_dict(),
         )
+        with _success_cache_lock:
+            _success_cache[cache_key] = (monotonic(), _clone_result(result))
+        return result
 
     errors = audit.errors or ["OLT profile dependency audit failed"]
     return OltDependencyPreflightResult(

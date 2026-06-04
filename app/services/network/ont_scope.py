@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.network import OntAssignment, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber, UserType
+from app.services.network.serial_utils import canonical as canonical_serial
 from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.serial_utils import search_candidates
 
@@ -221,8 +222,8 @@ def submitted_authorization_ont_matches_scope(
     if direct_ont is None:
         return False
 
-    submitted_serial = normalize_serial(serial_number)
-    direct_serial = normalize_serial(getattr(direct_ont, "serial_number", None))
+    submitted_serial = canonical_serial(serial_number)
+    direct_serial = canonical_serial(getattr(direct_ont, "serial_number", None))
     direct_olt_id = getattr(direct_ont, "olt_device_id", None)
     direct_match = (
         str(direct_olt_id) == str(olt_id) and direct_serial == submitted_serial
@@ -230,7 +231,7 @@ def submitted_authorization_ont_matches_scope(
     if direct_match:
         return True
 
-    if direct_olt_id is not None or direct_serial != submitted_serial:
+    if direct_olt_id is not None:
         return False
 
     candidate = db.scalars(
@@ -245,9 +246,9 @@ def submitted_authorization_ont_matches_scope(
         return False
 
     candidate_serials = {
-        normalize_serial(getattr(candidate, "serial_number", None)),
-        normalize_serial(getattr(candidate, "serial_hex", None)),
-        normalize_serial(getattr(candidate, "equipment_sn", None)),
+        canonical_serial(getattr(candidate, "serial_number", None)),
+        canonical_serial(getattr(candidate, "serial_hex", None)),
+        canonical_serial(getattr(candidate, "equipment_sn", None)),
     }
     return submitted_serial in candidate_serials
 

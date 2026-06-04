@@ -241,6 +241,45 @@ class TestInformWebhook:
         assert ont.acs_last_inform_at == device.last_inform_at
         assert ont.last_seen_at == device.last_inform_at
 
+    def test_receive_inform_links_existing_unassigned_device_to_matching_ont(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services import tr069 as tr069_service
+
+        server = Tr069AcsServer(
+            name="Unassigned Inform ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        ont = OntUnit(serial_number="INFORM-UNASSIGNED-001", is_active=True)
+        db_session.add_all([server, ont])
+        db_session.flush()
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="00D09E-TestProduct-INFORM-UNASSIGNED-001",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+
+        result = tr069_service.receive_inform(
+            db_session,
+            serial_number=ont.serial_number,
+            device_id_raw=device.genieacs_device_id,
+            event="periodic",
+            raw_payload={},
+            acs_server_id=str(server.id),
+        )
+
+        assert result["status"] == "ok"
+        db_session.refresh(ont)
+        db_session.refresh(device)
+        assert device.ont_unit_id == ont.id
+        assert ont.acs_last_inform_at == device.last_inform_at
+        assert ont.last_seen_at == device.last_inform_at
+
     def test_receive_inform_updates_changed_genieacs_device_id(
         self, db_session
     ) -> None:
@@ -545,6 +584,62 @@ class TestAutoLinkOnts:
         assert linked.ont_unit_id == ont.id
         assert linked.acs_server_id == server.id
 
+    def test_sync_links_existing_unassigned_device_by_serial(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="Existing Unassigned AutoLink ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        ont = OntUnit(serial_number="AUTOLINK-EXISTING-001", is_active=True)
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="00D09E-TestProduct-AUTOLINK-EXISTING-001",
+            is_active=True,
+        )
+        db_session.add_all([ont, device])
+        db_session.commit()
+
+        last_inform_at = datetime.now(UTC)
+        mock_device = {
+            "_id": device.genieacs_device_id,
+            "_deviceId": {
+                "_OUI": "00D09E",
+                "_ProductClass": "TestProduct",
+                "_SerialNumber": ont.serial_number,
+            },
+            "_lastInform": last_inform_at.isoformat(),
+        }
+        with patch("app.services.tr069.create_genieacs_client") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = [mock_device]
+            instance.parse_device_id.return_value = (
+                "00D09E",
+                "TestProduct",
+                ont.serial_number,
+            )
+            instance.extract_parameter_value.return_value = None
+
+            result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        assert result["created"] == 0
+        assert result["updated"] == 1
+        db_session.refresh(ont)
+        db_session.refresh(device)
+        assert device.ont_unit_id == ont.id
+        assert ont.acs_last_inform_at == device.last_inform_at
+        assert ont.last_seen_at == device.last_inform_at
+
     def test_olt_ont_acs_sync_and_inform_updates_table_last_seen_e2e(
         self, db_session
     ) -> None:
@@ -677,7 +772,7 @@ class TestAutoLinkOnts:
         monkeypatch.setattr(
             zabbix_ont_status,
             "get_ont_snapshots_from_zabbix",
-            lambda db, onts: {
+            lambda db, onts, **_: {
                 str(item.id): zabbix_ont_status.OntSignalData(
                     online=True,
                     updated_at=zabbix_seen,

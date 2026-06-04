@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from app.models.network import OntStatusSource, OntUnit, OnuOnlineStatus
+from app.models.network import OLTDevice, OntStatusSource, OntUnit, OnuOnlineStatus
 from app.services import network as network_service
 from app.services import zabbix_ont_status
 from app.services.network.ont_status import (
@@ -183,3 +183,60 @@ def test_list_advanced_filters_by_zabbix_status(db_session, monkeypatch) -> None
 
     assert total == 1
     assert [item.serial_number for item in rows] == ["ONT-ZABBIX-ONLINE"]
+
+
+def test_get_ont_snapshots_falls_back_for_missing_members_in_cached_olt(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(
+        name="Cached Snapshot OLT",
+        vendor="Huawei",
+        model="MA5608T",
+        zabbix_host_id="30303",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont_cached = OntUnit(serial_number="ONT-CACHED-1", olt_device_id=olt.id)
+    ont_missing = OntUnit(serial_number="ONT-MISSING-2", olt_device_id=olt.id)
+    db_session.add_all([ont_cached, ont_missing])
+    db_session.commit()
+
+    merged_cache = {}
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_cached_olt_snapshot",
+        lambda olt_id: {
+            str(ont_cached.id): zabbix_ont_status.OntSignalData(online=True)
+        },
+    )
+    monkeypatch.setattr(zabbix_ont_status, "record_cache_lookup", lambda *args: None)
+    monkeypatch.setattr(zabbix_ont_status, "record_cache_fallback", lambda *args: None)
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "set_cached_olt_snapshot",
+        lambda olt_id, snapshot: merged_cache.update(snapshot) or True,
+    )
+
+    def _fake_snapshot(_olt, onts):
+        assert [ont.serial_number for ont in onts] == ["ONT-MISSING-2"]
+        return {
+            str(ont_missing.id): zabbix_ont_status.OntSignalData(
+                online=True,
+                olt_rx_dbm=-22.0,
+            )
+        }
+
+    monkeypatch.setattr(
+        zabbix_ont_status,
+        "get_olt_ont_snapshot_from_zabbix",
+        _fake_snapshot,
+    )
+
+    snapshots = zabbix_ont_status.get_ont_snapshots_from_zabbix(
+        db_session,
+        [ont_cached, ont_missing],
+    )
+
+    assert snapshots[str(ont_cached.id)].online is True
+    assert snapshots[str(ont_missing.id)].online is True
+    assert set(merged_cache) == {str(ont_cached.id), str(ont_missing.id)}

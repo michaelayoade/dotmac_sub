@@ -132,7 +132,7 @@ def sync_all_acs_devices() -> dict[str, int]:
 
 @celery_app.task(name="app.tasks.tr069.wait_for_ont_bootstrap")
 @idempotent_task(
-    key_func=lambda ont_id, operation_id=None, **kw: (
+    key_func=lambda ont_id, operation_id=None, *args, **kw: (
         f"{ont_id}:{operation_id or 'no-op'}"
     )
 )

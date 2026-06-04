@@ -27,6 +27,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -354,6 +355,229 @@ def _igd_ppp_container_conflict(
     return None
 
 
+def _igd_wan_container_is_blank(
+    details: dict[str, Any],
+    *,
+    ip_count: int,
+    ppp_count: int,
+) -> bool:
+    """Return True when the target WCD slot is safe to populate with PPP."""
+    if ip_count > 0 or ppp_count > 0:
+        return False
+    observed = (
+        "ppp_name",
+        "ppp_status",
+        "ppp_ip",
+        "ppp_username",
+        "ppp_service",
+        "ppp_vlan",
+        "ip_name",
+        "ip_status",
+        "ip_address",
+        "ip_service",
+        "ip_vlan",
+    )
+    return not any(details.get(key) not in (None, "") for key in observed)
+
+
+def _get_igd_ppp_instance_indexes(
+    device: dict[str, Any],
+    root: str,
+    wcd_index: int,
+) -> list[int]:
+    """Return discovered WANPPPConnection child indexes under one WCD slot."""
+    node: Any = device
+    for segment in (
+        root,
+        "WANDevice",
+        "1",
+        "WANConnectionDevice",
+        str(wcd_index),
+        "WANPPPConnection",
+    ):
+        if not isinstance(node, dict):
+            return []
+        node = node.get(segment)
+    ppp_root = node
+    if not isinstance(ppp_root, dict):
+        return []
+    return sorted(int(key) for key in ppp_root if str(key).isdigit())
+
+
+def _get_existing_igd_ppp_instance_index(
+    device: dict[str, Any],
+    root: str,
+    wcd_index: int,
+) -> int | None:
+    """Prefer the primary/lowest discovered PPP child for existing layouts."""
+    digit_keys = _get_igd_ppp_instance_indexes(device, root, wcd_index)
+    return min(digit_keys) if digit_keys else None
+
+
+def _get_newest_igd_ppp_instance_index(
+    device: dict[str, Any],
+    root: str,
+    wcd_index: int,
+) -> int | None:
+    """Resolve the child created most recently after addObject refresh."""
+    digit_keys = _get_igd_ppp_instance_indexes(device, root, wcd_index)
+    return max(digit_keys) if digit_keys else None
+
+
+def _ensure_igd_ppp_wan_service(
+    *,
+    ont: Any,
+    client: Any,
+    device_id: str,
+    root: str,
+    wcd_index: int,
+    wan_vlan: int | None,
+) -> tuple[int | None, ActionResult | None]:
+    """Ensure a writable WANPPPConnection exists for IGD devices.
+
+    Returns the discovered PPP child instance index on success. When creation
+    is not possible or the new object is still not visible after refresh, an
+    actionable ActionResult is returned instead.
+    """
+    device = client.get_device(device_id)
+    entries_path = (
+        f"{root}.WANDevice.1.WANConnectionDevice.{wcd_index}."
+        "WANPPPConnectionNumberOfEntries"
+    )
+    ip_entries_path = (
+        f"{root}.WANDevice.1.WANConnectionDevice.{wcd_index}."
+        "WANIPConnectionNumberOfEntries"
+    )
+    ppp_count = _int_value(client.extract_parameter_value(device, entries_path))
+    ip_count = _int_value(client.extract_parameter_value(device, ip_entries_path))
+    details = _igd_wan_details(client, device, root, wcd_index)
+    existing_ppp_index = _get_existing_igd_ppp_instance_index(
+        device,
+        root,
+        wcd_index,
+    )
+
+    if ppp_count >= 1 or existing_ppp_index is not None:
+        conflict = _igd_ppp_container_conflict(details=details, wan_vlan=wan_vlan)
+        if conflict:
+            return None, ActionResult(
+                success=False,
+                message=(f"Refusing to push PPPoE credentials because {conflict}."),
+                data={
+                    "missing_ppp_wan_service": False,
+                    "wan_connection_device_index": wcd_index,
+                    "wan_instance": existing_ppp_index,
+                    **details,
+                },
+            )
+        _clear_wan_add_object_pending(ont, "ppp", success=True)
+        return existing_ppp_index or 1, None
+
+    if wan_vlan is None:
+        return None, ActionResult(
+            success=False,
+            message=(
+                "No PPP WAN service exists on this ONT and no Internet VLAN "
+                "was provided. Configure the PPPoE WAN service with its VLAN "
+                "first, then push credentials."
+            ),
+            data={
+                "missing_ppp_wan_service": True,
+                "required_step": "provision_wan_service_instance",
+                "wan_connection_device_index": wcd_index,
+                "wan_vlan": wan_vlan,
+                **details,
+            },
+        )
+
+    conflict = _igd_ppp_container_conflict(details=details, wan_vlan=wan_vlan)
+    if conflict or not _igd_wan_container_is_blank(
+        details,
+        ip_count=ip_count,
+        ppp_count=ppp_count,
+    ):
+        reason = conflict or "the selected WANConnectionDevice is not empty"
+        return None, ActionResult(
+            success=False,
+            message=(
+                "No PPP WAN service exists on this ONT. Refusing to create one "
+                f"because {reason}."
+            ),
+            data={
+                "missing_ppp_wan_service": True,
+                "required_step": "provision_wan_service_instance",
+                "wan_connection_device_index": wcd_index,
+                "wan_vlan": wan_vlan,
+                **details,
+            },
+        )
+
+    object_path = _get_wan_object_container(root, "ppp", wcd_index)
+    try:
+        client.add_object(device_id, object_path)
+        _mark_wan_add_object_pending(
+            ont,
+            wan_type="ppp",
+            root=root,
+            instance_index=wcd_index,
+            wan_vlan=wan_vlan,
+            object_path=object_path,
+        )
+    except GenieACSError as exc:
+        return None, ActionResult(
+            success=False,
+            message=f"Failed to create PPPoE WAN service on ONT: {exc}",
+            data={
+                "missing_ppp_wan_service": True,
+                "required_step": "provision_wan_service_instance",
+                "wan_connection_device_index": wcd_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    refresh = getattr(client, "refresh_object", None)
+    for attempt in range(4):
+        if callable(refresh):
+            try:
+                refresh(device_id, object_path, allow_when_pending=True)
+            except GenieACSError:
+                logger.debug(
+                    "PPP WAN refresh failed for %s on attempt %d",
+                    device_id,
+                    attempt + 1,
+                    exc_info=True,
+                )
+        refreshed = client.get_device(device_id)
+        discovered_index = _get_newest_igd_ppp_instance_index(
+            refreshed,
+            root,
+            wcd_index,
+        )
+        if discovered_index is not None:
+            _clear_wan_add_object_pending(ont, "ppp", success=True)
+            return discovered_index, None
+        if attempt < 3:
+            time.sleep(2)
+
+    _clear_wan_add_object_pending(ont, "ppp", success=False)
+    return None, ActionResult(
+        success=False,
+        message=(
+            "GenieACS accepted the PPPoE WAN service creation task, but the "
+            "new WANPPPConnection was not visible after refresh. Retry "
+            "provisioning once device state has refreshed."
+        ),
+        data={
+            "failure_reason": "ppp_wan_add_object_not_visible",
+            "retry_after_seconds": _WAN_ADD_OBJECT_VERIFY_DELAY_SECONDS,
+            "missing_ppp_wan_service": True,
+            "required_step": "verify_ppp_wan_add_object",
+            "wan_connection_device_index": wcd_index,
+            "wan_vlan": wan_vlan,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # PPPoE Configuration
 # ---------------------------------------------------------------------------
@@ -397,35 +621,48 @@ def set_pppoe_credentials(
     root = detect_data_model_root(db, ont, client, device_id)
     persist_data_model_root(ont, root)
 
-    # Build parameter paths
-    username_path = _resolve_wan_path(root, "ppp.username", instance_index)
-    password_path = _resolve_wan_path(root, "ppp.password", instance_index)
-    enable_path = _resolve_wan_path(root, "ppp.enable", instance_index)
+    params: dict[str, str] = {}
 
-    params: dict[str, str] = {
-        username_path: username,
-        password_path: password,
-        enable_path: "true",
-    }
-
-    # For TR-098, also set NAT and connection type
     if root == "InternetGatewayDevice":
-        nat_path = _resolve_wan_path(root, "ppp.nat_enabled", instance_index)
-        conn_type_path = _resolve_wan_path(root, "ppp.connection_type", instance_index)
-        params[nat_path] = "true"
-        params[conn_type_path] = "IP_Routed"
+        ppp_child_index, ensure_error = _ensure_igd_ppp_wan_service(
+            ont=ont,
+            client=client,
+            device_id=device_id,
+            root=root,
+            wcd_index=instance_index,
+            wan_vlan=wan_vlan,
+        )
+        if ensure_error is not None:
+            return ensure_error
+        ppp_index = ppp_child_index or 1
+        ppp_base = (
+            f"{root}.WANDevice.1.WANConnectionDevice.{instance_index}."
+            f"WANPPPConnection.{ppp_index}"
+        )
+        params = {
+            f"{ppp_base}.Username": username,
+            f"{ppp_base}.Password": password,
+            f"{ppp_base}.Enable": "true",
+            f"{ppp_base}.NATEnabled": "true",
+            f"{ppp_base}.ConnectionType": "IP_Routed",
+        }
 
-        # Set VLAN if provided
         if wan_vlan is not None:
-            vlan_path = _resolve_wan_path(root, "ppp.vlan", instance_index)
-            params[vlan_path] = str(wan_vlan)
-
-            service_path = _resolve_wan_path(root, "ppp.service_list", instance_index)
-            params[service_path] = "INTERNET"
+            params[f"{ppp_base}.X_HW_VLAN"] = str(wan_vlan)
+            params[f"{ppp_base}.X_HW_SERVICELIST"] = "INTERNET"
 
         if connection_name:
-            name_path = _resolve_wan_path(root, "ppp.name", instance_index)
-            params[name_path] = connection_name
+            params[f"{ppp_base}.Name"] = connection_name
+    else:
+        # Build TR-181 parameter paths
+        username_path = _resolve_wan_path(root, "ppp.username", instance_index)
+        password_path = _resolve_wan_path(root, "ppp.password", instance_index)
+        enable_path = _resolve_wan_path(root, "ppp.enable", instance_index)
+        params = {
+            username_path: username,
+            password_path: password,
+            enable_path: "true",
+        }
 
     # Expected values for verification (exclude password - it's write-only)
     expected = {

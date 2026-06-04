@@ -270,6 +270,33 @@ def _read_until_prompt(
             return buffer
 
 
+def _prime_shell_prompt(
+    channel: Channel,
+    prompt_regex: str,
+    *,
+    attempts: int = 2,
+) -> str:
+    """Wake an interactive shell and read the first prompt.
+
+    Some Huawei OLTs do not emit a prompt immediately after ``invoke_shell()``.
+    Sending a newline is harmless on devices that are already ready, and it
+    reliably coaxes a prompt out of quieter MA5800 builds.
+    """
+
+    output = ""
+    for attempt in range(attempts):
+        channel.send("\n")
+        chunk = _read_until_prompt(
+            channel,
+            prompt_regex,
+            timeout_sec=8.0 if attempt == 0 else 4.0,
+        )
+        output += chunk
+        if chunk.strip():
+            break
+    return output
+
+
 def _derive_prompt_regex(output: str, fallback: str) -> str:
     """Return a prompt regex anchored to the actual device prompt.
 
@@ -283,6 +310,14 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
         if re.search(r"[>#]\s*$", line):
             return rf"(?:^|\r?\n){re.escape(line)}\s*$"
     return fallback
+
+
+def _replace_policy_prompt_regex(policy: OltSshPolicy, prompt_regex: str) -> OltSshPolicy:
+    try:
+        return replace(policy, prompt_regex=prompt_regex)
+    except TypeError:
+        setattr(policy, "prompt_regex", prompt_regex)
+        return policy
 
 
 def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
@@ -339,12 +374,10 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     # Use wider PTY and set terminal type to avoid control sequence issues
     channel.get_pty(term="dumb", width=400, height=50)
     channel.invoke_shell()
-    initial_output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
+    initial_output = _prime_shell_prompt(channel, policy.prompt_regex)
     prompt_regex = _derive_prompt_regex(initial_output, policy.prompt_regex)
     if prompt_regex != policy.prompt_regex:
-        policy = replace(policy, prompt_regex=prompt_regex)
-    channel.send("screen-length 0 temporary\n")
-    _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
+        policy = _replace_policy_prompt_regex(policy, prompt_regex)
     return transport, channel, policy
 
 

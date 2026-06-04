@@ -9,6 +9,99 @@ from app.services.db_session_adapter import db_session_adapter
 logger = logging.getLogger(__name__)
 
 
+def _queue_post_authorization_bootstrap_follow_up(
+    db,
+    *,
+    ont_id: str,
+    parent_operation_id: str | None,
+    initiated_by: str | None,
+) -> dict[str, object]:
+    """Create or reuse a TR-069 bootstrap operation and queue its worker task."""
+    from fastapi import HTTPException
+    from sqlalchemy import select
+
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+    from app.services.queue_adapter import enqueue_task
+
+    correlation_key = f"tr069_bootstrap:{ont_id}"
+    active_statuses = (
+        NetworkOperationStatus.pending,
+        NetworkOperationStatus.running,
+        NetworkOperationStatus.waiting,
+    )
+
+    try:
+        op = network_operations.start(
+            db,
+            NetworkOperationType.tr069_bootstrap,
+            NetworkOperationTargetType.ont,
+            ont_id,
+            correlation_key=correlation_key,
+            input_payload={
+                "ont_id": ont_id,
+                "parent_operation_id": parent_operation_id,
+                "reason": "post_authorization_baseline",
+            },
+            parent_id=parent_operation_id,
+            initiated_by=initiated_by or "system",
+        )
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        existing = db.scalars(
+            select(NetworkOperation).where(
+                NetworkOperation.correlation_key == correlation_key,
+                NetworkOperation.status.in_(active_statuses),
+            )
+        ).first()
+        return {
+            "queued": existing is not None,
+            "operation_id": str(existing.id) if existing else None,
+            "task_id": None,
+            "duplicate": True,
+            "error": None if existing is not None else "existing follow-up not found",
+        }
+
+    # Commit the pending operation before publishing to the queue so the worker
+    # can load it immediately when it starts.
+    db.commit()
+
+    dispatch = enqueue_task(
+        "app.tasks.tr069.wait_for_ont_bootstrap",
+        args=[ont_id, str(op.id), 0],
+        correlation_id=correlation_key,
+        source="ont_authorization_follow_up",
+    )
+    if not dispatch.queued:
+        network_operations.mark_failed(
+            db,
+            str(op.id),
+            f"TR-069 bootstrap follow-up queue failed: {dispatch.error or 'unknown queue error'}",
+        )
+        db.commit()
+        return {
+            "queued": False,
+            "operation_id": str(op.id),
+            "task_id": None,
+            "duplicate": False,
+            "error": dispatch.error or "unknown queue error",
+        }
+
+    return {
+        "queued": True,
+        "operation_id": str(op.id),
+        "task_id": dispatch.task_id,
+        "duplicate": False,
+        "error": None,
+    }
+
+
 @celery_app.task(name="app.tasks.ont_provisioning.authorize_ont")
 def authorize_ont(
     olt_id: str,
@@ -71,11 +164,38 @@ def authorize_ont(
             )
             payload = result.to_dict()
             payload["operation_id"] = operation_id
+            follow_up = None
+
+            if result.success and result.ont_unit_id:
+                follow_up = _queue_post_authorization_bootstrap_follow_up(
+                    db,
+                    ont_id=result.ont_unit_id,
+                    parent_operation_id=operation_id,
+                    initiated_by=initiated_by,
+                )
+                payload["follow_up_operation_id"] = follow_up.get("operation_id")
+                payload["follow_up_task_id"] = follow_up.get("task_id")
+                payload["follow_up_queued"] = bool(follow_up.get("queued"))
+                payload["follow_up_duplicate"] = bool(follow_up.get("duplicate"))
 
             if result.success:
-                network_operations.mark_succeeded(
-                    db, operation_id, output_payload=payload
-                )
+                if follow_up is not None and not bool(follow_up.get("queued")):
+                    payload["status"] = "warning"
+                    payload["partial_success"] = True
+                    payload["message"] = (
+                        f"{result.message} TR-069 bootstrap follow-up queue failed: "
+                        f"{follow_up.get('error') or 'unknown queue error'}"
+                    )
+                    network_operations.mark_warning(
+                        db,
+                        operation_id,
+                        str(payload["message"]),
+                        output_payload=payload,
+                    )
+                else:
+                    network_operations.mark_succeeded(
+                        db, operation_id, output_payload=payload
+                    )
             elif result.partial_success:
                 network_operations.mark_warning(
                     db,

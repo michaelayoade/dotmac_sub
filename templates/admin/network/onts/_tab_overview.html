@@ -97,6 +97,9 @@
         </div>
     </div>
 
+    {# ==================== PROVISIONING STATUS ==================== #}
+    {% include "admin/network/onts/_provisioning_status_panel.html" %}
+
     {# ==================== OPTICAL LINK VISUALIZATION ==================== #}
     {% if signal_info %}
     <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">

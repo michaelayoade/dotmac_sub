@@ -704,6 +704,13 @@ def test_authorization_baseline_does_not_push_acs_service_config(
         "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.resolve_effective_config_pack_stage",
+        lambda *args, **kwargs: (
+            {"values": {}, "config_pack": None},
+            StepResult("resolve_effective_config_pack", True, "ok", data={}),
+        ),
+    )
 
     result = apply_authorization_baseline(db_session, str(ont.id))
 
@@ -830,7 +837,7 @@ def test_apply_saved_service_config_uses_active_assignment_for_pppoe(
 def test_apply_saved_service_config_skips_wan_when_wan_mode_absent(
     db_session, monkeypatch
 ):
-    from app.models.network import OLTDevice, OntUnit
+    from app.models.network import OLTDevice, OntProvisioningStatus, OntUnit
     from app.models.tr069 import Tr069AcsServer
     from app.services.network.ont_provision_steps import apply_saved_service_config
 
@@ -871,6 +878,7 @@ def test_apply_saved_service_config_skips_wan_when_wan_mode_absent(
     assert result.data["needs_input"] == [
         "Connection request credentials are incomplete in desired_config/OLT defaults."
     ]
+    assert ont.provisioning_status == OntProvisioningStatus.pending_service_config
     assert "probe_wan_capabilities" not in {
         step["step"] for step in result.data.get("steps", [])
     }
@@ -1081,6 +1089,18 @@ def test_authorization_baseline_updates_provisioning_status(db_session, monkeypa
         lambda *args, **kwargs: StepResult("provision_reconciled", True, "ok"),
     )
     monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.resolve_effective_config_pack_stage",
+        lambda *_args, **_kwargs: (
+            {"values": {}, "config_pack": object()},
+            StepResult(
+                "resolve_effective_config_pack",
+                True,
+                "resolved",
+                data={"validation": {"incomplete_fields": [], "mismatches": []}},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
@@ -1088,7 +1108,8 @@ def test_authorization_baseline_updates_provisioning_status(db_session, monkeypa
     result = apply_authorization_baseline(db_session, str(ont.id))
 
     assert result.success is True
-    assert ont.provisioning_status == OntProvisioningStatus.provisioned
+    assert result.waiting is True
+    assert ont.provisioning_status == OntProvisioningStatus.pending_acs_registration
 
 
 def test_authorization_baseline_marks_failed_status(db_session, monkeypatch):
@@ -1111,6 +1132,18 @@ def test_authorization_baseline_marks_failed_status(db_session, monkeypatch):
         ),
     )
     monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.resolve_effective_config_pack_stage",
+        lambda *_args, **_kwargs: (
+            {"values": {}, "config_pack": object()},
+            StepResult(
+                "resolve_effective_config_pack",
+                True,
+                "resolved",
+                data={"validation": {"incomplete_fields": [], "mismatches": []}},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.network.ont_provision_steps.validate_prerequisites",
         lambda *args, **kwargs: {"ready_to_provision": True, "checks": []},
     )
@@ -1126,6 +1159,7 @@ def test_authorization_baseline_blocks_before_olt_write_when_preflight_fails(
 ):
     from app.models.network import OntProvisioningStatus, OntUnit
     from app.services.network.ont_provision_steps import apply_authorization_baseline
+    from app.services.network.ont_provisioning.result import StepResult
 
     ont = OntUnit(
         serial_number="DESIRED-CFG-ACS-BLOCK",
@@ -1147,6 +1181,18 @@ def test_authorization_baseline_blocks_before_olt_write_when_preflight_fails(
                 }
             ],
         },
+    )
+    monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.resolve_effective_config_pack_stage",
+        lambda *_args, **_kwargs: (
+            {"values": {}, "config_pack": object()},
+            StepResult(
+                "resolve_effective_config_pack",
+                True,
+                "resolved",
+                data={"validation": {"incomplete_fields": [], "mismatches": []}},
+            ),
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.provision_with_reconciliation",
@@ -1193,6 +1239,24 @@ def test_authorization_baseline_continues_when_acs_inform_is_warning(
         },
     )
     monkeypatch.setattr(
+        "app.services.network.ont_provision_steps.resolve_effective_config_pack_stage",
+        lambda *_args, **_kwargs: (
+            {
+                "values": {
+                    "tr069_acs_server_id": "00000000-0000-0000-0000-000000000001",
+                    "tr069_olt_profile_id": 7,
+                },
+                "config_pack": object(),
+            },
+            StepResult(
+                "resolve_effective_config_pack",
+                True,
+                "resolved",
+                data={"validation": {"incomplete_fields": [], "mismatches": []}},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.network.effective_ont_config.resolve_effective_ont_config",
         lambda *args, **kwargs: {
             "values": {
@@ -1224,8 +1288,9 @@ def test_authorization_baseline_continues_when_acs_inform_is_warning(
     result = apply_authorization_baseline(db_session, str(ont.id))
 
     assert result.success is True
+    assert result.waiting is True
     assert calls == ["provision"]
-    assert ont.provisioning_status == OntProvisioningStatus.provisioned
+    assert ont.provisioning_status == OntProvisioningStatus.pending_acs_registration
 
 
 def test_preflight_warns_when_acs_has_not_informed_yet(db_session, monkeypatch):
@@ -1792,7 +1857,14 @@ def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unse
     from types import SimpleNamespace
 
     from app.models.catalog import RegionZone
-    from app.models.network import OLTDevice, OntAssignment, OntUnit, Vlan, VlanPurpose
+    from app.models.network import (
+        OLTDevice,
+        OntAssignment,
+        OntProvisioningStatus,
+        OntUnit,
+        Vlan,
+        VlanPurpose,
+    )
     from app.models.tr069 import Tr069AcsServer
     from app.services.credential_crypto import encrypt_credential
     from app.services.network.ont_provision_steps import apply_saved_service_config
@@ -1877,6 +1949,7 @@ def test_apply_saved_service_config_pushes_dhcp_enable_defensively_when_lan_unse
     result = apply_saved_service_config(db_session, str(ont.id))
 
     assert result.success is True, result.message
+    assert ont.provisioning_status == OntProvisioningStatus.provisioned
     assert len(lan_calls) == 1
     assert lan_calls[0]["dhcp_enabled"] is True
 
