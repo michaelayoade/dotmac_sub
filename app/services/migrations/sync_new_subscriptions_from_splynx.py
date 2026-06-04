@@ -19,7 +19,7 @@ import uuid
 from collections import Counter
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db import SessionLocal
 from app.models.catalog import (
@@ -51,7 +51,8 @@ def run(dry_run: bool = True) -> dict[str, int]:
     db = SessionLocal()
     try:
         existing = {
-            sid for (sid,) in db.execute(
+            sid
+            for (sid,) in db.execute(
                 select(Subscription.splynx_service_id).where(
                     Subscription.splynx_service_id.isnot(None)
                 )
@@ -73,7 +74,9 @@ def run(dry_run: bool = True) -> dict[str, int]:
         stats["new_to_process"] = len(candidates)
         logger.info(
             "Splynx services undeleted: %d. Already in dotmac: %d. New: %d",
-            len(rows), len(rows) - len(candidates), len(candidates),
+            len(rows),
+            len(rows) - len(candidates),
+            len(candidates),
         )
         if not candidates:
             return dict(stats)
@@ -150,13 +153,17 @@ def run(dry_run: bool = True) -> dict[str, int]:
             for rec in to_insert[:5]:
                 logger.info(
                     "  would-INSERT: splynx_id=%s login=%s ipv4=%s",
-                    rec["splynx_id"], rec["login"], rec["ipv4_address"],
+                    rec["splynx_id"],
+                    rec["login"],
+                    rec["ipv4_address"],
                 )
             for rec in to_update[:5]:
                 logger.info(
                     "  would-UPDATE: sub %s old_splynx=%s -> new_splynx=%s login=%s",
-                    str(rec["existing_sub_id"])[:8], rec["old_splynx_id"],
-                    rec["splynx_id"], rec["login"],
+                    str(rec["existing_sub_id"])[:8],
+                    rec["old_splynx_id"],
+                    rec["splynx_id"],
+                    rec["login"],
                 )
             logger.info("DRY RUN — pass --execute to apply")
             return dict(stats)
@@ -182,7 +189,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
             stats["inserted"] += 1
         for rec in to_update:
             db.execute(
-                Subscription.__table__.update()
+                update(Subscription)
                 .where(Subscription.id == rec["existing_sub_id"])
                 .values(
                     splynx_service_id=rec["splynx_id"],
@@ -194,7 +201,9 @@ def run(dry_run: bool = True) -> dict[str, int]:
             )
             stats["updated"] += 1
         db.commit()
-        logger.info("applied: %d INSERT, %d UPDATE", stats["inserted"], stats["updated"])
+        logger.info(
+            "applied: %d INSERT, %d UPDATE", stats["inserted"], stats["updated"]
+        )
     finally:
         db.close()
     return dict(stats)

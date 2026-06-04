@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import HTTPException, Request, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import DetachedInstanceError
 
@@ -81,29 +82,29 @@ class AuditEvents(ListResponseMixin):
         limit: int = 100,
         offset: int = 0,
     ):
-        query = db.query(AuditEvent)
+        stmt = select(AuditEvent)
         if actor_id:
-            query = query.filter(AuditEvent.actor_id == actor_id)
+            stmt = stmt.where(AuditEvent.actor_id == actor_id)
         if actor_type:
-            query = query.filter(AuditEvent.actor_type == actor_type)
+            stmt = stmt.where(AuditEvent.actor_type == actor_type)
         if action:
-            query = query.filter(AuditEvent.action == action)
+            stmt = stmt.where(AuditEvent.action == action)
         if entity_type:
-            query = query.filter(AuditEvent.entity_type == entity_type)
+            stmt = stmt.where(AuditEvent.entity_type == entity_type)
         if entity_id:
-            query = query.filter(AuditEvent.entity_id == entity_id)
+            stmt = stmt.where(AuditEvent.entity_id == entity_id)
         if request_id:
-            query = query.filter(AuditEvent.request_id == request_id)
+            stmt = stmt.where(AuditEvent.request_id == request_id)
         if is_success is not None:
-            query = query.filter(AuditEvent.is_success == is_success)
+            stmt = stmt.where(AuditEvent.is_success == is_success)
         if status_code is not None:
-            query = query.filter(AuditEvent.status_code == status_code)
+            stmt = stmt.where(AuditEvent.status_code == status_code)
         if is_active is None:
-            query = query.filter(AuditEvent.is_active.is_(True))
+            stmt = stmt.where(AuditEvent.is_active.is_(True))
         else:
-            query = query.filter(AuditEvent.is_active == is_active)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(AuditEvent.is_active == is_active)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {
@@ -113,7 +114,7 @@ class AuditEvents(ListResponseMixin):
                 "status_code": AuditEvent.status_code,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        return list(db.scalars(apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
     def log_request(db: Session, request: Request, response: Response):

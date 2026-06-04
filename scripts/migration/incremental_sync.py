@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import sys
 
-from app.services.migrations.incremental_sync import *  # noqa: F401,F403
-from app.services.migrations.incremental_sync import (  # noqa: F401
-    _is_splynx_deleted,
-    _parse_date,
-    _payment_since_expression,
-    run_incremental_sync,
-)
+from app.services.migrations import incremental_sync as _impl
+
+if __name__ != "__main__":
+    sys.modules[__name__] = _impl
+
+run_incremental_sync = _impl.run_incremental_sync
 
 
 def main(argv: list[str] | None = None) -> None:

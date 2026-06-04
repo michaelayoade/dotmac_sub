@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.stored_file import StoredFile
@@ -332,14 +333,13 @@ class UnifiedFileUploadService:
     def get_active_entity_file(
         self, db: Session, entity_type: str, entity_id: str
     ) -> StoredFile | None:
-        return (
-            db.query(StoredFile)
-            .filter(StoredFile.entity_type == entity_type)
-            .filter(StoredFile.entity_id == entity_id)
-            .filter(StoredFile.is_deleted.is_(False))
+        return db.scalars(
+            select(StoredFile)
+            .where(StoredFile.entity_type == entity_type)
+            .where(StoredFile.entity_id == entity_id)
+            .where(StoredFile.is_deleted.is_(False))
             .order_by(StoredFile.created_at.desc())
-            .first()
-        )
+        ).first()
 
     def assert_owner_access(
         self, file: StoredFile, current_owner_subscriber_id: uuid.UUID | None

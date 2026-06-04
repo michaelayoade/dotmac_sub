@@ -50,9 +50,7 @@ from app.services.radius_access_state import (
     set_subscription_access_state,
 )
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("phase5_backfill")
 
 
@@ -170,17 +168,13 @@ def main() -> int:
             if seen_in_page == 1:
                 page_n += 1
 
-            state = derive_access_state(
-                sub.status, captive_redirect_enabled=captive
-            )
+            state = derive_access_state(sub.status, captive_redirect_enabled=captive)
             state_label = state.value if state else "none"
             counts[state_label] += 1
 
             if not args.dry_run:
                 try:
-                    result = set_subscription_access_state(
-                        db, str(sub.id), state
-                    )
+                    result = set_subscription_access_state(db, str(sub.id), state)
                     n_written += result.get("external_rows_written", 0)
                 except Exception as exc:
                     logger.warning(
@@ -205,9 +199,7 @@ def main() -> int:
                 try:
                     db.commit()
                 except Exception as exc:
-                    logger.warning(
-                        "batch commit failed at n_done=%d: %s", n_done, exc
-                    )
+                    logger.warning("batch commit failed at n_done=%d: %s", n_done, exc)
                     db.rollback()
                 if args.sleep_between_batches > 0:
                     time.sleep(args.sleep_between_batches)

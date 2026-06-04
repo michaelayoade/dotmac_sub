@@ -35,13 +35,18 @@ class AuditAdapter:
     depends_on: tuple[str, ...] = ("db.session.sqlalchemy",)
 
     def build_payload(self, record: AuditRecord) -> AuditEventCreate:
+        # DB requires status_code NOT NULL; default to 200 for in-band callers
+        # that don't carry an HTTP status (workflows, bulk ops, etc.)
+        status_code = record.status_code
+        if status_code is None:
+            status_code = 200 if record.is_success else 500
         return AuditEventCreate(
             actor_type=record.actor_type,
             actor_id=record.actor_id,
             action=record.action,
             entity_type=record.entity_type,
             entity_id=record.entity_id,
-            status_code=record.status_code,
+            status_code=status_code,
             is_success=record.is_success,
             ip_address=record.ip_address,
             user_agent=record.user_agent,

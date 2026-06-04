@@ -33,7 +33,7 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(80))
     entity_type: Mapped[str] = mapped_column(String(160))
     entity_id: Mapped[str | None] = mapped_column(String(120))
-    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
     is_success: Mapped[bool] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     ip_address: Mapped[str | None] = mapped_column(String(64))

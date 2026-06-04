@@ -29,6 +29,64 @@ from app.services.migrations.db_connections import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+_PAYMENT_DATE_FIELDS = (
+    "updated_at",
+    "real_create_datetime",
+    "payment_date",
+    "date",
+)
+
+_PAYMENT_COUNT_QUERY_BY_FIELDS: dict[tuple[str, ...], str] = {
+    ("updated_at",): "SELECT COUNT(*) as cnt FROM payments WHERE updated_at >= %s",
+    ("real_create_datetime",): (
+        "SELECT COUNT(*) as cnt FROM payments WHERE real_create_datetime >= %s"
+    ),
+    ("payment_date",): "SELECT COUNT(*) as cnt FROM payments WHERE payment_date >= %s",
+    ("date",): "SELECT COUNT(*) as cnt FROM payments WHERE date >= %s",
+    ("updated_at", "real_create_datetime"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(updated_at, real_create_datetime) >= %s"
+    ),
+    ("updated_at", "payment_date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(updated_at, payment_date) >= %s"
+    ),
+    ("updated_at", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments WHERE COALESCE(updated_at, date) >= %s"
+    ),
+    ("real_create_datetime", "payment_date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(real_create_datetime, payment_date) >= %s"
+    ),
+    ("real_create_datetime", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(real_create_datetime, date) >= %s"
+    ),
+    ("payment_date", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments WHERE COALESCE(payment_date, date) >= %s"
+    ),
+    ("updated_at", "real_create_datetime", "payment_date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(updated_at, real_create_datetime, payment_date) >= %s"
+    ),
+    ("updated_at", "real_create_datetime", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(updated_at, real_create_datetime, date) >= %s"
+    ),
+    ("updated_at", "payment_date", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(updated_at, payment_date, date) >= %s"
+    ),
+    ("real_create_datetime", "payment_date", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(real_create_datetime, payment_date, date) >= %s"
+    ),
+    ("updated_at", "real_create_datetime", "payment_date", "date"): (
+        "SELECT COUNT(*) as cnt FROM payments "
+        "WHERE COALESCE(updated_at, real_create_datetime, payment_date, date) >= %s"
+    ),
+}
+
 
 def _parse_date(val) -> datetime | None:
     if not val:
@@ -62,18 +120,27 @@ def _table_columns(conn, table_name: str) -> set[str]:
     return {str(row.get("Field") or row.get("field") or "") for row in rows}
 
 
-def _payment_since_expression(conn) -> str:
+def _payment_since_fields(conn) -> tuple[str, ...]:
     columns = _table_columns(conn, "payments")
-    fields = [
-        field
-        for field in ("updated_at", "real_create_datetime", "payment_date", "date")
-        if field in columns
-    ]
+    fields = tuple(field for field in _PAYMENT_DATE_FIELDS if field in columns)
     if not fields:
         raise RuntimeError("Splynx payments table has no usable date column")
+    return fields
+
+
+def _payment_since_expression(conn) -> str:
+    fields = _payment_since_fields(conn)
     if len(fields) == 1:
         return fields[0]
     return f"COALESCE({', '.join(fields)})"
+
+
+def _payment_count_query(conn) -> str:
+    fields = _payment_since_fields(conn)
+    query = _PAYMENT_COUNT_QUERY_BY_FIELDS.get(fields)
+    if query is None:
+        raise RuntimeError(f"Unsupported Splynx payments date columns: {fields!r}")
+    return query
 
 
 def _payment_paid_at(row: dict) -> datetime | None:
@@ -499,7 +566,7 @@ def sync_new_credit_notes(conn, db, since: datetime) -> dict[str, int]:
             continue
 
         is_deleted = _is_splynx_deleted(row.get("deleted"))
-        status = status_map.get(row.get("status"), CreditNoteStatus.issued)
+        status = status_map.get(str(row.get("status") or ""), CreditNoteStatus.issued)
         if is_deleted:
             status = CreditNoteStatus.void
         total = Decimal(str(row.get("total") or "0"))
@@ -580,36 +647,42 @@ def run_incremental_sync(
         with dotmac_session() as db:
             if dry_run:
                 since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-                payment_since_expr = _payment_since_expression(conn)
                 tables = [
                     (
                         "new invoices",
-                        f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'",
-                    ),  # noqa: S608
+                        "SELECT COUNT(*) as cnt FROM invoices "
+                        "WHERE real_create_datetime >= %s",
+                        (since_str,),
+                    ),
                     (
                         "new payments",
-                        "SELECT COUNT(*) as cnt FROM payments "
-                        f"WHERE {payment_since_expr} >= '{since_str}'",
-                    ),  # noqa: S608
+                        _payment_count_query(conn),
+                        (since_str,),
+                    ),
                     (
                         "new credit notes",
-                        f"SELECT COUNT(*) as cnt FROM credit_notes WHERE real_create_datetime >= '{since_str}'",
-                    ),  # noqa: S608
+                        "SELECT COUNT(*) as cnt FROM credit_notes "
+                        "WHERE real_create_datetime >= %s",
+                        (since_str,),
+                    ),
                     (
                         "status changes",
                         "SELECT COUNT(*) as cnt FROM customers WHERE deleted='0' AND category != 'lead'",
+                        None,
                     ),
                     (
                         "deleted customers",
                         "SELECT COUNT(*) as cnt FROM customers WHERE deleted='1' AND category != 'lead'",
+                        None,
                     ),
                     (
                         "deleted services",
                         "SELECT COUNT(*) as cnt FROM services_internet WHERE deleted='1'",
+                        None,
                     ),
                 ]
-                for name, query in tables:
-                    rows = fetch_all(conn, query)
+                for name, query, params in tables:
+                    rows = fetch_all(conn, query, params)
                     logger.info("  %s: %d to check", name, rows[0]["cnt"])
                 logger.info("Run with --execute to sync")
                 return

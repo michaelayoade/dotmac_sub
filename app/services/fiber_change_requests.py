@@ -3,7 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.fiber_change_request import (
@@ -103,10 +103,10 @@ def create_request(
 
 
 def list_requests(db: Session, status: FiberChangeRequestStatus | None = None):
-    query = db.query(FiberChangeRequest)
+    stmt = select(FiberChangeRequest)
     if status:
-        query = query.filter(FiberChangeRequest.status == status)
-    return query.order_by(FiberChangeRequest.created_at.desc()).all()
+        stmt = stmt.where(FiberChangeRequest.status == status)
+    return list(db.scalars(stmt.order_by(FiberChangeRequest.created_at.desc())).all())
 
 
 def get_request(db: Session, request_id: str) -> FiberChangeRequest:

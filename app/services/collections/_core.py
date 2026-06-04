@@ -122,6 +122,11 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
     return Decimal(str(credit_balance)) - Decimal(str(open_balance))
 
 
+def get_available_balance(db: Session, account_id: str) -> Decimal:
+    """Return the available account balance visible to customer billing flows."""
+    return _resolve_prepaid_available_balance(db, account_id)
+
+
 def _resolve_policy_set_for_account(db: Session, account_id: str):
     subscriptions = (
         db.query(Subscription)

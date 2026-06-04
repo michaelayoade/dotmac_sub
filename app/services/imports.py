@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.imports.loader import load_csv_content
@@ -18,13 +19,12 @@ _DEFAULT_MAX_ROWS = 5000
 
 
 def _imports_int_setting(db: Session, key: str, default: int) -> int:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.imports)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
+    setting = db.scalars(
+        select(DomainSetting)
+        .where(DomainSetting.domain == SettingDomain.imports)
+        .where(DomainSetting.key == key)
+        .where(DomainSetting.is_active.is_(True))
+    ).first()
     if not setting:
         return default
     value = setting.value_text if setting.value_text is not None else setting.value_json

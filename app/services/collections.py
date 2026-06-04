@@ -20,6 +20,7 @@ from app.services.collections._core import (
     dunning_action_logs,
     dunning_cases,
     dunning_workflow,
+    get_available_balance,
     prepaid_enforcement,
     restore_account_services,
 )
@@ -35,5 +36,6 @@ __all__ = [
     "dunning_action_logs",
     "dunning_workflow",
     "prepaid_enforcement",
+    "get_available_balance",
     "restore_account_services",
 ]

@@ -8,8 +8,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType, AuditEvent
-from app.models.subscriber import Subscriber
+from app.models.audit import AuditEvent
 from app.services import audit as audit_service
 from app.services.audit_helpers import (
     extract_changes,
@@ -17,6 +16,8 @@ from app.services.audit_helpers import (
     format_changes,
     humanize_action,
     humanize_entity,
+    load_audit_actor_subscribers,
+    resolve_actor_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,24 +53,10 @@ def get_audit_page_data(
         offset=offset,
     )
 
-    actor_ids = {
-        event.actor_id
-        for event in events
-        if event.actor_id and _is_user_actor(getattr(event, "actor_type", None))
-    }
-    people: dict[str, Subscriber] = {}
-    if actor_ids:
-        try:
-            people = {
-                str(person.id): person
-                for person in db.execute(
-                    select(Subscriber).where(Subscriber.id.in_(actor_ids))
-                )
-                .scalars()
-                .all()
-            }
-        except Exception:
-            people = {}
+    try:
+        people = load_audit_actor_subscribers(db, events)
+    except Exception:
+        people = {}
 
     event_views = []
     for event in events:
@@ -122,10 +109,6 @@ def get_audit_page_data(
     }
 
 
-def _is_user_actor(actor_type) -> bool:
-    return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
-
-
 def _normalize_actor_id(actor_id: str | None) -> str | None:
     if not actor_id:
         return None
@@ -140,25 +123,5 @@ def _normalize_actor_id(actor_id: str | None) -> str | None:
         return None
 
 
-def _resolve_actor_name(event, people: dict[str, Subscriber]) -> str:
-    actor_name = None
-    is_user_actor = _is_user_actor(getattr(event, "actor_type", None))
-    if event.actor_id and is_user_actor:
-        actor = people.get(str(event.actor_id))
-        if actor:
-            actor_name = (
-                actor.display_name
-                or f"{actor.first_name} {actor.last_name}".strip()
-                or actor.email
-            )
-    if actor_name:
-        return actor_name
-    metadata = getattr(event, "metadata_", None) or {}
-    if is_user_actor:
-        return metadata.get("actor_email") or event.actor_id or "User"
-    return (
-        metadata.get("actor_name")
-        or metadata.get("actor_email")
-        or event.actor_id
-        or "System"
-    )
+def _resolve_actor_name(event, people: dict[str, object]) -> str:
+    return resolve_actor_name(event, people)

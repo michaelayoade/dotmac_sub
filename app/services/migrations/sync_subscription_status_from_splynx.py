@@ -32,8 +32,7 @@ import argparse
 import logging
 from collections import Counter
 
-import pymysql
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db import SessionLocal
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -154,9 +153,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
             if ip_change is not None:
                 values["ipv4_address"] = ip_change
             db.execute(
-                Subscription.__table__.update()
-                .where(Subscription.id == sub.id)
-                .values(**values)
+                update(Subscription).where(Subscription.id == sub.id).values(**values)
             )
             updated += 1
             if updated % 500 == 0:
@@ -173,6 +170,8 @@ def run(dry_run: bool = True) -> dict[str, int]:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--execute", action="store_true", help="Apply updates (default dry-run)")
+    p.add_argument(
+        "--execute", action="store_true", help="Apply updates (default dry-run)"
+    )
     args = p.parse_args()
     run(dry_run=not args.execute)

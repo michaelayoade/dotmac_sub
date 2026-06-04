@@ -15,7 +15,11 @@ from app.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.splynx_sync.run_incremental_sync", soft_time_limit=600, time_limit=900)
+@celery_app.task(
+    name="app.tasks.splynx_sync.run_incremental_sync",
+    soft_time_limit=600,
+    time_limit=900,
+)
 def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
     """Pull recent changes from Splynx into DotMac Sub.
 
@@ -132,7 +136,9 @@ def run_subscriber_status_sync() -> dict[str, int]:
     regularly during dual-run so dotmac_sub mirrors Splynx blocks.
     """
     import sys
-    if "/app" not in sys.path: sys.path.insert(0, "/app")
+
+    if "/app" not in sys.path:
+        sys.path.insert(0, "/app")
     from scripts.migration.sync_subscriber_status_from_splynx import run
 
     logger.info("Splynx subscriber-status sync starting")
@@ -165,10 +171,32 @@ def run_refresh_radius_from_subs() -> dict[str, int]:
     Subscriber.status. Idempotent; per-user DELETE+INSERT.
     """
     import sys
-    if "/app" not in sys.path: sys.path.insert(0, "/app")
+
+    if "/app" not in sys.path:
+        sys.path.insert(0, "/app")
     from scripts.migration.populate_radius_from_subs import populate
 
     logger.info("RADIUS refresh-from-subs starting")
     result = populate(dry_run=False)
     logger.info("RADIUS refresh-from-subs complete: %s", result)
+    return result
+
+
+@celery_app.task(
+    name="app.tasks.splynx_sync.run_new_subscriptions_sync",
+    soft_time_limit=300,
+    time_limit=600,
+)
+def run_new_subscriptions_sync() -> dict[str, int]:
+    """Discover new Splynx services and create matching dotmac Subscriptions.
+
+    Fills the gap where existing subscription_status_sync only UPDATES known
+    subs but doesn't CREATE new ones for services added in Splynx since
+    migration.
+    """
+    from app.services.migrations.sync_new_subscriptions_from_splynx import run
+
+    logger.info("Splynx new-subscriptions discovery starting")
+    result = run(dry_run=False)
+    logger.info("Splynx new-subscriptions discovery complete: %s", result)
     return result

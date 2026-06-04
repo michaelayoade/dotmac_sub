@@ -141,9 +141,9 @@ def build_commands(pool_cidr: str, portal_ip: str) -> list[str]:
 
     # 2. Address-list
     cmds.append(
-        f':if ([:len [/ip firewall address-list find '
+        f":if ([:len [/ip firewall address-list find "
         f'list="{CAPTIVE_LIST}" address="{pool_cidr}"]] = 0) '
-        f'do={{/ip firewall address-list add '
+        f"do={{/ip firewall address-list add "
         f'list="{CAPTIVE_LIST}" address="{pool_cidr}" '
         f'comment="dotmac access-state captive pool"}}'
     )
@@ -152,9 +152,9 @@ def build_commands(pool_cidr: str, portal_ip: str) -> list[str]:
     for rule in _RULES:
         add_clause = rule["add"].format(LIST=CAPTIVE_LIST, PORTAL=portal_ip)
         cmds.append(
-            f':if ([:len [{rule["find_path"]} find '
+            f":if ([:len [{rule['find_path']} find "
             f'comment="{rule["comment"]}"]] = 0) '
-            f'do={{{rule["find_path"]} {add_clause}}}'
+            f"do={{{rule['find_path']} {add_clause}}}"
         )
 
     return cmds

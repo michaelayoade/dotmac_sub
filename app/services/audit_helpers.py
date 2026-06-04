@@ -7,11 +7,13 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import and_, or_
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
 from app.timezone import APP_TIMEZONE
@@ -284,6 +286,72 @@ def build_audit_activities_for_types(
     return _events_to_activities(db, events, include_entity_label=True)
 
 
+def list_audit_events_for_entities(
+    db: Session,
+    entity_refs: list[tuple[str, str]],
+    limit: int = 20,
+) -> list:
+    """Return recent audit events for the provided entity type/id pairs."""
+    if not entity_refs:
+        return []
+
+    from app.models.audit import AuditEvent
+
+    normalized_refs = list(
+        dict.fromkeys(
+            (str(entity_type), str(entity_id))
+            for entity_type, entity_id in entity_refs
+            if entity_type and entity_id
+        )
+    )
+    if not normalized_refs:
+        return []
+
+    ref_filters = [
+        and_(
+            AuditEvent.entity_type == entity_type,
+            AuditEvent.entity_id == entity_id,
+        )
+        for entity_type, entity_id in normalized_refs
+    ]
+    predicate = ref_filters[0] if len(ref_filters) == 1 else or_(*ref_filters)
+    return (
+        db.query(AuditEvent)
+        .filter(AuditEvent.is_active.is_(True))
+        .filter(predicate)
+        .order_by(AuditEvent.occurred_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]:
+    """Resolve user actors referenced by the provided audit events."""
+    actor_ids = {
+        str(event.actor_id)
+        for event in events
+        if getattr(event, "actor_id", None)
+        and _is_user_actor(getattr(event, "actor_type", None))
+    }
+    if not actor_ids:
+        return {}
+    actors: dict[str, object] = {
+        str(subscriber.id): subscriber
+        for subscriber in db.query(Subscriber)
+        .filter(Subscriber.id.in_(actor_ids))
+        .all()
+    }
+    actors.update(
+        {
+            str(user.id): user
+            for user in db.query(SystemUser)
+            .filter(SystemUser.id.in_(actor_ids))
+            .all()
+        }
+    )
+    return actors
+
+
 def _events_to_activities(
     db: Session,
     events: list,
@@ -292,27 +360,10 @@ def _events_to_activities(
     """Shared logic: resolve actors and build activity dicts from audit events."""
     if not events:
         return []
-    actor_ids = {
-        str(event.actor_id) for event in events if getattr(event, "actor_id", None)
-    }
-    people: dict[str, Subscriber] = {}
-    if actor_ids:
-        people = {
-            str(person.id): person
-            for person in db.query(Subscriber)
-            .filter(Subscriber.id.in_(actor_ids))
-            .all()
-        }
+    people = load_audit_actor_subscribers(db, events)
     activities: list[dict] = []
     for event in events:
-        actor = (
-            people.get(str(event.actor_id))
-            if getattr(event, "actor_id", None)
-            else None
-        )
-        actor_name = (
-            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
-        )
+        actor_name = _resolve_actor_name(event, people)
         metadata = getattr(event, "metadata_", None) or {}
         comment_text = str(metadata.get("comment") or "").strip()
         changes = extract_changes(metadata, getattr(event, "action", None))
@@ -366,17 +417,19 @@ def _is_user_actor(actor_type) -> bool:
     return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
 
 
-def _resolve_actor_name(event, subscribers: dict[str, Subscriber]) -> str:
+def _resolve_actor_name(event, subscribers: dict[str, object]) -> str:
     actor_id = getattr(event, "actor_id", None)
     actor_type = getattr(event, "actor_type", None)
     if actor_id and _is_user_actor(actor_type):
-        subscriber = subscribers.get(str(actor_id))
-        if subscriber:
-            return (
-                subscriber.display_name
-                or f"{subscriber.first_name} {subscriber.last_name}".strip()
-                or subscriber.email
+        actor = subscribers.get(str(actor_id))
+        if actor:
+            actor_name = (
+                getattr(actor, "display_name", None)
+                or f"{getattr(actor, 'first_name', '')} {getattr(actor, 'last_name', '')}".strip()
+                or getattr(actor, "email", None)
             )
+            if actor_name:
+                return actor_name
         metadata = getattr(event, "metadata_", None) or {}
         return metadata.get("actor_email") or str(actor_id)
     metadata = getattr(event, "metadata_", None) or {}
@@ -388,24 +441,15 @@ def _resolve_actor_name(event, subscribers: dict[str, Subscriber]) -> str:
     )
 
 
+def resolve_actor_name(event, subscribers: dict[str, object]) -> str:
+    return _resolve_actor_name(event, subscribers)
+
+
 def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> list[dict]:
     if not events:
         return []
     sliced_events = events[:limit]
-    actor_ids = {
-        str(event.actor_id)
-        for event in sliced_events
-        if getattr(event, "actor_id", None)
-        and _is_user_actor(getattr(event, "actor_type", None))
-    }
-    subscribers: dict[str, Subscriber] = {}
-    if actor_ids:
-        subscribers = {
-            str(subscriber.id): subscriber
-            for subscriber in db.query(Subscriber)
-            .filter(Subscriber.id.in_(actor_ids))
-            .all()
-        }
+    subscribers = load_audit_actor_subscribers(db, sliced_events)
     activities = []
     for event in sliced_events:
         metadata = getattr(event, "metadata_", None) or {}

@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -14,13 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 def _setting_value(db: Session, key: str) -> str | None:
-    setting = (
-        db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.geocoding)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .first()
-    )
+    setting = db.scalars(
+        select(DomainSetting)
+        .where(DomainSetting.domain == SettingDomain.geocoding)
+        .where(DomainSetting.key == key)
+        .where(DomainSetting.is_active.is_(True))
+    ).first()
     if not setting:
         return None
     if setting.value_text is not None:
