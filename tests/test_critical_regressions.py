@@ -26,9 +26,11 @@ def test_apply_mikrotik_address_list_executes_add_command(monkeypatch):
     result = _apply_mikrotik_address_list(device, "blocked", "192.0.2.10")
 
     assert result is True
-    assert commands == [
-        '/ip firewall address-list add list="blocked" address="192.0.2.10"'
-    ]
+    assert len(commands) == 1
+    assert commands[0].startswith(":if ([:len [/ip firewall address-list find")
+    assert 'list="blocked"' in commands[0]
+    assert 'address="192.0.2.10"' in commands[0]
+    assert "do={/ip firewall address-list add" in commands[0]
 
 
 def test_remove_mikrotik_address_list_executes_remove_command(monkeypatch):

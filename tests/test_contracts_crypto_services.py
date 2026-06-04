@@ -665,6 +665,11 @@ class TestPaymentArrangementHelpers:
         end = _calculate_end_date(start, PaymentFrequency.monthly, 4)
         assert end == date(2026, 2, 1)
 
+    def test_calculate_end_date_monthly_clamps_short_month_and_recovers_anchor(self):
+        start = date(2025, 1, 31)
+        end = _calculate_end_date(start, PaymentFrequency.monthly, 3)
+        assert end == date(2025, 3, 31)
+
     def test_calculate_next_due_date_weekly(self):
         d = date(2025, 3, 1)
         assert _calculate_next_due_date(d, PaymentFrequency.weekly) == date(2025, 3, 8)
@@ -684,6 +689,18 @@ class TestPaymentArrangementHelpers:
     def test_calculate_next_due_date_monthly_december(self):
         d = date(2025, 12, 1)
         assert _calculate_next_due_date(d, PaymentFrequency.monthly) == date(2026, 1, 1)
+
+    def test_calculate_next_due_date_monthly_clamps_short_month(self):
+        d = date(2025, 1, 31)
+        assert _calculate_next_due_date(
+            d, PaymentFrequency.monthly, anchor_day=31
+        ) == date(2025, 2, 28)
+
+    def test_calculate_next_due_date_monthly_preserves_anchor_after_clamp(self):
+        d = date(2025, 2, 28)
+        assert _calculate_next_due_date(
+            d, PaymentFrequency.monthly, anchor_day=31
+        ) == date(2025, 3, 31)
 
 
 def _create_arrangement_directly(
@@ -740,6 +757,23 @@ def _create_arrangement_directly(
 
 class TestPaymentArrangements:
     """Tests for payment arrangement CRUD operations."""
+
+    def test_create_arrangement_uses_subscriber_fields(self, db_session, subscriber):
+        arrangement = payment_arrangements.create(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            total_amount=Decimal("600.00"),
+            installments=3,
+            frequency=PaymentFrequency.monthly.value,
+            start_date=date(2025, 1, 31),
+            requested_by_subscriber_id=str(subscriber.id),
+            notes="Need extra time",
+        )
+
+        assert arrangement.subscriber_id == subscriber.id
+        assert arrangement.requested_by_subscriber_id == subscriber.id
+        assert arrangement.end_date == date(2025, 3, 31)
+        assert len(arrangement.installments) == 3
 
     def test_create_arrangement_directly(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(

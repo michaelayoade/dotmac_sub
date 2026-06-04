@@ -232,6 +232,58 @@ def test_olt_detail_template_uses_imported_state_sections() -> None:
     assert "Runtime and hardware state" not in template
 
 
+def test_olt_detail_template_exposes_pon_port_identifier_editor() -> None:
+    template = Path("templates/admin/network/olts/detail.html").read_text()
+
+    assert "Edit PON Port Identifier" in template
+    assert "/pon-port-identifier" in template
+    assert "Identifier Name" in template
+    assert "No identifier" in template
+
+
+def test_olt_save_pon_port_identifier_route_updates_alias(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network import OLTDevice, PonPort
+    from app.web.admin import network_olts_inventory
+
+    olt = OLTDevice(name="OLT-J", mgmt_ip="198.51.100.19", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    port = PonPort(olt_id=olt.id, name="0/9/0", is_active=True)
+    db_session.add(port)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        network_olts_inventory, "_log_olt_action_result", lambda **_kwargs: None
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/admin/network/olts/{olt.id}/pon-port-identifier",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+
+    response = network_olts_inventory.olt_save_pon_port_identifier(
+        request,
+        str(olt.id),
+        pon_port_id=str(port.id),
+        alias="Feeder Cabinet A",
+        db=db_session,
+    )
+
+    db_session.refresh(port)
+
+    assert response.status_code == 303
+    assert "sync_status=success" in response.headers["location"]
+    assert "Identifier+updated+for+0%2F9%2F0." in response.headers["location"]
+    assert "[[alias:Feeder Cabinet A]]" in (port.notes or "")
+
+
 def test_ont_operations_tab_lazy_loads_only_when_selected() -> None:
     template = Path("templates/admin/network/onts/detail.html").read_text()
 
@@ -239,3 +291,15 @@ def test_ont_operations_tab_lazy_loads_only_when_selected() -> None:
     assert 'hx-trigger="loadOperationalHealth from:window"' in template
     assert "load, revealed, loadOperationalHealth" not in template
     assert "activeTab === 'operations'" in template
+
+
+def test_ont_overview_template_includes_provisioning_status_panel() -> None:
+    template = Path("templates/admin/network/onts/_tab_overview.html").read_text()
+    panel = Path(
+        "templates/admin/network/onts/_provisioning_status_panel.html"
+    ).read_text()
+
+    assert "_provisioning_status_panel.html" in template
+    assert "Provisioning Status" in panel
+    assert "Stage Results" in panel
+    assert "Recent Provisioning Activity" in panel

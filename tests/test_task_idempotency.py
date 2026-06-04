@@ -259,6 +259,40 @@ class TestIdempotentTaskDecorator:
         assert stale_execution is not None
         assert stale_execution.status == TaskExecutionStatus.failed
 
+    def test_key_func_can_ignore_extra_positional_args(self, db_session):
+        """Key funcs used by retried Celery tasks must tolerate extra args."""
+        call_count = 0
+
+        @idempotent_task(
+            key_func=lambda ont_id, operation_id=None, *args, **kw: (
+                f"{ont_id}:{operation_id or 'no-op'}"
+            )
+        )
+        def test_task(ont_id, operation_id=None, service_retry_count=0):
+            nonlocal call_count
+            call_count += 1
+            return {
+                "ont_id": ont_id,
+                "operation_id": operation_id,
+                "service_retry_count": service_retry_count,
+            }
+
+        with patch(
+            "app.services.task_idempotency.SessionLocal", return_value=db_session
+        ):
+            mock_task = MagicMock()
+            mock_task.name = "test_task"
+            mock_task.request.id = "celery-task-extra-args"
+            with patch("app.services.task_idempotency.current_task", mock_task):
+                result = test_task("ont-1", "op-1", 2)
+
+        assert call_count == 1
+        assert result == {
+            "ont_id": "ont-1",
+            "operation_id": "op-1",
+            "service_retry_count": 2,
+        }
+
     def test_exception_marks_as_failed(self, db_session):
         """Should mark execution as failed on exception."""
         unique_key = f"exception:{uuid.uuid4().hex}"
