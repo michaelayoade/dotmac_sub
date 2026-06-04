@@ -1,3 +1,8 @@
+(function () {
+    if (window.OperationTracker && window.initOperationTracker) {
+        return;
+    }
+
 /**
  * Operation Tracker - Real-time operation status via WebSocket
  *
@@ -382,14 +387,14 @@ class OperationTracker {
  * Alpine.js data component for operation tracking.
  *
  * Usage in templates:
- *   <div x-data="operationTracker()" x-init="init()">
+ *   <div x-data="operationTrackerComponent()" x-init="init()">
  *       <button @click="authorize(oltId, serial)" :disabled="isProcessing">
  *           <span x-show="!isProcessing">Authorize</span>
  *           <span x-show="isProcessing" x-text="statusMessage">Processing...</span>
  *       </button>
  *   </div>
  */
-function operationTracker() {
+function operationTrackerComponent() {
     return {
         isProcessing: false,
         statusMessage: '',
@@ -484,7 +489,7 @@ function operationTracker() {
 
 // Create global instance (will be initialized with token from page)
 window.OperationTracker = OperationTracker;
-window.operationTracker = null;  // Set by initOperationTracker()
+window.operationTracker = null;
 
 /**
  * Initialize the global operation tracker.
@@ -519,10 +524,10 @@ window.trackOperation = function(operationId, options = {}) {
     window.operationTracker.track(operationId, options);
 };
 
-// Export Alpine component
-window.operationTracker = operationTracker;
+window.operationTrackerComponent = operationTrackerComponent;
 
 // For module systems
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { OperationTracker, operationTracker };
+    module.exports = { OperationTracker, operationTrackerComponent };
 }
+})();

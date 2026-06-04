@@ -1,0 +1,19 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Request Error - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+        <svg class="h-7 w-7 text-amber-600 dark:text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86l-7.5 13A1 1 0 003.65 18h16.7a1 1 0 00.86-1.5l-7.5-13a1 1 0 00-1.72 0z"/>
+        </svg>
+    </div>
+    <h1 class="mt-4 text-2xl font-bold text-slate-900 dark:text-white">We could not complete that request</h1>
+    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">{{ message | default('Please review the request and try again.') }}</p>
+    <a href="/portal/billing" class="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+        Back to billing
+    </a>
+</div>
+{% endblock %}
