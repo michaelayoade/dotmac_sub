@@ -908,8 +908,8 @@ def build_nas_dashboard_data(
         "runtime_statuses": runtime_statuses,
         "runtime_last_seen": runtime_last_seen,
         "stats": {
-            "by_vendor": NasDevices.count_by_vendor(db),
-            "by_status": NasDevices.count_by_status(db),
+            "by_vendor": NasDevices.count_by_vendor(db, is_active=True),
+            "by_status": NasDevices.count_by_status(db, is_active=True),
         },
         "pagination": {
             "page": page,

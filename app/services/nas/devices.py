@@ -212,29 +212,35 @@ class NasDevices(ListResponseMixin):
         return db.execute(query).scalar() or 0
 
     @staticmethod
-    def count_by_vendor(db: Session) -> dict[str, int]:
+    def count_by_vendor(
+        db: Session, *, is_active: bool | None = None
+    ) -> dict[str, int]:
         """Get count of devices grouped by vendor."""
-        result = db.execute(
-            select(NasDevice.vendor, func.count(NasDevice.id)).group_by(
-                NasDevice.vendor
-            )
-        ).all()
+        query = select(NasDevice.vendor, func.count(NasDevice.id)).group_by(
+            NasDevice.vendor
+        )
+        if is_active is not None:
+            query = query.where(NasDevice.is_active == is_active)
+        result = db.execute(query).all()
         return {str(vendor.value): count for vendor, count in result}
 
     @staticmethod
-    def count_by_status(db: Session) -> dict[str, int]:
+    def count_by_status(
+        db: Session, *, is_active: bool | None = None
+    ) -> dict[str, int]:
         """Get count of devices grouped by status."""
-        result = db.execute(
-            select(NasDevice.status, func.count(NasDevice.id)).group_by(
-                NasDevice.status
-            )
-        ).all()
+        query = select(NasDevice.status, func.count(NasDevice.id)).group_by(
+            NasDevice.status
+        )
+        if is_active is not None:
+            query = query.where(NasDevice.is_active == is_active)
+        result = db.execute(query).all()
         return {str(status.value): count for status, count in result}
 
     @staticmethod
-    def get_stats(db: Session) -> dict:
+    def get_stats(db: Session, *, is_active: bool | None = None) -> dict:
         """Get combined NAS device statistics by vendor and status."""
         return {
-            "by_vendor": NasDevices.count_by_vendor(db),
-            "by_status": NasDevices.count_by_status(db),
+            "by_vendor": NasDevices.count_by_vendor(db, is_active=is_active),
+            "by_status": NasDevices.count_by_status(db, is_active=is_active),
         }

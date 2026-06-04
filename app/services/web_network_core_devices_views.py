@@ -38,15 +38,138 @@ from app.services import network as network_service
 from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
+from app.services.network.provisioning_events import list_ont_provisioning_events
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
 )
+from app.services.web_network_pon_interfaces import parse_pon_port_notes
 
 logger = logging.getLogger(__name__)
 
 # Staleness threshold for auto-refresh (15 minutes)
 _STALE_THRESHOLD_MINUTES = 15
+
+_PROVISIONING_STATUS_META: dict[str, dict[str, str]] = {
+    "unprovisioned": {
+        "headline": "Not provisioned",
+        "summary": "No provisioning apply has completed for this ONT yet.",
+        "next_step": "Open Configure to start the OLT baseline and ACS setup.",
+        "tone": "slate",
+    },
+    "partial": {
+        "headline": "Provisioning partially applied",
+        "summary": "Some provisioning work completed, but the ONT is not fully confirmed yet.",
+        "next_step": "Review the stage results below before retrying.",
+        "tone": "amber",
+    },
+    "pending_acs_registration": {
+        "headline": "Waiting for ACS registration",
+        "summary": "OLT-side provisioning completed, but ACS has not confirmed the device yet.",
+        "next_step": "Wait for the next inform or check the management and TR-069 path.",
+        "tone": "sky",
+    },
+    "pending_service_config": {
+        "headline": "Waiting for service configuration",
+        "summary": "The ONT reached ACS, but customer service settings are incomplete or still pending.",
+        "next_step": "Complete or reapply the saved WAN, LAN, or WiFi service settings.",
+        "tone": "amber",
+    },
+    "provisioned": {
+        "headline": "Provisioned",
+        "summary": "Provisioning completed successfully.",
+        "next_step": "No operator action is required unless service drift is reported.",
+        "tone": "emerald",
+    },
+    "drift_detected": {
+        "headline": "Configuration drift detected",
+        "summary": "The ONT no longer matches the intended configuration state.",
+        "next_step": "Review drift and decide whether to reapply or investigate device-side changes.",
+        "tone": "amber",
+    },
+    "failed": {
+        "headline": "Provisioning failed",
+        "summary": "Provisioning hit a hard failure that needs operator attention.",
+        "next_step": "Review the failed stage below before retrying.",
+        "tone": "rose",
+    },
+}
+
+_PROVISIONING_TONE_CLASSES: dict[str, dict[str, str]] = {
+    "slate": {
+        "badge": "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+        "panel": "border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800",
+        "accent": "text-slate-700 dark:text-slate-300",
+        "dot": "bg-slate-400",
+    },
+    "sky": {
+        "badge": "bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+        "panel": "border-sky-200 bg-sky-50/50 dark:border-sky-900/40 dark:bg-sky-950/10",
+        "accent": "text-sky-700 dark:text-sky-300",
+        "dot": "bg-sky-500",
+    },
+    "amber": {
+        "badge": "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
+        "panel": "border-amber-200 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/10",
+        "accent": "text-amber-700 dark:text-amber-300",
+        "dot": "bg-amber-500",
+    },
+    "emerald": {
+        "badge": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+        "panel": "border-emerald-200 bg-emerald-50/40 dark:border-emerald-900/40 dark:bg-emerald-950/10",
+        "accent": "text-emerald-700 dark:text-emerald-300",
+        "dot": "bg-emerald-500",
+    },
+    "rose": {
+        "badge": "bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300",
+        "panel": "border-rose-200 bg-rose-50/40 dark:border-rose-900/40 dark:bg-rose-950/10",
+        "accent": "text-rose-700 dark:text-rose-300",
+        "dot": "bg-rose-500",
+    },
+}
+
+_PROVISIONING_DOMAIN_LABELS: dict[str, str] = {
+    "config_pack_resolution": "Config pack",
+    "olt_l2_apply": "OLT service path",
+    "management_path_apply": "Management path",
+    "omci_wan_apply": "OMCI WAN apply",
+    "tr069_bind_apply": "TR-069 bind",
+    "olt_or_omci_readback_verify": "Device readback",
+    "acs_bootstrap_verify": "ACS registration",
+}
+
+_PROVISIONING_DOMAIN_ORDER = [
+    "config_pack_resolution",
+    "olt_l2_apply",
+    "management_path_apply",
+    "omci_wan_apply",
+    "tr069_bind_apply",
+    "olt_or_omci_readback_verify",
+    "acs_bootstrap_verify",
+]
+
+_PROVISIONING_DOMAIN_STATUS_META: dict[str, dict[str, str]] = {
+    "succeeded": {"label": "Completed", "tone": "emerald"},
+    "pending_verification": {"label": "Waiting", "tone": "sky"},
+    "retryable_failure": {"label": "Needs retry", "tone": "amber"},
+    "terminal_failure": {"label": "Failed", "tone": "rose"},
+}
+
+_PROVISIONING_FAILURE_LABELS: dict[str, str] = {
+    "config_pack_missing": "Config pack missing",
+    "config_pack_mismatch": "Config pack mismatch",
+    "config_pack_incomplete": "Config pack incomplete",
+    "regional_pack_resolution_failure": "Regional config resolution failed",
+    "service_port_conflict": "Service-port conflict",
+    "management_path_missing": "Management path missing",
+    "omci_apply_failure": "OMCI apply failed",
+    "omci_readback_failure": "OMCI readback failed",
+    "tr069_binding_readback_miss": "TR-069 binding not confirmed yet",
+    "acs_bootstrap_timeout": "ACS registration timeout",
+    "olt_state_conflict": "OLT state conflict",
+    "vendor_capability_gap": "Vendor capability gap",
+    "transport_timeout": "Transport timeout",
+}
 
 
 def _maybe_queue_stale_ont_refresh(db: Session, ont: object, *, ont_id: str) -> bool:
@@ -509,6 +632,10 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         limit=100,
         offset=0,
     )
+    pon_port_aliases = {
+        str(port.id): (parse_pon_port_notes(getattr(port, "notes", None))[0] or "")
+        for port in pon_ports
+    }
 
     # Gather ONT assignments and build per-port stats
     from app.services.network.signal_thresholds import (
@@ -1128,6 +1255,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     return {
         "olt": olt,
         "pon_ports": pon_ports,
+        "pon_port_aliases": pon_port_aliases,
         "ont_assignments": ont_assignments,
         "assignment_by_ont_id": assignment_by_ont_id,
         "pon_port_display_by_ont_id": pon_port_display_by_ont_id,
@@ -1341,9 +1469,13 @@ def onts_list_page_data(
     )
     from app.services import zabbix_ont_status
 
+    # Render fast from cached Zabbix snapshots only; the cache is populated
+    # out-of-band by the snapshot refresh task. A live fan-out (7 OLTs * ~2s
+    # each) would otherwise block the inventory page on every cache miss.
     zabbix_snapshots = zabbix_ont_status.get_ont_snapshots_from_zabbix(
         db,
         displayed_onts,
+        cached_only=True,
     )
     for ont in displayed_onts:
         zbx = zabbix_snapshots.get(str(ont.id))
@@ -1427,29 +1559,26 @@ def onts_list_page_data(
     if olt_id:
         stats_filters.append(OntUnit.olt_device_id == olt_id)
 
-    all_onts_count = (
-        db.scalar(select(func.count()).select_from(OntUnit).where(*stats_filters)) or 0
-    )
-    online_count = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(*stats_filters)
-            .where(OntUnit.olt_status == OnuOnlineStatus.online)
+    stats_row = db.execute(
+        select(
+            func.count().label("total"),
+            func.count()
+            .filter(OntUnit.olt_status == OnuOnlineStatus.online)
+            .label("online"),
+            func.count()
+            .filter(
+                OntUnit.olt_rx_signal_dbm.isnot(None),
+                OntUnit.olt_rx_signal_dbm < warn,
+            )
+            .label("low_signal"),
         )
-        or 0
-    )
+        .select_from(OntUnit)
+        .where(*stats_filters)
+    ).one()
+    all_onts_count = int(stats_row.total or 0)
+    online_count = int(stats_row.online or 0)
+    low_signal_count = int(stats_row.low_signal or 0)
     offline_count = max(all_onts_count - online_count, 0)
-    low_signal_count = (
-        db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(*stats_filters)
-            .where(OntUnit.olt_rx_signal_dbm.isnot(None))
-            .where(OntUnit.olt_rx_signal_dbm < warn)
-        )
-        or 0
-    )
 
     stats = {
         "total_onts": all_onts_count,
@@ -1543,13 +1672,30 @@ def onts_list_page_data(
             assignment_filters.append(
                 func.upper(OntUnit.serial_number).in_(serial_variants)
             )
+        # Skip the wide JSON/TEXT columns on the joined ont_units rows — the
+        # assignment row builder only needs the serial fields, and pulling
+        # the full ONT row (5KB avg) for every joined assignment dominates
+        # the page load time.
         assign_rows = db.scalars(
             select(OntAssignment)
             .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
             .options(
-                joinedload(OntAssignment.ont_unit),
+                joinedload(OntAssignment.ont_unit).load_only(
+                    OntUnit.id,
+                    OntUnit.serial_number,
+                    OntUnit.vendor_serial_number,
+                ),
                 joinedload(OntAssignment.subscriber),
-                joinedload(OntAssignment.pon_port).joinedload(PonPort.olt),
+                joinedload(OntAssignment.pon_port)
+                .load_only(
+                    PonPort.id,
+                    PonPort.name,
+                    PonPort.olt_id,
+                    PonPort.port_number,
+                    PonPort.notes,
+                )
+                .joinedload(PonPort.olt)
+                .load_only(OLTDevice.id, OLTDevice.name),
             )
             .where(OntAssignment.active.is_(True))
             .where(or_(*assignment_filters))
@@ -2043,6 +2189,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     configure_mgmt_ip_choices = web_network_onts_service.management_ip_choices_for_ont(
         db, ont
     )
+    provisioning_events = list_ont_provisioning_events(db, ont.id, limit=12)
+    provisioning_summary = _build_ont_provisioning_summary(ont, provisioning_events)
 
     return {
         "ont": ont,
@@ -2064,6 +2212,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "connected_wifi_clients": connected_wifi_clients,
         "profile_state": profile_state,
         "capabilities": capabilities,
+        "provisioning_summary": provisioning_summary,
         "inventory_ready": (
             not bool(assignment)
             and not bool(getattr(ont, "external_id", None))
@@ -2275,6 +2424,194 @@ def _display_bool(value: object) -> str:
     if value is False:
         return "Disabled"
     return str(value or "")
+
+
+def _event_status_value(value: object) -> str:
+    return str(getattr(value, "value", value) or "").strip()
+
+
+def _humanize_provisioning_step(step_name: object) -> str:
+    text = str(step_name or "").strip()
+    known = {
+        "authorization_baseline": "Authorization baseline",
+        "apply_saved_service_config": "Saved service config",
+        "provision": "Provisioning apply",
+        "resolve_effective_config_pack": "Config pack resolution",
+        "wait_tr069_bootstrap": "ACS bootstrap wait",
+        "post_authorization_acs_link": "ACS link check",
+    }
+    if text in known:
+        return known[text]
+    return text.replace("_", " ").strip().title() or "Provisioning step"
+
+
+def _build_ont_provisioning_summary(
+    ont: object,
+    events: Sequence[object],
+) -> dict[str, object]:
+    status = (
+        _event_status_value(getattr(ont, "provisioning_status", None))
+        or "unprovisioned"
+    )
+    status_meta = _PROVISIONING_STATUS_META.get(
+        status, _PROVISIONING_STATUS_META["unprovisioned"]
+    )
+    tone_classes = _PROVISIONING_TONE_CLASSES[status_meta["tone"]]
+
+    latest_event = events[0] if events else None
+    latest_domain_event = next(
+        (
+            event
+            for event in events
+            if isinstance(getattr(event, "event_data", None), dict)
+            and isinstance(event.event_data.get("domain_outcomes"), dict)
+        ),
+        None,
+    )
+    latest_failure_event = next(
+        (
+            event
+            for event in events
+            if isinstance(getattr(event, "event_data", None), dict)
+            and event.event_data.get("failure_class")
+        ),
+        None,
+    )
+
+    failure_class_code = None
+    failure_class_label = None
+    if latest_failure_event is not None and isinstance(
+        getattr(latest_failure_event, "event_data", None), dict
+    ):
+        failure_class_code = (
+            str(latest_failure_event.event_data.get("failure_class") or "").strip()
+            or None
+        )
+        if failure_class_code:
+            failure_class_label = _PROVISIONING_FAILURE_LABELS.get(
+                failure_class_code,
+                failure_class_code.replace("_", " ").strip().title(),
+            )
+
+    domain_rows: list[dict[str, object]] = []
+    attention_items: list[dict[str, str]] = []
+    success_items: list[str] = []
+    domain_outcomes = {}
+    if latest_domain_event is not None and isinstance(
+        getattr(latest_domain_event, "event_data", None), dict
+    ):
+        raw_domain_outcomes = latest_domain_event.event_data.get("domain_outcomes")
+        if isinstance(raw_domain_outcomes, dict):
+            domain_outcomes = raw_domain_outcomes
+
+    for key in _PROVISIONING_DOMAIN_ORDER:
+        payload = domain_outcomes.get(key)
+        if not isinstance(payload, dict):
+            continue
+        domain_status = str(payload.get("status") or "").strip() or "unknown"
+        domain_meta = _PROVISIONING_DOMAIN_STATUS_META.get(
+            domain_status, {"label": "Unknown", "tone": "slate"}
+        )
+        classes = _PROVISIONING_TONE_CLASSES[domain_meta["tone"]]
+        label = _PROVISIONING_DOMAIN_LABELS.get(
+            key, key.replace("_", " ").strip().title()
+        )
+        message = str(payload.get("message") or domain_meta["label"]).strip()
+        row = {
+            "key": key,
+            "label": label,
+            "status": domain_status,
+            "status_label": domain_meta["label"],
+            "badge_class": classes["badge"],
+            "accent_class": classes["accent"],
+            "dot_class": classes["dot"],
+            "message": message,
+        }
+        domain_rows.append(row)
+        if domain_status == "succeeded":
+            success_items.append(f"{label}: {message}")
+        else:
+            attention_items.append(
+                {
+                    "label": label,
+                    "status_label": domain_meta["label"],
+                    "message": message,
+                    "accent_class": classes["accent"],
+                    "dot_class": classes["dot"],
+                }
+            )
+
+    recent_events: list[dict[str, object]] = []
+    for event in list(events)[:4]:
+        recent_events.append(
+            {
+                "step_label": _humanize_provisioning_step(
+                    getattr(event, "step_name", "")
+                ),
+                "status": _event_status_value(getattr(event, "status", None))
+                or "unknown",
+                "status_label": (
+                    {
+                        "succeeded": "Completed",
+                        "failed": "Failed",
+                        "waiting": "Waiting",
+                        "skipped": "Skipped",
+                    }.get(
+                        _event_status_value(getattr(event, "status", None)), "Unknown"
+                    )
+                ),
+                "badge_class": _PROVISIONING_TONE_CLASSES[
+                    {
+                        "succeeded": "emerald",
+                        "failed": "rose",
+                        "waiting": "sky",
+                        "skipped": "slate",
+                    }.get(_event_status_value(getattr(event, "status", None)), "slate")
+                ]["badge"],
+                "message": str(getattr(event, "message", "") or "").strip(),
+                "created_at": getattr(event, "created_at", None),
+            }
+        )
+
+    latest_message = (
+        str(getattr(latest_event, "message", "") or "").strip()
+        if latest_event is not None
+        else ""
+    )
+    latest_status = (
+        _event_status_value(getattr(latest_event, "status", None))
+        if latest_event is not None
+        else ""
+    )
+
+    return {
+        "status": status,
+        "headline": status_meta["headline"],
+        "summary": status_meta["summary"],
+        "next_step": status_meta["next_step"],
+        "panel_class": tone_classes["panel"],
+        "badge_class": tone_classes["badge"],
+        "accent_class": tone_classes["accent"],
+        "dot_class": tone_classes["dot"],
+        "failure_class_code": failure_class_code,
+        "failure_class_label": failure_class_label,
+        "last_event_message": latest_message,
+        "last_event_status": latest_status,
+        "last_event_label": (
+            _humanize_provisioning_step(getattr(latest_event, "step_name", ""))
+            if latest_event is not None
+            else ""
+        ),
+        "last_event_at": getattr(latest_event, "created_at", None)
+        if latest_event is not None
+        else None,
+        "domain_rows": domain_rows,
+        "attention_items": attention_items,
+        "success_items": success_items[:3],
+        "recent_events": recent_events,
+        "has_events": bool(events),
+        "action_url": f"/admin/network/onts/{getattr(ont, 'id', '')}/provision",
+    }
 
 
 def _format_observed_time(value: object) -> str:

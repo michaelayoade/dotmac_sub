@@ -31,6 +31,7 @@ class _SshSession:
             raise Exception(f"SSH error: {error}")
         return output or error
 
+
 from app.models.catalog import (
     ConfigBackupMethod,
     ConnectionType,

@@ -70,9 +70,15 @@ def _pppoe_omci_ip_index(
     return 1
 
 
-def _validate_olt_write_dependencies(db: Session, olt: object) -> ActionResult | None:
+def _validate_olt_write_dependencies(
+    db: Session,
+    olt: object,
+    *,
+    cached_only: bool = False,
+) -> ActionResult | None:
     """Return a failed action result when live OLT dependencies are invalid."""
     from app.services.network.olt_dependency_preflight import (
+        get_cached_olt_dependency_validation,
         validate_olt_profile_dependencies,
     )
 
@@ -83,11 +89,20 @@ def _validate_olt_write_dependencies(db: Session, olt: object) -> ActionResult |
             message="OLT ID not available for dependency audit.",
             data={"delivery_pending": False},
         )
-    result = validate_olt_profile_dependencies(
-        db,
-        olt_id=str(olt_id),
-        operation="manual OLT write",
-    )
+    if cached_only:
+        result = get_cached_olt_dependency_validation(str(olt_id))
+        if result is None:
+            result = validate_olt_profile_dependencies(
+                db,
+                olt_id=str(olt_id),
+                operation="manual OLT write",
+            )
+    else:
+        result = validate_olt_profile_dependencies(
+            db,
+            olt_id=str(olt_id),
+            operation="manual OLT write",
+        )
     if result.success:
         return None
     return ActionResult(
@@ -136,7 +151,11 @@ def _set_pppoe_config_omci(
             data={"delivery_transport": "olt_omci", "delivery_pending": False},
         )
 
-    dependency_failure = _validate_olt_write_dependencies(db, ctx.olt)
+    # Re-running the full live OLT dependency audit here turns an interactive
+    # Apply WAN click into a multi-minute request. The actual OLT command is
+    # authoritative for missing-profile failures, so reuse only a recent
+    # successful audit when one exists and otherwise proceed directly.
+    dependency_failure = _validate_olt_write_dependencies(db, ctx.olt, cached_only=True)
     if dependency_failure is not None:
         dependency_failure.data = {
             **(dependency_failure.data or {}),
@@ -669,7 +688,7 @@ def configure_management_ip(
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
-    dependency_failure = _validate_olt_write_dependencies(db, olt)
+    dependency_failure = _validate_olt_write_dependencies(db, olt, cached_only=True)
     if dependency_failure is not None:
         return False, dependency_failure.message
     config_pack = resolve_olt_config_pack(db, olt.id)
@@ -725,7 +744,7 @@ def bind_tr069_profile(db: Session, ont_id: str) -> tuple[bool, str]:
         return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
-    dependency_failure = _validate_olt_write_dependencies(db, olt)
+    dependency_failure = _validate_olt_write_dependencies(db, olt, cached_only=True)
     if dependency_failure is not None:
         return False, dependency_failure.message
     config_pack = resolve_olt_config_pack(db, olt.id)

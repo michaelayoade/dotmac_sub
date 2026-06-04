@@ -1,10 +1,12 @@
 """Admin NAS device management web routes."""
 
+import secrets
+import string
 from typing import cast
-from urllib.parse import quote_plus
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -68,6 +70,47 @@ def _extract_enhanced_fields(tags: list | None) -> dict[str, str | list[str] | N
     return nas_service.extract_enhanced_fields(tags)
 
 
+def _generate_radius_shared_secret(length: int = 6) -> str:
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        secret = "".join(secrets.choice(alphabet) for _ in range(length))
+        if any(char.isalpha() for char in secret) and any(
+            char.isdigit() for char in secret
+        ):
+            return secret
+
+
+def _build_backup_redirect_url(
+    request: Request,
+    *,
+    device_id: str,
+    key: str,
+    value: str,
+) -> str:
+    default_path = f"/admin/network/nas/devices/{device_id}/backups"
+    referer = request.headers.get("referer", "")
+    path = default_path
+    query_items: list[tuple[str, str]] = []
+
+    if referer:
+        parsed = urlsplit(referer)
+        allowed_paths = {
+            f"/admin/network/nas/devices/{device_id}",
+            default_path,
+        }
+        if parsed.path in allowed_paths:
+            path = parsed.path
+            query_items = [
+                (k, v)
+                for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                if k not in {"message", "error"}
+            ]
+
+    query_items.append((key, value))
+    query = urlencode(query_items)
+    return urlunsplit(("", "", path, query, ""))
+
+
 # ============== NAS Dashboard ==============
 
 
@@ -127,6 +170,7 @@ def device_form_new(request: Request, db: Session = Depends(get_db)):
             "selected_radius_pool_ids": [],
             "selected_partner_org_ids": [],
             "enhanced_fields": {},
+            "generated_radius_secret": _generate_radius_shared_secret(),
         },
     )
 
@@ -256,6 +300,7 @@ def device_create(
                 "pop_site_label": _get_pop_site_label_by_id(db, pop_site_id),
                 "selected_radius_pool_ids": radius_pool_ids,
                 "selected_partner_org_ids": partner_org_ids,
+                "generated_radius_secret": _generate_radius_shared_secret(),
             },
         )
 
@@ -282,6 +327,7 @@ def device_create(
                 "pop_site_label": _get_pop_site_label_by_id(db, pop_site_id),
                 "selected_radius_pool_ids": radius_pool_ids,
                 "selected_partner_org_ids": partner_org_ids,
+                "generated_radius_secret": _generate_radius_shared_secret(),
             },
         )
 
@@ -295,6 +341,8 @@ def device_detail(
     api_test_message: str | None = Query(None),
     rule_status: str | None = Query(None),
     rule_message: str | None = Query(None),
+    message: str | None = Query(None),
+    error: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     """NAS device detail page."""
@@ -314,6 +362,8 @@ def device_detail(
         {
             **_base_context(request, db, "nas"),
             **page_data,
+            "message": message,
+            "error": error,
         },
     )
 
@@ -644,6 +694,8 @@ def device_backups(
     device_id: str,
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
+    message: str | None = Query(None),
+    error: str | None = Query(None),
 ):
     """List configuration backups for a device."""
     page_data = nas_service.build_nas_device_backups_page_data(
@@ -658,6 +710,8 @@ def device_backups(
         {
             **_base_context(request, db, "nas"),
             **page_data,
+            "message": message,
+            "error": error,
         },
     )
 
@@ -676,13 +730,17 @@ def device_backup_trigger(
         device_id=device_id,
         triggered_by=triggered_by,
     )
-    if result["ok"]:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?message=Backup+triggered+successfully",
-            status_code=303,
-        )
+    key = "message" if result["ok"] else "error"
+    message = "Backup triggered successfully" if result["ok"] else str(
+        result["error"] or "Backup trigger failed."
+    )
     return RedirectResponse(
-        f"/admin/network/nas/devices/{device_id}?error={result['error']}",
+        _build_backup_redirect_url(
+            request,
+            device_id=device_id,
+            key=key,
+            value=message,
+        ),
         status_code=303,
     )
 
@@ -702,6 +760,25 @@ def backup_detail(request: Request, backup_id: str, db: Session = Depends(get_db
             **_base_context(request, db, "nas"),
             **page_data,
         },
+    )
+
+
+@router.get("/backups/{backup_id}/download")
+def backup_download(backup_id: str, db: Session = Depends(get_db)):
+    """Download raw configuration backup content."""
+    page_data = nas_service.build_nas_backup_detail_data(
+        db,
+        backup_id=backup_id,
+        build_activities_fn=build_audit_activities,
+    )
+    backup = page_data["backup"]
+    device = page_data["device"]
+    extension = str(getattr(backup, "config_format", None) or "txt")
+    filename = f'nas_backup_{device.id}_{backup.id}.{extension}'
+    return Response(
+        content=str(backup.config_content or ""),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

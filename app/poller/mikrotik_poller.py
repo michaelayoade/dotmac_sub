@@ -8,6 +8,7 @@ devices using the RouterOS API and publishes them to a Redis stream.
 import asyncio
 import logging
 import os
+import re
 import signal
 import time
 from collections.abc import AsyncIterator
@@ -32,8 +33,19 @@ from app.services.queue_mapping import queue_mapping
 
 logger = logging.getLogger(__name__)
 
+_PASSWORD_RE = re.compile(r"=password=[^\x00 ]*")
+
+
+def _sanitize_exc(exc: BaseException) -> str:
+    """Strip routeros_api's cleartext =password=... from exception text."""
+    return _PASSWORD_RE.sub("=password=<redacted>", str(exc))
+
+
 # Configuration
-POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "1000"))
+# Default cadence is 5s: 1s polling produces ~4k Redis ops/sec over WAN, which
+# saturates the poller process and dwarfs any UI responsiveness benefit. Real
+# customer dashboards display at ~5s granularity; tune via env if needed.
+POLL_INTERVAL_MS = int(os.getenv("BANDWIDTH_POLL_INTERVAL_MS", "5000"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 REDIS_STREAM = os.getenv("BANDWIDTH_REDIS_STREAM", "bandwidth:samples")
 POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in (
@@ -41,6 +53,17 @@ POLLING_ENABLED = os.getenv("BANDWIDTH_POLLING_ENABLED", "true").lower() in (
     "true",
     "yes",
 )
+
+# On-demand mode polls only devices that host an active live viewer; idle when
+# no operator is watching. RADIUS interim-update sampling provides the
+# always-on baseline for historical charts (see usage.py).
+POLL_MODE = os.getenv("BANDWIDTH_POLL_MODE", "always").strip().lower()
+ACTIVE_VIEWERS_KEY = os.getenv(
+    "BANDWIDTH_ACTIVE_VIEWERS_KEY", "active:bandwidth:viewers"
+)
+# A live viewer's ZADD score is the unix timestamp of the most recent SSE tick.
+# Memberships older than this window are treated as gone.
+ACTIVE_VIEWER_TTL_SECONDS = int(os.getenv("BANDWIDTH_ACTIVE_VIEWER_TTL_SECONDS", "15"))
 
 
 @dataclass
@@ -92,10 +115,12 @@ class MikroTikConnection:
         self._pool: RouterOsApiPool | None = None
         self._connection: Any | None = None
         self._last_connected: datetime | None = None
+        self._last_attempt: datetime | None = None
         self._consecutive_failures: int = 0
 
     async def connect(self) -> bool:
         """Establish connection to the device."""
+        self._last_attempt = datetime.now(UTC)
         try:
             # RouterOS API is synchronous, run in executor
             loop = asyncio.get_event_loop()
@@ -119,7 +144,7 @@ class MikroTikConnection:
             return True
         except Exception as e:
             self._consecutive_failures += 1
-            logger.error(f"Failed to connect to {self.host}: {e}")
+            logger.error(f"Failed to connect to {self.host}: {_sanitize_exc(e)}")
             return False
 
     async def disconnect(self):
@@ -199,7 +224,9 @@ class MikroTikConnection:
 
         except Exception as e:
             self._consecutive_failures += 1
-            logger.error(f"Failed to get queue stats from {self.host}: {e}")
+            logger.error(
+                f"Failed to get queue stats from {self.host}: {_sanitize_exc(e)}"
+            )
             # Reconnect on next attempt
             await self.disconnect()
             return []
@@ -213,8 +240,12 @@ class MikroTikConnection:
         backoff_seconds = 2**self._consecutive_failures
         if backoff_seconds > 60:
             backoff_seconds = 60
-        if self._last_connected:
-            elapsed = (datetime.now(UTC) - self._last_connected).total_seconds()
+        # Compare against the last attempt (success or failure). Using
+        # _last_connected alone would skip backoff entirely for devices that
+        # have never connected — producing a 1-Hz retry storm.
+        reference = self._last_attempt or self._last_connected
+        if reference:
+            elapsed = (datetime.now(UTC) - reference).total_seconds()
             return bool(elapsed >= backoff_seconds)
         return True
 
@@ -327,7 +358,16 @@ class DevicePool:
 
                 # Create new connection if we have credentials
                 if device.api_username and device.api_password and device.management_ip:
-                    api_password = decrypt_credential(device.api_password)
+                    try:
+                        api_password = decrypt_credential(device.api_password)
+                    except ValueError as exc:
+                        # One bad ciphertext must not gate the whole refresh.
+                        logger.warning(
+                            "Skipping NAS %s: api_password decrypt failed (%s)",
+                            device_id,
+                            exc,
+                        )
+                        continue
                     if not api_password:
                         logger.warning(
                             "Skipping NAS %s: API password could not be decrypted",
@@ -342,30 +382,68 @@ class DevicePool:
                         port=self._resolve_mikrotik_api_port(device),
                     )
 
-                # Load queue mappings for this device
-                raw_mapping = queue_mapping.get_device_mapping_dict(db, device_id)
-                self._queue_mappings[device_id] = self._build_mapping_alias_dict(
-                    raw_mapping
-                )
-
                 # Fallback mapping from active subscriptions on this NAS by login.
+                # Duplicate logins are common (migrated re-installs leave many
+                # disabled/canceled rows). When multiple rows share a login,
+                # prefer status=active over status=pending so the customer
+                # portal (which resolves the active sub) finds samples tagged
+                # with the same sub it queries.
                 login_rows = (
-                    db.query(Subscription.id, Subscription.login)
+                    db.query(Subscription.id, Subscription.login, Subscription.status)
                     .filter(
                         Subscription.provisioning_nas_device_id == device_id,
                         Subscription.status.in_(
                             [SubscriptionStatus.active, SubscriptionStatus.pending]
                         ),
+                        Subscription.login.isnot(None),
                     )
                     .all()
                 )
-                login_map: dict[str, UUID] = {}
-                for sub_id, login in login_rows:
-                    if not login:
-                        continue
+                _STATUS_PRIORITY = {
+                    SubscriptionStatus.active: 0,
+                    SubscriptionStatus.pending: 1,
+                }
+                best_for_login: dict[str, tuple[UUID, int]] = {}
+                for sub_id, login, status in login_rows:
                     login_clean = str(login).strip()
                     if not login_clean:
                         continue
+                    pri = _STATUS_PRIORITY.get(status, 99)
+                    existing = best_for_login.get(login_clean)
+                    if existing is None or pri < existing[1]:
+                        best_for_login[login_clean] = (sub_id, pri)
+
+                # Load queue mappings for this device and remap any entry whose
+                # subscription_id is a stale duplicate (same login as an active
+                # sub but pointing to a disabled/canceled/suspended row). The
+                # QueueMapping table is populated at turn-up and isn't updated
+                # when an old sub is suspended in favor of a re-install.
+                raw_mapping = queue_mapping.get_device_mapping_dict(db, device_id)
+                if raw_mapping and best_for_login:
+                    mapped_sub_ids = {sid for sid in raw_mapping.values() if sid}
+                    sub_logins = (
+                        dict(
+                            db.query(Subscription.id, Subscription.login)
+                            .filter(Subscription.id.in_(mapped_sub_ids))
+                            .all()
+                        )
+                        if mapped_sub_ids
+                        else {}
+                    )
+                    fixed_mapping: dict[str, UUID] = {}
+                    for queue_name, sub_id in raw_mapping.items():
+                        login = sub_logins.get(sub_id)
+                        if login:
+                            preferred = best_for_login.get(str(login).strip())
+                            if preferred and preferred[0] != sub_id:
+                                sub_id = preferred[0]
+                        fixed_mapping[queue_name] = sub_id
+                    raw_mapping = fixed_mapping
+                self._queue_mappings[device_id] = self._build_mapping_alias_dict(
+                    raw_mapping
+                )
+                login_map: dict[str, UUID] = {}
+                for login_clean, (sub_id, _) in best_for_login.items():
                     for alias in self._queue_aliases(login_clean):
                         login_map[alias] = sub_id
                 self._login_mappings[device_id] = login_map
@@ -379,10 +457,12 @@ class DevicePool:
                 self._queue_mappings.pop(device_id, None)
                 self._login_mappings.pop(device_id, None)
 
-            self._last_refresh = datetime.now(UTC)
             logger.info(f"Device pool refreshed: {len(self._connections)} devices")
 
         finally:
+            # Always advance the refresh marker — a failed refresh must not
+            # cause a 1-Hz retry storm against the DB and credential layer.
+            self._last_refresh = datetime.now(UTC)
             db.close()
 
     def _should_refresh(self) -> bool:
@@ -391,11 +471,27 @@ class DevicePool:
         elapsed = (datetime.now(UTC) - self._last_refresh).total_seconds()
         return elapsed >= self._refresh_interval
 
-    async def poll_all(self) -> AsyncIterator[tuple[UUID, list[QueueStats]]]:
-        """
-        Poll all connected devices and yield queue stats.
+    def _devices_with_active_subscriptions(self, active_sub_ids: set[str]) -> set[UUID]:
+        """Return device IDs that host at least one of the given subscriptions."""
+        if not active_sub_ids:
+            return set()
+        hosts: set[UUID] = set()
+        for device_id, mapping in self._queue_mappings.items():
+            if any(str(sub_id) in active_sub_ids for sub_id in mapping.values()):
+                hosts.add(device_id)
+                continue
+            login_map = self._login_mappings.get(device_id, {})
+            if any(str(sub_id) in active_sub_ids for sub_id in login_map.values()):
+                hosts.add(device_id)
+        return hosts
 
-        Yields tuples of (device_id, queue_stats).
+    async def poll_all(
+        self, active_devices: set[UUID] | None = None
+    ) -> AsyncIterator[tuple[UUID, list[QueueStats]]]:
+        """Poll connected devices and yield queue stats.
+
+        When ``active_devices`` is provided, only those device IDs are polled;
+        this is how on-demand mode skips devices with no live viewer.
         """
         if self._should_refresh():
             await self.refresh_devices()
@@ -410,6 +506,7 @@ class DevicePool:
         tasks = [
             poll_device(device_id, conn)
             for device_id, conn in self._connections.items()
+            if active_devices is None or device_id in active_devices
         ]
 
         if not tasks:
@@ -480,32 +577,69 @@ class BandwidthPoller:
         return self._redis
 
     async def _publish_samples(self, samples: list[BandwidthSample]):
-        """Publish samples to Redis stream."""
+        """Publish samples to Redis stream as a single pipelined batch.
+
+        Individual XADD per sample yields one WAN round-trip each; on a remote
+        Redis at 66ms RTT that bottlenecks the poller. A pipeline collapses
+        every sample in a poll cycle into a single network exchange.
+        """
         if not samples:
             return
 
         r = await self._get_redis()
-
-        # Publish as a batch to the stream
-        for sample in samples:
-            data: dict[bytes | str | int | float, bytes | str | int | float] = {
-                "subscription_id": sample.subscription_id,
-                "nas_device_id": sample.nas_device_id,
-                "queue_name": sample.queue_name,
-                "rx_bps": str(sample.rx_bps),
-                "tx_bps": str(sample.tx_bps),
-                "sample_at": sample.sample_at.isoformat(),
-            }
-            await r.xadd(REDIS_STREAM, data, maxlen=100000)
+        async with r.pipeline(transaction=False) as pipe:
+            for sample in samples:
+                data: dict[bytes | str | int | float, bytes | str | int | float] = {
+                    "subscription_id": sample.subscription_id,
+                    "nas_device_id": sample.nas_device_id,
+                    "queue_name": sample.queue_name,
+                    "rx_bps": str(sample.rx_bps),
+                    "tx_bps": str(sample.tx_bps),
+                    "sample_at": sample.sample_at.isoformat(),
+                }
+                pipe.xadd(REDIS_STREAM, data, maxlen=100000)
+            await pipe.execute()
 
         self._sample_count += len(samples)
+
+    async def _active_viewer_subscriptions(self) -> set[str]:
+        """Return subscription IDs with a live SSE viewer within the TTL window."""
+        try:
+            r = await self._get_redis()
+            cutoff = time.time() - ACTIVE_VIEWER_TTL_SECONDS
+            members = await r.zrangebyscore(ACTIVE_VIEWERS_KEY, cutoff, "+inf")
+        except Exception as exc:
+            logger.debug("active viewer lookup failed: %s", exc)
+            return set()
+        result: set[str] = set()
+        for member in members:
+            if isinstance(member, bytes):
+                result.add(member.decode("utf-8", errors="ignore"))
+            else:
+                result.add(str(member))
+        return result
 
     async def _poll_once(self):
         """Execute a single polling cycle."""
         sample_time = datetime.now(UTC)
         samples = []
 
-        async for device_id, queue_stats in self.device_pool.poll_all():
+        active_devices: set[UUID] | None = None
+        if POLL_MODE == "on_demand":
+            active_subs = await self._active_viewer_subscriptions()
+            if not active_subs:
+                # No live viewers — RADIUS interim-update samples (60s cadence)
+                # keep historical charts populated without burning the poller.
+                self._poll_count += 1
+                return
+            active_devices = self.device_pool._devices_with_active_subscriptions(
+                active_subs
+            )
+            if not active_devices:
+                self._poll_count += 1
+                return
+
+        async for device_id, queue_stats in self.device_pool.poll_all(active_devices):
             for qs in queue_stats:
                 subscription_id = self.device_pool.resolve_subscription(
                     device_id, qs.name

@@ -46,9 +46,21 @@ def _clear_caches():
 
 def test_parse_items_groups_in_out_by_snmp_index():
     items = [
-        {"key_": "net.if.in[ifHCInOctets.5]", "lastvalue": "1500000", "lastclock": "1700000100"},
-        {"key_": "net.if.out[ifHCOutOctets.5]", "lastvalue": "900000", "lastclock": "1700000101"},
-        {"key_": "net.if.in[ifHCInOctets.7]", "lastvalue": "0", "lastclock": "1700000050"},
+        {
+            "key_": "net.if.in[ifHCInOctets.5]",
+            "lastvalue": "1500000",
+            "lastclock": "1700000100",
+        },
+        {
+            "key_": "net.if.out[ifHCOutOctets.5]",
+            "lastvalue": "900000",
+            "lastclock": "1700000101",
+        },
+        {
+            "key_": "net.if.in[ifHCInOctets.7]",
+            "lastvalue": "0",
+            "lastclock": "1700000050",
+        },
         {"key_": "unrelated.key", "lastvalue": "x", "lastclock": "1700000000"},
     ]
     grouped = _parse_items_by_snmp_index(items)
@@ -61,7 +73,11 @@ def test_parse_items_groups_in_out_by_snmp_index():
 def test_parse_items_skips_non_numeric_values():
     items = [
         {"key_": "net.if.in[ifHCInOctets.1]", "lastvalue": None, "lastclock": "1700"},
-        {"key_": "net.if.out[ifHCOutOctets.1]", "lastvalue": "garbage", "lastclock": "1700"},
+        {
+            "key_": "net.if.out[ifHCOutOctets.1]",
+            "lastvalue": "garbage",
+            "lastclock": "1700",
+        },
     ]
     grouped = _parse_items_by_snmp_index(items)
     # value 0 stored from None; "garbage" raises ValueError → dropped
@@ -88,10 +104,20 @@ def test_returns_rx_tx_for_monitored_interfaces():
     iface = _make_iface("sfp-sfpplus1", 5)
     fake_client = MagicMock()
     fake_client.get_items.return_value = [
-        {"key_": "net.if.in[ifHCInOctets.5]", "lastvalue": "3200000", "lastclock": "1700000200"},
-        {"key_": "net.if.out[ifHCOutOctets.5]", "lastvalue": "420000", "lastclock": "1700000201"},
+        {
+            "key_": "net.if.in[ifHCInOctets.5]",
+            "lastvalue": "3200000",
+            "lastclock": "1700000200",
+        },
+        {
+            "key_": "net.if.out[ifHCOutOctets.5]",
+            "lastvalue": "420000",
+            "lastclock": "1700000201",
+        },
     ]
-    with patch.object(core_router_metrics.ZabbixClient, "from_env", return_value=fake_client):
+    with patch.object(
+        core_router_metrics.ZabbixClient, "from_env", return_value=fake_client
+    ):
         result = get_interface_bandwidth(db, device, [iface])
     assert result.error is None
     fake_client.get_items.assert_called_once_with(host_ids=["10692"], metric="net.if")
@@ -132,7 +158,9 @@ def test_zabbix_with_no_interface_items_returns_explanatory_error():
         {"key_": "icmppingloss", "lastvalue": "0", "lastclock": "1700"},
         {"key_": "net.if.walk", "lastvalue": "", "lastclock": "1700"},
     ]
-    with patch.object(core_router_metrics.ZabbixClient, "from_env", return_value=fake_client):
+    with patch.object(
+        core_router_metrics.ZabbixClient, "from_env", return_value=fake_client
+    ):
         result = get_interface_bandwidth(db, device, [iface])
     assert result.error == "Interface counters not enabled in monitoring"
     assert result.by_interface_id == {}
@@ -146,7 +174,9 @@ def test_zabbix_client_error_renders_as_unreachable():
     iface = _make_iface("eth1", 1)
     fake_client = MagicMock()
     fake_client.get_items.side_effect = ZabbixClientError("network down")
-    with patch.object(core_router_metrics.ZabbixClient, "from_env", return_value=fake_client):
+    with patch.object(
+        core_router_metrics.ZabbixClient, "from_env", return_value=fake_client
+    ):
         result = get_interface_bandwidth(db, device, [iface])
     assert result.error == "Live monitoring unavailable"
 

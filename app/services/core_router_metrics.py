@@ -65,7 +65,9 @@ class CoreRouterBandwidth:
 # Matches both `net.if.in[ifHCInOctets.41]` and `net.if.out[ifHCOutOctets.41]`.
 _IF_KEY_RE = re.compile(r"net\.if\.(in|out)\[[^.]+\.(\d+)\]")
 
-_bandwidth_cache: dict[str, tuple[CoreRouterBandwidth, float]] = {}  # device.id → (result, ts)
+_bandwidth_cache: dict[
+    str, tuple[CoreRouterBandwidth, float]
+] = {}  # device.id → (result, ts)
 _lock = threading.Lock()
 
 
@@ -156,7 +158,9 @@ def get_interface_bandwidth(
     except ZabbixConfigurationError as exc:
         logger.warning("Live monitoring not configured: %s", exc)
         return CoreRouterBandwidth(
-            by_interface_id={}, fetched_at=time.time(), error="Live monitoring not configured"
+            by_interface_id={},
+            fetched_at=time.time(),
+            error="Live monitoring not configured",
         )
 
     try:
@@ -164,13 +168,17 @@ def get_interface_bandwidth(
     except ZabbixClientError as exc:
         logger.info("Live bandwidth fetch failed for %s: %s", device.name, exc)
         return CoreRouterBandwidth(
-            by_interface_id={}, fetched_at=time.time(), error="Live monitoring unavailable"
+            by_interface_id={},
+            fetched_at=time.time(),
+            error="Live monitoring unavailable",
         )
 
     by_idx = _parse_items_by_snmp_index(items)
     by_iface_id: dict[str, InterfaceBandwidth] = {}
     for iface in monitored:
-        entry = by_idx.get(int(iface.snmp_index)) if iface.snmp_index is not None else None
+        entry = (
+            by_idx.get(int(iface.snmp_index)) if iface.snmp_index is not None else None
+        )
         if not entry:
             continue
         rx_pair = entry.get("in")

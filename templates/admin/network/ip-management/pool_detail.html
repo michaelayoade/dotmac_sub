@@ -150,6 +150,31 @@
                 </div>
             </div>
 
+            <!-- Used by NAS -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Used by NAS Devices</h2>
+                    <span class="text-sm text-slate-500 dark:text-slate-400">{{ linked_nas_devices | length }} device{{ '' if (linked_nas_devices | length) == 1 else 's' }}</span>
+                </div>
+                <div class="p-6">
+                    {% if linked_nas_devices %}
+                    <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for device in linked_nas_devices %}
+                        <li class="flex items-center justify-between py-3">
+                            <div>
+                                <a href="/admin/network/nas/devices/{{ device.id }}" class="text-sm font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400">{{ device.name }}</a>
+                                <p class="text-xs text-slate-500 dark:text-slate-400 font-mono">{{ device.ip_address or '-' }}{% if device.code %} · {{ device.code }}{% endif %}</p>
+                            </div>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ device.vendor.value | title }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No NAS devices are configured to hand out IPs from this pool.</p>
+                    {% endif %}
+                </div>
+            </div>
+
             <!-- Assignments -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">

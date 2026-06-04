@@ -11,8 +11,10 @@ from collections import defaultdict
 from uuid import UUID
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
+from app.models.catalog import NasDevice, Subscription
 from app.models.network import IPAssignment, IPv4Address, IPv6Address, IPVersion
 from app.schemas.catalog import SubscriptionUpdate
 from app.schemas.network import (
@@ -155,6 +157,60 @@ def _subscription_display_name(subscription) -> str | None:
         or str(getattr(subscription, "id", "") or "").strip()
         or None
     )
+
+
+def _subscriptions_by_ipv4(
+    db,
+    *,
+    ip_addresses: list[str],
+) -> dict[str, list[Subscription]]:
+    normalized = sorted(
+        {
+            str(ip_address or "").strip()
+            for ip_address in ip_addresses
+            if str(ip_address or "").strip()
+        }
+    )
+    if not normalized:
+        return {}
+
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.ipv4_address.in_(normalized))
+        .order_by(Subscription.updated_at.desc())
+        .all()
+    )
+    by_ip: dict[str, list[Subscription]] = defaultdict(list)
+    for subscription in subscriptions:
+        ip_address = str(getattr(subscription, "ipv4_address", "") or "").strip()
+        if ip_address:
+            by_ip[ip_address].append(subscription)
+    return by_ip
+
+
+def _matching_subscription_for_assignment(
+    subscriptions_by_ip: dict[str, list[Subscription]],
+    *,
+    ip_address: str,
+    assignment: IPAssignment | None,
+) -> Subscription | None:
+    candidates = subscriptions_by_ip.get(str(ip_address or "").strip(), [])
+    if not candidates:
+        return None
+    if assignment is None:
+        return candidates[0]
+
+    subscriber_id = str(getattr(assignment, "subscriber_id", "") or "")
+    service_address_id = str(getattr(assignment, "service_address_id", "") or "")
+    subscriber_match: Subscription | None = None
+    for subscription in candidates:
+        if str(getattr(subscription, "subscriber_id", "") or "") != subscriber_id:
+            continue
+        if subscriber_match is None:
+            subscriber_match = subscription
+        if str(getattr(subscription, "service_address_id", "") or "") == service_address_id:
+            return subscription
+    return subscriber_match or candidates[0]
 
 
 def _pool_metadata(pool) -> tuple[dict[str, str | None], str | None]:
@@ -646,6 +702,7 @@ def _build_ipv4_range_rows(
         else [str(ip) for ip in network.hosts()]
     )
     limited_hosts = all_hosts[:limit] if limit > 0 else all_hosts
+    subscriptions_by_ip = _subscriptions_by_ipv4(db, ip_addresses=limited_hosts)
 
     rows: list[dict[str, object]] = []
     assigned_count = 0
@@ -655,7 +712,11 @@ def _build_ipv4_range_rows(
         record = address_records.get(ip)
         assignment = _active_assignment(record) if record else None
         subscriber = getattr(assignment, "subscriber", None) if assignment else None
-        subscription = getattr(assignment, "subscription", None) if assignment else None
+        subscription = _matching_subscription_for_assignment(
+            subscriptions_by_ip,
+            ip_address=ip,
+            assignment=assignment,
+        )
         status = _ipam_row_status(record)
         if status in {"assigned", "ont_management"}:
             assigned_count += 1
@@ -860,7 +921,6 @@ def build_ipv4_assignment_form_data(
         db.query(IPv4Address)
         .options(
             joinedload(IPv4Address.assignment).joinedload(IPAssignment.subscriber),
-            joinedload(IPv4Address.assignment).joinedload(IPAssignment.subscription),
         )
         .filter(IPv4Address.address == normalized_ip)
         .first()
@@ -869,8 +929,10 @@ def build_ipv4_assignment_form_data(
     subscriber = (
         getattr(active_assignment, "subscriber", None) if active_assignment else None
     )
-    subscription = (
-        getattr(active_assignment, "subscription", None) if active_assignment else None
+    subscription = _matching_subscription_for_assignment(
+        _subscriptions_by_ipv4(db, ip_addresses=[normalized_ip]),
+        ip_address=normalized_ip,
+        assignment=active_assignment,
     )
 
     return {
@@ -1490,6 +1552,22 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         return None, None, str(exc)
 
 
+def _nas_devices_using_pool(db, pool_id: str) -> list[NasDevice]:
+    """Return active NAS devices whose tags reference this pool.
+
+    NAS↔pool linkage is stored as a `radius_pool:<pool_id>` tag on the JSONB
+    `NasDevice.tags` column (no FK), so this is the reverse lookup.
+    """
+    tag = f"radius_pool:{pool_id}"
+    stmt = (
+        select(NasDevice)
+        .where(NasDevice.is_active.is_(True))
+        .where(NasDevice.tags.contains([tag]))
+        .order_by(NasDevice.name.asc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
 def build_ip_pool_detail_data(db, *, pool_id: str) -> dict[str, object] | None:
     try:
         pool = network_service.ip_pools.get(db=db, pool_id=pool_id)
@@ -1532,6 +1610,7 @@ def build_ip_pool_detail_data(db, *, pool_id: str) -> dict[str, object] | None:
             str(pool.id),
             {"used": 0, "reserved": 0, "available": 0, "total": 0, "percent": 0},
         ),
+        "linked_nas_devices": _nas_devices_using_pool(db, pool_id),
     }
 
 

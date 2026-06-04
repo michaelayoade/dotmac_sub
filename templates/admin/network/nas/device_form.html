@@ -137,6 +137,12 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Select the authentication methods supported by this device</p>
             </div>
             <div class="p-6">
+                {% if device and device.default_connection_type and not device.supported_connection_types %}
+                <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300">
+                    <strong>Inconsistent connection-type configuration.</strong>
+                    A default connection type ({{ device.default_connection_type.value | upper }}) is set, but no supported connection types are checked below. Tick at least the default before saving — RADIUS auth will rely on it.
+                </div>
+                {% endif %}
                 <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     {% for ct in connection_types %}
                     <label class="flex items-center gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 cursor-pointer">
@@ -318,9 +324,15 @@
                 <div class="grid gap-4 sm:grid-cols-3">
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">RADIUS Shared Secret</label>
-                        <input type="password" name="radius_secret" value=""
-                               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
-                               placeholder="Shared secret for RADIUS">
+                        {% set radius_secret_value = form_data.radius_secret if form_data and form_data.radius_secret is not none else generated_radius_secret|default('') %}
+                        <input type="{% if device %}password{% else %}text{% endif %}" name="radius_secret"
+                               value="{% if device %}{% else %}{{ radius_secret_value }}{% endif %}"
+                               class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                               placeholder="{% if device %}Enter a new shared secret to replace the current one{% else %}Auto-generated shared secret{% endif %}"
+                               autocomplete="off" spellcheck="false">
+                        {% if not device %}
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Generated automatically for this new NAS so it can be copied into the MikroTik.</p>
+                        {% endif %}
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">NAS Identifier (Code)</label>

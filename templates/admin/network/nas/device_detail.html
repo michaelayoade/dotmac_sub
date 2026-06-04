@@ -124,6 +124,17 @@
         </div>
     </div>
 
+    {% if message %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        {{ message }}
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
+
     <div class="border-b border-slate-200 dark:border-slate-700">
         <nav class="flex gap-1" aria-label="Tabs">
             <a href="/admin/network/nas/devices/{{ device.id }}?tab=information"
@@ -303,6 +314,57 @@
                         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No backups yet</p>
                     </div>
                     {% endif %}
+                </div>
+            </div>
+
+            <!-- RADIUS Configuration -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS</h2>
+                </div>
+                <div class="p-6">
+                    {% if device.shared_secret %}
+                    <div class="space-y-2 text-sm">
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Secret:</span>
+                            <span class="font-mono">********</span>
+                        </p>
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">NAS IP:</span> {{ device.nas_ip or '-' }}
+                        </p>
+                        {% if device.code %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">NAS-ID:</span> {{ device.code }}
+                        </p>
+                        {% endif %}
+                        {% if radius_pool_names %}
+                        <p class="text-slate-600 dark:text-slate-300">
+                            <span class="text-slate-400">Pools:</span> {{ radius_pool_names | join(', ') }}
+                        </p>
+                        {% else %}
+                        <p class="text-slate-500 dark:text-slate-400">
+                            Use only these pools, if selected (in service set as Any pool): none selected.
+                        </p>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <p class="text-sm text-slate-400">Not configured</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Shaper / QoS -->
+            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Shaper / QoS</h2>
+                </div>
+                <div class="p-6 text-sm text-slate-600 dark:text-slate-300 space-y-2">
+                    <p><span class="text-slate-400">Enabled:</span> {{ 'Yes' if enhanced_fields.shaper_enabled == 'true' else 'No' }}</p>
+                    <p><span class="text-slate-400">Target:</span> {{ enhanced_fields.shaper_target or '-' }}</p>
+                    <p><span class="text-slate-400">Type:</span> {{ enhanced_fields.shaping_type or '-' }}</p>
+                    <p><span class="text-slate-400">Wireless Access-List:</span> {{ 'Yes' if enhanced_fields.wireless_access_list == 'true' else 'No' }}</p>
+                    <p><span class="text-slate-400">Disabled-customers list:</span> {{ 'Yes' if enhanced_fields.disabled_customers_address_list == 'true' else 'No' }}</p>
+                    <p><span class="text-slate-400">Blocking rules:</span> {{ 'Yes' if enhanced_fields.blocking_rules_enabled == 'true' else 'No' }}</p>
                 </div>
             </div>
             {% endif %}
@@ -752,57 +814,6 @@
                 </div>
             </div>
 
-            <!-- RADIUS Configuration -->
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">RADIUS</h2>
-                </div>
-                <div class="p-6">
-                    {% if device.shared_secret %}
-                    <div class="space-y-2 text-sm">
-                        <p class="text-slate-600 dark:text-slate-300">
-                            <span class="text-slate-400">Secret:</span>
-                            <span class="font-mono">********</span>
-                        </p>
-                        <p class="text-slate-600 dark:text-slate-300">
-                            <span class="text-slate-400">NAS IP:</span> {{ device.nas_ip or '-' }}
-                        </p>
-                        {% if device.code %}
-                        <p class="text-slate-600 dark:text-slate-300">
-                            <span class="text-slate-400">NAS-ID:</span> {{ device.code }}
-                        </p>
-                        {% endif %}
-                        {% if radius_pool_names %}
-                        <p class="text-slate-600 dark:text-slate-300">
-                            <span class="text-slate-400">Pools:</span> {{ radius_pool_names | join(', ') }}
-                        </p>
-                        {% else %}
-                        <p class="text-slate-500 dark:text-slate-400">
-                            Use only these pools, if selected (in service set as Any pool): none selected.
-                        </p>
-                        {% endif %}
-                    </div>
-                    {% else %}
-                    <p class="text-sm text-slate-400">Not configured</p>
-                    {% endif %}
-                </div>
-            </div>
-
-            <!-- Backup Configuration -->
-            <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <h2 class="font-semibold text-slate-900 dark:text-white">Shaper / QoS</h2>
-                </div>
-                <div class="p-6 text-sm text-slate-600 dark:text-slate-300 space-y-2">
-                    <p><span class="text-slate-400">Enabled:</span> {{ 'Yes' if enhanced_fields.shaper_enabled == 'true' else 'No' }}</p>
-                    <p><span class="text-slate-400">Target:</span> {{ enhanced_fields.shaper_target or '-' }}</p>
-                    <p><span class="text-slate-400">Type:</span> {{ enhanced_fields.shaping_type or '-' }}</p>
-                    <p><span class="text-slate-400">Wireless Access-List:</span> {{ 'Yes' if enhanced_fields.wireless_access_list == 'true' else 'No' }}</p>
-                    <p><span class="text-slate-400">Disabled-customers list:</span> {{ 'Yes' if enhanced_fields.disabled_customers_address_list == 'true' else 'No' }}</p>
-                    <p><span class="text-slate-400">Blocking rules:</span> {{ 'Yes' if enhanced_fields.blocking_rules_enabled == 'true' else 'No' }}</p>
-                </div>
-            </div>
-
             <!-- Backup Configuration -->
             <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -854,24 +865,6 @@
             </div>
             {% endif %}
 
-            <!-- Danger Zone -->
-            <div class="rounded-xl border border-red-200 bg-red-50 shadow-sm dark:border-red-900/50 dark:bg-red-900/10">
-                <div class="border-b border-red-200 px-6 py-4 dark:border-red-900/50">
-                    <h2 class="font-semibold text-red-800 dark:text-red-300">Danger Zone</h2>
-                </div>
-                <div class="p-6">
-                    <p class="text-sm text-red-700 dark:text-red-400 mb-4">
-                        Deleting this device will also remove all configuration backups and provisioning logs.
-                    </p>
-                    <form method="post" action="/admin/network/nas/devices/{{ device.id }}/delete" onsubmit="return confirm('Are you sure you want to delete this device? This action cannot be undone.');">
-                        {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/30">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                            Delete Device
-                        </button>
-                    </form>
-                </div>
-            </div>
         </div>
     </div>
 </div>

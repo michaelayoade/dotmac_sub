@@ -295,7 +295,7 @@ def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session, monke
     )
     db_session.commit()
 
-    def _fake_snapshots(db, onts):
+    def _fake_snapshots(db, onts, **_):
         return {
             str(ont.id): zabbix_ont_status.OntSignalData(
                 online=ont.serial_number.startswith("PARTIAL-ONLINE")

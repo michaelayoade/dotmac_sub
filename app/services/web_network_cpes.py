@@ -558,18 +558,20 @@ def build_cpe_list_data(
         )
 
     # Filtered counts (total + status/vendor breakdown) in a single query.
-    counts_subq = base.with_only_columns(
-        CPEDevice.id, CPEDevice.status, CPEDevice.vendor
-    ).order_by(None).subquery()
+    counts_subq = (
+        base.with_only_columns(CPEDevice.id, CPEDevice.status, CPEDevice.vendor)
+        .order_by(None)
+        .subquery()
+    )
     counts_row = db.execute(
         select(
             func.count().label("total"),
-            func.count(
-                case((counts_subq.c.status == DeviceStatus.active, 1))
-            ).label("active"),
-            func.count(
-                case((counts_subq.c.vendor.ilike("%mikrotik%"), 1))
-            ).label("mikrotik"),
+            func.count(case((counts_subq.c.status == DeviceStatus.active, 1))).label(
+                "active"
+            ),
+            func.count(case((counts_subq.c.vendor.ilike("%mikrotik%"), 1))).label(
+                "mikrotik"
+            ),
         ).select_from(counts_subq)
     ).one()
     total = int(counts_row.total or 0)
@@ -579,9 +581,7 @@ def build_cpe_list_data(
     offset = (page - 1) * per_page
 
     rows_stmt = (
-        base.order_by(CPEDevice.created_at.desc())
-        .limit(per_page)
-        .offset(offset)
+        base.order_by(CPEDevice.created_at.desc()).limit(per_page).offset(offset)
     )
     devices = list(db.scalars(rows_stmt).unique().all())
 
