@@ -129,7 +129,10 @@ def upgrade() -> None:
                 server_default=sa.text("0"),
             ),
             sa.Column(
-                "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+                "is_active",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("true"),
             ),
             sa.Column(
                 "metadata", postgresql.JSONB(astext_type=sa.Text()), nullable=True
@@ -179,7 +182,9 @@ def upgrade() -> None:
                 nullable=True,
             ),
         )
-    payment_account_col = next(c for c in payment_cols_list if c["name"] == "account_id")
+    payment_account_col = next(
+        c for c in payment_cols_list if c["name"] == "account_id"
+    )
     if not payment_account_col.get("nullable", True):
         op.alter_column(
             "payments",

@@ -156,7 +156,7 @@ def _fetch_invoice_items(conn, inv_id: int) -> list[dict]:
     """Fetch non-deleted line items for a Splynx invoice."""
     return fetch_all(
         conn,
-        f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'",  # noqa: S608
+        f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'",  # noqa: S608  # nosec B608
     )
 
 
@@ -211,7 +211,7 @@ def _resolve_subscription_id(
         return None
     rows = fetch_all(
         conn,
-        f"SELECT service_id FROM billing_transactions WHERE id = {transaction_id}",  # noqa: S608
+        f"SELECT service_id FROM billing_transactions WHERE id = {transaction_id}",  # noqa: S608  # nosec B608
     )
     if not rows:
         return None
@@ -255,7 +255,7 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
         SELECT * FROM invoices
         WHERE real_create_datetime >= '{since_str}'
         ORDER BY id
-    """  # noqa: S608
+    """  # noqa: S608  # nosec B608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -376,7 +376,7 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
         SELECT * FROM payments
         WHERE {payment_since_expr} >= '{since_str}'
         ORDER BY id
-    """  # noqa: S608
+    """  # noqa: S608  # nosec B608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -492,7 +492,7 @@ def sync_deleted_customers(conn, db) -> dict[str, int]:
 
     # Find which mapped customers are now deleted in Splynx
     splynx_ids = ",".join(str(sid) for sid in customer_map)
-    query = f"SELECT id FROM customers WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    query = f"SELECT id FROM customers WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608  # nosec B608
     deleted_rows = fetch_all(conn, query)
     deleted_splynx_ids = {row["id"] for row in deleted_rows}
 
@@ -550,7 +550,7 @@ def sync_new_credit_notes(conn, db, since: datetime) -> dict[str, int]:
     }
 
     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-    query = f"SELECT * FROM credit_notes WHERE real_create_datetime >= '{since_str}' ORDER BY id"  # noqa: S608
+    query = f"SELECT * FROM credit_notes WHERE real_create_datetime >= '{since_str}' ORDER BY id"  # noqa: S608  # nosec B608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -615,7 +615,7 @@ def sync_deleted_services(conn, db) -> dict[str, int]:
 
     splynx_ids = ",".join(str(sid) for sid in service_map)
     query = (
-        f"SELECT id FROM services_internet WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+        f"SELECT id FROM services_internet WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608  # nosec B608
     )
     deleted_rows = fetch_all(conn, query)
     deleted_splynx_ids = {row["id"] for row in deleted_rows}

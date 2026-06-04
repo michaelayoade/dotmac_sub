@@ -9,6 +9,8 @@ from app.services import support as support_service
 from app.services import typeahead as typeahead_service
 from app.services import web_support_tickets
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _system_user(**overrides) -> SystemUser:
     return SystemUser(
@@ -150,9 +152,7 @@ def test_list_assignment_people_keeps_legacy_subscriber_assignments_visible(
 
 
 def test_support_ticket_form_uses_live_typeahead_endpoints() -> None:
-    template = Path(
-        "/opt/dotmac_sub/templates/admin/support/tickets/new.html"
-    ).read_text()
+    template = (REPO_ROOT / "templates/admin/support/tickets/new.html").read_text()
 
     assert 'data-typeahead-url="/api/v1/search/people"' in template
     assert 'data-typeahead-url="/api/v1/search/subscribers"' in template
@@ -160,14 +160,12 @@ def test_support_ticket_form_uses_live_typeahead_endpoints() -> None:
 
 
 def test_support_ticket_templates_use_staff_data_for_assignment_controls() -> None:
-    form_template = Path(
-        "/opt/dotmac_sub/templates/admin/support/tickets/new.html"
+    form_template = (REPO_ROOT / "templates/admin/support/tickets/new.html").read_text()
+    index_template = (
+        REPO_ROOT / "templates/admin/support/tickets/index.html"
     ).read_text()
-    index_template = Path(
-        "/opt/dotmac_sub/templates/admin/support/tickets/index.html"
-    ).read_text()
-    detail_template = Path(
-        "/opt/dotmac_sub/templates/admin/support/tickets/detail.html"
+    detail_template = (
+        REPO_ROOT / "templates/admin/support/tickets/detail.html"
     ).read_text()
 
     assert "staff_options" in form_template
@@ -176,4 +174,4 @@ def test_support_ticket_templates_use_staff_data_for_assignment_controls() -> No
     assert "{% for person in staff_options %}" in detail_template
     assert "Type at least 2 characters to search technicians" in form_template
     assert "if (search.length < 2) return []" in form_template
-    assert "x-show=\"shouldShowAssigneeResults\"" in form_template
+    assert 'x-show="shouldShowAssigneeResults"' in form_template

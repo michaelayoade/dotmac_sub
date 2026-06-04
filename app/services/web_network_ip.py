@@ -132,6 +132,17 @@ def _query_count(db, model, where_clause=None) -> int:
     return len(rows)
 
 
+def _session_dialect_name(db) -> str:
+    get_bind = getattr(db, "get_bind", None)
+    if not callable(get_bind):
+        return ""
+    try:
+        bind = get_bind()
+    except Exception:
+        return ""
+    return str(getattr(getattr(bind, "dialect", None), "name", "") or "")
+
+
 def _subscriber_display_name(subscriber) -> str | None:
     if not subscriber:
         return None
@@ -174,12 +185,10 @@ def _subscriptions_by_ipv4(
     if not normalized:
         return {}
 
-    subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.ipv4_address.in_(normalized))
-        .order_by(Subscription.updated_at.desc())
-        .all()
-    )
+    query = db.query(Subscription).filter(Subscription.ipv4_address.in_(normalized))
+    if hasattr(query, "order_by"):
+        query = query.order_by(Subscription.updated_at.desc())
+    subscriptions = query.all()
     by_ip: dict[str, list[Subscription]] = defaultdict(list)
     for subscription in subscriptions:
         ip_address = str(getattr(subscription, "ipv4_address", "") or "").strip()
@@ -208,7 +217,10 @@ def _matching_subscription_for_assignment(
             continue
         if subscriber_match is None:
             subscriber_match = subscription
-        if str(getattr(subscription, "service_address_id", "") or "") == service_address_id:
+        if (
+            str(getattr(subscription, "service_address_id", "") or "")
+            == service_address_id
+        ):
             return subscription
     return subscriber_match or candidates[0]
 
@@ -514,6 +526,23 @@ def _build_pool_and_block_utilization(
     def _agg_counts(addr_model, pool_ids: list) -> dict[str, dict[str, int]]:
         if not pool_ids:
             return {}
+        if not hasattr(db, "execute"):
+            rows = db.query(addr_model).filter(addr_model.pool_id.in_(pool_ids)).all()
+            counts: dict[str, dict[str, int]] = {}
+            for row in rows:
+                pool_id = str(getattr(row, "pool_id", "") or "")
+                if not pool_id:
+                    continue
+                bucket = counts.setdefault(
+                    pool_id,
+                    {"tracked": 0, "used": 0, "reserved": 0},
+                )
+                bucket["tracked"] += 1
+                if _active_assignment(row) or _is_ont_management_allocation(row):
+                    bucket["used"] += 1
+                elif getattr(row, "is_reserved", False):
+                    bucket["reserved"] += 1
+            return counts
         has_ont_mgmt = hasattr(addr_model, "ont_unit_id")
         ont_mgmt_expr = (
             (addr_model.ont_unit_id.isnot(None))
@@ -1559,6 +1588,14 @@ def _nas_devices_using_pool(db, pool_id: str) -> list[NasDevice]:
     `NasDevice.tags` column (no FK), so this is the reverse lookup.
     """
     tag = f"radius_pool:{pool_id}"
+    if _session_dialect_name(db) == "sqlite":
+        devices = (
+            db.query(NasDevice)
+            .filter(NasDevice.is_active.is_(True))
+            .order_by(NasDevice.name.asc())
+            .all()
+        )
+        return [device for device in devices if tag in (device.tags or [])]
     stmt = (
         select(NasDevice)
         .where(NasDevice.is_active.is_(True))

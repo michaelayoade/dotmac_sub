@@ -106,7 +106,9 @@ def run(dry_run: bool = True) -> dict[str, int]:
         for (from_s, to_s), n in transitions.most_common():
             logger.info("  %s → %s : %d", from_s, to_s, n)
         if not_in_splynx:
-            logger.info("first 10 splynx_customer_ids missing in Splynx: %s", not_in_splynx)
+            logger.info(
+                "first 10 splynx_customer_ids missing in Splynx: %s", not_in_splynx
+            )
 
         if dry_run:
             logger.info("DRY RUN — no DB writes. Pass --execute to apply.")
@@ -134,6 +136,8 @@ def run(dry_run: bool = True) -> dict[str, int]:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--execute", action="store_true", help="Apply updates (default dry-run)")
+    p.add_argument(
+        "--execute", action="store_true", help="Apply updates (default dry-run)"
+    )
     args = p.parse_args()
     run(dry_run=not args.execute)

@@ -7,8 +7,9 @@ Create Date: 2026-05-26
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "113_add_catalog_offer_plan_family"
 down_revision = "112_add_notifications_is_active_status_index"

@@ -9,7 +9,12 @@ from app.models.communication_log import (
     CommunicationLog,
 )
 from app.models.customer_identity import CustomerIdentityIndex
-from app.models.subscriber import ChannelType, Subscriber, SubscriberChannel, SubscriberContact
+from app.models.subscriber import (
+    ChannelType,
+    Subscriber,
+    SubscriberChannel,
+    SubscriberContact,
+)
 from app.services.customer_identity_normalization import (
     normalize_email_identifier,
     normalize_phone_identifier,
@@ -39,7 +44,10 @@ def _subscriber(**overrides) -> Subscriber:
 
 
 def test_normalization_behaviour():
-    assert normalize_email_identifier("  Mixed.Case@Example.COM  ") == "mixed.case@example.com"
+    assert (
+        normalize_email_identifier("  Mixed.Case@Example.COM  ")
+        == "mixed.case@example.com"
+    )
     assert normalize_phone_identifier("(0801) 234-5678") == "+2348012345678"
     assert normalize_phone_identifier("whatsapp: 0808 111 2222") == "+2348081112222"
     assert normalize_phone_identifier("+1 (415) 555-0100") == "+14155550100"
@@ -88,7 +96,9 @@ def test_resolve_phone_and_whatsapp_matches_contact(db_session):
     db_session.flush()
     rebuild_identity_index_for_subscriber(db_session, subscriber.id)
 
-    phone_result = resolve_customer_identity(db_session, "+2348012345678", channel_hint="phone")
+    phone_result = resolve_customer_identity(
+        db_session, "+2348012345678", channel_hint="phone"
+    )
     whatsapp_result = resolve_customer_identity(
         db_session,
         "whatsapp: 0808 111 2222",
@@ -245,7 +255,9 @@ def test_resolve_marks_duplicate_identifier_ambiguous(db_session):
     rebuild_identity_index_for_subscriber(db_session, left.id)
     rebuild_identity_index_for_subscriber(db_session, right.id)
 
-    result = resolve_customer_identity(db_session, "(0801) 234-5678", channel_hint="phone")
+    result = resolve_customer_identity(
+        db_session, "(0801) 234-5678", channel_hint="phone"
+    )
 
     assert result.matched is False
     assert result.ambiguous is True
@@ -319,7 +331,9 @@ def test_resolve_logs_match_details_with_confidence(db_session, caplog):
     rebuild_identity_index_for_subscriber(db_session, subscriber.id)
 
     with caplog.at_level("INFO"):
-        result = resolve_customer_identity(db_session, "linked@example.com", channel_hint="email")
+        result = resolve_customer_identity(
+            db_session, "linked@example.com", channel_hint="email"
+        )
 
     assert result.matched is True
     assert "customer_identity_resolved" in caplog.text

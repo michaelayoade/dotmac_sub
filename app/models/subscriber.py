@@ -141,7 +141,9 @@ class Reseller(Base):
     contact_email: Mapped[str | None] = mapped_column(String(255))
     contact_phone: Mapped[str | None] = mapped_column(String(40))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_house: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    is_house: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(

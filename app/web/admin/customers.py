@@ -6,7 +6,6 @@ import uuid
 from typing import Any, Literal
 
 import anyio
-
 from fastapi import (
     APIRouter,
     Body,

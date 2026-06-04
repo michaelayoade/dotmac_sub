@@ -240,17 +240,20 @@ def _email_channel_ready(db: Session) -> tuple[bool, str]:
 
 
 def _sms_channel_ready(db: Session) -> tuple[bool, str]:
-    enabled = sms_service._get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
+    enabled = (
+        sms_service._get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
+    )
     if enabled.strip().lower() in {"false", "0", "no", "disabled"}:
         return False, "SMS is disabled"
 
-    provider = sms_service._get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook") or "webhook"
+    provider = (
+        sms_service._get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
+        or "webhook"
+    )
     if provider == "twilio":
         account_sid = sms_service._get_setting(db, "sms_api_key", "SMS_API_KEY")
         auth_token = sms_service._get_setting(db, "sms_api_secret", "SMS_API_SECRET")
-        from_number = sms_service._get_setting(
-            db, "sms_from_number", "SMS_FROM_NUMBER"
-        )
+        from_number = sms_service._get_setting(db, "sms_from_number", "SMS_FROM_NUMBER")
         if account_sid and auth_token and from_number:
             return True, "Twilio credentials configured"
         return False, "Twilio credentials are incomplete"
@@ -260,9 +263,7 @@ def _sms_channel_ready(db: Session) -> tuple[bool, str]:
             return True, "Africa's Talking API key configured"
         return False, "Africa's Talking API key is missing"
     if provider == "webhook":
-        webhook_url = sms_service._get_setting(
-            db, "sms_webhook_url", "SMS_WEBHOOK_URL"
-        )
+        webhook_url = sms_service._get_setting(db, "sms_webhook_url", "SMS_WEBHOOK_URL")
         if webhook_url:
             return True, "Webhook endpoint configured"
         return False, "Webhook URL is missing"
@@ -298,7 +299,8 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
         {
             "id": channel.value,
             "label": channel.value.capitalize(),
-            "enabled": channel.value in {
+            "enabled": channel.value
+            in {
                 NotificationChannel.email.value,
                 NotificationChannel.sms.value,
                 NotificationChannel.whatsapp.value,

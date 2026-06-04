@@ -17,7 +17,9 @@ from app.services.customer_portal_flow_payments import (
 )
 
 
-def _make_invoice(db_session, account_id, *, amount: str, invoice_number: str) -> object:
+def _make_invoice(
+    db_session, account_id, *, amount: str, invoice_number: str
+) -> object:
     return billing_service.invoices.create(
         db_session,
         InvoiceCreate(
@@ -32,7 +34,9 @@ def _make_invoice(db_session, account_id, *, amount: str, invoice_number: str) -
     )
 
 
-def _patch_topup_settings(monkeypatch, *, min_amount: int = 1000, max_amount: int = 500000) -> None:
+def _patch_topup_settings(
+    monkeypatch, *, min_amount: int = 1000, max_amount: int = 500000
+) -> None:
     def _fake_resolve_value(_db, _domain, key):
         if key == "topup_min_amount":
             return min_amount
@@ -46,7 +50,9 @@ def _patch_topup_settings(monkeypatch, *, min_amount: int = 1000, max_amount: in
     )
 
 
-def _create_intent(monkeypatch, db_session, subscriber, *, amount: str, reference: str) -> dict:
+def _create_intent(
+    monkeypatch, db_session, subscriber, *, amount: str, reference: str
+) -> dict:
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -112,9 +118,7 @@ def test_get_topup_page_omits_balance_when_lookup_fails(
     assert page["prepaid_balance"] is None
 
 
-def test_get_billing_page_includes_current_balance(
-    monkeypatch, db_session, subscriber
-):
+def test_get_billing_page_includes_current_balance(monkeypatch, db_session, subscriber):
     monkeypatch.setattr(
         "app.services.customer_portal_flow_billing.get_available_balance",
         lambda *_args, **_kwargs: Decimal("2500.00"),
@@ -140,7 +144,9 @@ def test_create_topup_intent_persists_server_owned_reference(
         reference="topup-intent-ref-1",
     )
 
-    intent = db_session.query(TopupIntent).filter_by(reference="topup-intent-ref-1").one()
+    intent = (
+        db_session.query(TopupIntent).filter_by(reference="topup-intent-ref-1").one()
+    )
 
     assert payload["reference"] == "topup-intent-ref-1"
     assert payload["checkout_metadata"]["topup_intent_id"] == str(intent.id)
@@ -333,7 +339,10 @@ def test_verify_and_record_topup_records_out_of_policy_charge_with_warning(
     assert result["credit_added"] == Decimal("500.00")
     assert len(payments) == 1
     assert result["policy_warnings"]
-    assert "Requested ₦5,000.00 but the provider confirmed ₦500.00." in result["policy_warnings"]
+    assert (
+        "Requested ₦5,000.00 but the provider confirmed ₦500.00."
+        in result["policy_warnings"]
+    )
 
 
 def test_verify_and_record_topup_records_amount_above_max_with_warning(
@@ -378,7 +387,10 @@ def test_verify_and_record_topup_records_amount_above_max_with_warning(
     assert result["credit_added"] == Decimal("500001.00")
     assert len(payments) == 1
     assert result["policy_warnings"]
-    assert "Requested ₦5,000.00 but the provider confirmed ₦500,001.00." in result["policy_warnings"]
+    assert (
+        "Requested ₦5,000.00 but the provider confirmed ₦500,001.00."
+        in result["policy_warnings"]
+    )
 
 
 def test_verify_and_record_topup_is_idempotent_and_preserves_summary(
@@ -466,7 +478,9 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
     )
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.get_available_balance",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("balance lookup failed")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("balance lookup failed")
+        ),
     )
 
     result = verify_and_record_topup(

@@ -165,7 +165,10 @@ DEFAULT_PERMISSIONS = [
     # Consolidated billing accounts (reseller billing parents)
     ("billing_account:read", "View consolidated billing accounts and statements"),
     ("billing_account:write", "Create/edit consolidated billing accounts"),
-    ("billing_account:distribute", "Record bulk payments and distribute across child accounts"),
+    (
+        "billing_account:distribute",
+        "Record bulk payments and distribute across child accounts",
+    ),
     # Legacy broad permissions (for backward compatibility)
     ("billing:read", "Read all billing data"),
     ("billing:write", "Manage all billing data"),

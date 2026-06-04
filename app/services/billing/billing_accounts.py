@@ -123,9 +123,7 @@ class BillingAccounts(ListResponseMixin):
         return ba
 
     @staticmethod
-    def create_default_for_reseller(
-        db: Session, reseller_id: str
-    ) -> BillingAccount:
+    def create_default_for_reseller(db: Session, reseller_id: str) -> BillingAccount:
         reseller = get_by_id(db, Reseller, reseller_id)
         if not reseller:
             raise HTTPException(status_code=404, detail="Reseller not found")
@@ -223,9 +221,9 @@ class BillingAccounts(ListResponseMixin):
                 Subscriber.display_name,
                 Subscriber.company_name,
                 func.count(Invoice.id).label("open_invoice_count"),
-                func.coalesce(
-                    func.sum(Invoice.balance_due), Decimal("0.00")
-                ).label("open_balance"),
+                func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
+                    "open_balance"
+                ),
             )
             .join(Invoice, Invoice.account_id == Subscriber.id)
             .filter(Subscriber.reseller_id == ba.reseller_id)

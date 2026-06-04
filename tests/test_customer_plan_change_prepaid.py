@@ -103,7 +103,9 @@ def _freeze_subscription_now(monkeypatch, frozen: datetime) -> None:
     monkeypatch.setattr(subscriptions_service, "datetime", _FrozenDateTime)
 
 
-def _stub_plan_change_side_effects(monkeypatch, event_types: list | None = None) -> None:
+def _stub_plan_change_side_effects(
+    monkeypatch, event_types: list | None = None
+) -> None:
     import app.services.enforcement as enforcement_service
     import app.services.radius as radius_service
 
@@ -132,9 +134,9 @@ def _stub_plan_change_side_effects(monkeypatch, event_types: list | None = None)
         subscriptions_service,
         "emit_event",
         (
-            lambda db, event_type, payload, **kwargs: event_types.append(event_type)
-            if event_types is not None
-            else None
+            lambda db, event_type, payload, **kwargs: (
+                event_types.append(event_type) if event_types is not None else None
+            )
         ),
     )
 
@@ -246,8 +248,12 @@ def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
 
     create_mock = Mock()
     apply_mock = Mock()
-    monkeypatch.setattr(change_service.subscription_change_requests, "create", create_mock)
-    monkeypatch.setattr(change_service.subscription_change_requests, "apply", apply_mock)
+    monkeypatch.setattr(
+        change_service.subscription_change_requests, "create", create_mock
+    )
+    monkeypatch.setattr(
+        change_service.subscription_change_requests, "apply", apply_mock
+    )
 
     result = apply_instant_plan_change(
         db_session,
@@ -448,7 +454,9 @@ def test_no_provisioning_before_payment_coverage(db_session, subscriber, monkeyp
     import app.services.subscription_changes as change_service
 
     apply_mock = Mock()
-    monkeypatch.setattr(change_service.subscription_change_requests, "apply", apply_mock)
+    monkeypatch.setattr(
+        change_service.subscription_change_requests, "apply", apply_mock
+    )
 
     result = apply_instant_plan_change(
         db_session,

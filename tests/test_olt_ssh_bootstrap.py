@@ -63,18 +63,26 @@ def test_open_shell_primes_prompt_with_newline_retry(monkeypatch) -> None:
             return ""
         return "MA5800>"
 
-    monkeypatch.setattr(olt_ssh.socket, "create_connection", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        olt_ssh.socket, "create_connection", lambda *_args, **_kwargs: object()
+    )
     monkeypatch.setattr(olt_ssh, "Transport", _fake_transport)
-    monkeypatch.setattr(olt_ssh, "resolve_policy", lambda _olt: SimpleNamespace(
-        key="huawei",
-        kex=(),
-        host_key_types=(),
-        ciphers=(),
-        macs=(),
-        prompt_regex=r"[>#]\s*$",
-    ))
+    monkeypatch.setattr(
+        olt_ssh,
+        "resolve_policy",
+        lambda _olt: SimpleNamespace(
+            key="huawei",
+            kex=(),
+            host_key_types=(),
+            ciphers=(),
+            macs=(),
+            prompt_regex=r"[>#]\s*$",
+        ),
+    )
     monkeypatch.setattr(olt_ssh, "decrypt_credential", lambda _value: "secret")
-    monkeypatch.setattr(olt_ssh, "_apply_preferred_algorithms", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        olt_ssh, "_apply_preferred_algorithms", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(olt_ssh, "_read_until_prompt", _fake_read_until_prompt)
 
     transport, channel, policy = olt_ssh._open_shell(
@@ -107,18 +115,26 @@ def test_open_shell_does_not_send_screen_length_before_return(monkeypatch) -> No
         transport_holder["transport"] = transport
         return transport
 
-    monkeypatch.setattr(olt_ssh.socket, "create_connection", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        olt_ssh.socket, "create_connection", lambda *_args, **_kwargs: object()
+    )
     monkeypatch.setattr(olt_ssh, "Transport", _fake_transport)
-    monkeypatch.setattr(olt_ssh, "resolve_policy", lambda _olt: SimpleNamespace(
-        key="huawei",
-        kex=(),
-        host_key_types=(),
-        ciphers=(),
-        macs=(),
-        prompt_regex=r"[>#]\s*$",
-    ))
+    monkeypatch.setattr(
+        olt_ssh,
+        "resolve_policy",
+        lambda _olt: SimpleNamespace(
+            key="huawei",
+            kex=(),
+            host_key_types=(),
+            ciphers=(),
+            macs=(),
+            prompt_regex=r"[>#]\s*$",
+        ),
+    )
     monkeypatch.setattr(olt_ssh, "decrypt_credential", lambda _value: "secret")
-    monkeypatch.setattr(olt_ssh, "_apply_preferred_algorithms", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        olt_ssh, "_apply_preferred_algorithms", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         olt_ssh,
         "_read_until_prompt",

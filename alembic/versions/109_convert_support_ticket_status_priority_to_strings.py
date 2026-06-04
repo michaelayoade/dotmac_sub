@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
 revision = "109_convert_support_ticket_status_priority_to_strings"
 down_revision = "108_drop_support_assignment_subscriber_fks"
@@ -27,9 +26,7 @@ def upgrade() -> None:
         "ALTER TABLE support_tickets ALTER COLUMN priority TYPE VARCHAR(40) USING priority::text"
     )
     op.execute("ALTER TABLE support_tickets ALTER COLUMN status SET DEFAULT 'open'")
-    op.execute(
-        "ALTER TABLE support_tickets ALTER COLUMN priority SET DEFAULT 'normal'"
-    )
+    op.execute("ALTER TABLE support_tickets ALTER COLUMN priority SET DEFAULT 'normal'")
 
 
 def downgrade() -> None:
@@ -74,6 +71,4 @@ def downgrade() -> None:
         "ALTER TABLE support_tickets ALTER COLUMN priority TYPE ticketpriority USING priority::ticketpriority"
     )
     op.execute("ALTER TABLE support_tickets ALTER COLUMN status SET DEFAULT 'open'")
-    op.execute(
-        "ALTER TABLE support_tickets ALTER COLUMN priority SET DEFAULT 'normal'"
-    )
+    op.execute("ALTER TABLE support_tickets ALTER COLUMN priority SET DEFAULT 'normal'")

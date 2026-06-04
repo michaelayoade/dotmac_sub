@@ -130,7 +130,9 @@ def populate(dry_run: bool = True) -> dict[str, int]:
             .all()
         )
         stats["subscriptions_considered"] = len(rows)
-        logger.info("considering %d active/blocked subscriptions with a login", len(rows))
+        logger.info(
+            "considering %d active/blocked subscriptions with a login", len(rows)
+        )
 
         # Pre-fetch all AccessCredentials keyed by username
         creds_by_username: dict[str, AccessCredential] = {
@@ -174,9 +176,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                     try:
                         cleartext = decrypt_credential(cred.secret_hash)
                     except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "decrypt failed for %s: %s", sub.login, exc
-                        )
+                        logger.warning("decrypt failed for %s: %s", sub.login, exc)
                         stats["skipped_decrypt_failed"] += 1
                         continue
                     if not cleartext:
@@ -188,14 +188,18 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                         # Don't write, just count what we'd do
                         stats["radcheck_upserts"] += 1
                         stats["radreply_upserts"] += len(
-                            _radreply_attrs(sub, sub.offer, sub.radius_profile, sub_blocked)
+                            _radreply_attrs(
+                                sub, sub.offer, sub.radius_profile, sub_blocked
+                            )
                         )
                         if sub_blocked or sub.status == SubscriptionStatus.blocked:
                             stats["blocked_users_written"] += 1
                         continue
 
                     # --- radcheck: single Cleartext-Password row ---
-                    cur.execute("DELETE FROM radcheck WHERE username = %s", (sub.login,))
+                    cur.execute(
+                        "DELETE FROM radcheck WHERE username = %s", (sub.login,)
+                    )
                     cur.execute(
                         "INSERT INTO radcheck (username, attribute, op, value) "
                         "VALUES (%s, 'Cleartext-Password', ':=', %s)",
@@ -204,8 +208,12 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                     stats["radcheck_upserts"] += 1
 
                     # --- radreply: full attribute set ---
-                    attrs = _radreply_attrs(sub, sub.offer, sub.radius_profile, sub_blocked)
-                    cur.execute("DELETE FROM radreply WHERE username = %s", (sub.login,))
+                    attrs = _radreply_attrs(
+                        sub, sub.offer, sub.radius_profile, sub_blocked
+                    )
+                    cur.execute(
+                        "DELETE FROM radreply WHERE username = %s", (sub.login,)
+                    )
                     for attr, op, val in attrs:
                         cur.execute(
                             "INSERT INTO radreply (username, attribute, op, value) "
@@ -227,11 +235,19 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                     radcheck_users = {r[0] for r in cur.fetchall()}
                     orphans = list(radcheck_users - active_usernames)
                     if orphans:
-                        cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,))
+                        cur.execute(
+                            "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
+                        )
                         stats["radcheck_orphans_deleted"] = cur.rowcount
-                        cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (orphans,))
+                        cur.execute(
+                            "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
+                        )
                         stats["radreply_orphans_deleted"] = cur.rowcount
-                        logger.info("orphan cleanup: %d radcheck + %d radreply rows", stats["radcheck_orphans_deleted"], stats["radreply_orphans_deleted"])
+                        logger.info(
+                            "orphan cleanup: %d radcheck + %d radreply rows",
+                            stats["radcheck_orphans_deleted"],
+                            stats["radreply_orphans_deleted"],
+                        )
 
             if not dry_run:
                 rconn.commit()
@@ -252,7 +268,9 @@ if __name__ == "__main__":
         populate(dry_run=False)
     else:
         populate(dry_run=True)
-        print("\nTo execute: python -m scripts.migration.populate_radius_from_subs --execute")
+        print(
+            "\nTo execute: python -m scripts.migration.populate_radius_from_subs --execute"
+        )
 
 
 # -----------------------------------------------------------------------------

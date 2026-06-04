@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import RedirectResponse

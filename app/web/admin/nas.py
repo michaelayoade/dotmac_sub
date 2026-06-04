@@ -6,7 +6,12 @@ from typing import cast
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -731,8 +736,10 @@ def device_backup_trigger(
         triggered_by=triggered_by,
     )
     key = "message" if result["ok"] else "error"
-    message = "Backup triggered successfully" if result["ok"] else str(
-        result["error"] or "Backup trigger failed."
+    message = (
+        "Backup triggered successfully"
+        if result["ok"]
+        else str(result["error"] or "Backup trigger failed.")
     )
     return RedirectResponse(
         _build_backup_redirect_url(
@@ -774,7 +781,7 @@ def backup_download(backup_id: str, db: Session = Depends(get_db)):
     backup = page_data["backup"]
     device = page_data["device"]
     extension = str(getattr(backup, "config_format", None) or "txt")
-    filename = f'nas_backup_{device.id}_{backup.id}.{extension}'
+    filename = f"nas_backup_{device.id}_{backup.id}.{extension}"
     return Response(
         content=str(backup.config_content or ""),
         media_type="text/plain; charset=utf-8",

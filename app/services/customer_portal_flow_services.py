@@ -509,7 +509,8 @@ def _zabbix_usage_records(graph: list[dict[str, Any]]) -> list[Any]:
             recorded_at=day,
             usage_type="Zabbix Bandwidth",
             amount=(totals["download_bytes"] + totals["upload_bytes"]) / (1024**3),
-            usage_amount=(totals["download_bytes"] + totals["upload_bytes"]) / (1024**3),
+            usage_amount=(totals["download_bytes"] + totals["upload_bytes"])
+            / (1024**3),
             download_amount=totals["download_bytes"] / (1024**3),
             upload_amount=totals["upload_bytes"] / (1024**3),
             unit="GB",
@@ -522,8 +523,10 @@ def _zabbix_usage_records(graph: list[dict[str, Any]]) -> list[Any]:
 def _serialize_usage_chart_records(records: list[Any]) -> list[dict[str, Any]]:
     ordered_records = sorted(
         records,
-        key=lambda record: _as_utc(getattr(record, "recorded_at", None))
-        or datetime.min.replace(tzinfo=UTC),
+        key=lambda record: (
+            _as_utc(getattr(record, "recorded_at", None))
+            or datetime.min.replace(tzinfo=UTC)
+        ),
     )
 
     chart_records: list[dict[str, Any]] = []
@@ -531,7 +534,9 @@ def _serialize_usage_chart_records(records: list[Any]) -> list[dict[str, Any]]:
         recorded_at = _as_utc(getattr(record, "recorded_at", None))
         if recorded_at is None:
             continue
-        amount = float(getattr(record, "amount", None) or getattr(record, "usage_amount", 0) or 0)
+        amount = float(
+            getattr(record, "amount", None) or getattr(record, "usage_amount", 0) or 0
+        )
         chart_records.append(
             {
                 "label": recorded_at.strftime("%b %d"),

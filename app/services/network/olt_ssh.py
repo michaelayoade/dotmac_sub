@@ -312,11 +312,13 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
     return fallback
 
 
-def _replace_policy_prompt_regex(policy: OltSshPolicy, prompt_regex: str) -> OltSshPolicy:
+def _replace_policy_prompt_regex(
+    policy: OltSshPolicy, prompt_regex: str
+) -> OltSshPolicy:
     try:
         return replace(policy, prompt_regex=prompt_regex)
     except TypeError:
-        setattr(policy, "prompt_regex", prompt_regex)
+        policy.prompt_regex = prompt_regex
         return policy
 
 

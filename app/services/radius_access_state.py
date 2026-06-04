@@ -37,28 +37,36 @@ AccessStateWriteResult = dict[str, int | str | None]
 # about which SubscriptionStatus values map to a given AccessState
 # without inverting the function.
 
-_ACTIVE_STATUSES: frozenset[SubscriptionStatus] = frozenset({
-    SubscriptionStatus.active,
-})
+_ACTIVE_STATUSES: frozenset[SubscriptionStatus] = frozenset(
+    {
+        SubscriptionStatus.active,
+    }
+)
 
-_BLOCKED_STATUSES: frozenset[SubscriptionStatus] = frozenset({
-    SubscriptionStatus.suspended,
-    SubscriptionStatus.blocked,
-    SubscriptionStatus.stopped,
-})
+_BLOCKED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
+    {
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.stopped,
+    }
+)
 
-_TERMINATED_STATUSES: frozenset[SubscriptionStatus] = frozenset({
-    SubscriptionStatus.canceled,
-    SubscriptionStatus.expired,
-    SubscriptionStatus.disabled,
-})
+_TERMINATED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
+    {
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.expired,
+        SubscriptionStatus.disabled,
+    }
+)
 
 # Pending/hidden/archived → None. Not provisioned to RADIUS.
-_UNPROVISIONED_STATUSES: frozenset[SubscriptionStatus] = frozenset({
-    SubscriptionStatus.pending,
-    SubscriptionStatus.hidden,
-    SubscriptionStatus.archived,
-})
+_UNPROVISIONED_STATUSES: frozenset[SubscriptionStatus] = frozenset(
+    {
+        SubscriptionStatus.pending,
+        SubscriptionStatus.hidden,
+        SubscriptionStatus.archived,
+    }
+)
 
 
 # Map AccessState → external RADIUS group name. Terminated and None
@@ -127,9 +135,7 @@ def derive_subscriber_access_state(
     """
     rows = list(
         db.execute(
-            select(
-                Subscription.status, Subscriber.captive_redirect_enabled
-            )
+            select(Subscription.status, Subscriber.captive_redirect_enabled)
             .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
             .where(Subscription.subscriber_id == coerce_uuid(subscriber_id))
         ).all()
@@ -217,10 +223,7 @@ def set_subscription_access_state(
         }
 
     target_group: str | None = None
-    if (
-        aggregate_state is not None
-        and aggregate_state != AccessState.terminated
-    ):
+    if aggregate_state is not None and aggregate_state != AccessState.terminated:
         target_group = _GROUP_FOR_STATE[aggregate_state]
 
     external_configs = _active_external_sync_configs(db)

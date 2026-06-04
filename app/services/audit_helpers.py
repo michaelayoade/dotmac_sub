@@ -344,9 +344,7 @@ def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]
     actors.update(
         {
             str(user.id): user
-            for user in db.query(SystemUser)
-            .filter(SystemUser.id.in_(actor_ids))
-            .all()
+            for user in db.query(SystemUser).filter(SystemUser.id.in_(actor_ids)).all()
         }
     )
     return actors

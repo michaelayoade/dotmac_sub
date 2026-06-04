@@ -10,7 +10,12 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import CreditNoteStatus, Invoice, InvoiceStatus, Payment
-from app.models.catalog import ContractTerm, OfferStatus, Subscription, SubscriptionStatus
+from app.models.catalog import (
+    ContractTerm,
+    OfferStatus,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.network import (
     CPEDevice,
     FdhCabinet,
@@ -21,7 +26,6 @@ from app.models.network_monitoring import SpeedTestResult
 from app.models.provisioning import ServiceOrder
 from app.models.subscriber import (
     Address,
-    Subscriber,
     SubscriberCategory,
     SubscriberChannel,
 )
@@ -714,7 +718,9 @@ def build_subscriber_timeline(db: Session, subscriber_id):
     service_orders = (
         db.query(ServiceOrder)
         .filter(ServiceOrder.subscriber_id == subscriber_id)
-        .order_by(func.coalesce(ServiceOrder.updated_at, ServiceOrder.created_at).desc())
+        .order_by(
+            func.coalesce(ServiceOrder.updated_at, ServiceOrder.created_at).desc()
+        )
         .limit(8)
         .all()
     )
@@ -732,7 +738,9 @@ def build_subscriber_timeline(db: Session, subscriber_id):
         .all()
     )
     entity_refs = [("subscriber", subscriber_id_str)]
-    entity_refs.extend(("subscription", str(subscription.id)) for subscription in subscriptions)
+    entity_refs.extend(
+        ("subscription", str(subscription.id)) for subscription in subscriptions
+    )
     entity_refs.extend(("invoice", str(invoice.id)) for invoice in invoices)
     entity_refs.extend(("payment", str(payment.id)) for payment in payments)
     entity_refs.extend(("service_order", str(order.id)) for order in service_orders)

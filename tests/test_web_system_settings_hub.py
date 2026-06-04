@@ -72,7 +72,9 @@ def test_settings_hub_includes_bulk_notification_setup_link(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
 
     notifications_category = next(
-        category for category in context["categories"] if category["id"] == "notifications"
+        category
+        for category in context["categories"]
+        if category["id"] == "notifications"
     )
     bulk_setup_link = next(
         link

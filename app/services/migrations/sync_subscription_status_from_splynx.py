@@ -83,7 +83,7 @@ def run(dry_run: bool = True) -> dict[str, int]:
             with conn.cursor() as cur:
                 ids_csv = ",".join(str(int(x)) for x in splynx_ids)
                 cur.execute(
-                    f"SELECT id, status, deleted, ipv4, customer_id "  # noqa: S608
+                    f"SELECT id, status, deleted, ipv4, customer_id "  # noqa: S608  # nosec B608
                     f"FROM services_internet WHERE id IN ({ids_csv})"
                 )
                 splynx_rows = cur.fetchall()

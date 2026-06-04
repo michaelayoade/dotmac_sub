@@ -247,7 +247,9 @@ class TestCustomerProfileNotifications:
         assert (updated.metadata_ or {}).get("sms_updates") is True
         assert emit_event_mock.call_args.args[1] == EventType.subscriber_updated
 
-    def test_customer_update_profile_route_passes_notification_preferences(self) -> None:
+    def test_customer_update_profile_route_passes_notification_preferences(
+        self,
+    ) -> None:
         from app.web.customer.routes import customer_update_profile
 
         request = MagicMock()

@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 def _acs_ready_olt(db_session, *, pool_cidr: str = "172.16.210.0/24"):
     from app.models.catalog import RegionZone
-    from app.models.network import IPVersion, IpPool, OLTDevice, Vlan, VlanPurpose
+    from app.models.network import IpPool, IPVersion, OLTDevice, Vlan, VlanPurpose
     from app.models.tr069 import Tr069AcsServer
 
     region = RegionZone(name=f"Config Pack Resolution {pool_cidr}", code=pool_cidr[-6:])
@@ -128,7 +128,10 @@ def test_authorization_baseline_records_config_pack_resolution_snapshot(
     assert event.event_data["effective_values"]["pppoe_wcd_index"] == 2
     assert "cr_password" not in event.event_data["raw_config_pack"]
     assert "failure_class" not in event.event_data
-    assert result.data["domain_outcomes"]["config_pack_resolution"]["status"] == "succeeded"
+    assert (
+        result.data["domain_outcomes"]["config_pack_resolution"]["status"]
+        == "succeeded"
+    )
     assert (
         result.data["domain_outcomes"]["acs_bootstrap_verify"]["status"]
         == "pending_verification"
@@ -177,8 +180,10 @@ def test_authorization_baseline_blocks_on_incomplete_config_pack_before_write(
 
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.validate_prerequisites",
-        lambda *args, **kwargs: calls.__setitem__("preflight", calls["preflight"] + 1)
-        or {"ready_to_provision": True, "checks": []},
+        lambda *args, **kwargs: (
+            calls.__setitem__("preflight", calls["preflight"] + 1)
+            or {"ready_to_provision": True, "checks": []}
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.ont_provision_steps.provision_with_reconciliation",

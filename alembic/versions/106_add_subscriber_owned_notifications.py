@@ -19,11 +19,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    uuid_type = postgresql.UUID(as_uuid=True) if op.get_bind().dialect.name == "postgresql" else sa.String(length=36)
+    uuid_type = (
+        postgresql.UUID(as_uuid=True)
+        if op.get_bind().dialect.name == "postgresql"
+        else sa.String(length=36)
+    )
 
     op.add_column(
         "notifications",
-        sa.Column("subscriber_id", uuid_type, sa.ForeignKey("subscribers.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "subscriber_id",
+            uuid_type,
+            sa.ForeignKey("subscribers.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
     )
     op.add_column(
         "notifications",
@@ -54,7 +63,12 @@ def upgrade() -> None:
 
     op.add_column(
         "customer_notification_events",
-        sa.Column("subscriber_id", uuid_type, sa.ForeignKey("subscribers.id", ondelete="SET NULL"), nullable=True),
+        sa.Column(
+            "subscriber_id",
+            uuid_type,
+            sa.ForeignKey("subscribers.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
     )
     op.create_index(
         "ix_customer_notification_events_subscriber_id",

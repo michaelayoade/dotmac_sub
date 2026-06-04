@@ -88,17 +88,13 @@ def test_consolidated_payment_auto_allocates_across_subscribers(db_session):
         .filter(PaymentAllocation.payment_id == payment.id)
         .all()
     )
-    allocations_by_invoice = {
-        str(a.invoice_id): a.amount for a in allocated_total
-    }
+    allocations_by_invoice = {str(a.invoice_id): a.amount for a in allocated_total}
     # Both invoices got allocations.
     assert str(inv_a.id) in allocations_by_invoice
     assert str(inv_b.id) in allocations_by_invoice
-    assert (
-        allocations_by_invoice[str(inv_a.id)]
-        + allocations_by_invoice[str(inv_b.id)]
-        == Decimal("450.00")
-    )
+    assert allocations_by_invoice[str(inv_a.id)] + allocations_by_invoice[
+        str(inv_b.id)
+    ] == Decimal("450.00")
     # Unallocated balance is zero (everything fit).
     assert ba.balance == Decimal("0.00")
 
@@ -143,9 +139,7 @@ def test_consolidated_payment_ledger_entries_are_per_subscriber(db_session):
         ),
     )
     entries = (
-        db_session.query(LedgerEntry)
-        .filter(LedgerEntry.payment_id == payment.id)
-        .all()
+        db_session.query(LedgerEntry).filter(LedgerEntry.payment_id == payment.id).all()
     )
     # One ledger entry per subscriber.
     account_ids = {str(e.account_id) for e in entries}
@@ -184,15 +178,13 @@ def test_consolidated_explicit_allocation_rejects_cross_reseller_invoice(db_sess
     assert exc.value.status_code == 400
 
 
-def test_account_scoped_payment_still_rejects_cross_account_invoice(db_session, subscriber):
+def test_account_scoped_payment_still_rejects_cross_account_invoice(
+    db_session, subscriber
+):
     """Regression: existing single-account flow still enforces same-account."""
     other_reseller = _make_reseller(db_session, name="Other")
-    other = _make_subscriber(
-        db_session, reseller_id=other_reseller.id, suffix="ACTUAL"
-    )
-    inv_other = _make_invoice(
-        db_session, account_id=other.id, balance=Decimal("50.00")
-    )
+    other = _make_subscriber(db_session, reseller_id=other_reseller.id, suffix="ACTUAL")
+    inv_other = _make_invoice(db_session, account_id=other.id, balance=Decimal("50.00"))
     from app.schemas.billing import PaymentAllocationApply
 
     with pytest.raises(HTTPException) as exc:

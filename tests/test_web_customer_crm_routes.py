@@ -3,8 +3,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
-ROUTES_PATH = Path("/opt/dotmac_sub/app/web/customer/routes.py")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+ROUTES_PATH = REPO_ROOT / "app/web/customer/routes.py"
 
 
 def _function_source(function_name: str) -> str:
@@ -21,14 +21,14 @@ def _function_source(function_name: str) -> str:
 def test_support_detail_redirect_preserves_ticket_next_url() -> None:
     source = _function_source("customer_support_detail")
 
-    assert 'quote_plus(ticket_id)' in source
+    assert "quote_plus(ticket_id)" in source
     assert '"/portal/auth/login?next=/portal/support/' in source
 
 
 def test_work_order_detail_redirect_preserves_work_order_next_url() -> None:
     source = _function_source("customer_work_order_detail")
 
-    assert 'quote_plus(work_order_id)' in source
+    assert "quote_plus(work_order_id)" in source
     assert '"/portal/auth/login?next=/portal/work-orders/' in source
 
 

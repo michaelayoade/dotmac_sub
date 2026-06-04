@@ -82,7 +82,9 @@ def upgrade() -> None:
             _TABLE_NAME,
             _COLUMN_NAME,
             existing_type=postgresql.ENUM(name=_LEGACY_TYPE_NAME, create_type=False),
-            type_=postgresql.ENUM(*_ALL_TYPE_VALUES, name=_TYPE_NAME, create_type=False),
+            type_=postgresql.ENUM(
+                *_ALL_TYPE_VALUES, name=_TYPE_NAME, create_type=False
+            ),
             postgresql_using=f"{_COLUMN_NAME}::text::{_TYPE_NAME}",
             existing_nullable=True,
         )

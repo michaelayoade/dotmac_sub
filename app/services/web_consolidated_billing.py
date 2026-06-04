@@ -110,7 +110,8 @@ def build_detail_context(
     reseller = db.get(Reseller, ba.reseller_id)
     subscribers_total_pages = max(
         1,
-        (statement.subscribers_total + subscribers_per_page - 1) // subscribers_per_page,
+        (statement.subscribers_total + subscribers_per_page - 1)
+        // subscribers_per_page,
     )
     payments_total_pages = max(
         1,

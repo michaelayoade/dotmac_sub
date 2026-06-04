@@ -579,7 +579,9 @@ def _build_activity_items(
         )
 
     entity_refs = [(entity_type, entity_id)]
-    entity_refs.extend(("subscription", str(subscription.id)) for subscription in subscriptions[:8])
+    entity_refs.extend(
+        ("subscription", str(subscription.id)) for subscription in subscriptions[:8]
+    )
     entity_refs.extend(("invoice", str(invoice.id)) for invoice in invoices)
     entity_refs.extend(("payment", str(payment.id)) for payment in payments)
     entity_refs.extend(("support_ticket", str(ticket.id)) for ticket in support_tickets)

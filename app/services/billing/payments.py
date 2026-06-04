@@ -402,9 +402,7 @@ def _record_unallocated_payment_credit(
     if payment.billing_account_id is not None:
         from app.services.billing.billing_accounts import BillingAccounts
 
-        BillingAccounts.credit_balance(
-            db, str(payment.billing_account_id), remaining
-        )
+        BillingAccounts.credit_balance(db, str(payment.billing_account_id), remaining)
         return
     _create_payment_ledger_entry(db, payment, None, remaining)
 
@@ -595,9 +593,7 @@ class Payments(ListResponseMixin):
 
             ba = get_by_id(db, BillingAccount, payment.billing_account_id)
             if not ba:
-                raise HTTPException(
-                    status_code=404, detail="Billing account not found"
-                )
+                raise HTTPException(status_code=404, detail="Billing account not found")
             member_reseller_id = str(ba.reseller_id)
         for allocation in allocations:
             if allocation.amount > remaining:
@@ -665,9 +661,7 @@ class Payments(ListResponseMixin):
                 db,
                 str(payload.account_id),
                 None,
-                str(payload.payment_method_id)
-                if payload.payment_method_id
-                else None,
+                str(payload.payment_method_id) if payload.payment_method_id else None,
             )
         elif payload.billing_account_id is not None:
             from app.services.billing.billing_accounts import BillingAccounts

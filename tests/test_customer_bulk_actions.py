@@ -1,4 +1,8 @@
-from app.models.notification import Notification, NotificationChannel, NotificationTemplate
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationTemplate,
+)
 from app.models.subscriber import Subscriber, UserType
 from app.services import web_customer_actions
 

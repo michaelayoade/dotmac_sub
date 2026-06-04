@@ -43,9 +43,8 @@ def _load_active_assignment(
 ) -> OntAssignment | None:
     """Load the active assignment used for strict OLT write context resolution.
 
-    The caller needs the latest active assignment metadata, not an exclusive
-    row lock. Using a plain read avoids lock-timeout failures when interactive
-    OLT actions race with inventory or sync jobs.
+    Lock the selected active assignment so concurrent inventory or sync jobs
+    cannot change the write target while an OLT mutation is being prepared.
     """
     stmt = (
         select(OntAssignment)
@@ -57,6 +56,7 @@ def _load_active_assignment(
             OntAssignment.assigned_at.desc(),
             OntAssignment.created_at.desc(),
         )
+        .with_for_update()
     )
     return db.scalars(stmt).first()
 

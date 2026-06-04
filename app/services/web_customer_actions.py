@@ -27,8 +27,8 @@ from app.models.notification import (
 )
 from app.models.subscriber import (
     AddressType,
-    ContactMethod,
     ChannelType,
+    ContactMethod,
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
@@ -376,7 +376,9 @@ def _normalize_bulk_updates(payload: dict[str, Any]) -> dict[str, Any]:
         normalized["notes"] = _normalize_optional(str(updates.get("notes") or ""))
 
     if not normalized:
-        raise HTTPException(status_code=400, detail="No supported updates were provided")
+        raise HTTPException(
+            status_code=400, detail="No supported updates were provided"
+        )
     return normalized
 
 
@@ -387,7 +389,9 @@ def bulk_update_customers_from_payload(
     if not customers:
         raise HTTPException(status_code=400, detail="No customers matched this scope")
     updates = _normalize_bulk_updates(payload)
-    return bulk_update_customers(db=db, customers=customers, updates=updates, scope=scope)
+    return bulk_update_customers(
+        db=db, customers=customers, updates=updates, scope=scope
+    )
 
 
 def bulk_update_customers(
@@ -413,9 +417,7 @@ def bulk_update_customers(
                     source=f"admin:bulk_update:{scope}:{subscriber.id}",
                 )
                 subscriber.status = (
-                    SubscriberStatus.active
-                    if is_active
-                    else SubscriberStatus.suspended
+                    SubscriberStatus.active if is_active else SubscriberStatus.suspended
                 )
 
             if "preferred_contact_method" in updates:
@@ -454,7 +456,7 @@ def _subscriber_channel_address(
     subscriber: Subscriber, channel_type: ChannelType
 ) -> str | None:
     ordered_channels = sorted(
-        list(subscriber.channels or []),
+        subscriber.channels or [],
         key=lambda row: (not bool(row.is_primary), str(row.created_at or "")),
     )
     for channel in ordered_channels:
@@ -470,9 +472,9 @@ def _resolve_notification_recipient(
     subscriber: Subscriber, channel: NotificationChannel
 ) -> str | None:
     if channel == NotificationChannel.email:
-        return normalize_email_identifier(subscriber.email) or _subscriber_channel_address(
-            subscriber, ChannelType.email
-        )
+        return normalize_email_identifier(
+            subscriber.email
+        ) or _subscriber_channel_address(subscriber, ChannelType.email)
 
     if channel == NotificationChannel.sms:
         return (
@@ -545,7 +547,9 @@ def queue_bulk_message_from_payload(
     try:
         channel = NotificationChannel(channel_value)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Unsupported notification channel") from exc
+        raise HTTPException(
+            status_code=400, detail="Unsupported notification channel"
+        ) from exc
 
     template = db.get(NotificationTemplate, coerce_uuid(template_id))
     if not template or not template.is_active:

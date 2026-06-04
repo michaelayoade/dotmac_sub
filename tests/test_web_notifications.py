@@ -71,7 +71,9 @@ def test_bulk_notification_setup_context_reports_channel_readiness(monkeypatch):
     assert channels["whatsapp"]["ready"] is True
     assert channels["whatsapp"]["message"] == "Twilio is configured"
 
-    templates_state = {item["id"]: item for item in context["bulk_notification_templates"]}
+    templates_state = {
+        item["id"]: item for item in context["bulk_notification_templates"]
+    }
     assert templates_state["tmpl-email"]["channel"] == "email"
     assert templates_state["tmpl-sms"]["subject"] == ""
 

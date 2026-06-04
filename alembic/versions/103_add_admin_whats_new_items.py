@@ -11,8 +11,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "103_add_admin_whats_new_items"
 down_revision = "102_add_splynx_credit_note_id"
@@ -23,7 +24,9 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "admin_whats_new_items",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column(
+            "id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+        ),
         sa.Column("title", sa.String(length=200), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("benefit_one", sa.String(length=255), nullable=True),
@@ -140,7 +143,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_admin_whats_new_items_ends_at", table_name="admin_whats_new_items")
+    op.drop_index(
+        "ix_admin_whats_new_items_ends_at", table_name="admin_whats_new_items"
+    )
     op.drop_index(
         "ix_admin_whats_new_items_starts_at", table_name="admin_whats_new_items"
     )

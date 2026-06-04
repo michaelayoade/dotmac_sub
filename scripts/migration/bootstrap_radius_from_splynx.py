@@ -81,8 +81,11 @@ def _splynx_customer(customer_id: int) -> dict | None:
         headers["Host"] = SPLYNX_HOST_HEADER
     try:
         r = requests.get(
-            url, auth=(SPLYNX_API_KEY, SPLYNX_API_SECRET),
-            headers=headers, verify=SPLYNX_VERIFY_TLS, timeout=20,
+            url,
+            auth=(SPLYNX_API_KEY, SPLYNX_API_SECRET),
+            headers=headers,
+            verify=SPLYNX_VERIFY_TLS,
+            timeout=20,
         )
         if r.status_code == 200:
             return r.json() if isinstance(r.json(), dict) else None
@@ -120,7 +123,9 @@ def _splynx_services(customer_id: int) -> list[dict] | None:
     return None
 
 
-def _rate_limit(offer: CatalogOffer | None, profile: RadiusProfile | None) -> str | None:
+def _rate_limit(
+    offer: CatalogOffer | None, profile: RadiusProfile | None
+) -> str | None:
     if profile and profile.mikrotik_rate_limit:
         return profile.mikrotik_rate_limit
     if offer and offer.speed_download_mbps and offer.speed_upload_mbps:
@@ -151,7 +156,10 @@ def _radreply_attrs(
 
 
 def _upsert_access_credential(
-    db, subscriber_id: uuid.UUID, username: str, cleartext: str,
+    db,
+    subscriber_id: uuid.UUID,
+    username: str,
+    cleartext: str,
     radius_profile_id: uuid.UUID | None,
 ) -> None:
     """Create or update the AccessCredential row, Fernet-encrypting the password."""
@@ -180,8 +188,11 @@ def _upsert_access_credential(
 
 
 def _upsert_radius_rows(
-    cur, sub: Subscription, cleartext: str,
-    offer: CatalogOffer | None, profile: RadiusProfile | None,
+    cur,
+    sub: Subscription,
+    cleartext: str,
+    offer: CatalogOffer | None,
+    profile: RadiusProfile | None,
 ) -> int:
     """Write radcheck + radreply rows. Returns count of radreply attrs written."""
     cur.execute("DELETE FROM radcheck WHERE username = %s", (sub.login,))
@@ -289,13 +300,17 @@ def run(
         if customer_ids:
             before = len(subs_by_splynx_cid)
             subs_by_splynx_cid = {
-                cid: lst for cid, lst in subs_by_splynx_cid.items() if cid in customer_ids
+                cid: lst
+                for cid, lst in subs_by_splynx_cid.items()
+                if cid in customer_ids
             }
             stats["customer_ids_filter_kept"] = len(subs_by_splynx_cid)
             stats["customer_ids_filter_dropped"] = before - len(subs_by_splynx_cid)
             logger.info(
                 "--customer-ids filter: %d → %d customers (requested %s)",
-                before, len(subs_by_splynx_cid), sorted(customer_ids),
+                before,
+                len(subs_by_splynx_cid),
+                sorted(customer_ids),
             )
 
         logger.info(
@@ -352,7 +367,8 @@ def run(
                         stats["prefer_customer_password_applied"] += 1
                 # Fill in any login that's missing a password from the customer-level
                 logins_needing_fallback = [
-                    svc["login"].strip() for svc in services
+                    svc["login"].strip()
+                    for svc in services
                     if svc.get("login") and not svc.get("password")
                 ]
                 if logins_needing_fallback and not cust_pw:
@@ -361,7 +377,9 @@ def run(
                     if cust_pw:
                         for login in logins_needing_fallback:
                             pw_map.setdefault(login, cust_pw)
-                        stats["fallback_customer_password"] += len(logins_needing_fallback)
+                        stats["fallback_customer_password"] += len(
+                            logins_needing_fallback
+                        )
 
                 with rconn.cursor() as cur:
                     for sub in sub_list:
@@ -386,17 +404,19 @@ def run(
                             if sub.status == SubscriptionStatus.blocked:
                                 stats["blocked_users"] += 1
                         except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "upsert failed for %s: %s", sub.login, exc
-                            )
+                            logger.warning("upsert failed for %s: %s", sub.login, exc)
                             stats["upsert_failures"] += 1
                             # CRITICAL: rollback the SQLAlchemy session to avoid
                             # "Can't reconnect until invalid transaction is rolled back"
                             # cascade — otherwise ALL subsequent customers fail too.
-                            try: db.rollback()
-                            except Exception: pass
-                            try: rconn.rollback()
-                            except Exception: pass
+                            try:
+                                db.rollback()
+                            except Exception:
+                                pass
+                            try:
+                                rconn.rollback()
+                            except Exception:
+                                pass
 
                 processed_customers += 1
                 # Commit every 250 customers to keep transactions small
@@ -427,7 +447,9 @@ def run(
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--execute", action="store_true", help="Live run (default: dry-run)")
-    p.add_argument("--limit", type=int, help="Process only first N subscriptions (testing)")
+    p.add_argument(
+        "--limit", type=int, help="Process only first N subscriptions (testing)"
+    )
     p.add_argument(
         "--missing-only",
         action="store_true",
@@ -442,12 +464,14 @@ if __name__ == "__main__":
         "--prefer-customer-password",
         action="store_true",
         help="Always prefer customers.password over services_internet.password "
-             "(matches what Splynx_radd actually authenticates against in MS-CHAPv2 mode)",
+        "(matches what Splynx_radd actually authenticates against in MS-CHAPv2 mode)",
     )
     args = p.parse_args()
     cust_filter: set[int] | None = None
     if args.customer_ids:
-        cust_filter = {int(x.strip()) for x in args.customer_ids.split(",") if x.strip()}
+        cust_filter = {
+            int(x.strip()) for x in args.customer_ids.split(",") if x.strip()
+        }
     run(
         dry_run=not args.execute,
         limit=args.limit,

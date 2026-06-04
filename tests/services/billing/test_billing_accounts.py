@@ -8,7 +8,11 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.subscriber import Reseller
-from app.schemas.billing import BillingAccountCreate, BillingAccountUpdate, PaymentCreate
+from app.schemas.billing import (
+    BillingAccountCreate,
+    BillingAccountUpdate,
+    PaymentCreate,
+)
 from app.services import billing as billing_service
 
 
@@ -119,9 +123,7 @@ def test_list_filters_by_reseller(db_session):
     r2 = _make_reseller(db_session, name="B")
     billing_service.billing_accounts.create_default_for_reseller(db_session, str(r1.id))
     billing_service.billing_accounts.create_default_for_reseller(db_session, str(r2.id))
-    only_r1 = billing_service.billing_accounts.list(
-        db_session, reseller_id=str(r1.id)
-    )
+    only_r1 = billing_service.billing_accounts.list(db_session, reseller_id=str(r1.id))
     assert len(only_r1) == 1
     assert only_r1[0].reseller_id == r1.id
 

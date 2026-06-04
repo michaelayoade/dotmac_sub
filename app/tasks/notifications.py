@@ -112,9 +112,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                         else DeliveryStatus.failed,
                         response_code=str(result.get("status_code") or ""),
                         response_body=str(
-                            result.get("response")
-                            or result.get("message")
-                            or ""
+                            result.get("response") or result.get("message") or ""
                         )
                         or None,
                     )

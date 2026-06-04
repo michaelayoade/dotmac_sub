@@ -374,9 +374,7 @@ class TestSubscriberAggregation:
             )
 
         assert result["aggregate_state"] == "active"
-        assert _read_radusergroup(radius_db, "agg-1") == [
-            ("agg-1", "dotmac-active", 0)
-        ]
+        assert _read_radusergroup(radius_db, "agg-1") == [("agg-1", "dotmac-active", 0)]
 
     def test_captive_plus_suspended_writes_captive(
         self, db_session, tmp_path, subscriber, catalog_offer
@@ -408,9 +406,7 @@ class TestSubscriberAggregation:
             # Both subs are suspended, but captive_redirect_enabled
             # promotes both to captive at the per-sub derive step. The
             # aggregate is also captive.
-            set_subscription_access_state(
-                db_session, str(sub1.id), AccessState.captive
-            )
+            set_subscription_access_state(db_session, str(sub1.id), AccessState.captive)
 
         assert _read_radusergroup(radius_db, "agg-2") == [
             ("agg-2", "dotmac-captive", 0)
@@ -435,7 +431,8 @@ class TestSubscriberAggregation:
         db_session.commit()
         radius_db = tmp_path / "external.db"
         _write_radusergroup_sqlite(
-            radius_db, rows=[("agg-3", "dotmac-active", 0)]  # stale
+            radius_db,
+            rows=[("agg-3", "dotmac-active", 0)],  # stale
         )
         config = _fake_config(radius_db)
 

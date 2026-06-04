@@ -8,8 +8,9 @@ Create Date: 2026-05-24
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "104_add_topup_intents"
 down_revision = "103_add_admin_whats_new_items"
@@ -20,7 +21,9 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "topup_intents",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column(
+            "id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+        ),
         sa.Column(
             "account_id",
             postgresql.UUID(as_uuid=True),
