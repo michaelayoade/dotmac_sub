@@ -90,6 +90,14 @@
                     abortActiveRequest();
                     input.value = item.label || item.name || "";
                     updateHiddenValue(item.ref || item.id || "");
+                    container.dispatchEvent(new CustomEvent("typeahead:selected", {
+                        bubbles: true,
+                        detail: {
+                            item: item,
+                            input: input,
+                            hidden: hidden
+                        }
+                    }));
                     clearResults();
                 });
                 menu.appendChild(button);

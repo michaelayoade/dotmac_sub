@@ -307,14 +307,14 @@ class TicketAutomationRule(Base):
         Enum(AutomationTrigger, name="ticket_automation_trigger"), nullable=False
     )
     conditions: Mapped[dict] = mapped_column(
-        MutableDict.as_mutable(JSON), default=dict, nullable=False
+        MutableDict.as_mutable(JSON()), default=dict, nullable=False
     )
     action_type: Mapped[AutomationActionType] = mapped_column(
         Enum(AutomationActionType, name="ticket_automation_action_type"),
         nullable=False,
     )
     action_value: Mapped[dict] = mapped_column(
-        MutableDict.as_mutable(JSON), default=dict, nullable=False
+        MutableDict.as_mutable(JSON()), default=dict, nullable=False
     )
     sort_order: Mapped[int] = mapped_column(default=100, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

@@ -22,9 +22,7 @@ def upgrade() -> None:
     op.execute(
         "ALTER TYPE communicationchannel ADD VALUE IF NOT EXISTS 'internal_note'"
     )
-    op.execute(
-        "ALTER TYPE communicationdirection ADD VALUE IF NOT EXISTS 'internal'"
-    )
+    op.execute("ALTER TYPE communicationdirection ADD VALUE IF NOT EXISTS 'internal'")
 
 
 def downgrade() -> None:

@@ -24,6 +24,9 @@ from app.services.common import (
     apply_ordering,
     apply_pagination,
 )
+from app.services.customer_notification_policy import (
+    resolve_subscriber_id_for_recipient,
+)
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,12 @@ class CustomerNotifications(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: CustomerNotificationCreate):
         data = payload.model_dump()
+        data["subscriber_id"] = data.get(
+            "subscriber_id"
+        ) or resolve_subscriber_id_for_recipient(
+            db,
+            data.get("recipient"),
+        )
         fields_set = payload.model_fields_set
         if "status" not in fields_set:
             default_status = settings_spec.resolve_value(

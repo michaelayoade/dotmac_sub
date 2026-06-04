@@ -12,6 +12,27 @@ from app.services.response import list_response
 logger = logging.getLogger(__name__)
 
 
+def _subscriber_metadata(subscriber: Subscriber) -> dict[str, str]:
+    address = ", ".join(
+        [
+            part
+            for part in [subscriber.address_line1, subscriber.city, subscriber.region]
+            if part
+        ]
+    )
+    return {
+        "email": subscriber.email or "",
+        "phone": subscriber.phone or "",
+        "organization": subscriber.company_name or "",
+        "address": address,
+        "subscriber_number": subscriber.subscriber_number or "",
+        "account_number": subscriber.account_number or "",
+        "account_status": (subscriber.status.value if subscriber.status else "") or "",
+        "plan": "",
+        "service_address": address,
+    }
+
+
 def _subscriber_label(subscriber: Subscriber) -> str:
     """Generate label for a subscriber."""
     if subscriber.category == SubscriberCategory.business:
@@ -81,7 +102,15 @@ def subscribers(db: Session, query: str, limit: int) -> list[dict]:
         .limit(limit)
         .all()
     )
-    return [{"id": sub.id, "label": _subscriber_label(sub)} for sub in results]
+    return [
+        {
+            "id": sub.id,
+            "label": _subscriber_label(sub),
+            "type": "subscriber",
+            **_subscriber_metadata(sub),
+        }
+        for sub in results
+    ]
 
 
 def reseller_linkable_subscribers(db: Session, query: str, limit: int) -> list[dict]:
@@ -126,7 +155,14 @@ def reseller_linkable_subscribers(db: Session, query: str, limit: int) -> list[d
         label = (
             f"{base_name} - {' - '.join(suffix_parts)}" if suffix_parts else base_name
         )
-        items.append({"id": sub.id, "label": label})
+        items.append(
+            {
+                "id": sub.id,
+                "label": label,
+                "type": "subscriber",
+                **_subscriber_metadata(sub),
+            }
+        )
     return items
 
 
@@ -196,7 +232,14 @@ def people(db: Session, query: str, limit: int) -> list[dict]:
             label = f"{label} ({subscriber.email})"
         elif subscriber.phone:
             label = f"{label} ({subscriber.phone})"
-        items.append({"id": subscriber.id, "label": label})
+        items.append(
+            {
+                "id": subscriber.id,
+                "label": label,
+                "type": "person",
+                **_subscriber_metadata(subscriber),
+            }
+        )
     return items
 
 

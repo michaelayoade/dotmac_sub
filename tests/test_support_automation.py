@@ -44,20 +44,29 @@ def test_conditions_match_empty_dict_matches_anything():
 
 def test_conditions_match_exact_strings():
     ticket = SimpleNamespace(status="open", priority="urgent", region="lagos")
-    assert support_automation._conditions_match(
-        {"status": "open", "region": "lagos"}, ticket
-    ) is True
-    assert support_automation._conditions_match(
-        {"status": "open", "region": "abuja"}, ticket
-    ) is False
+    assert (
+        support_automation._conditions_match(
+            {"status": "open", "region": "lagos"}, ticket
+        )
+        is True
+    )
+    assert (
+        support_automation._conditions_match(
+            {"status": "open", "region": "abuja"}, ticket
+        )
+        is False
+    )
 
 
 def test_conditions_match_unwraps_enum_value():
     """Enum-typed ticket fields should compare by `.value`, not by enum object."""
     ticket = SimpleNamespace(status=TicketStatus.open, priority=TicketPriority.high)
-    assert support_automation._conditions_match(
-        {"status": "open", "priority": "high"}, ticket
-    ) is True
+    assert (
+        support_automation._conditions_match(
+            {"status": "open", "priority": "high"}, ticket
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------

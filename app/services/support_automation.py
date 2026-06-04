@@ -133,9 +133,7 @@ def toggle_rule(db: Session, rule_id: str | UUID) -> TicketAutomationRule:
     return set_rule_active(db, rule_id, is_active=not rule.is_active)
 
 
-def apply_rules(
-    db: Session, ticket: Ticket, trigger: AutomationTrigger
-) -> list[str]:
+def apply_rules(db: Session, ticket: Ticket, trigger: AutomationTrigger) -> list[str]:
     """Apply matching automation rules to `ticket` for the given trigger.
 
     Iterates every active rule for `trigger` in sort_order. For each rule whose
@@ -187,7 +185,9 @@ def apply_rules(
 
 def _identity_review_blocks_automation(ticket: Ticket) -> bool:
     metadata = dict(ticket.metadata_ or {})
-    return identity_resolution_requires_manual_review(metadata.get("identity_resolution"))
+    return identity_resolution_requires_manual_review(
+        metadata.get("identity_resolution")
+    )
 
 
 def _mark_identity_automation_suppressed(ticket: Ticket) -> None:
@@ -223,7 +223,7 @@ def _conditions_match(conditions: dict[str, Any], ticket: Ticket) -> bool:
 
 def _ticket_field_value(ticket: Ticket, field: str) -> Any:
     value = getattr(ticket, field, None)
-    if hasattr(value, "value"):  # enum
+    if value is not None and hasattr(value, "value"):  # enum
         return value.value
     return value
 

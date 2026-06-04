@@ -21,9 +21,9 @@
         {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'amber', 'orange') }}
     {% endcall %}
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
+    <div class="grid gap-4 md:grid-cols-3">
         {% for card in status_summary_cards %}
-        {{ summary_card(card.label, card.count, card.href, card.color) }}
+        {{ summary_card(card.label, card.count, '', card.color) }}
         {% endfor %}
     </div>
 
@@ -38,6 +38,7 @@
           class="space-y-4">
         <div class="grid gap-3 lg:grid-cols-12">
             <div class="lg:col-span-4">
+                <label class="mb-1 block invisible text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search</label>
                 {{ search_input('search', search, 'Search by ticket ID, title, or description...', 'amber', {'hx-trigger': 'keyup changed delay:250ms'}) }}
             </div>
             <div class="lg:col-span-2">

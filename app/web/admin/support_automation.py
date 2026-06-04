@@ -59,9 +59,7 @@ def _parse_json_field(raw: str | None, field: str) -> dict:
 def automation_list(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db)
     context["rules"] = automation_service.list_rules(db)
-    return templates.TemplateResponse(
-        "admin/support/automation/index.html", context
-    )
+    return templates.TemplateResponse("admin/support/automation/index.html", context)
 
 
 @router.get(
@@ -219,9 +217,7 @@ def automation_toggle(
     (double-click won't flip back). Otherwise falls back to legacy flip.
     """
     if target in ("on", "off"):
-        automation_service.set_rule_active(
-            db, str(rule_id), is_active=(target == "on")
-        )
+        automation_service.set_rule_active(db, str(rule_id), is_active=(target == "on"))
     else:
         automation_service.toggle_rule(db, str(rule_id))
     db.commit()

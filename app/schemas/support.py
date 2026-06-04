@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.support import TicketChannel, TicketPriority, TicketStatus
+from app.models.support import TicketChannel, TicketPriority
 
 
 class AttachmentMeta(BaseModel):
@@ -30,14 +30,16 @@ class TicketBase(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     region: str | None = Field(default=None, max_length=80)
-    status: TicketStatus | None = None
-    priority: TicketPriority = TicketPriority.normal
+    status: str | None = None
+    priority: str = TicketPriority.normal.value
     ticket_type: str | None = Field(default=None, max_length=80)
     channel: TicketChannel = TicketChannel.web
     tags: list[str] = Field(default_factory=list)
     metadata_: dict | None = Field(
         default=None, validation_alias="metadata", serialization_alias="metadata"
     )
+    inbound_sender: str | None = None
+    inbound_sender_type: str | None = None
 
     due_at: datetime | None = None
     resolved_at: datetime | None = None
@@ -48,7 +50,15 @@ class TicketBase(BaseModel):
 
 
 class TicketCreate(TicketBase):
-    pass
+    @field_validator("status", "priority", "ticket_type", mode="before")
+    @classmethod
+    def _normalize_text_fields(cls, value):
+        if value is None:
+            return value
+        if hasattr(value, "value"):
+            value = value.value
+        text = str(value).strip()
+        return text or None
 
 
 class TicketUpdate(BaseModel):
@@ -66,20 +76,32 @@ class TicketUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     region: str | None = Field(default=None, max_length=80)
-    status: TicketStatus | None = None
-    priority: TicketPriority | None = None
+    status: str | None = None
+    priority: str | None = None
     ticket_type: str | None = Field(default=None, max_length=80)
     channel: TicketChannel | None = None
     tags: list[str] | None = None
     metadata_: dict | None = Field(
         default=None, validation_alias="metadata", serialization_alias="metadata"
     )
+    inbound_sender: str | None = None
+    inbound_sender_type: str | None = None
 
     due_at: datetime | None = None
     resolved_at: datetime | None = None
     closed_at: datetime | None = None
 
     assignee_person_ids: list[UUID] | None = None
+
+    @field_validator("status", "priority", "ticket_type", mode="before")
+    @classmethod
+    def _normalize_update_text_fields(cls, value):
+        if value is None:
+            return value
+        if hasattr(value, "value"):
+            value = value.value
+        text = str(value).strip()
+        return text or None
 
 
 class TicketRead(BaseModel):
@@ -102,8 +124,8 @@ class TicketRead(BaseModel):
     title: str
     description: str | None
     region: str | None
-    status: TicketStatus
-    priority: TicketPriority
+    status: str
+    priority: str
     ticket_type: str | None
     channel: TicketChannel
     tags: list[str] | None = None
@@ -124,9 +146,19 @@ class TicketRead(BaseModel):
 
 class TicketBulkUpdateItem(BaseModel):
     ticket_id: UUID
-    status: TicketStatus | None = None
-    priority: TicketPriority | None = None
+    status: str | None = None
+    priority: str | None = None
     assigned_to_person_id: UUID | None = None
+
+    @field_validator("status", "priority", mode="before")
+    @classmethod
+    def _normalize_bulk_text_fields(cls, value):
+        if value is None:
+            return value
+        if hasattr(value, "value"):
+            value = value.value
+        text = str(value).strip()
+        return text or None
 
 
 class TicketBulkUpdateRequest(BaseModel):

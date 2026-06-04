@@ -375,6 +375,30 @@ def _seed_missing_notification_templates(db: Session) -> int:
 
     templates = [
         {
+            "code": "subscriber_created",
+            "name": "Subscriber Created",
+            "channel": NotificationChannel.email,
+            "subject": "Your customer account is ready",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your customer account has been created successfully. "
+                "You can now manage your services and billing through the portal.\n\n"
+                "Thank you for choosing us."
+            ),
+        },
+        {
+            "code": "subscriber_updated",
+            "name": "Subscriber Updated",
+            "channel": NotificationChannel.email,
+            "subject": "Your account profile was updated",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your account profile was updated successfully.\n\n"
+                "Updated fields: {updated_fields}\n\n"
+                "If you did not make this change, please contact support immediately."
+            ),
+        },
+        {
             "code": "subscription_created",
             "name": "Subscription Created",
             "channel": NotificationChannel.email,
@@ -526,6 +550,65 @@ def _seed_missing_notification_templates(db: Session) -> int:
             ),
         },
         {
+            "code": "subscription_expired",
+            "name": "Subscription Expired",
+            "channel": NotificationChannel.email,
+            "subject": "Your subscription has expired",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your {offer_name} subscription has expired. "
+                "Renew your service to restore access."
+            ),
+        },
+        {
+            "code": "subscription_expired",
+            "name": "Subscription Expired SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your {offer_name} subscription has expired. "
+                "Renew to restore access."
+            ),
+        },
+        {
+            "code": "subscription_upgraded",
+            "name": "Subscription Upgraded",
+            "channel": NotificationChannel.email,
+            "subject": "Your plan has been upgraded",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your service has been upgraded from {old_offer_name} to {new_offer_name}."
+            ),
+        },
+        {
+            "code": "subscription_upgraded",
+            "name": "Subscription Upgraded SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your plan has been upgraded to {new_offer_name}."
+            ),
+        },
+        {
+            "code": "subscription_downgraded",
+            "name": "Subscription Downgraded",
+            "channel": NotificationChannel.email,
+            "subject": "Your plan has been updated",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your service has been changed from {old_offer_name} to {new_offer_name}."
+            ),
+        },
+        {
+            "code": "subscription_downgraded",
+            "name": "Subscription Downgraded SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your plan has been updated to {new_offer_name}."
+            ),
+        },
+        {
             "code": "invoice_created",
             "name": "Invoice Created",
             "channel": NotificationChannel.email,
@@ -561,6 +644,17 @@ def _seed_missing_notification_templates(db: Session) -> int:
             "body": (
                 "Invoice #{invoice_number} for {amount} is due on {due_date}. "
                 "Pay online: {portal_url}/billing"
+            ),
+        },
+        {
+            "code": "invoice_paid",
+            "name": "Invoice Paid",
+            "channel": NotificationChannel.email,
+            "subject": "Invoice #{invoice_number} has been paid",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Invoice #{invoice_number} has been paid successfully. "
+                "Thank you for your payment."
             ),
         },
         {
@@ -617,6 +711,16 @@ def _seed_missing_notification_templates(db: Session) -> int:
                 "Please try again or use a different payment method.\n\n"
                 "If you continue to experience issues, contact our support team.\n\n"
                 "Thank you."
+            ),
+        },
+        {
+            "code": "payment_refunded",
+            "name": "Payment Refunded",
+            "channel": NotificationChannel.email,
+            "subject": "Payment refunded",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "A refund of {amount} has been processed on your account."
             ),
         },
         {
@@ -678,6 +782,57 @@ def _seed_missing_notification_templates(db: Session) -> int:
                 "Our technical team has been notified and will follow up shortly.\n\n"
                 "We apologize for the inconvenience."
             ),
+        },
+        {
+            "code": "service_order_created",
+            "name": "Service Order Created",
+            "channel": NotificationChannel.email,
+            "subject": "Your service order has been created",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Service order #{service_order_id} has been created for your account."
+            ),
+        },
+        {
+            "code": "service_order_created",
+            "name": "Service Order Created SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": "Service order #{service_order_id} has been created for your account.",
+        },
+        {
+            "code": "service_order_assigned",
+            "name": "Service Order Assigned",
+            "channel": NotificationChannel.email,
+            "subject": "Your service order is in progress",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Service order #{service_order_id} is now being worked on by our team."
+            ),
+        },
+        {
+            "code": "service_order_assigned",
+            "name": "Service Order Assigned SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": "Service order #{service_order_id} is now in progress.",
+        },
+        {
+            "code": "service_order_completed",
+            "name": "Service Order Completed",
+            "channel": NotificationChannel.email,
+            "subject": "Your service order is complete",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Service order #{service_order_id} has been completed successfully."
+            ),
+        },
+        {
+            "code": "service_order_completed",
+            "name": "Service Order Completed SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": "Service order #{service_order_id} has been completed successfully.",
         },
         {
             "code": "ont_offline",
